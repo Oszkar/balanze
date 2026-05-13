@@ -42,22 +42,37 @@ pub struct CadenceBar {
 }
 
 /// The `extra_usage` block — separate from cadence bars because it has different
-/// shape (a dollar-denominated counter with a monthly cap).
+/// shape (a numeric counter with a cap and a percentage).
 ///
-/// What this block actually represents in the user-facing UI is unsettled:
-/// the visible claude.ai/settings/usage page shows different numbers than what
-/// OAuth returns for the same account (UI showed "$4.67 spent this month"
-/// while OAuth reported `used_credits=1763`). Cross-checking against
-/// hamed-elfayome's Claude Usage Tracker tool — which the user has been using
-/// reliably for months — shows the same `(1763, 2000)` pair displayed as
-/// `$17.63 / $20.00`, so the units are CENTS. Semantic still TBD; possibly a
-/// lifetime spend tally or a different rolling window.
+/// **The semantic of this block is currently UNKNOWN and the values should not
+/// be trusted as dollar amounts.** Investigation as of May 2026:
+///
+/// - The visible claude.ai/settings/usage UI shows "$4.67 spent this month / $20
+///   monthly spend limit / 23% used" for the user's account.
+/// - OAuth `/api/oauth/usage` returns `{monthly_limit: 2000, used_credits: 1763,
+///   utilization: 88.15, currency: "USD"}` for the same account at the same time.
+/// - hamed-elfayome's Claude Usage Tracker (Electron, macOS) renders the OAuth
+///   numbers as `$17.63 / $20.00` — i.e. it treats the raw values as cents.
+/// - Treating as cents reconciles `monthly_limit = 2000 → $20.00` with the UI's
+///   `$20 monthly spend limit`, but `used_credits = 1763 → $17.63` does NOT match
+///   the UI's `$4.67 spent`. Interpreting `used_credits` as "remaining" also
+///   doesn't reconcile cleanly ($20 - $17.63 = $2.37, still $2.30 off from $4.67).
+///
+/// Possibilities (none verified):
+/// - `used_credits` is a lifetime spend tally rather than current-month spend.
+/// - `used_credits` is a different metric (committed balance, reserved credits).
+/// - The visible UI's "$4.67 spent" comes from a different endpoint we haven't
+///   found; a claude.ai/settings/usage HAR capture would identify it.
+///
+/// Until the semantic is resolved, the CLI's pretty output suppresses the
+/// extra_usage block. The data is still parsed and exposed in --json output for
+/// diagnostic purposes. Units are stored as micro-USD assuming cents-input.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtraUsage {
     pub is_enabled: bool,
-    /// Raw `monthly_limit` is in cents. We store as micro-USD (× 10_000).
+    /// Raw `monthly_limit` is in cents (assumed). We store as micro-USD (× 10_000).
     pub monthly_limit_micro_usd: i64,
-    /// Raw `used_credits` is in cents. We store as micro-USD (× 10_000).
+    /// Raw `used_credits` is in cents (assumed). Semantic unclear — see struct doc.
     pub used_credits_micro_usd: i64,
     pub utilization_percent: f32,
     pub currency: String,

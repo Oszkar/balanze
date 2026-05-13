@@ -235,24 +235,18 @@ fn print_pretty(snapshot: &CliSnapshot) {
                 pretty_duration(resets_in)
             );
         }
-        if let Some(extra) = &oauth.extra_usage {
-            let used = (extra.used_credits_micro_usd as f64) / 1_000_000.0;
-            let limit = (extra.monthly_limit_micro_usd as f64) / 1_000_000.0;
-            let remaining = limit - used;
-            println!();
-            println!(
-                "EXTRA USAGE: {}",
-                if extra.is_enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            );
-            println!(
-                "  Used {:.2} {} of {:.2} {} ({:.1}%)  — {:.2} {} remaining",
-                used, extra.currency, limit, extra.currency, extra.utilization_percent, remaining, extra.currency
-            );
-        }
+        // extra_usage block intentionally suppressed from pretty output.
+        // OAuth's `used_credits` / `monthly_limit` / `utilization` reconcile
+        // with each other but disagree with the visible claude.ai/settings/usage
+        // page (which is the user-facing source of truth — e.g. UI shows
+        // "$4.67 spent this month" while OAuth reports a different metric
+        // entirely). hamed-elfayome's Claude Usage Tracker shows the same
+        // OAuth-derived value, so the discrepancy is not specific to us.
+        // The data is still available in --json output for diagnostics.
+        // To re-enable: capture a HAR from claude.ai/settings/usage,
+        // identify the endpoint that exposes the visible $4.67 number,
+        // wire it in, and either replace or annotate this section.
+        let _ = &oauth.extra_usage;
     } else if let Some(err) = &snapshot.claude_oauth_error {
         println!("CADENCE BARS: unavailable — {err}");
     }
