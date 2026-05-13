@@ -58,3 +58,5 @@ balanze.log*
 
 # Network captures — frequently contain live session cookies and PII
 *.har
+
+/references/
