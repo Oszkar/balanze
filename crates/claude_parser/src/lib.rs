@@ -15,4 +15,4 @@ mod walker;
 
 pub use parser::{parse_line, parse_str};
 pub use types::{AccountType, DataSource, ParseError, Provider, UsageEvent};
-pub use walker::find_jsonl_files;
+pub use walker::{candidate_claude_projects_dirs, find_claude_projects_dir, find_jsonl_files};
