@@ -98,10 +98,14 @@ fn parse_response(
         if key == "extra_usage" {
             match serde_json::from_value::<RawExtraUsage>(value.clone()) {
                 Ok(raw) => {
+                    // Anthropic returns these in CENTS, not dollars. Confirmed by
+                    // cross-checking against hamed-elfayome's Claude Usage Tracker
+                    // (which shows the same numbers as $17.63 / $20.00). Convert
+                    // cents → micro-USD via × 10_000 (1 cent = 10_000 micro-USD).
                     extra_usage = Some(ExtraUsage {
                         is_enabled: raw.is_enabled,
-                        monthly_limit_micro_usd: (raw.monthly_limit * 1_000_000.0).round() as i64,
-                        used_credits_micro_usd: (raw.used_credits * 1_000_000.0).round() as i64,
+                        monthly_limit_micro_usd: (raw.monthly_limit * 10_000.0).round() as i64,
+                        used_credits_micro_usd: (raw.used_credits * 10_000.0).round() as i64,
                         utilization_percent: raw.utilization,
                         currency: raw.currency,
                     });
@@ -213,7 +217,7 @@ mod tests {
             "tangelo": null,
             "iguana_necktie": null,
             "omelette_promotional": null,
-            "extra_usage": {"is_enabled": true, "monthly_limit": 100.0, "used_credits": 42.5, "utilization": 42.5, "currency": "USD"}
+            "extra_usage": {"is_enabled": true, "monthly_limit": 5000, "used_credits": 1234, "utilization": 24.68, "currency": "USD"}
         }"#;
         let snapshot = parse_response(
             body,
@@ -236,8 +240,10 @@ mod tests {
 
         let extra = snapshot.extra_usage.expect("extra_usage present");
         assert!(extra.is_enabled);
-        assert_eq!(extra.monthly_limit_micro_usd, 100_000_000);
-        assert_eq!(extra.used_credits_micro_usd, 42_500_000);
+        // Anthropic returns values in cents: 5000 cents = $50.00 = 50_000_000 micro-USD
+        assert_eq!(extra.monthly_limit_micro_usd, 50_000_000);
+        // 1234 cents = $12.34 = 12_340_000 micro-USD
+        assert_eq!(extra.used_credits_micro_usd, 12_340_000);
         assert_eq!(extra.currency, "USD");
 
         assert_eq!(snapshot.subscription_type.as_deref(), Some("max"));

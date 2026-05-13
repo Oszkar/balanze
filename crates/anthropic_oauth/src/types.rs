@@ -42,12 +42,22 @@ pub struct CadenceBar {
 }
 
 /// The `extra_usage` block — separate from cadence bars because it has different
-/// shape (dollar-denominated overage credits with a monthly cap).
+/// shape (a dollar-denominated counter with a monthly cap).
+///
+/// What this block actually represents in the user-facing UI is unsettled:
+/// the visible claude.ai/settings/usage page shows different numbers than what
+/// OAuth returns for the same account (UI showed "$4.67 spent this month"
+/// while OAuth reported `used_credits=1763`). Cross-checking against
+/// hamed-elfayome's Claude Usage Tracker tool — which the user has been using
+/// reliably for months — shows the same `(1763, 2000)` pair displayed as
+/// `$17.63 / $20.00`, so the units are CENTS. Semantic still TBD; possibly a
+/// lifetime spend tally or a different rolling window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtraUsage {
     pub is_enabled: bool,
-    /// `monthly_limit` × 1_000_000. Raw response uses dollars.
+    /// Raw `monthly_limit` is in cents. We store as micro-USD (× 10_000).
     pub monthly_limit_micro_usd: i64,
+    /// Raw `used_credits` is in cents. We store as micro-USD (× 10_000).
     pub used_credits_micro_usd: i64,
     pub utilization_percent: f32,
     pub currency: String,
