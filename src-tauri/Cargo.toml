@@ -1,0 +1,24 @@
+[package]
+name = "balanze"
+description = "Local-first AI usage tracker — tray-first desktop app for Claude + OpenAI usage on Windows and macOS."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "balanze_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+tauri = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+tauri-plugin-single-instance = { workspace = true }

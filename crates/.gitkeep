@@ -1,0 +1,10 @@
+# Workspace member crates land here as the design's build sequence progresses.
+# Planned (per docs/prd.md + design doc):
+#   claude_parser      — read ~/.claude/projects/**/*.jsonl, normalize to UsageEvent
+#   window             — rolling 5-hour window utilization
+#   predictor          — EWMA + warm-up state, predicted time-to-cap
+#   openai_client      — OpenAI billing endpoints
+#   state_coordinator  — actor that owns Snapshot + AppHandle (only writer of tray)
+#   watcher            — notify + 1s debounce + 60s safety poll
+#   keychain           — keyring wrapper for API keys
+#   settings           — config serde + atomic save
