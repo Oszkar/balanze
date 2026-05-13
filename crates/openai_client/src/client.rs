@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use reqwest::{Client, StatusCode};
-use serde::Deserialize;
+use serde::{de, Deserialize, Deserializer};
 use tracing::debug;
 
 use crate::types::{LineItemCost, OpenAiCosts, OpenAiError};
@@ -30,7 +30,29 @@ struct RawResult {
 
 #[derive(Debug, Deserialize)]
 struct RawAmount {
+    /// OpenAI serializes amounts as high-precision strings (e.g.
+    /// `"0.02100000000000000000000000000000000"`) to avoid float-precision
+    /// loss over the wire. Older endpoints and most docs say "number" so
+    /// we accept either shape defensively.
+    #[serde(deserialize_with = "deserialize_amount_value")]
     value: f64,
+}
+
+fn deserialize_amount_value<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    let raw = serde_json::Value::deserialize(d)?;
+    match raw {
+        serde_json::Value::Number(n) => n
+            .as_f64()
+            .ok_or_else(|| de::Error::custom("amount.value: number was not representable as f64")),
+        serde_json::Value::String(s) => s.trim().parse::<f64>().map_err(|e| {
+            de::Error::custom(format!(
+                "amount.value: string {s:?} could not parse as f64: {e}"
+            ))
+        }),
+        other => Err(de::Error::custom(format!(
+            "amount.value: expected number or string, got {other:?}"
+        ))),
+    }
 }
 
 /// Convenience wrapper: query spend from the first of the current calendar
@@ -316,6 +338,50 @@ mod tests {
         assert!(parsed.truncated);
         // Total is still computed from what we did get — it's just flagged partial.
         assert!((parsed.total_usd - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn amount_value_as_high_precision_string_is_accepted() {
+        // The real OpenAI Costs API serializes amount.value as a high-precision
+        // string ("0.02100000000000000000000000000000000") rather than a JSON
+        // number, presumably to avoid float-roundtrip loss. We have to tolerate
+        // both. Regression: prior versions of this crate assumed f64.
+        let body = r#"{
+            "object": "page",
+            "data": [{"object":"bucket","start_time":1,"end_time":2,"results":[
+                {"object":"organization.costs.result","amount":{"value":"0.02100000000000000000000000000000000","currency":"usd"},"line_item":"gpt-5"},
+                {"object":"organization.costs.result","amount":{"value":"1.50000000000000000000000000000000000","currency":"usd"},"line_item":"o1-mini"}
+            ]}],
+            "has_more": false
+        }"#;
+        let (start, end) = fixed_window();
+        let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
+        // 0.021 + 1.5 = 1.521; check within float epsilon.
+        assert!((parsed.total_usd - 1.521).abs() < 1e-9, "got {}", parsed.total_usd);
+        assert_eq!(parsed.by_line_item.len(), 2);
+        // o1-mini has the higher amount (1.50), comes first.
+        assert_eq!(parsed.by_line_item[0].line_item, "o1-mini");
+        assert!((parsed.by_line_item[0].amount_usd - 1.5).abs() < 1e-9);
+        assert_eq!(parsed.by_line_item[1].line_item, "gpt-5");
+        assert!((parsed.by_line_item[1].amount_usd - 0.021).abs() < 1e-9);
+    }
+
+    #[test]
+    fn amount_value_as_invalid_string_is_shape_error() {
+        let body = r#"{
+            "object": "page",
+            "data": [{"object":"bucket","start_time":1,"end_time":2,"results":[
+                {"object":"organization.costs.result","amount":{"value":"not a number","currency":"usd"},"line_item":"gpt-5"}
+            ]}],
+            "has_more": false
+        }"#;
+        let (start, end) = fixed_window();
+        match parse_response(body, start, end, Utc::now()) {
+            Err(OpenAiError::ResponseShape(msg)) => {
+                assert!(msg.contains("could not parse"), "msg: {msg}")
+            }
+            other => panic!("expected ResponseShape, got {other:?}"),
+        }
     }
 
     #[test]
