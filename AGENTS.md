@@ -165,7 +165,8 @@ balanze/
 │   ├── state_coordinator/      (planned) actor; ONLY writer of Snapshot AND OS tray state
 │   ├── watcher/                (planned) notify + 1s debounce + 60s safety poll
 │   ├── keychain/               (planned) `keyring` wrapper
-│   └── settings/               (planned) config serde, atomic write (tmp + rename)
+│   ├── settings/               (planned) config serde, atomic write (tmp + rename)
+│   └── balanze_cli/            binary entry-point that composes the backend crates into a Snapshot. Same composition role that `src-tauri/` will play when the front-end lands; useful as a dev tool and as a reference for the eventual Tauri wiring. Binary name: `balanze`.
 └── .github/
     └── workflows/
         ├── ci.yml              fmt + clippy + cargo test + svelte-check on Win + Mac
@@ -210,7 +211,7 @@ Strict layering — agents must respect:
 5. **`keychain` is the only caller of the `keyring` crate.** All secret reads and writes route through this crate's API. Settings UI commands invoke `keychain::set/get/delete`, not `keyring::*` directly.
 6. **`settings` owns the `settings.json` file on disk.** Atomic writes (tmp + rename). No other crate reads or writes this file.
 7. **`state_coordinator` is the ONLY writer of the in-memory Snapshot AND the ONLY caller of Tauri tray APIs (`tray.set_icon`, `tray.set_title`).** Pollers send `StateMsg::Update(SourcePartial)`; the coordinator merges, dedups by `last_painted`, emits to Tauri, paints the tray. The 30s tray ticker is a dumb `StateMsg::Refresh` sender — it never touches OS tray state itself.
-8. **`src-tauri` (the app crate) is the glue.** It wires plugins (`tauri-plugin-single-instance`, `tauri-plugin-opener`), declares Tauri commands that delegate to crates, and emits events. Business logic does not live here; if you're tempted to add a `#[tauri::command] fn compute_…`, that computation belongs in a crate.
+8. **`src-tauri` and `balanze_cli` are the two glue entry-points.** Both compose the backend crates into a `Snapshot`. Neither contains business logic; if you're tempted to add a `#[tauri::command] fn compute_…` in `src-tauri` or a parallel computation in `balanze_cli`, that computation belongs in a crate. The two entry-points must produce identical `Snapshot`s for identical inputs; when they diverge, the underlying crate is wrong.
 9. **Frontend talks to backend only via the IPC contract.** Commands: `get_snapshot`, `get_history`, `refresh_now`, `set_api_key`, `get_settings`, `set_settings`. Events: `usage_updated`, `degraded_state`. Adding a new command or event requires a design-doc update first.
 10. **Currency math uses `i64` micro-USD.** Float arithmetic on money is a footgun (`0.1 + 0.2 != 0.3`, threshold comparisons flake near boundaries). Convert to `f64` ONLY at the display boundary.
 
