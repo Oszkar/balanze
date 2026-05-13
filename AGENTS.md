@@ -148,7 +148,7 @@ balanze/
 │       └── lib.rs              single_instance plugin + tray menu via app.tray_by_id("main")
 ├── crates/                     workspace members; populated as build sequence progresses
 │   ├── .gitkeep                placeholder so the dir is committed
-│   ├── claude_parser/          (planned) JSONL parser, byte-cursor incremental reads
+│   ├── claude_parser/          parser + walker (full-file reads in v0.1a; byte-cursor incremental is step 2b). 15 unit tests + smoke example against real ~/.claude/projects/
 │   ├── window/                 (planned) rolling 5-hour window utilization
 │   ├── predictor/              (planned) EWMA + warm-up state machine
 │   ├── openai_client/          (planned) OpenAI billing API client
@@ -285,7 +285,7 @@ The design doc spec'd ~30 tests across 8 crates; as crates land, the locations t
 
 | Subject | Location | What's there |
 |---|---|---|
-| Claude JSONL parsing | `crates/claude_parser/tests/` | (planned) fixture-based unit tests; anonymized excerpts from real `~/.claude/projects/` data; edge cases per §6 |
+| Claude JSONL parsing | `crates/claude_parser/src/{parser,walker}.rs` (inline `#[cfg(test)]`) + `examples/smoke.rs` | 15 unit tests: happy/zero-cache/extra-fields/blank/malformed/missing-ts/blank-skips/error-line-numbers/partial-final-line + recursive find/missing-root/empty-dir/mtime-sort. Smoke example runs against real `~/.claude/projects/` (`cargo run --release --example smoke -p claude_parser`). |
 | Rolling window | `crates/window/tests/` | (planned) empty / N-events / reset-straddle / empirical heuristic correctness |
 | Predictor state machine | `crates/predictor/tests/` | (planned) warm-up (Insufficient) / steady-burst (Confident ±10%) / high-variance (Uncertain) / mid-window reset (back to Insufficient) |
 | OpenAI billing client | `crates/openai_client/tests/` | (planned) wiremock-based: 200 / 401 / 429-with-retry / 500 transient / network offline |
