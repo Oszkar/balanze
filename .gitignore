@@ -55,3 +55,6 @@ balanze.log*
 
 # gstack session state
 .claude/
+
+# Network captures — frequently contain live session cookies and PII
+*.har

@@ -242,7 +242,7 @@ Tightest possible side-project ship. The goal is to replace the user's existing 
 
 - Tauri 2 + Rust + Svelte 5 desktop app. Windows 11 and macOS 15+ only (Ubuntu deferred to Phase 3).
 - Claude subscription usage via local JSONL parsing of `~/.claude/projects/**/*.jsonl` — no API, no scraping, no auth (approach proven by ccusage; reimplemented in Rust to keep the binary self-contained).
-- Claude API spend + extra credits via Anthropic Console — included if the step-1 spike finds a stable endpoint; otherwise deferred to v0.2 and explicitly marked as a known gap.
+- Claude API spend + extra credits via Anthropic Console — **deferred to v0.2** after the step-1 spike. The Console (platform.claude.com) does expose stable JSON endpoints, but auth is via expiring session cookies rather than an API key; cookie-paste UX deserves first-class design and a `DegradedState::auth_expired` flow, neither of which fits in v0.1's scope. v0.1 ships without Anthropic API spend visibility on the Console side; subscription usage from `~/.claude/projects/` JSONL is still fully covered.
 - OpenAI API spend + credits via documented billing endpoints.
 - Tray icon as a color-shifting gauge (idle → green → amber → red) with hover tooltip; macOS additionally shows a `Title` text slot with the current percentage.
 - Tray menu: Open Balanze / Settings… / Quit.
@@ -262,7 +262,7 @@ Round out what was deferred from v0.1 and respond to the first weeks of real use
 - Alerts for spend thresholds, credits below threshold, subscription approaching cap, reset windows, and connector failure / stale data — with thresholds informed by v0.1 observation.
 - Optional full dashboard window for per-provider detail pages, recent trends, account source and confidence indicators, settings, connectors, and troubleshooting.
 - Auto-update via Tauri updater (pointed at the GitHub Releases JSON manifest).
-- Anthropic Console scrape if it was deferred from v0.1.
+- Anthropic Console integration via session-cookie paste-from-DevTools flow (endpoints already discovered and documented in the design doc's Open Questions section). Tile shows `auth_expired` state on 401 and prompts the user to re-paste cookies.
 - "Send Logs" tray menu item that bundles rotated logs + recent state snapshot for support.
 - Subscription "estimated $ value" tile (synthetic-dollar display via a hardcoded pricing table — kept separate from the cap math, which stays denominated in tokens).
 - Code signing investigation (Windows certificate, macOS notarization) if external users start appearing.
