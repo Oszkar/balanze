@@ -14,6 +14,9 @@ path = "src/main.rs"
 [dependencies]
 anthropic_oauth = { path = "../anthropic_oauth" }
 claude_parser = { path = "../claude_parser" }
+keychain = { path = "../keychain" }
+openai_client = { path = "../openai_client" }
+settings = { path = "../settings" }
 
 tokio = { workspace = true }
 reqwest = { workspace = true }

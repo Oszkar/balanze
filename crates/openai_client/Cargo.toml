@@ -1,0 +1,21 @@
+[package]
+name = "openai_client"
+description = "OpenAI Platform API client. v0.1 fetches /v1/dashboard/billing/credit_grants (legacy endpoint that returns plain USD doubles)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }
+anyhow = { workspace = true }

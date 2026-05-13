@@ -161,11 +161,11 @@ balanze/
 │   ├── anthropic_oauth/        client + credentials loader + types. Calls `GET api.anthropic.com/api/oauth/usage` and parses dynamic-keyed response with curated display labels (`Current 5-hour session` / `Sonnet only (7 days)` / etc.) and titlecased fallback for unknown future cadence keys. 14 unit tests + 5 wiremock tests + smoke example against the real endpoint. Refresh-token flow on 401 is TODO for step 4.
 │   ├── window/                 (planned) composes tray-paint state + sparkline inputs from OAuth (primary) + JSONL (per-event detail). Heuristic only as a degraded fallback.
 │   ├── predictor/              (planned) EWMA + warm-up state machine
-│   ├── openai_client/          (planned) OpenAI billing API client
+│   ├── openai_client/          credit_grants fetcher (legacy endpoint, plain USD doubles). 8 unit tests + 5 wiremock. 403 returns ForbiddenProjectKey with hint that project keys don't have billing access.
 │   ├── state_coordinator/      (planned) actor; ONLY writer of Snapshot AND OS tray state
 │   ├── watcher/                (planned) notify + 1s debounce + 60s safety poll
-│   ├── keychain/               (planned) `keyring` wrapper
-│   ├── settings/               (planned) config serde, atomic write (tmp + rename)
+│   ├── keychain/               `keyring` wrapper, service="me.oszkar.Balanze". Only crate that imports keyring per §4 #5. 1 inline test + 1 #[ignore]'d real-keychain smoke.
+│   ├── settings/               config serde + atomic write (tmp + rename), schema versioned. Path via `directories::ProjectDirs`. 9 unit tests. Stores non-secrets only — keys live in keychain crate.
 │   └── balanze_cli/            binary entry-point that composes the backend crates into a Snapshot. Same composition role that `src-tauri/` will play when the front-end lands; useful as a dev tool and as a reference for the eventual Tauri wiring. Binary name: `balanze`.
 └── .github/
     └── workflows/
@@ -266,10 +266,10 @@ Before claiming work is done:
 | `crates/window/**` or `crates/predictor/**` | All Rust gates + fixture-based unit tests covering empty / N-events / reset-straddle / warm-up / uncertain / confident state transitions |
 | `crates/state_coordinator/**` | All Rust gates + one unit test per `StateMsg` variant + an mpsc-saturation test |
 | `crates/anthropic_oauth/**` | All Rust gates + wiremock unit tests (happy / 401-then-successful-refresh / 401-then-failed-refresh / network offline / unexpected response shape). Manual verification with the real credentials file on each developer machine. |
-| `crates/openai_client/**` | All Rust gates + wiremock unit tests (happy / 401 / 429-with-retry / 500 / network offline) |
+| `crates/openai_client/**` | All Rust gates + 8 parser unit tests + 5 wiremock integration tests (happy / 401 / 403 with hint / 500 / invalid-JSON). |
 | `crates/watcher/**` | All Rust gates + `tokio::time::pause()` timing tests (notify+debounce single-fire / burst dedupe / safety poll on silence / notify-during-safety-poll dedupe) |
-| `crates/keychain/**` | All Rust gates + smoke test (ignored on CI; manual run on each developer machine — cross-OS keychain in CI is unreliable) |
-| `crates/settings/**` | All Rust gates + tests for load-missing → defaults, load-corrupt → defaults+warn, save uses tmp + rename |
+| `crates/keychain/**` | All Rust gates + 1 inline keys-constant test + 1 `#[ignore]` real-keychain smoke. Run smoke manually on each developer machine before tagging a release (cross-OS keychain in CI is unreliable). |
+| `crates/settings/**` | All Rust gates + 9 unit tests (load missing → defaults, load corrupt → Malformed, atomic save uses tmp + rename, schema version handling, unknown extra-fields tolerated, minimal version-only file loads). |
 | `src-tauri/src/**/*.rs` | All Rust gates + `bun run tauri dev` smoke test (tray icon appears, click opens window, Quit exits cleanly) |
 | `src-tauri/tauri.conf.json` | All Rust gates + verify `bun run tauri build --no-bundle` succeeds (validates config without the slow bundling step) |
 | `src/**/*.{svelte,ts}` | `bun run check`; visually verify in `bun run tauri dev` |

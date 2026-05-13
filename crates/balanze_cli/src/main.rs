@@ -1,8 +1,12 @@
 //! Balanze CLI — composes the backend crates into a single status view.
 //!
-//! Run with no args to print a pretty snapshot, or `--json` for
-//! machine-readable output. Each data source degrades independently:
-//! if OAuth fails, JSONL summary still prints, and vice versa.
+//! Subcommands:
+//!   balanze                       Print pretty status (default)
+//!   balanze status [--json]       Same as above; --json is machine-readable
+//!   balanze set-openai-key        Read sk-... from stdin, store in OS keychain
+//!   balanze clear-openai-key      Remove the OpenAI key from the keychain
+//!   balanze settings              Print current settings.json contents
+//!   balanze help                  This help
 //!
 //! When the Tauri front-end lands, the same composition logic will live
 //! behind the `get_snapshot` IPC command in `src-tauri`. This CLI is the
@@ -11,11 +15,14 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
+use std::io::{self, Read, Write};
+use std::process::ExitCode;
 
-use anthropic_oauth::{fetch_usage, load as load_credentials, ClaudeOAuthSnapshot, DEFAULT_API_BASE};
-use anyhow::Result;
+use anthropic_oauth::{fetch_usage, load as load_credentials, ClaudeOAuthSnapshot, DEFAULT_API_BASE as ANTHROPIC_API_BASE};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
 use claude_parser::{find_jsonl_files, parse_str, UsageEvent};
+use openai_client::{fetch_credit_grants, CreditGrants, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE};
 use serde::Serialize;
 use tracing::{info, warn};
 
@@ -26,6 +33,10 @@ struct CliSnapshot {
     claude_oauth_error: Option<String>,
     claude_jsonl: Option<JsonlSummary>,
     claude_jsonl_error: Option<String>,
+    openai: Option<CreditGrants>,
+    /// `None` means: OpenAI not configured. `Some` with error string means
+    /// configured but the fetch failed.
+    openai_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -50,13 +61,41 @@ struct ByModel {
     total_tokens: u64,
 }
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let json_mode = env::args().any(|a| a == "--json");
+    let args: Vec<String> = env::args().collect();
+    let cmd = args.get(1).map(String::as_str).unwrap_or("status");
 
+    let result = match cmd {
+        "status" | "--json" => cmd_status(&args),
+        "set-openai-key" => cmd_set_openai_key(),
+        "clear-openai-key" => cmd_clear_openai_key(),
+        "settings" => cmd_settings(),
+        "help" | "--help" | "-h" => {
+            print_help();
+            Ok(())
+        }
+        other => {
+            eprintln!("unknown command: {other}");
+            print_help();
+            return ExitCode::from(2);
+        }
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_status(args: &[String]) -> Result<()> {
+    let json_mode = args.iter().any(|a| a == "--json");
     let snapshot = tokio::runtime::Runtime::new()?.block_on(build_snapshot());
 
     if json_mode {
@@ -65,6 +104,90 @@ fn main() -> Result<()> {
         print_pretty(&snapshot);
     }
     Ok(())
+}
+
+fn cmd_set_openai_key() -> Result<()> {
+    eprintln!("Paste your OpenAI API key (sk-...) and press Enter:");
+    let mut input = String::new();
+    // If stdin is a pipe, read everything; otherwise read one line.
+    if atty_isatty() {
+        io::stdin().read_line(&mut input)?;
+    } else {
+        io::stdin().read_to_string(&mut input)?;
+    }
+    let key = input.trim().to_string();
+    if key.is_empty() {
+        return Err(anyhow!("no key provided"));
+    }
+    if !key.starts_with("sk-") {
+        return Err(anyhow!(
+            "key doesn't look like an OpenAI key (expected to start with `sk-`)"
+        ));
+    }
+    // Warn about project keys but don't block — let the user decide.
+    let is_project_key = key.starts_with("sk-proj-");
+    if is_project_key {
+        eprintln!(
+            "Heads up: keys starting with `sk-proj-` (project keys) do not have access to the billing"
+        );
+        eprintln!(
+            "credit_grants endpoint. Balanze will store this key but the OpenAI tile will show a"
+        );
+        eprintln!(
+            "403 error until you replace it with a legacy/user key from your OpenAI account settings."
+        );
+    }
+
+    keychain::set(keychain::keys::OPENAI_API_KEY, &key)?;
+
+    let mut s = settings::load().unwrap_or_default();
+    s.providers.openai_enabled = true;
+    settings::save(&s)?;
+
+    eprintln!("Stored OpenAI key in the OS keychain ({} bytes).", key.len());
+    if !is_project_key {
+        eprintln!("Run `balanze` to verify the tile shows credit data.");
+    }
+    Ok(())
+}
+
+fn cmd_clear_openai_key() -> Result<()> {
+    keychain::delete(keychain::keys::OPENAI_API_KEY)?;
+    let mut s = settings::load().unwrap_or_default();
+    s.providers.openai_enabled = false;
+    settings::save(&s)?;
+    eprintln!("Removed OpenAI key from the keychain.");
+    Ok(())
+}
+
+fn cmd_settings() -> Result<()> {
+    let s = settings::load()?;
+    println!("{}", serde_json::to_string_pretty(&s)?);
+    let path = settings::default_path()?;
+    eprintln!("(loaded from: {})", path.display());
+    Ok(())
+}
+
+fn print_help() {
+    eprintln!("Balanze — local-first AI usage tracker.");
+    eprintln!();
+    eprintln!("Subcommands:");
+    eprintln!("  balanze                  Print pretty status (default)");
+    eprintln!("  balanze status [--json]  Same as above; --json is machine-readable");
+    eprintln!("  balanze set-openai-key   Read sk-... from stdin, store in OS keychain");
+    eprintln!("  balanze clear-openai-key Remove the OpenAI key from the keychain");
+    eprintln!("  balanze settings         Print current settings.json contents");
+    eprintln!("  balanze help             This help");
+}
+
+/// Cheap stdin-is-a-tty check. Avoids pulling in the `atty` crate; assumes
+/// Windows is a TTY for `read_line` purposes, which is correct for our use case.
+fn atty_isatty() -> bool {
+    // We always want the read_line behavior unless stdin was redirected.
+    // The simplest portable check is "are we running in an interactive shell" —
+    // approximated by checking if stdin is a tty via std::io::IsTerminal.
+    use std::io::IsTerminal;
+    io::stdin().is_terminal()
 }
 
 async fn build_snapshot() -> CliSnapshot {
@@ -83,12 +206,22 @@ async fn build_snapshot() -> CliSnapshot {
             (None, Some(e.to_string()))
         }
     };
+    let (openai, openai_error) = match fetch_openai().await {
+        Ok(Some(g)) => (Some(g), None),
+        Ok(None) => (None, None),
+        Err(e) => {
+            warn!("OpenAI source failed: {e}");
+            (None, Some(e.to_string()))
+        }
+    };
     CliSnapshot {
         fetched_at: now,
         claude_oauth,
         claude_oauth_error,
         claude_jsonl,
         claude_jsonl_error,
+        openai,
+        openai_error,
     }
 }
 
@@ -100,7 +233,7 @@ async fn fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
         .build()?;
     let snapshot = fetch_usage(
         &client,
-        DEFAULT_API_BASE,
+        ANTHROPIC_API_BASE,
         &oauth.access_token,
         oauth.subscription_type,
         oauth.rate_limit_tier,
@@ -108,6 +241,37 @@ async fn fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
     .await?;
     info!("oauth: fetched {} cadence bars", snapshot.cadences.len());
     Ok(snapshot)
+}
+
+/// Fetch OpenAI credit grants if the user has configured an API key.
+/// Returns `Ok(None)` when nothing is configured (so the CLI can print a
+/// "not configured" hint rather than a scary error). Returns `Err` only for
+/// real failures (401, 403, network, etc.).
+async fn fetch_openai() -> Result<Option<CreditGrants>> {
+    let key = match keychain::get(keychain::keys::OPENAI_API_KEY) {
+        Ok(k) => k,
+        Err(keychain::KeychainError::NotFound(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let client = reqwest::Client::builder()
+        .user_agent("balanze-cli/0.1.0")
+        .build()?;
+    match fetch_credit_grants(&client, OPENAI_API_BASE, &key).await {
+        Ok(grants) => {
+            info!(
+                "openai: fetched grants total_granted={} total_used={}",
+                grants.total_granted_usd, grants.total_used_usd
+            );
+            Ok(Some(grants))
+        }
+        Err(OpenAiError::AuthExpired { .. }) => Err(anyhow!(
+            "OpenAI API key rejected (HTTP 401). Run `balanze set-openai-key` to update."
+        )),
+        Err(OpenAiError::ForbiddenProjectKey { .. }) => Err(anyhow!(
+            "OpenAI returned 403. The credit_grants endpoint requires a legacy/user API key; project keys (`sk-proj-…`) don't have billing access. Generate a legacy key at platform.openai.com/account/api-keys."
+        )),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
@@ -158,7 +322,6 @@ fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
         }
     }
 
-    // Burn rate: tokens per minute over last 30 minutes. Require at least 3 events.
     let recent_burn_tokens_per_min = if burn_events >= 3 {
         Some(burn_tokens as f64 / 30.0)
     } else {
@@ -186,7 +349,6 @@ fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
 }
 
 fn locate_claude_projects_dir() -> Result<std::path::PathBuf> {
-    // Check XDG first, then ~/.claude/projects, then ~/.config/claude/projects.
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
         candidates.push(std::path::PathBuf::from(xdg).join("claude").join("projects"));
@@ -201,17 +363,19 @@ fn locate_claude_projects_dir() -> Result<std::path::PathBuf> {
             return Ok(c.clone());
         }
     }
-    Err(anyhow::anyhow!(
+    Err(anyhow!(
         "claude projects directory not found; searched {:?}",
         candidates
     ))
 }
 
 fn print_pretty(snapshot: &CliSnapshot) {
+    let _ = io::stdout().flush();
     println!("=== Balanze Status ===");
     println!("fetched: {}", snapshot.fetched_at.format("%Y-%m-%d %H:%M:%S UTC"));
     println!();
 
+    // Claude OAuth (cadence bars)
     if let Some(oauth) = &snapshot.claude_oauth {
         println!(
             "subscription: {} ({})",
@@ -235,22 +399,41 @@ fn print_pretty(snapshot: &CliSnapshot) {
                 pretty_duration(resets_in)
             );
         }
-        // extra_usage block intentionally suppressed from pretty output.
-        // OAuth's `used_credits` / `monthly_limit` / `utilization` reconcile
-        // with each other but disagree with the visible claude.ai/settings/usage
-        // page (which is the user-facing source of truth — e.g. UI shows
-        // "$4.67 spent this month" while OAuth reports a different metric
-        // entirely). hamed-elfayome's Claude Usage Tracker shows the same
-        // OAuth-derived value, so the discrepancy is not specific to us.
-        // The data is still available in --json output for diagnostics.
-        // To re-enable: capture a HAR from claude.ai/settings/usage,
-        // identify the endpoint that exposes the visible $4.67 number,
-        // wire it in, and either replace or annotate this section.
+        // extra_usage block intentionally suppressed; see commit e14365f.
         let _ = &oauth.extra_usage;
     } else if let Some(err) = &snapshot.claude_oauth_error {
         println!("CADENCE BARS: unavailable — {err}");
     }
 
+    // OpenAI credit grants
+    println!();
+    if let Some(grants) = &snapshot.openai {
+        let used_pct = if grants.total_granted_usd > 0.0 {
+            (grants.total_used_usd / grants.total_granted_usd) * 100.0
+        } else {
+            0.0
+        };
+        println!("OPENAI API CREDITS:");
+        println!(
+            "  Used ${:.2} of ${:.2} ({:.1}%)  —  ${:.2} available",
+            grants.total_used_usd, grants.total_granted_usd, used_pct, grants.total_available_usd
+        );
+        if let Some(expires) = grants.next_grant_expiry {
+            let in_dur = expires.signed_duration_since(snapshot.fetched_at);
+            println!(
+                "  Next grant expires: {} (in {})",
+                expires.format("%Y-%m-%d"),
+                pretty_duration(in_dur)
+            );
+        }
+    } else if let Some(err) = &snapshot.openai_error {
+        println!("OPENAI API CREDITS: unavailable — {err}");
+    } else {
+        println!("OPENAI API CREDITS: not configured");
+        println!("  Run `balanze set-openai-key` to add a legacy/user sk-... key.");
+    }
+
+    // Claude Code JSONL activity
     println!();
     if let Some(jsonl) = &snapshot.claude_jsonl {
         println!("CLAUDE CODE ACTIVITY (last 5h, from local JSONL):");
@@ -261,7 +444,10 @@ fn print_pretty(snapshot: &CliSnapshot) {
             fmt_int(jsonl.total_tokens_in_window)
         );
         match jsonl.recent_burn_tokens_per_min {
-            Some(rate) => println!("  recent burn:       ~{} tokens/min (last 30 min)", fmt_int(rate as u64)),
+            Some(rate) => println!(
+                "  recent burn:       ~{} tokens/min (last 30 min)",
+                fmt_int(rate as u64)
+            ),
             None => println!("  recent burn:       (too few events in last 30 min)"),
         }
         if !jsonl.by_model.is_empty() {
@@ -299,7 +485,6 @@ fn pretty_duration(d: Duration) -> String {
 }
 
 fn fmt_int(n: u64) -> String {
-    // Comma-separated thousands. No locale dependency.
     let s = n.to_string();
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);

@@ -1,0 +1,18 @@
+[package]
+name = "settings"
+description = "Non-secret Balanze settings — config file at OS-conventional path, atomic save (tmp + rename), schema-versioned for future migration. Secrets live in `crates/keychain`, not here."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+directories = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
