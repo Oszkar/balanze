@@ -15,14 +15,14 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::process::ExitCode;
 
 use anthropic_oauth::{fetch_usage, load as load_credentials, ClaudeOAuthSnapshot, DEFAULT_API_BASE as ANTHROPIC_API_BASE};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
 use claude_parser::{find_jsonl_files, parse_str, UsageEvent};
-use openai_client::{fetch_credit_grants, CreditGrants, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE};
+use openai_client::{costs_this_month, OpenAiCosts, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE};
 use serde::Serialize;
 use tracing::{info, warn};
 
@@ -33,7 +33,7 @@ struct CliSnapshot {
     claude_oauth_error: Option<String>,
     claude_jsonl: Option<JsonlSummary>,
     claude_jsonl_error: Option<String>,
-    openai: Option<CreditGrants>,
+    openai: Option<OpenAiCosts>,
     /// `None` means: OpenAI not configured. `Some` with error string means
     /// configured but the fetch failed.
     openai_error: Option<String>,
@@ -107,15 +107,29 @@ fn cmd_status(args: &[String]) -> Result<()> {
 }
 
 fn cmd_set_openai_key() -> Result<()> {
-    eprintln!("Paste your OpenAI API key (sk-...) and press Enter:");
-    let mut input = String::new();
-    // If stdin is a pipe, read everything; otherwise read one line.
-    if atty_isatty() {
-        io::stdin().read_line(&mut input)?;
+    // Accept the key as a positional argument (`balanze set-openai-key sk-…`)
+    // or, if no argv is provided, read one line from stdin. We always use
+    // `read_line` regardless of TTY status — `read_to_string` waited for EOF
+    // and made the command look hung under `cargo run` on Windows.
+    let args: Vec<String> = env::args().collect();
+    let argv_key = args.iter().skip(2).find(|s| !s.is_empty()).cloned();
+
+    let raw = if let Some(k) = argv_key {
+        k
     } else {
-        io::stdin().read_to_string(&mut input)?;
-    }
-    let key = input.trim().to_string();
+        eprint!("Paste your OpenAI API key (sk-...) and press Enter: ");
+        let _ = io::stderr().flush();
+        let mut input = String::new();
+        let n = io::stdin().read_line(&mut input)?;
+        if n == 0 {
+            return Err(anyhow!(
+                "stdin closed without input. Tip: pass the key as an argument instead — `balanze set-openai-key sk-...`"
+            ));
+        }
+        input
+    };
+
+    let key = raw.trim().to_string();
     if key.is_empty() {
         return Err(anyhow!("no key provided"));
     }
@@ -124,18 +138,23 @@ fn cmd_set_openai_key() -> Result<()> {
             "key doesn't look like an OpenAI key (expected to start with `sk-`)"
         ));
     }
-    // Warn about project keys but don't block — let the user decide.
-    let is_project_key = key.starts_with("sk-proj-");
-    if is_project_key {
+    // Warn about non-admin keys but don't block — the API will reject them
+    // and the user will see the specific error in the next status fetch.
+    let is_admin_key = key.starts_with("sk-admin-");
+    if !is_admin_key {
         eprintln!(
-            "Heads up: keys starting with `sk-proj-` (project keys) do not have access to the billing"
+            "Heads up: this doesn't look like an admin key. The organization/costs"
         );
         eprintln!(
-            "credit_grants endpoint. Balanze will store this key but the OpenAI tile will show a"
+            "endpoint Balanze uses requires an admin key (`sk-admin-…`); project keys"
         );
         eprintln!(
-            "403 error until you replace it with a legacy/user key from your OpenAI account settings."
+            "(`sk-proj-…`) and service-account keys will return 403 here. Create an"
         );
+        eprintln!(
+            "admin key at https://platform.openai.com/settings/organization/admin-keys"
+        );
+        eprintln!("and replace this one if the next `balanze` run shows an error.");
     }
 
     keychain::set(keychain::keys::OPENAI_API_KEY, &key)?;
@@ -145,8 +164,8 @@ fn cmd_set_openai_key() -> Result<()> {
     settings::save(&s)?;
 
     eprintln!("Stored OpenAI key in the OS keychain ({} bytes).", key.len());
-    if !is_project_key {
-        eprintln!("Run `balanze` to verify the tile shows credit data.");
+    if is_admin_key {
+        eprintln!("Run `balanze` to verify the tile shows spend data.");
     }
     Ok(())
 }
@@ -172,22 +191,14 @@ fn print_help() {
     eprintln!("Balanze — local-first AI usage tracker.");
     eprintln!();
     eprintln!("Subcommands:");
-    eprintln!("  balanze                  Print pretty status (default)");
-    eprintln!("  balanze status [--json]  Same as above; --json is machine-readable");
-    eprintln!("  balanze set-openai-key   Read sk-... from stdin, store in OS keychain");
-    eprintln!("  balanze clear-openai-key Remove the OpenAI key from the keychain");
-    eprintln!("  balanze settings         Print current settings.json contents");
-    eprintln!("  balanze help             This help");
-}
-
-/// Cheap stdin-is-a-tty check. Avoids pulling in the `atty` crate; assumes
-/// Windows is a TTY for `read_line` purposes, which is correct for our use case.
-fn atty_isatty() -> bool {
-    // We always want the read_line behavior unless stdin was redirected.
-    // The simplest portable check is "are we running in an interactive shell" —
-    // approximated by checking if stdin is a tty via std::io::IsTerminal.
-    use std::io::IsTerminal;
-    io::stdin().is_terminal()
+    eprintln!("  balanze                       Print pretty status (default)");
+    eprintln!("  balanze status [--json]       Same as above; --json is machine-readable");
+    eprintln!("  balanze set-openai-key [KEY]  Store KEY in the OS keychain. Reads from stdin if KEY is omitted.");
+    eprintln!("  balanze clear-openai-key      Remove the OpenAI key from the keychain");
+    eprintln!("  balanze settings              Print current settings.json contents");
+    eprintln!("  balanze help                  This help");
+    eprintln!();
+    eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
 
 async fn build_snapshot() -> CliSnapshot {
@@ -243,11 +254,11 @@ async fn fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
     Ok(snapshot)
 }
 
-/// Fetch OpenAI credit grants if the user has configured an API key.
+/// Fetch this-month OpenAI costs if the user has configured an admin key.
 /// Returns `Ok(None)` when nothing is configured (so the CLI can print a
 /// "not configured" hint rather than a scary error). Returns `Err` only for
 /// real failures (401, 403, network, etc.).
-async fn fetch_openai() -> Result<Option<CreditGrants>> {
+async fn fetch_openai() -> Result<Option<OpenAiCosts>> {
     let key = match keychain::get(keychain::keys::OPENAI_API_KEY) {
         Ok(k) => k,
         Err(keychain::KeychainError::NotFound(_)) => return Ok(None),
@@ -256,19 +267,21 @@ async fn fetch_openai() -> Result<Option<CreditGrants>> {
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
         .build()?;
-    match fetch_credit_grants(&client, OPENAI_API_BASE, &key).await {
-        Ok(grants) => {
+    match costs_this_month(&client, OPENAI_API_BASE, &key).await {
+        Ok(costs) => {
             info!(
-                "openai: fetched grants total_granted={} total_used={}",
-                grants.total_granted_usd, grants.total_used_usd
+                "openai: fetched costs total_usd={} buckets={} truncated={}",
+                costs.total_usd,
+                costs.by_line_item.len(),
+                costs.truncated
             );
-            Ok(Some(grants))
+            Ok(Some(costs))
         }
-        Err(OpenAiError::AuthExpired { .. }) => Err(anyhow!(
-            "OpenAI API key rejected (HTTP 401). Run `balanze set-openai-key` to update."
+        Err(OpenAiError::AuthInvalid { .. }) => Err(anyhow!(
+            "OpenAI admin key rejected (HTTP 401). Run `balanze set-openai-key` with a fresh `sk-admin-…` key."
         )),
-        Err(OpenAiError::ForbiddenProjectKey { .. }) => Err(anyhow!(
-            "OpenAI returned 403. The credit_grants endpoint requires a legacy/user API key; project keys (`sk-proj-…`) don't have billing access. Generate a legacy key at platform.openai.com/account/api-keys."
+        Err(OpenAiError::InsufficientScope { .. }) => Err(anyhow!(
+            "OpenAI returned 403. organization/costs requires an admin API key (`sk-admin-…`), not a project or service-account key. Generate one at https://platform.openai.com/settings/organization/admin-keys."
         )),
         Err(e) => Err(e.into()),
     }
@@ -405,32 +418,32 @@ fn print_pretty(snapshot: &CliSnapshot) {
         println!("CADENCE BARS: unavailable — {err}");
     }
 
-    // OpenAI credit grants
+    // OpenAI monthly costs (from Admin API)
     println!();
-    if let Some(grants) = &snapshot.openai {
-        let used_pct = if grants.total_granted_usd > 0.0 {
-            (grants.total_used_usd / grants.total_granted_usd) * 100.0
-        } else {
-            0.0
-        };
-        println!("OPENAI API CREDITS:");
+    if let Some(costs) = &snapshot.openai {
         println!(
-            "  Used ${:.2} of ${:.2} ({:.1}%)  —  ${:.2} available",
-            grants.total_used_usd, grants.total_granted_usd, used_pct, grants.total_available_usd
+            "OPENAI SPEND ({} – {}):",
+            costs.start_time.format("%Y-%m-%d"),
+            costs.end_time.format("%Y-%m-%d"),
         );
-        if let Some(expires) = grants.next_grant_expiry {
-            let in_dur = expires.signed_duration_since(snapshot.fetched_at);
-            println!(
-                "  Next grant expires: {} (in {})",
-                expires.format("%Y-%m-%d"),
-                pretty_duration(in_dur)
-            );
+        let suffix = if costs.truncated { "  (partial; more pages available)" } else { "" };
+        println!("  Total: ${:.2}{suffix}", costs.total_usd);
+        if !costs.by_line_item.is_empty() {
+            println!();
+            println!("  By line item:");
+            for item in costs.by_line_item.iter().take(10) {
+                println!("    {:36}  ${:>10.4}", item.line_item, item.amount_usd);
+            }
+            if costs.by_line_item.len() > 10 {
+                println!("    … ({} more)", costs.by_line_item.len() - 10);
+            }
         }
     } else if let Some(err) = &snapshot.openai_error {
-        println!("OPENAI API CREDITS: unavailable — {err}");
+        println!("OPENAI SPEND: unavailable — {err}");
     } else {
-        println!("OPENAI API CREDITS: not configured");
-        println!("  Run `balanze set-openai-key` to add a legacy/user sk-... key.");
+        println!("OPENAI SPEND: not configured");
+        println!("  Run `balanze set-openai-key` to add a `sk-admin-…` key.");
+        println!("  Create one at https://platform.openai.com/settings/organization/admin-keys");
     }
 
     // Claude Code JSONL activity

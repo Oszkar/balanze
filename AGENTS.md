@@ -161,7 +161,7 @@ balanze/
 │   ├── anthropic_oauth/        client + credentials loader + types. Calls `GET api.anthropic.com/api/oauth/usage` and parses dynamic-keyed response with curated display labels (`Current 5-hour session` / `Sonnet only (7 days)` / etc.) and titlecased fallback for unknown future cadence keys. 14 unit tests + 5 wiremock tests + smoke example against the real endpoint. Refresh-token flow on 401 is TODO for step 4.
 │   ├── window/                 (planned) composes tray-paint state + sparkline inputs from OAuth (primary) + JSONL (per-event detail). Heuristic only as a degraded fallback.
 │   ├── predictor/              (planned) EWMA + warm-up state machine
-│   ├── openai_client/          credit_grants fetcher (legacy endpoint, plain USD doubles). 8 unit tests + 5 wiremock. 403 returns ForbiddenProjectKey with hint that project keys don't have billing access.
+│   ├── openai_client/          Admin Costs API client (`GET /v1/organization/costs` with `sk-admin-…` Bearer). Sums spend across daily buckets, groups by line_item. 10 parser unit tests + 5 wiremock. 401 → AuthInvalid; 403 → InsufficientScope with admin-key hint. Originally targeted the legacy credit_grants endpoint; pivoted in May 2026 when OpenAI stopped issuing legacy user keys.
 │   ├── state_coordinator/      (planned) actor; ONLY writer of Snapshot AND OS tray state
 │   ├── watcher/                (planned) notify + 1s debounce + 60s safety poll
 │   ├── keychain/               `keyring` wrapper, service="me.oszkar.Balanze". Only crate that imports keyring per §4 #5. 1 inline test + 1 #[ignore]'d real-keychain smoke.
@@ -266,7 +266,7 @@ Before claiming work is done:
 | `crates/window/**` or `crates/predictor/**` | All Rust gates + fixture-based unit tests covering empty / N-events / reset-straddle / warm-up / uncertain / confident state transitions |
 | `crates/state_coordinator/**` | All Rust gates + one unit test per `StateMsg` variant + an mpsc-saturation test |
 | `crates/anthropic_oauth/**` | All Rust gates + wiremock unit tests (happy / 401-then-successful-refresh / 401-then-failed-refresh / network offline / unexpected response shape). Manual verification with the real credentials file on each developer machine. |
-| `crates/openai_client/**` | All Rust gates + 8 parser unit tests + 5 wiremock integration tests (happy / 401 / 403 with hint / 500 / invalid-JSON). |
+| `crates/openai_client/**` | All Rust gates + 10 parser unit tests (multi-bucket aggregation, line-item sort, null-line-item-as-unknown, missing-amount-skipped, truncation flag, etc.) + 5 wiremock integration tests (happy with admin Bearer + query params, 401, 403 with admin-key hint, 500, invalid-JSON). |
 | `crates/watcher/**` | All Rust gates + `tokio::time::pause()` timing tests (notify+debounce single-fire / burst dedupe / safety poll on silence / notify-during-safety-poll dedupe) |
 | `crates/keychain/**` | All Rust gates + 1 inline keys-constant test + 1 `#[ignore]` real-keychain smoke. Run smoke manually on each developer machine before tagging a release (cross-OS keychain in CI is unreliable). |
 | `crates/settings/**` | All Rust gates + 9 unit tests (load missing → defaults, load corrupt → Malformed, atomic save uses tmp + rename, schema version handling, unknown extra-fields tolerated, minimal version-only file loads). |
