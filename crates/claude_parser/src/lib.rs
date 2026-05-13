@@ -9,10 +9,12 @@
 //! we care about is reported as `ParseError::SchemaDrift { line, message }` so
 //! the caller can map the failure into a `DegradedState` rather than aborting.
 
+mod dedup;
 mod parser;
 mod types;
 mod walker;
 
+pub use dedup::dedup_events;
 pub use parser::{parse_line, parse_str};
 pub use types::{AccountType, DataSource, ParseError, Provider, UsageEvent};
 pub use walker::{candidate_claude_projects_dirs, find_claude_projects_dir, find_jsonl_files};

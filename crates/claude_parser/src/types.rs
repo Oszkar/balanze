@@ -37,6 +37,12 @@ pub struct UsageEvent {
     /// from the provider's billing endpoint, not from this stream).
     pub cost_micro_usd: Option<i64>,
     pub source: DataSource,
+    /// `message.id` from the JSONL line ("msg_…"). First half of the dedup
+    /// key. `None` for synthetic events or future schema drift.
+    pub message_id: Option<String>,
+    /// Top-level `requestId` from the JSONL line ("req_…"). Second half of
+    /// the dedup key. `None` if absent.
+    pub request_id: Option<String>,
 }
 
 impl UsageEvent {

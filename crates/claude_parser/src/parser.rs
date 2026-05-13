@@ -11,10 +11,13 @@ struct RawLine {
     kind: Option<String>,
     timestamp: Option<DateTime<Utc>>,
     message: Option<RawMessage>,
+    #[serde(rename = "requestId")]
+    request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawMessage {
+    id: Option<String>,
     model: Option<String>,
     usage: Option<RawUsage>,
 }
@@ -77,6 +80,8 @@ pub fn parse_line(line: &str, line_no: usize) -> Result<Option<UsageEvent>, Pars
         cache_read_input_tokens: usage.cache_read_input_tokens,
         cost_micro_usd: None,
         source: DataSource::Jsonl,
+        message_id: message.id,
+        request_id: raw.request_id,
     }))
 }
 
@@ -141,6 +146,22 @@ mod tests {
         assert_eq!(ev.cache_creation_input_tokens, 0);
         assert_eq!(ev.cache_read_input_tokens, 0);
         assert_eq!(ev.total_tokens(), 23);
+    }
+
+    #[test]
+    fn extracts_message_id_and_request_id_when_present() {
+        let line = r#"{"type":"assistant","timestamp":"2026-05-06T14:28:06.800Z","requestId":"req_011CaztiaTDrx5M77znpr6P5","message":{"id":"msg_01UuzJzVNCC9cgV7A5jAc63X","model":"claude-sonnet-4-6","usage":{"input_tokens":1,"output_tokens":2}}}"#;
+        let ev = parse_line(line, 1).unwrap().unwrap();
+        assert_eq!(ev.message_id.as_deref(), Some("msg_01UuzJzVNCC9cgV7A5jAc63X"));
+        assert_eq!(ev.request_id.as_deref(), Some("req_011CaztiaTDrx5M77znpr6P5"));
+    }
+
+    #[test]
+    fn missing_ids_become_none_not_parse_error() {
+        let line = r#"{"type":"assistant","timestamp":"2026-05-06T14:28:06.800Z","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":2}}}"#;
+        let ev = parse_line(line, 1).unwrap().unwrap();
+        assert_eq!(ev.message_id, None);
+        assert_eq!(ev.request_id, None);
     }
 
     #[test]

@@ -132,6 +132,8 @@ mod tests {
             cache_read_input_tokens: 0,
             cost_micro_usd: None,
             source: DataSource::Jsonl,
+            message_id: None,
+            request_id: None,
         }
     }
 
@@ -195,6 +197,8 @@ mod tests {
             cache_read_input_tokens: 13,
             cost_micro_usd: None,
             source: DataSource::Jsonl,
+            message_id: None,
+            request_id: None,
         };
         let s = summarize_window(
             &[e],
