@@ -157,9 +157,9 @@ balanze/
 │       └── lib.rs              single_instance plugin + tray menu via app.tray_by_id("main")
 ├── crates/                     workspace members; populated as build sequence progresses
 │   ├── .gitkeep                placeholder so the dir is committed
-│   ├── claude_parser/          parser + walker (full-file reads in v0.1a; byte-cursor incremental is step 2b). 15 unit tests + smoke example against real ~/.claude/projects/
+│   ├── claude_parser/          parser + walker (full-file reads in v0.1a; byte-cursor incremental is step 2b). Exposes `find_claude_projects_dir()` with XDG + dual-path (`~/.claude/` AND `~/.config/claude/`) search. 21 unit tests + smoke example against real ~/.claude/projects/
 │   ├── anthropic_oauth/        client + credentials loader + types. Calls `GET api.anthropic.com/api/oauth/usage` and parses dynamic-keyed response with curated display labels (`Current 5-hour session` / `Sonnet only (7 days)` / etc.) and titlecased fallback for unknown future cadence keys. 14 unit tests + 5 wiremock tests + smoke example against the real endpoint. Refresh-token flow on 401 is TODO for step 4.
-│   ├── window/                 (planned) composes tray-paint state + sparkline inputs from OAuth (primary) + JSONL (per-event detail). Heuristic only as a degraded fallback.
+│   ├── window/                 pure rolling-window math over `UsageEvent` slices: 5h main window + 30m burn rate + per-model breakdown (descending by tokens; ties name-asc for determinism). No I/O, no logging above debug. 10 unit tests covering empty / outside-window / boundary inclusion / burn under-threshold / burn at-threshold / burn-window narrower than main / sort order / tied-model determinism / same-model aggregation.
 │   ├── predictor/              (planned) EWMA + warm-up state machine
 │   ├── openai_client/          Admin Costs API client (`GET /v1/organization/costs` with `sk-admin-…` Bearer). Sums spend across daily buckets, groups by line_item. 10 parser unit tests + 5 wiremock. 401 → AuthInvalid; 403 → InsufficientScope with admin-key hint. Originally targeted the legacy credit_grants endpoint; pivoted in May 2026 when OpenAI stopped issuing legacy user keys.
 │   ├── state_coordinator/      (planned) actor; ONLY writer of Snapshot AND OS tray state
@@ -232,7 +232,7 @@ Avoid drive-by refactors.
 
 - `docs/prd.md` — product spec and phasing.
 - The design doc at `~/.gstack/projects/balanze/oszka-*-design-*.md` — architecture, IPC contract, state coordination diagram, predictor state machine, test strategy, build sequence. This is the load-bearing document; if a section in this AGENTS.md is missing detail, check there.
-- The repo currently has scaffolding only. As crates land under `crates/`, this AGENTS.md grows with them — each crate adds an entry to the Repo Map and may add a row to the Validation Matrix.
+- The backend data layer is shipped (7 crates: claude_parser, anthropic_oauth, openai_client, settings, keychain, window, balanze_cli). The Tauri frontend is still scaffold only (greet form + tray menu). As remaining crates land (`predictor`, `state_coordinator`, `watcher`) this AGENTS.md grows with them — each adds an entry to the Repo Map and may add a row to the Validation Matrix.
 
 ### Local dev (for agents that can run commands)
 
@@ -263,7 +263,8 @@ Before claiming work is done:
 |---|---|
 | Any `**/*.rs` in workspace | `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` |
 | `crates/claude_parser/**` | All Rust gates + fixture-based tests (happy / file missing / partial line / schema drift / empty / permission denied) + smoke run against real `~/.claude/projects/` data |
-| `crates/window/**` or `crates/predictor/**` | All Rust gates + fixture-based unit tests covering empty / N-events / reset-straddle / warm-up / uncertain / confident state transitions |
+| `crates/window/**` | All Rust gates + inline unit tests covering empty / outside-window / boundary inclusion / burn under-threshold / burn at-threshold / burn-window narrower than main / sort order / tied-model determinism / same-model aggregation |
+| `crates/predictor/**` | All Rust gates + fixture-based unit tests covering warm-up (Insufficient) / steady-burst (Confident) / high-variance (Uncertain) / mid-window reset (back to Insufficient) |
 | `crates/state_coordinator/**` | All Rust gates + one unit test per `StateMsg` variant + an mpsc-saturation test |
 | `crates/anthropic_oauth/**` | All Rust gates + wiremock unit tests (happy / 401-then-successful-refresh / 401-then-failed-refresh / network offline / unexpected response shape). Manual verification with the real credentials file on each developer machine. |
 | `crates/openai_client/**` | All Rust gates + 10 parser unit tests (multi-bucket aggregation, line-item sort, null-line-item-as-unknown, missing-amount-skipped, truncation flag, etc.) + 5 wiremock integration tests (happy with admin Bearer + query params, 401, 403 with admin-key hint, 500, invalid-JSON). |
@@ -293,19 +294,19 @@ State the exact command and request output from a human. Don't claim the work is
 
 ### Test locations
 
-The design doc spec'd ~30 tests across 8 crates; as crates land, the locations table fills in. Today (pre-implementation) only the scaffold exists:
+Current state: ~77 tests across 7 shipped crates (6 backend + balanze_cli glue); 4 crates still planned (predictor, state_coordinator, watcher, plus the Tauri smoke). One `#[ignore]`'d keychain smoke. As crates land, the table fills in.
 
 | Subject | Location | What's there |
 |---|---|---|
-| Claude JSONL parsing | `crates/claude_parser/src/{parser,walker}.rs` (inline `#[cfg(test)]`) + `examples/smoke.rs` | 15 unit tests: happy/zero-cache/extra-fields/blank/malformed/missing-ts/blank-skips/error-line-numbers/partial-final-line + recursive find/missing-root/empty-dir/mtime-sort. Smoke example runs against real `~/.claude/projects/` (`cargo run --release --example smoke -p claude_parser`). v0.1a missing: dedup by `(message_id, request_id)` and dual-path search (`~/.claude/` AND `~/.config/claude/`) — folded into step 2b alongside the byte-cursor work. |
+| Claude JSONL parsing | `crates/claude_parser/src/{parser,walker}.rs` (inline `#[cfg(test)]`) + `examples/smoke.rs` | 21 unit tests: parser (happy/zero-cache/extra-fields/blank/malformed/missing-ts/blank-skips/error-line-numbers/partial-final-line) + walker (recursive find/missing-root/empty-dir/mtime-sort) + `find_claude_projects_dir` (XDG present/absent/empty, dot-claude existence, dot-config-claude fallback, XDG-over-dot-claude preference). Smoke example runs against real `~/.claude/projects/` (`cargo run --release --example smoke -p claude_parser`). Still v0.1a missing: dedup by `(message_id, request_id)` and byte-cursor incremental reads — folded into step 2b. |
 | Claude OAuth usage | `crates/anthropic_oauth/src/{client,credentials}.rs` (inline `#[cfg(test)]`) + `tests/wiremock_tests.rs` + `examples/smoke.rs` | 14 unit tests covering parser response-shape happy/null-cadences/unknown-key-titlecase/sort-order/malformed-cadence/non-object-root + credentials happy/minimal/missing/malformed/missing-key. 5 wiremock integration tests for HTTP layer: happy/401/500/invalid-json/missing-org-header. Smoke example runs against the real endpoint (`cargo run --release --example smoke -p anthropic_oauth`). Refresh-token flow lands in step 4. |
-| Rolling window | `crates/window/tests/` | (planned) empty / N-events / reset-straddle / empirical heuristic correctness |
+| Rolling window | `crates/window/src/lib.rs` (inline `#[cfg(test)]`) | 10 unit tests: empty events / outside-window / window-start boundary inclusion / single-event token sum / burn under threshold / burn at threshold / burn-window narrower than main / by-model sort descending / tied-model alphabetical determinism / same-model aggregation. Pure functions; no fixtures, no I/O. |
 | Predictor state machine | `crates/predictor/tests/` | (planned) warm-up (Insufficient) / steady-burst (Confident ±10%) / high-variance (Uncertain) / mid-window reset (back to Insufficient) |
-| OpenAI billing client | `crates/openai_client/tests/` | (planned) wiremock-based: 200 / 401 / 429-with-retry / 500 transient / network offline |
+| OpenAI billing client | `crates/openai_client/src/client.rs` (inline `#[cfg(test)]`) + `tests/wiremock_tests.rs` | 12 parser unit tests (multi-bucket aggregation, line-item sort, null-line-item-as-unknown, missing-amount-skipped, truncation flag, amount-as-string-OR-number deserializer, etc.) + 5 wiremock integration tests (happy with admin Bearer + query params, 401 → AuthInvalid, 403 → InsufficientScope with admin-key hint, 500, invalid-JSON). |
 | StateCoordinator actor | `crates/state_coordinator/tests/` | (planned) one test per `StateMsg` variant (`Update` happy, `Update(Err)` → `DegradedState`, `Query`, `Refresh`, `SettingsChanged` fanout) + mpsc(64) saturation |
 | File watcher | `crates/watcher/tests/` | (planned) `tokio::time::pause()` timing tests |
-| Settings serde | `crates/settings/tests/` | (planned) load-missing / load-corrupt / atomic save |
-| Keychain | `crates/keychain/tests/` | (planned) one smoke test, `#[ignore]` so CI skips |
+| Settings serde | `crates/settings/src/lib.rs` (inline `#[cfg(test)]`) | 9 unit tests: load missing → defaults, load corrupt → Malformed, atomic save uses tmp + rename, schema version handling, unknown extra-fields tolerated, minimal version-only file loads. |
+| Keychain | `crates/keychain/src/lib.rs` (inline `#[cfg(test)]`) | 1 inline keys-constant test + 1 `#[ignore]`'d real-keychain smoke (documents the v3 Windows bug; re-runs manually). |
 | Tauri command smoke | `src-tauri/tests/smoke.rs` | (planned) boot app with fixture data dir, assert `usage_updated` event fires, `get_snapshot` returns expected shape |
 | Frontend | none yet | Manual verification in `bun run tauri dev`. If complexity grows, Vitest is the conventional choice for a Svelte 5 SPA |
 
