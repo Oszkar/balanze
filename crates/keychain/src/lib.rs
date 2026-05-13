@@ -105,6 +105,14 @@ mod tests {
     /// Smoke test against the real OS keychain. Ignored by default because
     /// CI runners don't have a usable keychain on every platform; run
     /// manually on each dev machine before tagging a release.
+    ///
+    /// **Known issue (May 2026)**: This test fails on Windows with
+    /// `keyring = "3.6.3"` — set returns Ok but a subsequent get returns
+    /// NoEntry, meaning the credential never actually persists. The fix is
+    /// to migrate to `keyring-core` (the v4 successor crate) with an
+    /// explicit `set_default_store` initialization. Tracked as a v0.2 task;
+    /// in the meantime, the CLI honors a `BALANZE_OPENAI_KEY` env var as a
+    /// fallback. See AGENTS.md "Known issues" section.
     #[test]
     #[ignore]
     fn roundtrip_against_real_keychain() {

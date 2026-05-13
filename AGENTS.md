@@ -164,7 +164,7 @@ balanze/
 │   ├── openai_client/          Admin Costs API client (`GET /v1/organization/costs` with `sk-admin-…` Bearer). Sums spend across daily buckets, groups by line_item. 10 parser unit tests + 5 wiremock. 401 → AuthInvalid; 403 → InsufficientScope with admin-key hint. Originally targeted the legacy credit_grants endpoint; pivoted in May 2026 when OpenAI stopped issuing legacy user keys.
 │   ├── state_coordinator/      (planned) actor; ONLY writer of Snapshot AND OS tray state
 │   ├── watcher/                (planned) notify + 1s debounce + 60s safety poll
-│   ├── keychain/               `keyring` wrapper, service="me.oszkar.Balanze". Only crate that imports keyring per §4 #5. 1 inline test + 1 #[ignore]'d real-keychain smoke.
+│   ├── keychain/               `keyring` wrapper, service="me.oszkar.Balanze". Only crate that imports keyring per §4 #5. 1 inline test + 1 #[ignore]'d real-keychain smoke. **KNOWN ISSUE**: keyring v3.6.3 set→get round-trip fails on Windows (smoke test fails). CLI honors `BALANZE_OPENAI_KEY` env var as a fallback. Migration to keyring-core (v4 successor) is a v0.2 task — see Known Issues section below.
 │   ├── settings/               config serde + atomic write (tmp + rename), schema versioned. Path via `directories::ProjectDirs`. 9 unit tests. Stores non-secrets only — keys live in keychain crate.
 │   └── balanze_cli/            binary entry-point that composes the backend crates into a Snapshot. Same composition role that `src-tauri/` will play when the front-end lands; useful as a dev tool and as a reference for the eventual Tauri wiring. Binary name: `balanze`.
 └── .github/
@@ -341,6 +341,20 @@ Add tests when behavior changes or bug fixes could regress. Prefer tests that en
 - Be correct first, agreeable second.
 - Do not add busywork (summary docs, status reports, recap markdown files) unless explicitly asked.
 - Persist until the task is complete or genuinely blocked; if blocked, state what you tried and what you need.
+
+## 10a. Known issues
+
+- **Keychain backend broken on Windows (v0.1)**: `keyring = "3.6.3"` (current
+  workspace pin) silently no-ops on Windows — `set_password` returns `Ok` but
+  the credential never lands in Credential Manager, so subsequent `get_password`
+  calls return `NoEntry`. Reproducible via
+  `cargo test --release -p keychain -- --ignored`. Workaround: the CLI honors
+  `BALANZE_OPENAI_KEY` env var, which takes precedence over the keychain.
+  Real fix is migrating to `keyring-core` (the v4 successor crate, which uses
+  an explicit "store" initialization pattern rather than the v3 implicit
+  default backend). Scheduled for v0.2 alongside the Tauri settings UI, where
+  the user will paste their key into a real input box anyway and the
+  keychain code will be exercised on both Win and macOS during development.
 
 ## 10. Troubleshooting
 

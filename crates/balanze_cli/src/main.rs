@@ -198,6 +198,11 @@ fn print_help() {
     eprintln!("  balanze settings              Print current settings.json contents");
     eprintln!("  balanze help                  This help");
     eprintln!();
+    eprintln!("Environment overrides:");
+    eprintln!("  BALANZE_OPENAI_KEY            sk-admin-… admin key. Takes precedence over keychain.");
+    eprintln!("                                Recommended on Windows until the keychain backend is");
+    eprintln!("                                migrated to keyring v4 in v0.2.");
+    eprintln!();
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
 
@@ -255,14 +260,27 @@ async fn fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
 }
 
 /// Fetch this-month OpenAI costs if the user has configured an admin key.
-/// Returns `Ok(None)` when nothing is configured (so the CLI can print a
-/// "not configured" hint rather than a scary error). Returns `Err` only for
-/// real failures (401, 403, network, etc.).
+///
+/// Source order:
+///   1. `BALANZE_OPENAI_KEY` env var (fallback while the keychain backend is
+///      unreliable on Windows — see AGENTS.md known issues)
+///   2. OS keychain entry `openai_api_key`
+///   3. None → "not configured"
+///
+/// Returns `Ok(None)` when nothing is configured; `Err` only for real
+/// fetch failures (401, 403, network, etc.).
 async fn fetch_openai() -> Result<Option<OpenAiCosts>> {
-    let key = match keychain::get(keychain::keys::OPENAI_API_KEY) {
-        Ok(k) => k,
-        Err(keychain::KeychainError::NotFound(_)) => return Ok(None),
-        Err(e) => return Err(e.into()),
+    let key = if let Ok(env_key) = env::var("BALANZE_OPENAI_KEY") {
+        if env_key.trim().is_empty() {
+            return Ok(None);
+        }
+        env_key.trim().to_string()
+    } else {
+        match keychain::get(keychain::keys::OPENAI_API_KEY) {
+            Ok(k) => k,
+            Err(keychain::KeychainError::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        }
     };
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
@@ -442,8 +460,10 @@ fn print_pretty(snapshot: &CliSnapshot) {
         println!("OPENAI SPEND: unavailable — {err}");
     } else {
         println!("OPENAI SPEND: not configured");
-        println!("  Run `balanze set-openai-key` to add a `sk-admin-…` key.");
-        println!("  Create one at https://platform.openai.com/settings/organization/admin-keys");
+        println!("  Set the BALANZE_OPENAI_KEY env var to a `sk-admin-…` admin key, or run");
+        println!("  `balanze set-openai-key` (note: keychain backend currently unreliable on");
+        println!("  Windows; env var is the recommended path until v0.2).");
+        println!("  Create an admin key at https://platform.openai.com/settings/organization/admin-keys");
     }
 
     // Claude Code JSONL activity
