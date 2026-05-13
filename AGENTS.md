@@ -158,7 +158,7 @@ balanze/
 ├── crates/                     workspace members; populated as build sequence progresses
 │   ├── .gitkeep                placeholder so the dir is committed
 │   ├── claude_parser/          parser + walker (full-file reads in v0.1a; byte-cursor incremental is step 2b). 15 unit tests + smoke example against real ~/.claude/projects/
-│   ├── anthropic_oauth/        (planned) authoritative 5h + 7d utilization + resets_at via `GET api.anthropic.com/api/oauth/usage`. Reads bearer from ~/.claude/.credentials.json. Refresh-token flow on 401.
+│   ├── anthropic_oauth/        client + credentials loader + types. Calls `GET api.anthropic.com/api/oauth/usage` and parses dynamic-keyed response with curated display labels (`Current 5-hour session` / `Sonnet only (7 days)` / etc.) and titlecased fallback for unknown future cadence keys. 14 unit tests + 5 wiremock tests + smoke example against the real endpoint. Refresh-token flow on 401 is TODO for step 4.
 │   ├── window/                 (planned) composes tray-paint state + sparkline inputs from OAuth (primary) + JSONL (per-event detail). Heuristic only as a degraded fallback.
 │   ├── predictor/              (planned) EWMA + warm-up state machine
 │   ├── openai_client/          (planned) OpenAI billing API client
@@ -297,7 +297,7 @@ The design doc spec'd ~30 tests across 8 crates; as crates land, the locations t
 | Subject | Location | What's there |
 |---|---|---|
 | Claude JSONL parsing | `crates/claude_parser/src/{parser,walker}.rs` (inline `#[cfg(test)]`) + `examples/smoke.rs` | 15 unit tests: happy/zero-cache/extra-fields/blank/malformed/missing-ts/blank-skips/error-line-numbers/partial-final-line + recursive find/missing-root/empty-dir/mtime-sort. Smoke example runs against real `~/.claude/projects/` (`cargo run --release --example smoke -p claude_parser`). v0.1a missing: dedup by `(message_id, request_id)` and dual-path search (`~/.claude/` AND `~/.config/claude/`) — folded into step 2b alongside the byte-cursor work. |
-| Claude OAuth usage | `crates/anthropic_oauth/...` | (planned) wiremock tests for happy/refresh/failed-refresh/offline/shape-drift. Authoritative source for 5h+7d utilization and reset_at. Manual verify on each dev machine against real credentials. |
+| Claude OAuth usage | `crates/anthropic_oauth/src/{client,credentials}.rs` (inline `#[cfg(test)]`) + `tests/wiremock_tests.rs` + `examples/smoke.rs` | 14 unit tests covering parser response-shape happy/null-cadences/unknown-key-titlecase/sort-order/malformed-cadence/non-object-root + credentials happy/minimal/missing/malformed/missing-key. 5 wiremock integration tests for HTTP layer: happy/401/500/invalid-json/missing-org-header. Smoke example runs against the real endpoint (`cargo run --release --example smoke -p anthropic_oauth`). Refresh-token flow lands in step 4. |
 | Rolling window | `crates/window/tests/` | (planned) empty / N-events / reset-straddle / empirical heuristic correctness |
 | Predictor state machine | `crates/predictor/tests/` | (planned) warm-up (Insufficient) / steady-burst (Confident ±10%) / high-variance (Uncertain) / mid-window reset (back to Insufficient) |
 | OpenAI billing client | `crates/openai_client/tests/` | (planned) wiremock-based: 200 / 401 / 429-with-retry / 500 transient / network offline |
