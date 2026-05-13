@@ -12,7 +12,6 @@
 //! behind the `get_snapshot` IPC command in `src-tauri`. This CLI is the
 //! reference implementation and a useful dev tool in its own right.
 
-use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
@@ -21,10 +20,13 @@ use std::process::ExitCode;
 use anthropic_oauth::{fetch_usage, load as load_credentials, ClaudeOAuthSnapshot, DEFAULT_API_BASE as ANTHROPIC_API_BASE};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
-use claude_parser::{find_jsonl_files, parse_str, UsageEvent};
+use claude_parser::{find_claude_projects_dir, find_jsonl_files, parse_str, UsageEvent};
 use openai_client::{costs_this_month, OpenAiCosts, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE};
 use serde::Serialize;
 use tracing::{info, warn};
+use window::{
+    summarize_window, WindowSummary, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW,
+};
 
 #[derive(Serialize)]
 struct CliSnapshot {
@@ -39,26 +41,14 @@ struct CliSnapshot {
     openai_error: Option<String>,
 }
 
+/// CLI's JSONL view: `files_scanned` (an I/O concept, computed here) plus
+/// the pure-function `WindowSummary` produced by the `window` crate. The
+/// flatten keeps the JSON wire shape identical to the pre-refactor output.
 #[derive(Serialize)]
 struct JsonlSummary {
     files_scanned: usize,
-    window_start: DateTime<Utc>,
-    /// Events from the last 5 hours (matching OAuth's five_hour cadence).
-    total_events_in_window: usize,
-    /// All token categories (input + output + cache_creation + cache_read), summed.
-    total_tokens_in_window: u64,
-    /// Tokens-per-minute averaged over the last 30 minutes of events.
-    /// `None` if too few events to compute meaningfully.
-    recent_burn_tokens_per_min: Option<f64>,
-    /// Per-model breakdown over the 5h window. Sorted by total tokens descending.
-    by_model: Vec<ByModel>,
-}
-
-#[derive(Serialize)]
-struct ByModel {
-    model: String,
-    events: usize,
-    total_tokens: u64,
+    #[serde(flatten)]
+    window: WindowSummary,
 }
 
 fn main() -> ExitCode {
@@ -306,7 +296,7 @@ async fn fetch_openai() -> Result<Option<OpenAiCosts>> {
 }
 
 fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
-    let claude_dir = locate_claude_projects_dir()?;
+    let claude_dir = find_claude_projects_dir()?;
     let files = find_jsonl_files(&claude_dir)?;
     info!(
         "jsonl: scanning {} files under {}",
@@ -314,10 +304,7 @@ fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
         claude_dir.display()
     );
 
-    let window_start = now - Duration::hours(5);
-    let burn_window_start = now - Duration::minutes(30);
     let mut all_events: Vec<UsageEvent> = Vec::new();
-
     for path in &files {
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
@@ -332,72 +319,18 @@ fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
         }
     }
 
-    let mut by_model_map: BTreeMap<String, (usize, u64)> = BTreeMap::new();
-    let mut total_events_in_window = 0usize;
-    let mut total_tokens_in_window: u64 = 0;
-    let mut burn_tokens: u64 = 0;
-    let mut burn_events: usize = 0;
-
-    for ev in &all_events {
-        if ev.ts >= window_start {
-            total_events_in_window += 1;
-            let tokens = ev.total_tokens();
-            total_tokens_in_window = total_tokens_in_window.saturating_add(tokens);
-            let entry = by_model_map.entry(ev.model.clone()).or_insert((0, 0));
-            entry.0 += 1;
-            entry.1 = entry.1.saturating_add(tokens);
-        }
-        if ev.ts >= burn_window_start {
-            burn_events += 1;
-            burn_tokens = burn_tokens.saturating_add(ev.total_tokens());
-        }
-    }
-
-    let recent_burn_tokens_per_min = if burn_events >= 3 {
-        Some(burn_tokens as f64 / 30.0)
-    } else {
-        None
-    };
-
-    let mut by_model: Vec<ByModel> = by_model_map
-        .into_iter()
-        .map(|(model, (events, total_tokens))| ByModel {
-            model,
-            events,
-            total_tokens,
-        })
-        .collect();
-    by_model.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    let window = summarize_window(
+        &all_events,
+        now,
+        DEFAULT_WINDOW,
+        DEFAULT_BURN_WINDOW,
+        DEFAULT_MIN_BURN_EVENTS,
+    );
 
     Ok(JsonlSummary {
         files_scanned: files.len(),
-        window_start,
-        total_events_in_window,
-        total_tokens_in_window,
-        recent_burn_tokens_per_min,
-        by_model,
+        window,
     })
-}
-
-fn locate_claude_projects_dir() -> Result<std::path::PathBuf> {
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
-        candidates.push(std::path::PathBuf::from(xdg).join("claude").join("projects"));
-    }
-    if let Some(home) = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")) {
-        let home = std::path::PathBuf::from(home);
-        candidates.push(home.join(".claude").join("projects"));
-        candidates.push(home.join(".config").join("claude").join("projects"));
-    }
-    for c in &candidates {
-        if c.exists() {
-            return Ok(c.clone());
-        }
-    }
-    Err(anyhow!(
-        "claude projects directory not found; searched {:?}",
-        candidates
-    ))
 }
 
 fn print_pretty(snapshot: &CliSnapshot) {
@@ -471,22 +404,22 @@ fn print_pretty(snapshot: &CliSnapshot) {
     if let Some(jsonl) = &snapshot.claude_jsonl {
         println!("CLAUDE CODE ACTIVITY (last 5h, from local JSONL):");
         println!("  files scanned:     {}", jsonl.files_scanned);
-        println!("  events in window:  {}", jsonl.total_events_in_window);
+        println!("  events in window:  {}", jsonl.window.total_events_in_window);
         println!(
             "  tokens in window:  {}",
-            fmt_int(jsonl.total_tokens_in_window)
+            fmt_int(jsonl.window.total_tokens_in_window)
         );
-        match jsonl.recent_burn_tokens_per_min {
+        match jsonl.window.recent_burn_tokens_per_min {
             Some(rate) => println!(
                 "  recent burn:       ~{} tokens/min (last 30 min)",
                 fmt_int(rate as u64)
             ),
             None => println!("  recent burn:       (too few events in last 30 min)"),
         }
-        if !jsonl.by_model.is_empty() {
+        if !jsonl.window.by_model.is_empty() {
             println!();
             println!("  By model:");
-            for m in &jsonl.by_model {
+            for m in &jsonl.window.by_model {
                 println!(
                     "    {:36}  events: {:>4}  tokens: {:>14}",
                     m.model,
