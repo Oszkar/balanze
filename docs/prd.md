@@ -241,12 +241,13 @@ The MVP described above lands across four phases. v0.1 is the current build targ
 Tightest possible side-project ship. The goal is to replace the user's existing fragmented setup with one local-first binary on Windows and macOS. Detailed architecture and step-by-step build sequence live in the design doc; this is the product-level summary.
 
 - Tauri 2 + Rust + Svelte 5 desktop app. Windows 11 and macOS 15+ only (Ubuntu deferred to Phase 3).
-- Claude subscription usage via local JSONL parsing of `~/.claude/projects/**/*.jsonl` — no API, no scraping, no auth (approach proven by ccusage; reimplemented in Rust to keep the binary self-contained).
+- Claude subscription utilization + reset clock via Anthropic's OAuth usage endpoint (`GET api.anthropic.com/api/oauth/usage`, Bearer from `~/.claude/.credentials.json`). This is the authoritative signal — replaces what would otherwise have been a multi-week empirical heuristic. Searched in both `~/.claude/` and `~/.config/claude/` (Claude Code v1.0.30+ uses the latter on some platforms).
+- Per-event detail (per-model breakdown, sparkline, burn rate) via local JSONL parsing of `<claude_home>/projects/**/*.jsonl` — no API, no scraping, no auth. Approach proven by ccusage; reimplemented in Rust to keep the binary self-contained. Events deduped by `(message_id, request_id)` to avoid double-counting retries and subagent forwarding.
 - Claude API spend + extra credits via Anthropic Console — **deferred to v0.2** after the step-1 spike. The Console (platform.claude.com) does expose stable JSON endpoints, but auth is via expiring session cookies rather than an API key; cookie-paste UX deserves first-class design and a `DegradedState::auth_expired` flow, neither of which fits in v0.1's scope. v0.1 ships without Anthropic API spend visibility on the Console side; subscription usage from `~/.claude/projects/` JSONL is still fully covered.
 - OpenAI API spend + credits via documented billing endpoints.
 - Tray icon as a color-shifting gauge (idle → green → amber → red) with hover tooltip; macOS additionally shows a `Title` text slot with the current percentage.
 - Tray menu: Open Balanze / Settings… / Quit.
-- Main window (popover-shaped, hidden on launch): sparkline of recent burn, predictive reset countdown ("~42 min to cap" with confidence band, or "uncertain" / "??" during warm-up), OpenAI spend tile.
+- Main window (popover-shaped, hidden on launch): one progress bar per Anthropic-exposed reset cadence (5h, 7-day, plus any model-specific bars like "Sonnet only" if OAuth exposes them) each with its own "Resets in …" subline; sparkline of recent burn; predictive reset countdown ("~42 min to cap" with confidence band, or "uncertain" / "??" during warm-up); OpenAI spend tile.
 - Predictive reset is the headline feature: EWMA over the rolling window with an explicit warm-up state (Insufficient → Uncertain → Confident) so the predictor never lies immediately after a window reset.
 - Settings UI: paste API keys, save to OS keychain.
 - Local secure storage (keychain for secrets; `directories`-crate per-OS paths for logs and non-secret settings).

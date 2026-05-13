@@ -106,14 +106,23 @@ This is for personal use only. Not affiliated with Anthropic or OpenAI. If a pro
 
 ### 3.4 Secret hygiene
 
-Secrets in scope: user-supplied API keys for OpenAI and (optionally) Anthropic. Rules:
+Secrets in scope: user-supplied API keys for OpenAI; plus read-only access to Claude Code's OAuth tokens at `~/.claude/.credentials.json` (and `~/.config/claude/.credentials.json` on newer Claude Code installs).
 
+Rules for user-supplied keys (OpenAI):
 - Keys live in the OS keychain via the `keyring` crate. They are **never** written to disk in plaintext, not even temporarily.
 - Keys are **never** logged at any level. Periodic redacted form (`sk-…45 (len=51)`) is OK in a debug "show config" command if ever added; that's the only acceptable display surface outside the settings UI's masked input.
 - `.env` is gitignored. `.env.example` is committed and lists variable names without values.
 - The settings UI's API-key input renders as `type="password"` (no clipboard side-effects, no autocomplete).
-- Don't grow the secret surface without justification. New secrets require a clear rotation path and a `DegradedState` variant for "keychain unavailable / locked" before they're added.
-- If a key leaks (commit / log share / screenshot), the user rotates it at the provider (OpenAI dashboard / Anthropic console) and pastes the new value into Settings. Balanze does not store an audit trail of historical keys.
+
+Rules for Claude OAuth tokens at `~/.claude/.credentials.json`:
+- **Read-only.** `anthropic_oauth` is the only crate that reads this file. We do not copy, persist, mirror, or back up its contents anywhere — not to settings, not to logs, not to cache, not to telemetry.
+- The bearer token, refresh token, and any field of `claudeAiOauth.*` are treated as secrets identical to OpenAI keys: never logged at any level, never echoed in `--show-config` output, never displayed in the UI even partially.
+- If we ever write a refreshed access token back to `~/.claude/.credentials.json` (when we implement the refresh-token flow), the write uses atomic tmp+rename and preserves the existing file permissions. We do not invent a new credentials file; we use Anthropic's.
+- The file path itself (and its existence) IS loggable at INFO ("found credentials at <path>") — the contents are not.
+
+General rules for both:
+- Don't grow the secret surface without justification. New secrets require a clear rotation path and a `DegradedState` variant for "credential unavailable / expired" before they're added.
+- If a user-supplied key leaks (commit / log share / screenshot), the user rotates it at the provider and pastes the new value into Settings. If a Claude OAuth token leaks, the user re-runs `claude login` to refresh both tokens. Balanze stores no audit trail of historical credentials.
 
 ## 4. Repo Map
 
@@ -149,7 +158,8 @@ balanze/
 ├── crates/                     workspace members; populated as build sequence progresses
 │   ├── .gitkeep                placeholder so the dir is committed
 │   ├── claude_parser/          parser + walker (full-file reads in v0.1a; byte-cursor incremental is step 2b). 15 unit tests + smoke example against real ~/.claude/projects/
-│   ├── window/                 (planned) rolling 5-hour window utilization
+│   ├── anthropic_oauth/        (planned) authoritative 5h + 7d utilization + resets_at via `GET api.anthropic.com/api/oauth/usage`. Reads bearer from ~/.claude/.credentials.json. Refresh-token flow on 401.
+│   ├── window/                 (planned) composes tray-paint state + sparkline inputs from OAuth (primary) + JSONL (per-event detail). Heuristic only as a degraded fallback.
 │   ├── predictor/              (planned) EWMA + warm-up state machine
 │   ├── openai_client/          (planned) OpenAI billing API client
 │   ├── state_coordinator/      (planned) actor; ONLY writer of Snapshot AND OS tray state
@@ -195,7 +205,7 @@ Strict layering — agents must respect:
 
 1. **`claude_parser` knows the JSONL wire format; nothing else does.** Other crates consume `UsageEvent` structs only. Don't leak schema details (field names, optionality, line-format quirks) outside this crate.
 2. **`window` and `predictor` are pure functions.** No I/O, no `tokio::spawn`, no logging above `debug` level. Pure functions on event slices.
-3. **`openai_client` and (future) the Console source are the only HTTP clients.** They expose typed `fetch_*` async functions that return `anyhow::Result<Partial>`. Other crates do not import `reqwest`.
+3. **`anthropic_oauth` and `openai_client` (and v0.2's Console source) are the only HTTP clients.** They expose typed `fetch_*` async functions that return `anyhow::Result<Partial>`. Other crates do not import `reqwest`. `anthropic_oauth` is additionally the only reader of `~/.claude/.credentials.json` — see §3.4 for the secrets discipline this implies.
 4. **`watcher` owns `notify` + the debounce + the 60s safety poll.** No other crate imports `notify`. The watcher exposes an `mpsc::Receiver<WatchEvent>` and that's it.
 5. **`keychain` is the only caller of the `keyring` crate.** All secret reads and writes route through this crate's API. Settings UI commands invoke `keychain::set/get/delete`, not `keyring::*` directly.
 6. **`settings` owns the `settings.json` file on disk.** Atomic writes (tmp + rename). No other crate reads or writes this file.
@@ -254,6 +264,7 @@ Before claiming work is done:
 | `crates/claude_parser/**` | All Rust gates + fixture-based tests (happy / file missing / partial line / schema drift / empty / permission denied) + smoke run against real `~/.claude/projects/` data |
 | `crates/window/**` or `crates/predictor/**` | All Rust gates + fixture-based unit tests covering empty / N-events / reset-straddle / warm-up / uncertain / confident state transitions |
 | `crates/state_coordinator/**` | All Rust gates + one unit test per `StateMsg` variant + an mpsc-saturation test |
+| `crates/anthropic_oauth/**` | All Rust gates + wiremock unit tests (happy / 401-then-successful-refresh / 401-then-failed-refresh / network offline / unexpected response shape). Manual verification with the real credentials file on each developer machine. |
 | `crates/openai_client/**` | All Rust gates + wiremock unit tests (happy / 401 / 429-with-retry / 500 / network offline) |
 | `crates/watcher/**` | All Rust gates + `tokio::time::pause()` timing tests (notify+debounce single-fire / burst dedupe / safety poll on silence / notify-during-safety-poll dedupe) |
 | `crates/keychain/**` | All Rust gates + smoke test (ignored on CI; manual run on each developer machine — cross-OS keychain in CI is unreliable) |
@@ -285,7 +296,8 @@ The design doc spec'd ~30 tests across 8 crates; as crates land, the locations t
 
 | Subject | Location | What's there |
 |---|---|---|
-| Claude JSONL parsing | `crates/claude_parser/src/{parser,walker}.rs` (inline `#[cfg(test)]`) + `examples/smoke.rs` | 15 unit tests: happy/zero-cache/extra-fields/blank/malformed/missing-ts/blank-skips/error-line-numbers/partial-final-line + recursive find/missing-root/empty-dir/mtime-sort. Smoke example runs against real `~/.claude/projects/` (`cargo run --release --example smoke -p claude_parser`). |
+| Claude JSONL parsing | `crates/claude_parser/src/{parser,walker}.rs` (inline `#[cfg(test)]`) + `examples/smoke.rs` | 15 unit tests: happy/zero-cache/extra-fields/blank/malformed/missing-ts/blank-skips/error-line-numbers/partial-final-line + recursive find/missing-root/empty-dir/mtime-sort. Smoke example runs against real `~/.claude/projects/` (`cargo run --release --example smoke -p claude_parser`). v0.1a missing: dedup by `(message_id, request_id)` and dual-path search (`~/.claude/` AND `~/.config/claude/`) — folded into step 2b alongside the byte-cursor work. |
+| Claude OAuth usage | `crates/anthropic_oauth/...` | (planned) wiremock tests for happy/refresh/failed-refresh/offline/shape-drift. Authoritative source for 5h+7d utilization and reset_at. Manual verify on each dev machine against real credentials. |
 | Rolling window | `crates/window/tests/` | (planned) empty / N-events / reset-straddle / empirical heuristic correctness |
 | Predictor state machine | `crates/predictor/tests/` | (planned) warm-up (Insufficient) / steady-burst (Confident ±10%) / high-variance (Uncertain) / mid-window reset (back to Insufficient) |
 | OpenAI billing client | `crates/openai_client/tests/` | (planned) wiremock-based: 200 / 401 / 429-with-retry / 500 transient / network offline |
