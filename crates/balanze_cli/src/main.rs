@@ -20,7 +20,7 @@ use std::process::ExitCode;
 use anthropic_oauth::{fetch_usage, load as load_credentials, ClaudeOAuthSnapshot, DEFAULT_API_BASE as ANTHROPIC_API_BASE};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
-use claude_parser::{find_claude_projects_dir, find_jsonl_files, parse_str, UsageEvent};
+use claude_parser::{dedup_events, find_claude_projects_dir, find_jsonl_files, parse_str, UsageEvent};
 use openai_client::{costs_this_month, OpenAiCosts, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE};
 use serde::Serialize;
 use tracing::{info, warn};
@@ -317,6 +317,18 @@ fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
             Ok(events) => all_events.extend(events),
             Err(e) => warn!("jsonl: parse error in {} ({e})", path.display()),
         }
+    }
+
+    let before = all_events.len();
+    dedup_events(&mut all_events);
+    let after = all_events.len();
+    if before != after {
+        info!(
+            "jsonl: deduped {} → {} events ({} duplicates collapsed by (msg_id, req_id))",
+            before,
+            after,
+            before - after
+        );
     }
 
     let window = summarize_window(
