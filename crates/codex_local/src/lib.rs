@@ -22,15 +22,27 @@
 //!
 //! # Failure modes
 //!
-//! Every fallible function returns `Result<_, ParseError>`. The three
-//! variants map cleanly to `state_coordinator`'s `DegradedState`:
+//! Every fallible function returns `Result<_, ParseError>`. The four
+//! outcomes are designed to map cleanly into the eventual
+//! `state_coordinator::DegradedState` enum (per AGENTS.md §3.2; the
+//! enum itself lands in v0.1 step 5 when state_coordinator is wired
+//! to consume codex_local's output):
 //!
-//! - `FileMissing` → `DegradedState::CodexDirMissing` (Codex isn't
-//!   installed, or installed but no sessions yet)
-//! - `IoError` → `DegradedState::IoError` (something unusual; surface
-//!   loudly)
-//! - `SchemaDrift` → `DegradedState::SchemaDrift` (Codex CLI shipped a
-//!   breaking change; surface "Codex data temporarily unavailable")
+//! - `Err(FileMissing)` — Codex CLI isn't installed (sessions
+//!   directory absent). Caller treats as "Codex data not available";
+//!   the Codex matrix cell shows as "not configured".
+//! - `Err(IoError)` — filesystem error (permission denied, disk
+//!   failure) on a directory or file that DID exist. Loud signal;
+//!   caller surfaces an error state rather than silently degrading.
+//! - `Err(SchemaDrift)` — file(s) contained `token_count` event(s)
+//!   but every one of them had unexpected shape. Codex CLI likely
+//!   shipped a breaking schema change. Caller surfaces "Codex data
+//!   temporarily unavailable" + the path/line in the error so the
+//!   maintainer knows where to start debugging.
+//! - `Ok(None)` — everything I/O worked, but the latest session had
+//!   zero parseable `token_count` events (e.g. session crashed before
+//!   quota accounting fired). NOT a drift signal; just no data yet.
+//! - `Ok(Some(snap))` — the happy path.
 //!
 //! # `CODEX_CONFIG_DIR`
 //!

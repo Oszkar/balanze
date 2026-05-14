@@ -131,17 +131,15 @@ In claude_parser, IncrementalParser exists to avoid re-parsing 100MB of JSONL on
 
 ### 5. CodexEvent → CodexQuotaSnapshot.
 
-The Issue 1 decision (separate type, not UsageEvent) is even more justified than we knew. The right type is:
+The Issue 1 decision (separate type, not UsageEvent) is even more justified than we knew. The **implemented** type (see `src/types.rs` for canonical docstrings):
 
 ```rust
 pub struct CodexQuotaSnapshot {
     pub observed_at: DateTime<Utc>,         // from event_msg.timestamp
     pub session_id: String,                 // from session_meta.payload.id
-    pub used_percent: f64,                  // primary.used_percent
-    pub window_duration_minutes: u64,       // primary.window_minutes
-    pub resets_at: DateTime<Utc>,           // primary.resets_at (unix → DateTime)
+    pub primary: RateLimitWindow,           // nested — see below
+    pub secondary: Option<RateLimitWindow>, // for higher-tier plans
     pub plan_type: String,                  // "go", "pro", etc.
-    pub secondary: Option<RateLimitWindow>, // for future 5h-window plans
     pub rate_limit_reached: bool,           // from rate_limit_reached_type
 }
 
@@ -151,6 +149,8 @@ pub struct RateLimitWindow {
     pub resets_at: DateTime<Utc>,
 }
 ```
+
+**Note**: the spike originally proposed flattening primary's fields onto the snapshot directly (`used_percent`, `window_duration_minutes`, `resets_at` at the top level). The implementation nests them under `primary: RateLimitWindow` so `primary` and `secondary` share the same shape — symmetric, less branching at the call site. Earlier drafts of this doc showed the flat shape; updated to match the shipped code after Copilot caught the drift on PR #12.
 
 ### 6. Public API shrinks dramatically.
 
@@ -170,16 +170,16 @@ Post-spike plan:
 
 1. `find_codex_sessions_dir`: `CODEX_CONFIG_DIR` set → uses it.
 2. `find_codex_sessions_dir`: no env var, `~/.codex/sessions/` exists → uses it (via `directories::UserDirs::home_dir().join(".codex/sessions")`).
-3. `find_codex_sessions_dir`: directory missing → `Err(FileMissing)` (caller maps to `DegradedState::CodexDirMissing`).
+3. `find_codex_sessions_dir`: directory missing → `Err(FileMissing)` (caller treats as "Codex not installed" graceful path).
 4. `find_latest_session`: walks `YYYY/MM/DD/`, returns most-recent `rollout-*.jsonl` by mtime.
 5. `find_latest_session`: empty `sessions/` dir → `Ok(None)`.
 6. `read_latest_quota_snapshot`: parses canonical sample line correctly → `CodexQuotaSnapshot` with expected fields.
 7. `read_latest_quota_snapshot`: file with zero `token_count` events (a session that crashed immediately) → `Ok(None)`.
-8. `read_latest_quota_snapshot`: malformed JSON line → `Err(SchemaDrift { line, message })` — but parser continues scanning earlier lines for the latest valid token_count.
+8. `read_latest_quota_snapshot`: file with ≥1 `token_count` events but all drift → `Err(SchemaDrift { line, message })` carrying the count + last-drift line. (Per-line malformed JSON is silently skipped if it's not a `token_count` event.)
 
 **Plus 1 smoke example** (gated behind `examples/`, not `tests/`): run against real `~/.codex/sessions/` on the author's machine, print the snapshot.
 
-**Total: ~8 tests + 1 smoke.** Down from the post-outside-voice number of 10, and dramatically down from the pre-outside-voice number of 39.
+**Total target: ~8 tests + 1 smoke.** Actual shipped: 15 tests across walker (5) + parser (10) — the extra coverage came from the eng-review's drift discipline + Copilot's PR review (secondary-window, file-not-found vs IoError, all-drift SchemaDrift).
 
 ---
 

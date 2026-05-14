@@ -5,13 +5,31 @@
 //! expected to be a `session_meta` (carrying the session UUID); each
 //! subsequent line is one event. We accumulate `token_count`
 //! event_msgs and return the LAST one parsed — that's the most recent
-//! quota state. Schema drift on individual lines is silently tolerated
-//! (per AGENTS.md §3.3: degrade gracefully on upstream schema changes)
-//! but the function returns `Ok(None)` if zero `token_count` events
-//! were parseable.
+//! quota state.
+//!
+//! # Error policy (sharper than "silently tolerate")
+//!
+//! - **`FileMissing`**: passed path doesn't exist (file deleted
+//!   between walk and read, or caller fabricated a path). Mapped from
+//!   `std::io::ErrorKind::NotFound` on `File::open`.
+//! - **`IoError`**: any other open / read failure (permission denied,
+//!   disk error). Loud signal — distinguish "Codex isn't installed"
+//!   (FileMissing) from "filesystem is broken" (IoError) for the
+//!   caller.
+//! - **`SchemaDrift`**: the file contained one or more `token_count`
+//!   event_msgs but the parser couldn't extract a valid quota from
+//!   any of them — Codex CLI may have shipped a breaking schema
+//!   change. Reported with the line number of the last drift event
+//!   and a count in the message. Distinct from `Ok(None)` (no
+//!   `token_count` events at all — session crashed before quota
+//!   accounting fired).
+//! - **`Ok(None)`**: the file is well-formed but contains zero
+//!   `token_count` event_msgs.
+//! - **`Ok(Some(_))`**: at least one `token_count` event parsed
+//!   successfully; we return the latest.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::path::Path;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -21,26 +39,32 @@ use crate::errors::ParseError;
 use crate::types::{CodexQuotaSnapshot, RateLimitWindow};
 
 /// Read one Codex session file and return the latest rate-limit
-/// snapshot extracted from it, or `Ok(None)` if no parseable
-/// `token_count` event was present (e.g. session crashed before any
-/// token accounting fired).
-///
-/// File IO errors propagate as `ParseError::IoError`. Per-line schema
-/// drift does NOT propagate — the scanner skips malformed lines and
-/// continues looking for the latest valid `token_count`. This matches
-/// the "best-effort, never panic on upstream drift" stance from
-/// AGENTS.md §3.3.
+/// snapshot. See the module-level "Error policy" doc for the four
+/// outcomes and what each means.
 pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapshot>, ParseError> {
-    let file = File::open(path).map_err(|source| ParseError::IoError {
-        path: path.to_path_buf(),
-        source,
+    let file = File::open(path).map_err(|source| {
+        if source.kind() == ErrorKind::NotFound {
+            ParseError::FileMissing(path.to_path_buf())
+        } else {
+            ParseError::IoError {
+                path: path.to_path_buf(),
+                source,
+            }
+        }
     })?;
     let reader = BufReader::new(file);
 
     let mut session_id = String::new();
     let mut latest: Option<CodexQuotaSnapshot> = None;
+    // Drift accounting: how many `token_count` event_msgs we saw vs
+    // how many we successfully extracted into `latest`. If we saw any
+    // attempts but extracted zero, that's a schema-drift signal worth
+    // surfacing as a typed error.
+    let mut token_count_attempts: usize = 0;
+    let mut last_drift_line: usize = 0;
 
-    for line_result in reader.lines() {
+    for (idx, line_result) in reader.lines().enumerate() {
+        let line_no = idx + 1; // 1-indexed for human-readable errors
         let line = match line_result {
             Ok(l) => l,
             Err(source) => {
@@ -56,7 +80,7 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
         }
         let value: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
-            Err(_) => continue, // schema drift on this line; skip
+            Err(_) => continue, // unparseable line — not a token_count event by definition
         };
 
         // Capture session_id from the session_meta line (typically line 1).
@@ -80,16 +104,23 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
             continue;
         }
 
+        // From here on, we're committed: this line is a token_count
+        // attempt. Any structural failure below counts as drift.
+        token_count_attempts += 1;
+
         let rate_limits = match payload.get("rate_limits") {
             Some(rl) => rl,
-            None => continue,
+            None => {
+                last_drift_line = line_no;
+                continue;
+            }
         };
-
-        // Parse the primary window. Drift on this is fatal-for-the-line
-        // but not fatal-for-the-file; skip and keep scanning.
         let primary = match parse_window(rate_limits.pointer("/primary")) {
             Some(w) => w,
-            None => continue,
+            None => {
+                last_drift_line = line_no;
+                continue;
+            }
         };
 
         let secondary = parse_window(rate_limits.pointer("/secondary"));
@@ -118,7 +149,8 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
                 // return the rest of the snapshot with a placeholder,
                 // but that would lie about freshness. Better to skip
                 // and let the previous (older) snapshot stand, or
-                // return None if this was the only candidate.
+                // surface as drift if this was the only candidate.
+                last_drift_line = line_no;
                 continue;
             }
         };
@@ -134,7 +166,18 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
         // Don't break — keep scanning so the LAST valid token_count wins.
     }
 
-    Ok(latest)
+    match latest {
+        Some(snap) => Ok(Some(snap)),
+        None if token_count_attempts > 0 => Err(ParseError::SchemaDrift {
+            path: path.to_path_buf(),
+            line: last_drift_line,
+            message: format!(
+                "saw {token_count_attempts} token_count event(s) but extracted no valid \
+                 quota snapshot — Codex CLI may have shipped a breaking schema change"
+            ),
+        }),
+        None => Ok(None),
+    }
 }
 
 /// Parse a `RateLimitWindow` from a JSON value. Returns `None` on any
@@ -250,5 +293,63 @@ mod tests {
         let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
         assert_eq!(snap.session_id, "");
         assert_eq!(snap.primary.used_percent, 3.0);
+    }
+
+    #[test]
+    fn all_token_count_events_drift_returns_schema_drift_error() {
+        // File has ≥1 token_count event_msg but every one of them is
+        // missing the primary block. Per the post-review error policy,
+        // this is a SchemaDrift signal (Codex CLI likely changed its
+        // schema) — distinct from Ok(None) which means "no token_count
+        // events at all" (session crashed before quota accounting).
+        let drift_a = r#"{"timestamp":"2026-05-14T08:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"plan_type":"go"}}}"#;
+        let drift_b = r#"{"timestamp":"2026-05-14T08:05:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"plan_type":"go"}}}"#;
+        let f = write_jsonl(&[SESSION_META, drift_a, drift_b]);
+        let err = read_latest_quota_snapshot(f.path()).unwrap_err();
+        match err {
+            ParseError::SchemaDrift { line, message, .. } => {
+                assert!(
+                    message.contains("saw 2 token_count"),
+                    "got message: {message}"
+                );
+                assert!(
+                    message.contains("Codex CLI may have shipped"),
+                    "got: {message}"
+                );
+                // Last drift event was on the third line of the file (1-indexed).
+                assert_eq!(line, 3);
+            }
+            other => panic!("expected SchemaDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_object_valued_secondary_window() {
+        // Higher-tier plans (per Codex docs) populate the secondary
+        // window with an object. Pin the parsing path so a regression
+        // in the secondary handler is caught.
+        let with_secondary = r#"{"timestamp":"2026-05-14T09:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":42.0,"window_minutes":10080,"resets_at":1779344602},"secondary":{"used_percent":7.5,"window_minutes":300,"resets_at":1779260400},"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+        let f = write_jsonl(&[SESSION_META, with_secondary]);
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        assert_eq!(snap.primary.used_percent, 42.0);
+        assert_eq!(snap.primary.window_duration_minutes, 10080);
+        let secondary = snap.secondary.expect("secondary should be Some");
+        assert_eq!(secondary.used_percent, 7.5);
+        assert_eq!(secondary.window_duration_minutes, 300);
+        assert_eq!(snap.plan_type, "pro");
+    }
+
+    #[test]
+    fn nonexistent_path_returns_file_missing_not_io_error() {
+        // File::open's NotFound case must surface as FileMissing per
+        // the error contract — callers distinguish "Codex isn't
+        // installed" (graceful) from "filesystem is broken" (loud).
+        let tmp = tempfile::TempDir::new().unwrap();
+        let nonexistent = tmp.path().join("does-not-exist.jsonl");
+        let err = read_latest_quota_snapshot(&nonexistent).unwrap_err();
+        match err {
+            ParseError::FileMissing(p) => assert_eq!(p, nonexistent),
+            other => panic!("expected FileMissing, got {other:?}"),
+        }
     }
 }

@@ -12,20 +12,34 @@ directory) — re-read those if Codex CLI changes its JSONL format.
 ## Public API
 
 ```rust
-use codex_local::read_codex_quota;
+use codex_local::{read_codex_quota, ParseError};
 
-match codex_local::read_codex_quota() {
+match read_codex_quota() {
     Ok(Some(snap)) => println!(
         "Codex: {:.1}% of {}d window, resets at {}",
         snap.primary.used_percent,
         snap.primary.window_duration_minutes / 1440,
         snap.primary.resets_at,
     ),
-    Ok(None) => println!("Codex installed but no session activity yet."),
-    Err(codex_local::ParseError::FileMissing(_)) => {
-        println!("Codex CLI not installed.")
+    Ok(None) => {
+        // Codex installed, scanned cleanly, just no quota data yet —
+        // session probably crashed before any `token_count` event fired.
+        println!("No Codex quota data in the latest session.");
     }
-    Err(e) => eprintln!("Codex read failed: {e}"),
+    Err(ParseError::FileMissing(_)) => {
+        // Codex CLI not installed (sessions dir absent).
+        println!("Codex CLI not installed.");
+    }
+    Err(ParseError::SchemaDrift { path, line, message }) => {
+        // Codex CLI shipped a breaking schema change. Surface to the
+        // user as "Codex data temporarily unavailable"; log the path/
+        // line for the maintainer to debug.
+        eprintln!("Codex schema drift at {}:{} — {}", path.display(), line, message);
+    }
+    Err(ParseError::IoError { path, source }) => {
+        // Filesystem broke (permission denied, disk error). Loud.
+        eprintln!("Codex read failed at {}: {}", path.display(), source);
+    }
 }
 ```
 
@@ -37,8 +51,11 @@ match codex_local::read_codex_quota() {
   [`read_latest_quota_snapshot`] are exposed separately for plumbing
   flexibility (testing, custom paths).
 - All fallible functions return `Result<_, ParseError>` with three
-  variants (`FileMissing`, `IoError`, `SchemaDrift`) that map cleanly
-  to `state_coordinator::DegradedState`.
+  error variants (`FileMissing`, `IoError`, `SchemaDrift`) plus the
+  `Ok(None)` "no data yet" case. The five-way outcome maps onto the
+  eventual `state_coordinator::DegradedState` enum (defined in v0.1
+  step 5 when state_coordinator consumes codex_local's output). See
+  the crate-level `lib.rs` docs for the full failure-mode mapping.
 
 ## What's NOT in this crate (per spike findings)
 
