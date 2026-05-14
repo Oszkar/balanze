@@ -1,7 +1,7 @@
 # cargo-deny configuration.
 # https://embarkstudios.github.io/cargo-deny/
 #
-# Three guard rails enforced in CI on every PR + push to main:
+# Four guard rails enforced in CI on every PR + push to main:
 # - advisories: RustSec database (CVEs, unsoundness, yanked crates)
 # - licenses:   only allow OSI-blessed licenses we're comfortable with
 # - bans:       no wildcard version reqs; multiple-version skew warned

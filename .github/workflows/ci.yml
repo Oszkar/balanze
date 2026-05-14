@@ -4,11 +4,14 @@ name: ci
 # - `linux` runs on every push + PR — the always-on gate covering rustfmt,
 #   clippy, tests, and svelte-check for the workspace MINUS src-tauri (which
 #   needs GTK+webkit deps we don't apt-install for the fast path).
-# - `cross-platform` runs the same gates plus src-tauri on Windows + macOS,
-#   but only on a weekly schedule and on demand. The signal it catches —
-#   Tauri's per-OS compilation paths, Windows file-system quirks, macOS
-#   keychain — doesn't change between most commits, so paying for it every
-#   PR was over-budget for current value.
+# - `cross-platform` runs the full workspace tests + a clippy pass on
+#   src-tauri (the one crate Linux can't lint without GTK/webkit deps)
+#   on Windows + macOS, on a weekly schedule and on demand. rustfmt and
+#   svelte-check don't need re-running here — they're truly OS-agnostic.
+#   What this catches: Tauri's per-OS compilation paths, Windows file-
+#   system quirks (mtime resolution affecting IncrementalParser), macOS
+#   keychain. None of that changes between most commits, so paying for it
+#   every PR was over-budget for current value.
 # - Before tagging a release, hit "Run workflow" in the Actions UI to fire
 #   `cross-platform` against the commit you're about to tag. The release.yml
 #   workflow also matrix-builds at tag time, so you have two layers of

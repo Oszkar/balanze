@@ -35,4 +35,9 @@ below move under a `[0.1.0] - YYYY-MM-DD` heading.
 - **v0.2** — Tauri tray + popover UI; `predictor` crate (warm-up → uncertain → confident state machine on top of `window::WindowSummary`); `watcher` crate (notify + `IncrementalParser`); `keyring-core` migration to fix the Windows keychain bug; Anthropic Console source.
 - **v0.3+** — Cross-device sync, Android, hosted wallboard. Out of scope for this milestone series.
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/HEAD...HEAD
+<!--
+  Until v0.1.0 is tagged, [Unreleased] points at the full commit history on
+  main. After the first tag, change to:
+    [Unreleased]: https://github.com/Oszkar/balanze/compare/v0.1.0...HEAD
+-->
+[Unreleased]: https://github.com/Oszkar/balanze/commits/main
