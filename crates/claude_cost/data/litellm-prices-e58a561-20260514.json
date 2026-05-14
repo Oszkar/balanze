@@ -4,7 +4,7 @@
     "commit": "e58a561caa21169fb02174148444c08509ce7028",
     "fetched_at": "2026-05-14",
     "source_file": "model_prices_and_context_window.json",
-    "filter": "bare claude-* keys (no vendor prefix, no slashes)",
+    "filter": "bare claude-* keys, anthropic provider only (no vendor prefix, no slashes, no Bedrock -v1:0 variants)",
     "license": "MIT (see LICENSE-LITELLM)"
   },
   "claude-3-7-sonnet-20250219": {
@@ -177,15 +177,6 @@
     "max_input_tokens": 200000,
     "max_output_tokens": 64000,
     "litellm_provider": "anthropic"
-  },
-  "claude-sonnet-4-5-20250929-v1:0": {
-    "input_cost_per_token": 3E-06,
-    "output_cost_per_token": 1.5E-05,
-    "cache_creation_input_token_cost": 3.75E-06,
-    "cache_read_input_token_cost": 3E-07,
-    "max_input_tokens": 200000,
-    "max_output_tokens": 64000,
-    "litellm_provider": "bedrock"
   },
   "claude-sonnet-4-6": {
     "input_cost_per_token": 3E-06,

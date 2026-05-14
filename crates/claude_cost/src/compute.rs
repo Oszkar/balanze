@@ -177,13 +177,24 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
 }
 
 /// Multiply (tokens, optional nano-per-token) → i64 micro-USD with
-/// `i128` intermediate to avoid overflow, saturating at `i64::MAX` /
-/// `i64::MIN` on the final cast. Returns 0 when the per-token price is
-/// `None` (e.g. older models that lack cache_read pricing).
+/// `i128` intermediate to avoid overflow, **rounding nano→micro to nearest
+/// (half away from zero)** before the final cast, and saturating at
+/// `i64::MAX` / `i64::MIN` on the cast itself. Returns 0 when the
+/// per-token price is `None` (e.g. older models that lack cache_read
+/// pricing).
+///
+/// Rounding rationale: truncation (`/ 1000`) systematically undercounts
+/// by up to 0.999 micro-USD per component per event, which biases the
+/// grand total downward when aggregating thousands of events. Round-to-
+/// nearest eliminates that bias on average. `validate_price` rejects
+/// negative prices, so the product is always non-negative in practice
+/// and the simple "+500 then truncate" idiom is correct (rounds half
+/// up for ties). The `saturating_add(500)` is defensive — for an already-
+/// saturated product the +500 is a no-op past i128::MAX.
 fn component_micro(tokens: u64, nano_per_token: Option<i64>) -> i64 {
     let nano = nano_per_token.unwrap_or(0);
     let product: i128 = (tokens as i128).saturating_mul(nano as i128);
-    let micro_i128 = product / 1000;
+    let micro_i128 = product.saturating_add(500) / 1000;
     if micro_i128 > i64::MAX as i128 {
         i64::MAX
     } else if micro_i128 < i64::MIN as i128 {
@@ -583,6 +594,51 @@ mod tests {
         assert_eq!(cost.skipped_models, vec!["claude-future-model".to_string()]);
         assert_eq!(cost.per_model.len(), 1);
         assert_eq!(cost.per_model[0].event_count, 1);
+    }
+
+    #[test]
+    fn component_micro_rounds_nano_to_nearest_micro() {
+        // 1 token × 1500 nano = 1500 nano. Truncation would yield 1 micro
+        // (1500 / 1000 = 1). Round-to-nearest (half away from zero) yields
+        // 2 micro. This test pins the round-to-nearest semantic; if you ever
+        // see this test fail asserting 1 instead of 2, someone reverted the
+        // rounding fix.
+        let mut models = BTreeMap::new();
+        models.insert(
+            "claude-half-round".to_string(),
+            ModelPrices {
+                input_nano_per_token: 1500,
+                output_nano_per_token: 0,
+                cache_creation_nano_per_token: None,
+                cache_read_nano_per_token: None,
+            },
+        );
+        let prices = PriceTable {
+            models,
+            commit: "t",
+            fetched_at: "t",
+        };
+        let cost = compute_cost(&[event("claude-half-round", 1, 0, 0, 0)], &prices);
+        assert_eq!(cost.per_model[0].input_micro_usd, 2);
+        assert_eq!(cost.per_model[0].total_micro_usd, 2);
+        // And the truncation case: 1499 nano rounds down to 1.
+        let mut models = BTreeMap::new();
+        models.insert(
+            "claude-round-down".to_string(),
+            ModelPrices {
+                input_nano_per_token: 1499,
+                output_nano_per_token: 0,
+                cache_creation_nano_per_token: None,
+                cache_read_nano_per_token: None,
+            },
+        );
+        let prices = PriceTable {
+            models,
+            commit: "t",
+            fetched_at: "t",
+        };
+        let cost = compute_cost(&[event("claude-round-down", 1, 0, 0, 0)], &prices);
+        assert_eq!(cost.per_model[0].input_micro_usd, 1);
     }
 
     #[test]

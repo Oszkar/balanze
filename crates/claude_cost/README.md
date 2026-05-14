@@ -35,7 +35,7 @@ use claude_cost::{compute_cost, load_bundled_prices};
 let prices = load_bundled_prices()?;
 let cost = compute_cost(&events, &prices);
 println!(
-    "Anthropic API spend: ${:.2}",
+    "Estimated API-rate cost: ${:.2}",
     cost.total_micro_usd as f64 / 1_000_000.0,
 );
 ```
@@ -81,7 +81,7 @@ the data file can never drift.
 
 ## Refresh procedure (manual, v0.1)
 
-See `TODOS-001` in repo root for the planned automation script.
+See `TODO-001` in `TODOS.md` (repo root) for the planned automation script.
 
 1. Fetch `model_prices_and_context_window.json` from a chosen LiteLLM
    commit:

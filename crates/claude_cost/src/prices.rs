@@ -178,9 +178,9 @@ fn validate_price(usd_per_token: f64, field: &str, model: &str) -> Result<(), Co
             "model {model} field {field} is negative: {usd_per_token}"
         )));
     }
-    if usd_per_token > 1.0 {
+    if usd_per_token >= 1.0 {
         return Err(CostError::PricesMissing(format!(
-            "model {model} field {field} is implausibly large (> $1/token): {usd_per_token}"
+            "model {model} field {field} is implausibly large (>= $1/token): {usd_per_token}"
         )));
     }
     Ok(())
@@ -337,7 +337,9 @@ mod tests {
     #[test]
     fn parse_prices_rejects_implausibly_large_price() {
         // 1.5 USD/token would mean $1.5M for a 1M-token conversation.
-        // The validation bound is `> 1.0` USD/token.
+        // The validation bound is `>= 1.0` USD/token (strict — matches the
+        // "below $1/token" doc + the bundled_prices_pass_sanity_scan check
+        // which asserts nano values `< 1_000_000_000`).
         let json = r#"{
             "claude-typo": {
                 "input_cost_per_token": 1.5,
@@ -350,6 +352,24 @@ mod tests {
                 assert!(msg.contains("implausibly large"), "got: {msg}");
                 assert!(msg.contains("$1/token"), "got: {msg}");
                 assert!(msg.contains("claude-typo"), "got: {msg}");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_prices_rejects_price_at_exactly_one_dollar() {
+        // Boundary: validate_price uses `>= 1.0` (strict), matching the doc's
+        // "below $1/token" and the sanity scan's `< 1_000_000_000`.
+        let json = r#"{
+            "claude-boundary": {
+                "input_cost_per_token": 1.0,
+                "output_cost_per_token": 1.5e-5
+            }
+        }"#;
+        let err = parse_prices(json).unwrap_err();
+        match err {
+            CostError::PricesMissing(msg) => {
+                assert!(msg.contains("implausibly large"), "got: {msg}");
             }
         }
     }
