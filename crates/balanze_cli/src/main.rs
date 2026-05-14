@@ -17,39 +17,19 @@ use std::fs;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use anthropic_oauth::{fetch_usage, load as load_credentials, ClaudeOAuthSnapshot, DEFAULT_API_BASE as ANTHROPIC_API_BASE};
+use anthropic_oauth::{
+    fetch_usage, load as load_credentials, ClaudeOAuthSnapshot,
+    DEFAULT_API_BASE as ANTHROPIC_API_BASE,
+};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
 use claude_parser::{dedup_events, find_claude_projects_dir, find_jsonl_files, parse_str, UsageEvent};
-use openai_client::{costs_this_month, OpenAiCosts, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE};
-use serde::Serialize;
-use tracing::{info, warn};
-use window::{
-    summarize_window, WindowSummary, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW,
+use openai_client::{
+    costs_this_month, OpenAiCosts, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE,
 };
-
-#[derive(Serialize)]
-struct CliSnapshot {
-    fetched_at: DateTime<Utc>,
-    claude_oauth: Option<ClaudeOAuthSnapshot>,
-    claude_oauth_error: Option<String>,
-    claude_jsonl: Option<JsonlSummary>,
-    claude_jsonl_error: Option<String>,
-    openai: Option<OpenAiCosts>,
-    /// `None` means: OpenAI not configured. `Some` with error string means
-    /// configured but the fetch failed.
-    openai_error: Option<String>,
-}
-
-/// CLI's JSONL view: `files_scanned` (an I/O concept, computed here) plus
-/// the pure-function `WindowSummary` produced by the `window` crate. The
-/// flatten keeps the JSON wire shape identical to the pre-refactor output.
-#[derive(Serialize)]
-struct JsonlSummary {
-    files_scanned: usize,
-    #[serde(flatten)]
-    window: WindowSummary,
-}
+use state_coordinator::{JsonlSnapshot, Snapshot};
+use tracing::{info, warn};
+use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -199,7 +179,7 @@ fn print_help() {
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
 
-async fn build_snapshot() -> CliSnapshot {
+async fn build_snapshot() -> Snapshot {
     let now = Utc::now();
     let (claude_oauth, claude_oauth_error) = match fetch_oauth().await {
         Ok(s) => (Some(s), None),
@@ -223,7 +203,7 @@ async fn build_snapshot() -> CliSnapshot {
             (None, Some(e.to_string()))
         }
     };
-    CliSnapshot {
+    Snapshot {
         fetched_at: now,
         claude_oauth,
         claude_oauth_error,
@@ -298,7 +278,7 @@ async fn fetch_openai() -> Result<Option<OpenAiCosts>> {
     }
 }
 
-fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
+fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSnapshot> {
     let claude_dir = find_claude_projects_dir()?;
     let files = find_jsonl_files(&claude_dir)?;
     info!(
@@ -342,13 +322,13 @@ fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
         DEFAULT_MIN_BURN_EVENTS,
     );
 
-    Ok(JsonlSummary {
+    Ok(JsonlSnapshot {
         files_scanned: files.len(),
         window,
     })
 }
 
-fn print_pretty(snapshot: &CliSnapshot, verbose: bool) {
+fn print_pretty(snapshot: &Snapshot, verbose: bool) {
     let _ = io::stdout().flush();
     println!("=== Balanze Status ===");
     println!("fetched: {}", snapshot.fetched_at.format("%Y-%m-%d %H:%M:%S UTC"));

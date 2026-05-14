@@ -17,6 +17,7 @@ claude_parser = { path = "../claude_parser" }
 keychain = { path = "../keychain" }
 openai_client = { path = "../openai_client" }
 settings = { path = "../settings" }
+state_coordinator = { path = "../state_coordinator" }
 window = { path = "../window" }
 
 tokio = { workspace = true }
