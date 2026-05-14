@@ -15,11 +15,16 @@ path = "src/main.rs"
 [dependencies]
 anthropic_oauth = { path = "../anthropic_oauth" }
 claude_parser = { path = "../claude_parser" }
+codex_local = { path = "../codex_local" }
 keychain = { path = "../keychain" }
 openai_client = { path = "../openai_client" }
 settings = { path = "../settings" }
 state_coordinator = { path = "../state_coordinator" }
 window = { path = "../window" }
+
+# Setup-wizard masked input. Tiny, widely-used crate (cross-platform tty
+# detection + termios/console manipulation). Used only by `balanze setup`.
+rpassword = "7"
 
 tokio = { workspace = true }
 reqwest = { workspace = true }
