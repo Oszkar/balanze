@@ -102,17 +102,63 @@ pub async fn fetch_costs(
 
     match status {
         StatusCode::OK => {}
-        StatusCode::UNAUTHORIZED => return Err(OpenAiError::AuthInvalid { body }),
-        StatusCode::FORBIDDEN => return Err(OpenAiError::InsufficientScope { body }),
+        StatusCode::UNAUTHORIZED => {
+            return Err(OpenAiError::AuthInvalid {
+                body: redact_for_display(&body),
+            });
+        }
+        StatusCode::FORBIDDEN => {
+            return Err(OpenAiError::InsufficientScope {
+                body: redact_for_display(&body),
+            });
+        }
         _ => {
             return Err(OpenAiError::UnexpectedStatus {
                 status: status.as_u16(),
-                body,
+                body: redact_for_display(&body),
             });
         }
     }
 
     parse_response(&body, start_time, actual_end, Utc::now())
+}
+
+/// Sanitize an HTTP error body before it ends up in an `OpenAiError`'s
+/// `Display` impl, which the CLI prints to stdout on the unhappy path.
+///
+/// Two protections, both defensive (OpenAI's current 4xx/5xx bodies don't
+/// echo headers, but the contract isn't a guarantee):
+///   1. Anything matching `sk-` followed by 15+ key-shaped characters is
+///      replaced with `sk-…REDACTED`.
+///   2. Bodies longer than 500 chars are truncated with a length-suffix.
+fn redact_for_display(body: &str) -> String {
+    const MAX_LEN: usize = 500;
+    let truncated: String = if body.chars().count() > MAX_LEN {
+        let head: String = body.chars().take(MAX_LEN).collect();
+        format!("{head}…[truncated, {} bytes]", body.len())
+    } else {
+        body.to_string()
+    };
+
+    let mut out = String::with_capacity(truncated.len());
+    let mut rest = truncated.as_str();
+    while let Some(idx) = rest.find("sk-") {
+        out.push_str(&rest[..idx]);
+        let after = &rest[idx + 3..];
+        let key_len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .unwrap_or(after.len());
+        if key_len >= 15 {
+            out.push_str("sk-…REDACTED");
+            rest = &after[key_len..];
+        } else {
+            // Not key-shaped; emit verbatim and continue.
+            out.push_str("sk-");
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn parse_response(
@@ -411,5 +457,60 @@ mod tests {
             .with_timezone(&Utc);
         let fom = first_of_month(mid_dec);
         assert_eq!(fom.to_rfc3339(), "2026-12-01T00:00:00+00:00");
+    }
+
+    // --- redact_for_display: HTTP-error-body sanitizer ---
+
+    #[test]
+    fn redact_empty_body_is_empty() {
+        assert_eq!(redact_for_display(""), "");
+    }
+
+    #[test]
+    fn redact_body_without_sk_passes_through() {
+        let body = r#"{"error":{"message":"Unauthorized","type":"invalid_request_error"}}"#;
+        assert_eq!(redact_for_display(body), body);
+    }
+
+    #[test]
+    fn redact_replaces_admin_key_lookalike() {
+        let body = "auth failed for sk-admin-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890";
+        let out = redact_for_display(body);
+        assert!(
+            out.contains("sk-…REDACTED"),
+            "expected redaction marker; got: {out}"
+        );
+        assert!(
+            !out.contains("AbCdEfGhIjKlMn"),
+            "key body must not survive: {out}"
+        );
+    }
+
+    #[test]
+    fn redact_replaces_multiple_keys_in_one_body() {
+        let body = "key1 sk-admin-AAAAAAAAAAAAAAAA mid sk-proj-BBBBBBBBBBBBBBBB tail";
+        let out = redact_for_display(body);
+        assert_eq!(out.matches("sk-…REDACTED").count(), 2);
+        assert!(!out.contains("AAAAAAAAAAAAAAAA"));
+        assert!(!out.contains("BBBBBBBBBBBBBBBB"));
+    }
+
+    #[test]
+    fn redact_leaves_short_sk_dash_strings_alone() {
+        // "sk-" followed by fewer than 15 key chars isn't a real key; don't
+        // mangle legitimate prose that happens to contain "sk-".
+        let body = "see sk-foo bar";
+        let out = redact_for_display(body);
+        assert_eq!(out, "see sk-foo bar");
+    }
+
+    #[test]
+    fn redact_truncates_long_bodies_with_length_suffix() {
+        let body: String = "x".repeat(800);
+        let out = redact_for_display(&body);
+        assert!(out.starts_with(&"x".repeat(500)));
+        assert!(out.contains("truncated"));
+        assert!(out.contains("800"));
+        assert!(out.len() < body.len());
     }
 }
