@@ -49,3 +49,15 @@ jobs:
 
       - name: svelte-check
         run: bun run check
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          # Order matches deny.toml comments: advisories first (most
+          # actionable), then licenses, bans, sources.
+          arguments: --workspace
