@@ -35,7 +35,7 @@ Apply at all times:
 
 - **12-Factor App** — Config in env, stateless processes where possible, strict dev/prod parity.
 - **DRY** — No duplication of domain logic. JSONL parsing happens in one crate; rolling-window math in one crate; etc.
-- **YAGNI** — No speculative abstractions. The v0.1 has 8 planned crates; don't add a 9th because it "might be useful."
+- **YAGNI** — No speculative abstractions. The v0.1 design has 10 crates (8 shipped + `predictor` + `watcher` planned); don't add an 11th because it "might be useful."
 - **KISS** — Simplest viable implementation.
 - **PoLP** — Least privilege always. Keychain reads happen in one crate; nothing else touches the `keyring` crate.
 - **MVP Bias** — Solo developer; ship fast, document tech debt, do not gold-plate, do not architect for imaginary scale.
@@ -111,7 +111,7 @@ Secrets in scope: user-supplied API keys for OpenAI; plus read-only access to Cl
 Rules for user-supplied keys (OpenAI):
 - Keys live in the OS keychain via the `keyring` crate. They are **never** written to disk in plaintext, not even temporarily.
 - Keys are **never** logged at any level. Periodic redacted form (`sk-…45 (len=51)`) is OK in a debug "show config" command if ever added; that's the only acceptable display surface outside the settings UI's masked input.
-- `.env` is gitignored. `.env.example` is committed and lists variable names without values.
+- `.env` is gitignored. The project doesn't load `.env` directly — secrets go through the OS keychain (`crates/keychain`), non-secret config goes through `directories::ProjectDirs` (`crates/settings`), and any user-tunable env var is documented in the CLI help (`BALANZE_OPENAI_KEY`, `BALANZE_LOG`). Add a `.env.example` only if a future feature actually requires `.env` loading.
 - The settings UI's API-key input renders as `type="password"` (no clipboard side-effects, no autocomplete).
 
 Rules for Claude OAuth tokens at `~/.claude/.credentials.json`:
@@ -161,7 +161,7 @@ balanze/
 │   ├── anthropic_oauth/        client + credentials loader + types. Calls `GET api.anthropic.com/api/oauth/usage` and parses dynamic-keyed response with curated display labels (`Current 5-hour session` / `Sonnet only (7 days)` / etc.) and titlecased fallback for unknown future cadence keys. 14 unit tests + 5 wiremock tests + smoke example against the real endpoint. Refresh-token flow on 401 is TODO for step 4.
 │   ├── window/                 pure rolling-window math over `UsageEvent` slices: 5h main window + 30m burn rate + per-model breakdown (descending by tokens; ties name-asc for determinism). No I/O, no logging above debug. 10 unit tests covering empty / outside-window / boundary inclusion / burn under-threshold / burn at-threshold / burn-window narrower than main / sort order / tied-model determinism / same-model aggregation.
 │   ├── predictor/              (planned) EWMA + warm-up state machine
-│   ├── openai_client/          Admin Costs API client (`GET /v1/organization/costs` with `sk-admin-…` Bearer). Sums spend across daily buckets, groups by line_item. 10 parser unit tests + 5 wiremock. 401 → AuthInvalid; 403 → InsufficientScope with admin-key hint. Originally targeted the legacy credit_grants endpoint; pivoted in May 2026 when OpenAI stopped issuing legacy user keys.
+│   ├── openai_client/          Admin Costs API client (`GET /v1/organization/costs` with `sk-admin-…` Bearer). Sums spend across daily buckets, groups by line_item. 18 parser unit tests (incl. 6 for the HTTP-error-body redactor) + 5 wiremock. 401 → AuthInvalid; 403 → InsufficientScope with admin-key hint. Originally targeted the legacy credit_grants endpoint; pivoted in May 2026 when OpenAI stopped issuing legacy user keys.
 │   ├── state_coordinator/      actor crate. Owns the in-memory `Snapshot` (canonical merge of all sources); receives `StateMsg::Update`/`Query`/`Refresh`/`SettingsChanged` on a bounded mpsc; notifies a `Sink` for side effects. Tauri-free — src-tauri later provides a `TauriSink` that does `app.emit("usage_updated", ...)` + `tray.set_icon`/`set_title`. 12 unit tests (one per StateMsg variant + mpsc backpressure burst + handle-clone fanout + snapshot merge_partial + record_error).
 │   ├── watcher/                (planned) notify + 1s debounce + 60s safety poll
 │   ├── keychain/               `keyring` wrapper, service="me.oszkar.Balanze". Only crate that imports keyring per §4 #5. 1 inline test + 1 #[ignore]'d real-keychain smoke. **KNOWN ISSUE**: keyring v3.6.3 set→get round-trip fails on Windows (smoke test fails). CLI honors `BALANZE_OPENAI_KEY` env var as a fallback. Migration to keyring-core (v4 successor) is a v0.2 task — see Known Issues section below.
@@ -267,7 +267,7 @@ Before claiming work is done:
 | `crates/predictor/**` | All Rust gates + fixture-based unit tests covering warm-up (Insufficient) / steady-burst (Confident) / high-variance (Uncertain) / mid-window reset (back to Insufficient) |
 | `crates/state_coordinator/**` | All Rust gates + one unit test per `StateMsg` variant + an mpsc-saturation test |
 | `crates/anthropic_oauth/**` | All Rust gates + wiremock unit tests (happy / 401-then-successful-refresh / 401-then-failed-refresh / network offline / unexpected response shape). Manual verification with the real credentials file on each developer machine. |
-| `crates/openai_client/**` | All Rust gates + 10 parser unit tests (multi-bucket aggregation, line-item sort, null-line-item-as-unknown, missing-amount-skipped, truncation flag, etc.) + 5 wiremock integration tests (happy with admin Bearer + query params, 401, 403 with admin-key hint, 500, invalid-JSON). |
+| `crates/openai_client/**` | All Rust gates + 12 parser unit tests (multi-bucket aggregation, line-item sort, null-line-item-as-unknown, missing-amount-skipped, truncation flag, amount-as-string-OR-number deserializer) + 6 redaction unit tests (sk- pattern, multi-key, short-string passthrough, length truncation) + 5 wiremock integration tests (happy with admin Bearer + query params, 401, 403 with admin-key hint, 500, invalid-JSON). |
 | `crates/watcher/**` | All Rust gates + `tokio::time::pause()` timing tests (notify+debounce single-fire / burst dedupe / safety poll on silence / notify-during-safety-poll dedupe) |
 | `crates/keychain/**` | All Rust gates + 1 inline keys-constant test + 1 `#[ignore]` real-keychain smoke. Run smoke manually on each developer machine before tagging a release (cross-OS keychain in CI is unreliable). |
 | `crates/settings/**` | All Rust gates + 9 unit tests (load missing → defaults, load corrupt → Malformed, atomic save uses tmp + rename, schema version handling, unknown extra-fields tolerated, minimal version-only file loads). |
@@ -294,7 +294,7 @@ State the exact command and request output from a human. Don't claim the work is
 
 ### Test locations
 
-Current state: ~117 tests across 8 shipped crates (7 backend + balanze_cli glue); 2 crates still planned (predictor, watcher, plus the Tauri smoke). One `#[ignore]`'d keychain smoke. As crates land, the table fills in.
+Current state: ~123 tests across 8 shipped crates (7 backend + balanze_cli glue); 2 crates still planned (predictor, watcher, plus the Tauri smoke). One `#[ignore]`'d keychain smoke. As crates land, the table fills in.
 
 | Subject | Location | What's there |
 |---|---|---|
@@ -359,7 +359,7 @@ Add tests when behavior changes or bug fixes could regress. Prefer tests that en
 
 ## 10. Troubleshooting
 
-The codebase is fresh (scaffold + hello world). This section grows with the project; today it captures the known footguns from design + scaffold.
+The v0.1 backend data layer is shipped (8 crates, 123 tests); the Tauri tray UI is still scaffold. This section captures the footguns the design surfaced plus anything observed in development.
 
 ### "Tray icon doesn't appear" or "two tray icons in the menu bar"
 
