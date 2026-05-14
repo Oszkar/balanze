@@ -10,13 +10,16 @@
 # Run locally:   cargo install --locked cargo-deny && cargo deny check
 
 [graph]
-# By default cargo-deny only checks the host platform. We build for
-# Windows + macOS in CI (and Linux eventually), so check the union.
+# By default cargo-deny only checks the host platform. We ship for
+# Windows + macOS today (v0.1); Linux comes in a later phase per PRD
+# Phasing. Targeting only the platforms we actually build for keeps
+# the dep graph honest — e.g., Tauri pulls GTK3 transitively on
+# Linux, which is RustSec-unmaintained, but we don't ship that path
+# so we shouldn't fail CI on it.
 targets = [
     { triple = "x86_64-pc-windows-msvc" },
     { triple = "x86_64-apple-darwin" },
     { triple = "aarch64-apple-darwin" },
-    { triple = "x86_64-unknown-linux-gnu" },
 ]
 
 # --- Security advisories (RustSec) ----------------------------------------
@@ -47,6 +50,12 @@ allow = [
     "BSL-1.0",
     "CC0-1.0",
     "0BSD",
+    # CDLA-Permissive-2.0 is used by `webpki-roots` (Mozilla's CA bundle),
+    # which reqwest+rustls pull in transitively. It's a permissive
+    # community-data license; OSI hasn't approved it but FSF rates it as
+    # similar to Apache-2.0 for use. Accepting because the alternative
+    # (drop rustls TLS) is unreasonable.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.93
 # Per-crate exceptions for crates whose license file is hard to detect
@@ -61,8 +70,12 @@ exceptions = []
 # triage in CI without blocking merges. Tighten to "deny" once the
 # baseline is clean.
 multiple-versions = "warn"
-# Wildcard version requirements (`*`) are a footgun.
+# Wildcard version requirements (`*`) are a footgun for external deps but
+# unavoidable for intra-workspace `path = "../foo"` dependencies — those
+# appear as wildcards in Cargo.lock because they have no version
+# constraint. Allow them; deny external wildcards.
 wildcards = "deny"
+allow-wildcard-paths = true
 deny = []
 # Crates allowed to appear in multiple versions without a warning.
 skip = []

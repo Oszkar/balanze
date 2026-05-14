@@ -106,7 +106,7 @@ pub fn summarize_window(
             total_tokens,
         })
         .collect();
-    by_model.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    by_model.sort_by_key(|b| std::cmp::Reverse(b.total_tokens));
 
     WindowSummary {
         window_start,
