@@ -1,0 +1,24 @@
+[package]
+name = "state_coordinator"
+description = "Actor that owns the in-memory Snapshot. The only writer of Snapshot AND the only caller of OS tray APIs (when wired via Sink). Pollers send StateMsg::Update; the coordinator merges, then notifies the Sink."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anthropic_oauth = { path = "../anthropic_oauth" }
+claude_parser = { path = "../claude_parser" }
+openai_client = { path = "../openai_client" }
+settings = { path = "../settings" }
+window = { path = "../window" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
