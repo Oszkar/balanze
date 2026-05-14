@@ -23,6 +23,14 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # `keyring` v4 is a sample app — the credential-store API moved to the
+      # `keyring-core` crate. Migrating to keyring-core v1 is a deliberate
+      # v0.2 code change (explicit `set_default_store` init), not a drop-in
+      # bump. Keep Dependabot quiet on the major until then; minor/patch on
+      # v3 still come through.
+      - dependency-name: "keyring"
+        update-types: ["version-update:semver-major"]
     groups:
       # Bundle minor + patch bumps so we don't get one PR per workspace dep
       # each week. Major bumps still land as their own PRs (default behavior).
