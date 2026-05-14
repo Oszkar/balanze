@@ -5,7 +5,7 @@
 //! summary. Token/credentials are NEVER printed.
 //!
 //! Run with:
-//!   cargo run --release --example smoke -p anthropic_oauth
+//!   cargo run --release -p anthropic_oauth --example anthropic_oauth_smoke
 
 use anthropic_oauth::{fetch_usage, load, DEFAULT_API_BASE};
 

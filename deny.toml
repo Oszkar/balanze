@@ -1,0 +1,95 @@
+# cargo-deny configuration.
+# https://embarkstudios.github.io/cargo-deny/
+#
+# Four guard rails enforced in CI on every PR + push to main:
+# - advisories: RustSec database (CVEs, unsoundness, yanked crates)
+# - licenses:   only allow OSI-blessed licenses we're comfortable with
+# - bans:       no wildcard version reqs; multiple-version skew warned
+# - sources:    only crates.io; no random git deps
+#
+# Run locally:   cargo install --locked cargo-deny && cargo deny check
+
+[graph]
+# By default cargo-deny only checks the host platform. We ship for
+# Windows + macOS today (v0.1); Linux comes in a later phase per PRD
+# Phasing. Targeting only the platforms we actually build for keeps
+# the dep graph honest — e.g., Tauri pulls GTK3 transitively on
+# Linux, which is RustSec-unmaintained, but we don't ship that path
+# so we shouldn't fail CI on it.
+targets = [
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "aarch64-apple-darwin" },
+]
+
+# --- Security advisories (RustSec) ----------------------------------------
+
+[advisories]
+version = 2
+yanked = "warn"
+# Specific RUSTSEC IDs to ignore — leave empty until something actually
+# justifies it; record the reason inline when adding.
+ignore = []
+# Only check WORKSPACE crates for unmaintained status. Transitive
+# unmaintained crates (e.g., Unicode helpers Tauri pulls in via Windows
+# Webview2 deps) aren't actionable from this repo — Dependabot tracks
+# upstream advisories for us. Tighten to "all" once we have direct
+# control over the dep graph.
+unmaintained = "workspace"
+
+# --- License policy --------------------------------------------------------
+
+[licenses]
+version = 2
+# Permissive licenses we accept. SPDX identifiers.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "0BSD",
+    # CDLA-Permissive-2.0 is used by `webpki-roots` (Mozilla's CA bundle),
+    # which reqwest+rustls pull in transitively. It's a permissive
+    # community-data license; OSI hasn't approved it but FSF rates it as
+    # similar to Apache-2.0 for use. Accepting because the alternative
+    # (drop rustls TLS) is unreasonable.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.93
+# Per-crate exceptions for crates whose license file is hard to detect
+# automatically (cargo-deny's heuristics can miss). Add with a reason.
+exceptions = []
+
+# --- Banned crates / version skew -----------------------------------------
+
+[bans]
+# Two copies of the same crate at different versions sometimes happen in
+# Rust ecosystems (transitive deps lag); warn rather than deny so we can
+# triage in CI without blocking merges. Tighten to "deny" once the
+# baseline is clean.
+multiple-versions = "warn"
+# Wildcard version requirements (`*`) are a footgun for external deps but
+# unavoidable for intra-workspace `path = "../foo"` dependencies — those
+# appear as wildcards in Cargo.lock because they have no version
+# constraint. Allow them; deny external wildcards.
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = []
+# Crates allowed to appear in multiple versions without a warning.
+skip = []
+
+# --- Source registries -----------------------------------------------------
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

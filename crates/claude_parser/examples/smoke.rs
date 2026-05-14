@@ -1,7 +1,7 @@
 //! Smoke test against the user's real ~/.claude/projects/ data.
 //!
 //! Run with:
-//!   cargo run --release --example smoke -p claude_parser
+//!   cargo run --release -p claude_parser --example claude_parser_smoke
 //!
 //! Prints a summary (files, events, total tokens) and a per-model breakdown.
 //! Parse errors are logged but don't abort — we want to see whether the
@@ -84,7 +84,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let mut models: Vec<_> = by_model.into_iter().collect();
-    models.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    models.sort_by_key(|m| std::cmp::Reverse(m.1 .1));
     if !models.is_empty() {
         println!();
         println!("By model (sorted by total tokens):");

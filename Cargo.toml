@@ -8,6 +8,11 @@ edition = "2021"
 rust-version = "1.77"
 license = "MIT"
 authors = ["Oszkar"]
+# All workspace crates are project-internal — never published to crates.io.
+# This also lets path-only inter-crate deps pass `cargo deny check bans`'s
+# wildcard rule (crates.io disallows path deps so cargo-deny only enforces
+# the wildcard check on publishable crates).
+publish = false
 
 [workspace.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
