@@ -1,7 +1,7 @@
 //! Smoke test against the user's real ~/.claude/projects/ data.
 //!
 //! Run with:
-//!   cargo run --release --example smoke -p claude_parser
+//!   cargo run --release -p claude_parser --example claude_parser_smoke
 //!
 //! Prints a summary (files, events, total tokens) and a per-model breakdown.
 //! Parse errors are logged but don't abort — we want to see whether the

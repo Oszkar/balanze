@@ -8,6 +8,13 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+# Avoid output filename collision with claude_parser's `smoke` example
+# (cargo issue #6313). File stays at examples/smoke.rs; invoke via
+# `cargo run -p anthropic_oauth --example anthropic_oauth_smoke`.
+[[example]]
+name = "anthropic_oauth_smoke"
+path = "examples/smoke.rs"
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

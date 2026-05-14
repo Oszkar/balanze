@@ -8,6 +8,15 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+# Workspace examples share the flat `target/debug/examples/` output dir
+# (cargo issue #6313). Two crates both named their example `smoke` collided
+# on Windows. Give each a distinct output name; the file path stays
+# `examples/smoke.rs` so `cargo run -p claude_parser --example
+# claude_parser_smoke` is the invocation.
+[[example]]
+name = "claude_parser_smoke"
+path = "examples/smoke.rs"
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
