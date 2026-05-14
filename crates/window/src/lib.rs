@@ -286,8 +286,8 @@ mod tests {
     fn by_model_sorted_descending_by_total_tokens() {
         let n = now();
         let events = vec![
-            ev(n - Duration::minutes(5), "haiku", 100, 50),    // 150
-            ev(n - Duration::minutes(10), "opus", 1000, 500),  // 1500
+            ev(n - Duration::minutes(5), "haiku", 100, 50), // 150
+            ev(n - Duration::minutes(10), "opus", 1000, 500), // 1500
             ev(n - Duration::minutes(15), "sonnet", 400, 200), // 600
         ];
         let s = summarize_window(

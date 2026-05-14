@@ -120,12 +120,11 @@ pub fn load_from(path: &Path) -> Result<Settings, SettingsError> {
             });
         }
     };
-    let mut parsed: Settings = serde_json::from_slice(&bytes).map_err(|e| {
-        SettingsError::Malformed {
+    let mut parsed: Settings =
+        serde_json::from_slice(&bytes).map_err(|e| SettingsError::Malformed {
             path: path.to_path_buf(),
             reason: e.to_string(),
-        }
-    })?;
+        })?;
     if parsed.version > SCHEMA_VERSION {
         warn!(
             seen = parsed.version,
@@ -233,7 +232,11 @@ mod tests {
     #[test]
     fn save_creates_parent_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested").join("subdir").join("settings.json");
+        let path = dir
+            .path()
+            .join("nested")
+            .join("subdir")
+            .join("settings.json");
         assert!(!path.parent().unwrap().exists());
         save_to(&Settings::default(), &path).expect("save");
         assert!(path.exists());

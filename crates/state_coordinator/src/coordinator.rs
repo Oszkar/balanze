@@ -36,10 +36,7 @@ impl StateCoordinatorHandle {
     ///
     /// `TrySendError` is large because it includes the un-sent `StateMsg`
     /// payload; we box it so this `Result` stays cheap at the call site.
-    pub fn try_send(
-        &self,
-        msg: StateMsg,
-    ) -> Result<(), Box<mpsc::error::TrySendError<StateMsg>>> {
+    pub fn try_send(&self, msg: StateMsg) -> Result<(), Box<mpsc::error::TrySendError<StateMsg>>> {
         self.tx.try_send(msg).map_err(Box::new)
     }
 
@@ -217,10 +214,7 @@ mod tests {
             .unwrap();
 
         let snap = handle.query().await.unwrap();
-        assert_eq!(
-            snap.openai_error.as_deref(),
-            Some("network unreachable")
-        );
+        assert_eq!(snap.openai_error.as_deref(), Some("network unreachable"));
         assert!(snap.openai.is_none(), "no data on error");
         assert_eq!(sink.snapshot_count(), 0);
         assert_eq!(sink.error_count(), 1);

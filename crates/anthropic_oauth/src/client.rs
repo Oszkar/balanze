@@ -72,7 +72,13 @@ pub async fn fetch_usage(
         }
     }
 
-    parse_response(&body, org_uuid, subscription_type, rate_limit_tier, Utc::now())
+    parse_response(
+        &body,
+        org_uuid,
+        subscription_type,
+        rate_limit_tier,
+        Utc::now(),
+    )
 }
 
 fn parse_response(

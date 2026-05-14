@@ -205,7 +205,9 @@ fn parse_response(
 
     debug!(
         buckets = page.data.len(),
-        total_usd, has_more = page.has_more, "costs: parsed"
+        total_usd,
+        has_more = page.has_more,
+        "costs: parsed"
     );
 
     Ok(OpenAiCosts {
@@ -403,7 +405,11 @@ mod tests {
         let (start, end) = fixed_window();
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
         // 0.021 + 1.5 = 1.521; check within float epsilon.
-        assert!((parsed.total_usd - 1.521).abs() < 1e-9, "got {}", parsed.total_usd);
+        assert!(
+            (parsed.total_usd - 1.521).abs() < 1e-9,
+            "got {}",
+            parsed.total_usd
+        );
         assert_eq!(parsed.by_line_item.len(), 2);
         // o1-mini has the higher amount (1.50), comes first.
         assert_eq!(parsed.by_line_item[0].line_item, "o1-mini");

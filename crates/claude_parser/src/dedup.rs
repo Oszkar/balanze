@@ -20,10 +20,12 @@ use crate::types::UsageEvent;
 /// O(unique-keys) space.
 pub fn dedup_events(events: &mut Vec<UsageEvent>) {
     let mut seen: HashSet<(String, String)> = HashSet::new();
-    events.retain(|e| match (e.message_id.as_deref(), e.request_id.as_deref()) {
-        (Some(m), Some(r)) => seen.insert((m.to_string(), r.to_string())),
-        _ => true,
-    });
+    events.retain(
+        |e| match (e.message_id.as_deref(), e.request_id.as_deref()) {
+            (Some(m), Some(r)) => seen.insert((m.to_string(), r.to_string())),
+            _ => true,
+        },
+    );
 }
 
 #[cfg(test)]
@@ -108,10 +110,7 @@ mod tests {
 
     #[test]
     fn events_with_missing_request_id_are_not_deduped() {
-        let mut events = vec![
-            ev(Some("msg_a"), None, 100),
-            ev(Some("msg_a"), None, 200),
-        ];
+        let mut events = vec![ev(Some("msg_a"), None, 100), ev(Some("msg_a"), None, 200)];
         dedup_events(&mut events);
         assert_eq!(events.len(), 2);
     }

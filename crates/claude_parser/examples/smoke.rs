@@ -45,7 +45,8 @@ fn main() -> anyhow::Result<()> {
                     total_events += 1;
                     total_input = total_input.saturating_add(ev.input_tokens);
                     total_output = total_output.saturating_add(ev.output_tokens);
-                    total_cache_create = total_cache_create.saturating_add(ev.cache_creation_input_tokens);
+                    total_cache_create =
+                        total_cache_create.saturating_add(ev.cache_creation_input_tokens);
                     total_cache_read = total_cache_read.saturating_add(ev.cache_read_input_tokens);
                     let entry = by_model.entry(ev.model.clone()).or_insert((0, 0));
                     entry.0 += 1;
@@ -75,7 +76,11 @@ fn main() -> anyhow::Result<()> {
         total_input + total_output + total_cache_create + total_cache_read
     );
     if let (Some(e), Some(l)) = (earliest, latest) {
-        println!("Date range:             {} to {}", e.to_rfc3339(), l.to_rfc3339());
+        println!(
+            "Date range:             {} to {}",
+            e.to_rfc3339(),
+            l.to_rfc3339()
+        );
     }
 
     let mut models: Vec<_> = by_model.into_iter().collect();
@@ -89,7 +94,10 @@ fn main() -> anyhow::Result<()> {
             } else {
                 model
             };
-            println!("  {:40} events={:>6}  tokens={:>14}", display, events, tokens);
+            println!(
+                "  {:40} events={:>6}  tokens={:>14}",
+                display, events, tokens
+            );
         }
     }
     Ok(())

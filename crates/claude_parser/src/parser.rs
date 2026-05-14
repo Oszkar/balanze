@@ -125,7 +125,9 @@ mod tests {
     #[test]
     fn parses_full_usage_line() {
         let line = r#"{"type":"assistant","timestamp":"2026-05-06T14:28:06.800Z","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":1000,"cache_read_input_tokens":5000}}}"#;
-        let ev = parse_line(line, 1).unwrap().expect("usage line should parse");
+        let ev = parse_line(line, 1)
+            .unwrap()
+            .expect("usage line should parse");
         assert_eq!(ev.model, "claude-sonnet-4-5");
         assert_eq!(ev.input_tokens, 100);
         assert_eq!(ev.output_tokens, 50);
@@ -152,8 +154,14 @@ mod tests {
     fn extracts_message_id_and_request_id_when_present() {
         let line = r#"{"type":"assistant","timestamp":"2026-05-06T14:28:06.800Z","requestId":"req_011CaztiaTDrx5M77znpr6P5","message":{"id":"msg_01UuzJzVNCC9cgV7A5jAc63X","model":"claude-sonnet-4-6","usage":{"input_tokens":1,"output_tokens":2}}}"#;
         let ev = parse_line(line, 1).unwrap().unwrap();
-        assert_eq!(ev.message_id.as_deref(), Some("msg_01UuzJzVNCC9cgV7A5jAc63X"));
-        assert_eq!(ev.request_id.as_deref(), Some("req_011CaztiaTDrx5M77znpr6P5"));
+        assert_eq!(
+            ev.message_id.as_deref(),
+            Some("msg_01UuzJzVNCC9cgV7A5jAc63X")
+        );
+        assert_eq!(
+            ev.request_id.as_deref(),
+            Some("req_011CaztiaTDrx5M77znpr6P5")
+        );
     }
 
     #[test]
@@ -215,7 +223,10 @@ mod tests {
         match parse_line(line, 7) {
             Err(ParseError::SchemaDrift { line, message }) => {
                 assert_eq!(line, 7);
-                assert!(message.contains("timestamp"), "message should mention timestamp: {message}");
+                assert!(
+                    message.contains("timestamp"),
+                    "message should mention timestamp: {message}"
+                );
             }
             other => panic!("expected SchemaDrift on line 7, got {other:?}"),
         }

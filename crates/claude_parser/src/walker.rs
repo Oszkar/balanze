@@ -144,7 +144,11 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
             .collect();
-        assert_eq!(results.len(), 3, "expected exactly 3 jsonl files; got {names:?}");
+        assert_eq!(
+            results.len(),
+            3,
+            "expected exactly 3 jsonl files; got {names:?}"
+        );
         assert!(names.iter().any(|n| n == "main.jsonl"));
         assert!(names.iter().any(|n| n == "agent-abc.jsonl"));
         assert!(names.iter().any(|n| n == "agent-acompact-def.jsonl"));
@@ -244,11 +248,7 @@ mod tests {
     #[test]
     fn finds_dot_config_claude_when_only_that_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let dot_config = dir
-            .path()
-            .join(".config")
-            .join("claude")
-            .join("projects");
+        let dot_config = dir.path().join(".config").join("claude").join("projects");
         fs::create_dir_all(&dot_config).unwrap();
         let candidates = candidate_claude_projects_dirs_in(dir.path(), None);
         let found = candidates.iter().find(|p| p.exists()).cloned();
@@ -263,8 +263,7 @@ mod tests {
         let dot_claude = dir.path().join(".claude").join("projects");
         fs::create_dir_all(&xdg_projects).unwrap();
         fs::create_dir_all(&dot_claude).unwrap();
-        let candidates =
-            candidate_claude_projects_dirs_in(dir.path(), Some(&xdg_root));
+        let candidates = candidate_claude_projects_dirs_in(dir.path(), Some(&xdg_root));
         let found = candidates.iter().find(|p| p.exists()).cloned();
         assert_eq!(found, Some(xdg_projects));
     }

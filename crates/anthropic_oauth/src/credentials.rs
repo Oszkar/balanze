@@ -33,7 +33,11 @@ fn candidate_paths() -> Vec<PathBuf> {
     }
     if let Some(home) = home_dir() {
         out.push(home.join(".claude").join(".credentials.json"));
-        out.push(home.join(".config").join("claude").join(".credentials.json"));
+        out.push(
+            home.join(".config")
+                .join("claude")
+                .join(".credentials.json"),
+        );
     }
     out
 }
@@ -95,7 +99,10 @@ mod tests {
         .unwrap();
         let creds = load_from(&path).expect("load");
         assert_eq!(creds.claude_ai_oauth.access_token, "sk-ant-oat01-test");
-        assert_eq!(creds.claude_ai_oauth.subscription_type.as_deref(), Some("max"));
+        assert_eq!(
+            creds.claude_ai_oauth.subscription_type.as_deref(),
+            Some("max")
+        );
         assert_eq!(creds.claude_ai_oauth.expires_at, 1778667589158);
         assert_eq!(creds.claude_ai_oauth.scopes.len(), 2);
     }

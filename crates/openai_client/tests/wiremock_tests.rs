@@ -31,7 +31,10 @@ fn body_typical() -> &'static str {
 
 fn window() -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
     let start = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).single().unwrap();
-    let end = Utc.with_ymd_and_hms(2026, 5, 13, 10, 0, 0).single().unwrap();
+    let end = Utc
+        .with_ymd_and_hms(2026, 5, 13, 10, 0, 0)
+        .single()
+        .unwrap();
     (start, end)
 }
 
@@ -68,7 +71,9 @@ async fn http_401_returns_auth_invalid() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/organization/costs"))
-        .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error":{"message":"bad key"}}"#))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_string(r#"{"error":{"message":"bad key"}}"#),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -78,7 +83,10 @@ async fn http_401_returns_auth_invalid() {
     let err = fetch_costs(&client, &server.uri(), "sk-admin-bad", start, Some(end))
         .await
         .expect_err("should fail with 401");
-    assert!(matches!(err, OpenAiError::AuthInvalid { .. }), "got {err:?}");
+    assert!(
+        matches!(err, OpenAiError::AuthInvalid { .. }),
+        "got {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -86,7 +94,9 @@ async fn http_403_returns_insufficient_scope_with_hint() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/organization/costs"))
-        .respond_with(ResponseTemplate::new(403).set_body_string(r#"{"error":{"message":"forbidden"}}"#))
+        .respond_with(
+            ResponseTemplate::new(403).set_body_string(r#"{"error":{"message":"forbidden"}}"#),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -101,7 +111,10 @@ async fn http_403_returns_insufficient_scope_with_hint() {
         OpenAiError::InsufficientScope { body } => {
             assert!(body.contains("forbidden"));
             assert!(displayed.contains("admin"), "hint missing: {displayed}");
-            assert!(displayed.contains("admin-keys"), "URL hint missing: {displayed}");
+            assert!(
+                displayed.contains("admin-keys"),
+                "URL hint missing: {displayed}"
+            );
         }
         other => panic!("expected InsufficientScope, got {other:?}"),
     }
