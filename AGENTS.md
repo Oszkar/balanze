@@ -162,7 +162,7 @@ balanze/
 │   ├── window/                 pure rolling-window math over `UsageEvent` slices: 5h main window + 30m burn rate + per-model breakdown (descending by tokens; ties name-asc for determinism). No I/O, no logging above debug. 10 unit tests covering empty / outside-window / boundary inclusion / burn under-threshold / burn at-threshold / burn-window narrower than main / sort order / tied-model determinism / same-model aggregation.
 │   ├── predictor/              (planned) EWMA + warm-up state machine
 │   ├── openai_client/          Admin Costs API client (`GET /v1/organization/costs` with `sk-admin-…` Bearer). Sums spend across daily buckets, groups by line_item. 10 parser unit tests + 5 wiremock. 401 → AuthInvalid; 403 → InsufficientScope with admin-key hint. Originally targeted the legacy credit_grants endpoint; pivoted in May 2026 when OpenAI stopped issuing legacy user keys.
-│   ├── state_coordinator/      (planned) actor; ONLY writer of Snapshot AND OS tray state
+│   ├── state_coordinator/      actor crate. Owns the in-memory `Snapshot` (canonical merge of all sources); receives `StateMsg::Update`/`Query`/`Refresh`/`SettingsChanged` on a bounded mpsc; notifies a `Sink` for side effects. Tauri-free — src-tauri later provides a `TauriSink` that does `app.emit("usage_updated", ...)` + `tray.set_icon`/`set_title`. 12 unit tests (one per StateMsg variant + mpsc backpressure burst + handle-clone fanout + snapshot merge_partial + record_error).
 │   ├── watcher/                (planned) notify + 1s debounce + 60s safety poll
 │   ├── keychain/               `keyring` wrapper, service="me.oszkar.Balanze". Only crate that imports keyring per §4 #5. 1 inline test + 1 #[ignore]'d real-keychain smoke. **KNOWN ISSUE**: keyring v3.6.3 set→get round-trip fails on Windows (smoke test fails). CLI honors `BALANZE_OPENAI_KEY` env var as a fallback. Migration to keyring-core (v4 successor) is a v0.2 task — see Known Issues section below.
 │   ├── settings/               config serde + atomic write (tmp + rename), schema versioned. Path via `directories::ProjectDirs`. 9 unit tests. Stores non-secrets only — keys live in keychain crate.
@@ -232,7 +232,7 @@ Avoid drive-by refactors.
 
 - `docs/prd.md` — product spec and phasing.
 - The design doc at `~/.gstack/projects/balanze/oszka-*-design-*.md` — architecture, IPC contract, state coordination diagram, predictor state machine, test strategy, build sequence. This is the load-bearing document; if a section in this AGENTS.md is missing detail, check there.
-- The backend data layer is shipped (7 crates: claude_parser, anthropic_oauth, openai_client, settings, keychain, window, balanze_cli). The Tauri frontend is still scaffold only (greet form + tray menu). As remaining crates land (`predictor`, `state_coordinator`, `watcher`) this AGENTS.md grows with them — each adds an entry to the Repo Map and may add a row to the Validation Matrix.
+- The backend data layer is shipped (8 crates: claude_parser, anthropic_oauth, openai_client, settings, keychain, window, state_coordinator, balanze_cli). The Tauri frontend is still scaffold only (greet form + tray menu). As remaining crates land (`predictor`, `watcher`) this AGENTS.md grows with them — each adds an entry to the Repo Map and may add a row to the Validation Matrix.
 
 ### Local dev (for agents that can run commands)
 
@@ -294,7 +294,7 @@ State the exact command and request output from a human. Don't claim the work is
 
 ### Test locations
 
-Current state: ~105 tests across 7 shipped crates (6 backend + balanze_cli glue); 3 crates still planned (predictor, state_coordinator, watcher, plus the Tauri smoke). One `#[ignore]`'d keychain smoke. As crates land, the table fills in.
+Current state: ~117 tests across 8 shipped crates (7 backend + balanze_cli glue); 2 crates still planned (predictor, watcher, plus the Tauri smoke). One `#[ignore]`'d keychain smoke. As crates land, the table fills in.
 
 | Subject | Location | What's there |
 |---|---|---|
@@ -303,7 +303,7 @@ Current state: ~105 tests across 7 shipped crates (6 backend + balanze_cli glue)
 | Rolling window | `crates/window/src/lib.rs` (inline `#[cfg(test)]`) | 10 unit tests: empty events / outside-window / window-start boundary inclusion / single-event token sum / burn under threshold / burn at threshold / burn-window narrower than main / by-model sort descending / tied-model alphabetical determinism / same-model aggregation. Pure functions; no fixtures, no I/O. |
 | Predictor state machine | `crates/predictor/tests/` | (planned) warm-up (Insufficient) / steady-burst (Confident ±10%) / high-variance (Uncertain) / mid-window reset (back to Insufficient) |
 | OpenAI billing client | `crates/openai_client/src/client.rs` (inline `#[cfg(test)]`) + `tests/wiremock_tests.rs` | 12 parser unit tests (multi-bucket aggregation, line-item sort, null-line-item-as-unknown, missing-amount-skipped, truncation flag, amount-as-string-OR-number deserializer, etc.) + 5 wiremock integration tests (happy with admin Bearer + query params, 401 → AuthInvalid, 403 → InsufficientScope with admin-key hint, 500, invalid-JSON). |
-| StateCoordinator actor | `crates/state_coordinator/tests/` | (planned) one test per `StateMsg` variant (`Update` happy, `Update(Err)` → `DegradedState`, `Query`, `Refresh`, `SettingsChanged` fanout) + mpsc(64) saturation |
+| StateCoordinator actor | `crates/state_coordinator/src/{snapshot,coordinator}.rs` (inline `#[cfg(test)]`) | 12 unit tests: snapshot (5: merge_partial per source clears matching _error, record_error preserves data, record_error routes correctly) + coordinator (7: Update happy → merge + on_snapshot, Update Err → record_error + on_degraded, Query returns current Snapshot, Refresh re-notifies sink, SettingsChanged is non-panicking, mpsc-burst-no-drops with tight 4-slot channel + 32 messages, handle clone shares same coordinator). |
 | File watcher | `crates/watcher/tests/` | (planned) `tokio::time::pause()` timing tests |
 | Settings serde | `crates/settings/src/lib.rs` (inline `#[cfg(test)]`) | 9 unit tests: load missing → defaults, load corrupt → Malformed, atomic save uses tmp + rename, schema version handling, unknown extra-fields tolerated, minimal version-only file loads. |
 | Keychain | `crates/keychain/src/lib.rs` (inline `#[cfg(test)]`) | 1 inline keys-constant test + 1 `#[ignore]`'d real-keychain smoke (documents the v3 Windows bug; re-runs manually). |
