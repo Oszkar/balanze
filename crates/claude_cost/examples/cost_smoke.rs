@@ -95,8 +95,15 @@ fn main() -> anyhow::Result<()> {
 
     let dollars = cost.total_micro_usd as f64 / 1_000_000.0;
     println!();
-    println!("=== Grand total ===");
+    println!("=== Estimated API-rate cost ===");
     println!("${dollars:.4}  ({} micro-USD)", cost.total_micro_usd);
+    println!();
+    println!("NOTE: This is what your Claude Code usage WOULD cost if billed at");
+    println!("Anthropic's direct API rates. If you're on a Pro/Max subscription,");
+    println!("your actual spend is the fixed monthly fee — this number is a");
+    println!("\"subscription leverage\" indicator (how much API-equivalent value");
+    println!("you're getting from the plan). For direct-API users (no subscription),");
+    println!("this approximates your actual spend, modulo price-table freshness.");
 
     if !cost.per_model.is_empty() {
         println!();

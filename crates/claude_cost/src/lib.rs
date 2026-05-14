@@ -1,5 +1,21 @@
-//! Pure-function crate that synthesizes estimated Claude API cost from
-//! [`claude_parser::UsageEvent`] slices.
+//! Pure-function crate that computes the **estimated API-rate cost** of
+//! Claude Code usage from [`claude_parser::UsageEvent`] slices.
+//!
+//! # What "cost" means here
+//!
+//! This crate produces a synthetic dollar figure — what your Claude Code
+//! sessions WOULD cost if every event were billed at Anthropic's published
+//! direct-API prices. For users on a Pro/Max subscription (the modal Claude
+//! Code user), this is NOT actual spend; actual spend is the fixed monthly
+//! subscription fee. The figure is useful as a "subscription leverage"
+//! indicator — how much API-rate value you're extracting from the plan. For
+//! the rarer user running Claude Code against direct-API auth, the figure
+//! approximates actual spend, subject to vendored-price-table freshness.
+//!
+//! Either way, [`Cost`] outputs are marked `Confidence::Estimated` by the
+//! Balanze data layer's convention (see AGENTS.md §2.1).
+//!
+//! # Hot path
 //!
 //! Per AGENTS.md §4 boundary #2, this crate is I/O-free on the hot path
 //! and synchronous. No `tokio::spawn`, no `reqwest`, no logging above

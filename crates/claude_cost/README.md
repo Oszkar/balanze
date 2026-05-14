@@ -1,10 +1,31 @@
 # claude_cost
 
-Pure-function Rust crate that synthesizes estimated Claude API cost from
-`claude_parser::UsageEvent` slices and a vendored Anthropic price table.
+Pure-function Rust crate that computes the **estimated API-rate cost** of
+Claude Code usage from `claude_parser::UsageEvent` slices and a vendored
+Anthropic price table.
 
 Sits in the same architectural slot as the `window` crate per AGENTS.md §4
 boundary #2: no I/O on the hot path, no async, no logging above debug.
+
+## What "cost" means in this crate
+
+The output is a synthetic dollar figure — what your Claude Code sessions
+WOULD cost if every event were billed at Anthropic's published direct-API
+prices. Three honest framings depending on the user:
+
+- **Pro / Max subscription user** (modal Claude Code user): this is NOT
+  actual spend. Actual spend is the fixed monthly subscription fee. The
+  figure is useful as a **"subscription leverage"** indicator — how much
+  API-rate value you extracted from the plan this month.
+- **Direct-API user** (rare for Claude Code): approximates actual spend,
+  modulo vendored-price-table freshness.
+- **Mixed user**: most Claude Code usage flows through the subscription;
+  this figure tracks the subscription portion only.
+
+UIs rendering `Cost.total_micro_usd` MUST label it with this framing
+(e.g. "estimated API-rate cost", "subscription leverage", "what your usage
+would cost at API rates"). Presenting it as "total spend" to a Max-plan
+user is actively misleading.
 
 ## Public API
 

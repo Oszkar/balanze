@@ -32,6 +32,11 @@ use crate::prices::PriceTable;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cost {
     pub per_model: Vec<ModelCost>,
+    /// Grand total in i64 micro-USD. **This is API-rate equivalent**, not
+    /// actual subscription spend — see the crate-level docs. UIs rendering
+    /// this value MUST label it as "estimated" / "API-rate equivalent" /
+    /// "subscription leverage" or similar; presenting it as "total spend"
+    /// to a Max-plan user is misleading.
     pub total_micro_usd: i64,
     pub skipped_models: Vec<String>,
     /// Total events the function saw, regardless of whether their model was
