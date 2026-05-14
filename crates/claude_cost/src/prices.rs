@@ -95,8 +95,8 @@ pub(crate) fn parse_prices(json: &str) -> Result<PriceTable, CostError> {
 
         let input = required_f64(entry, "input_cost_per_token", key)?;
         let output = required_f64(entry, "output_cost_per_token", key)?;
-        let cache_creation = optional_f64(entry, "cache_creation_input_token_cost")?;
-        let cache_read = optional_f64(entry, "cache_read_input_token_cost")?;
+        let cache_creation = optional_f64(entry, "cache_creation_input_token_cost", key)?;
+        let cache_read = optional_f64(entry, "cache_read_input_token_cost", key)?;
 
         models.insert(
             key.clone(),
@@ -130,22 +130,60 @@ fn required_f64(
     field: &str,
     model: &str,
 ) -> Result<f64, CostError> {
-    entry.get(field).and_then(|v| v.as_f64()).ok_or_else(|| {
+    let v = entry.get(field).and_then(|v| v.as_f64()).ok_or_else(|| {
         CostError::PricesMissing(format!("model {model} missing required field {field}"))
-    })
+    })?;
+    validate_price(v, field, model)?;
+    Ok(v)
 }
 
 fn optional_f64(
     entry: &serde_json::Map<String, serde_json::Value>,
     field: &str,
+    model: &str,
 ) -> Result<Option<f64>, CostError> {
     match entry.get(field) {
         None => Ok(None),
         Some(serde_json::Value::Null) => Ok(None),
-        Some(v) => v.as_f64().map(Some).ok_or_else(|| {
-            CostError::PricesMissing(format!("field {field} present but not numeric"))
-        }),
+        Some(v) => {
+            let f = v.as_f64().ok_or_else(|| {
+                CostError::PricesMissing(format!(
+                    "model {model} field {field} present but not numeric"
+                ))
+            })?;
+            validate_price(f, field, model)?;
+            Ok(Some(f))
+        }
     }
+}
+
+/// Validate a price value: finite, non-negative, and below `$1/token`.
+///
+/// The `$1/token` upper bound is a sanity guard against typos and unit errors
+/// (e.g. someone vendoring `3` instead of `3e-6` for $3/M tokens). No real
+/// Anthropic price is anywhere near this magnitude — Opus output is
+/// `$75/M = 7.5e-5 USD/token`, so the bound leaves ~4 orders of magnitude of
+/// headroom for any plausibly-priced future model. A price of `1.0` USD per
+/// single token would imply a million-dollar prompt for a million tokens; if
+/// that ever becomes a real price, the bound can be raised, but the more
+/// likely cause is a corrupted refresh and we want a loud failure.
+fn validate_price(usd_per_token: f64, field: &str, model: &str) -> Result<(), CostError> {
+    if !usd_per_token.is_finite() {
+        return Err(CostError::PricesMissing(format!(
+            "model {model} field {field} is non-finite: {usd_per_token}"
+        )));
+    }
+    if usd_per_token < 0.0 {
+        return Err(CostError::PricesMissing(format!(
+            "model {model} field {field} is negative: {usd_per_token}"
+        )));
+    }
+    if usd_per_token > 1.0 {
+        return Err(CostError::PricesMissing(format!(
+            "model {model} field {field} is implausibly large (> $1/token): {usd_per_token}"
+        )));
+    }
+    Ok(())
 }
 
 fn usd_per_token_to_nano(usd_per_token: f64) -> i64 {
@@ -274,6 +312,168 @@ mod tests {
         match err {
             CostError::PricesMissing(msg) => {
                 assert!(msg.contains("zero model entries"), "got: {msg}")
+            }
+        }
+    }
+
+    #[test]
+    fn parse_prices_rejects_negative_price() {
+        let json = r#"{
+            "claude-evil": {
+                "input_cost_per_token": -1.0e-6,
+                "output_cost_per_token": 1.5e-5
+            }
+        }"#;
+        let err = parse_prices(json).unwrap_err();
+        match err {
+            CostError::PricesMissing(msg) => {
+                assert!(msg.contains("negative"), "got: {msg}");
+                assert!(msg.contains("claude-evil"), "got: {msg}");
+                assert!(msg.contains("input_cost_per_token"), "got: {msg}");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_prices_rejects_implausibly_large_price() {
+        // 1.5 USD/token would mean $1.5M for a 1M-token conversation.
+        // The validation bound is `> 1.0` USD/token.
+        let json = r#"{
+            "claude-typo": {
+                "input_cost_per_token": 1.5,
+                "output_cost_per_token": 1.5e-5
+            }
+        }"#;
+        let err = parse_prices(json).unwrap_err();
+        match err {
+            CostError::PricesMissing(msg) => {
+                assert!(msg.contains("implausibly large"), "got: {msg}");
+                assert!(msg.contains("$1/token"), "got: {msg}");
+                assert!(msg.contains("claude-typo"), "got: {msg}");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_prices_rejects_negative_optional_cache_field() {
+        let json = r#"{
+            "claude-cache-bug": {
+                "input_cost_per_token": 1.0e-6,
+                "output_cost_per_token": 5.0e-6,
+                "cache_read_input_token_cost": -1.0e-7
+            }
+        }"#;
+        let err = parse_prices(json).unwrap_err();
+        match err {
+            CostError::PricesMissing(msg) => {
+                assert!(msg.contains("negative"), "got: {msg}");
+                assert!(msg.contains("cache_read_input_token_cost"), "got: {msg}");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_prices_rejects_non_numeric_optional_field() {
+        let json = r#"{
+            "claude-typed-bad": {
+                "input_cost_per_token": 1.0e-6,
+                "output_cost_per_token": 5.0e-6,
+                "cache_creation_input_token_cost": "not-a-number"
+            }
+        }"#;
+        let err = parse_prices(json).unwrap_err();
+        match err {
+            CostError::PricesMissing(msg) => {
+                assert!(msg.contains("not numeric"), "got: {msg}");
+                assert!(
+                    msg.contains("cache_creation_input_token_cost"),
+                    "got: {msg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn provenance_const_matches_bundled_json_meta_commit_prefix() {
+        // The build script extracts the commit prefix from the filename; the
+        // data file's `_meta.commit` block holds the full SHA. If these drift
+        // (e.g. a refresher updates one but not the other), this assertion
+        // catches it. Build-time const must be a prefix of the JSON metadata.
+        let raw: serde_json::Value = serde_json::from_str(BUNDLED_PRICES_JSON)
+            .expect("bundled JSON parses for provenance check");
+        let meta_commit = raw
+            .get("_meta")
+            .and_then(|m| m.get("commit"))
+            .and_then(|c| c.as_str())
+            .expect("bundled JSON has _meta.commit");
+        assert!(
+            meta_commit.starts_with(crate::PRICE_TABLE_COMMIT),
+            "PRICE_TABLE_COMMIT ({}) is not a prefix of bundled JSON _meta.commit ({}). \
+             Refresher likely updated the filename without updating the data \
+             file, or vice versa.",
+            crate::PRICE_TABLE_COMMIT,
+            meta_commit,
+        );
+
+        let meta_date = raw
+            .get("_meta")
+            .and_then(|m| m.get("fetched_at"))
+            .and_then(|c| c.as_str())
+            .expect("bundled JSON has _meta.fetched_at");
+        assert_eq!(
+            meta_date,
+            crate::PRICE_TABLE_DATE,
+            "PRICE_TABLE_DATE ({}) does not match bundled JSON _meta.fetched_at ({}).",
+            crate::PRICE_TABLE_DATE,
+            meta_date,
+        );
+    }
+
+    #[test]
+    fn bundled_prices_pass_sanity_scan() {
+        // Defense-in-depth: every entry in the shipped table has plausible
+        // values. Catches refresh-corruption where one model's price
+        // accidentally ends up at zero or wildly off.
+        let table = load_bundled_prices().unwrap();
+        assert!(
+            table.models.len() >= 15,
+            "bundled table has fewer models than expected: {}",
+            table.models.len()
+        );
+        for (name, prices) in &table.models {
+            assert!(
+                prices.input_nano_per_token > 0,
+                "model {name}: input price is zero or negative"
+            );
+            assert!(
+                prices.output_nano_per_token > 0,
+                "model {name}: output price is zero or negative"
+            );
+            // Sanity bound: no per-token price > 1 nano dollar (= $1/token).
+            // (validate_price enforces this at parse, but assert at the
+            // post-conversion stage too in case the conversion grew bugs.)
+            // 1 USD/token = 1e9 nano/token.
+            assert!(
+                prices.input_nano_per_token < 1_000_000_000,
+                "model {name}: input price >= $1/token ({} nano)",
+                prices.input_nano_per_token
+            );
+            assert!(
+                prices.output_nano_per_token < 1_000_000_000,
+                "model {name}: output price >= $1/token ({} nano)",
+                prices.output_nano_per_token
+            );
+            if let Some(cc) = prices.cache_creation_nano_per_token {
+                assert!(
+                    (0..1_000_000_000).contains(&cc),
+                    "model {name}: cache_creation out of range ({cc})"
+                );
+            }
+            if let Some(cr) = prices.cache_read_nano_per_token {
+                assert!(
+                    (0..1_000_000_000).contains(&cr),
+                    "model {name}: cache_read out of range ({cr})"
+                );
             }
         }
     }

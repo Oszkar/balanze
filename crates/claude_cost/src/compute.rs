@@ -20,14 +20,41 @@ use crate::prices::PriceTable;
 ///   broken by model name ascending so the order is deterministic for
 ///   serialization + snapshot dedup downstream.
 /// - `skipped_models` is sorted alphabetically and deduplicated.
+///
+/// Saturation caveat: `total_micro_usd` is computed via `saturating_add`
+/// across `per_model.total_micro_usd`. When one or more rows saturate at
+/// `i64::MAX`, `total_micro_usd` also caps at `i64::MAX` rather than
+/// overflowing — so the conceptual "sum of saturated rows" can exceed
+/// what `total_micro_usd` reports. Callers asserting
+/// `per_model.iter().map(|m| m.total_micro_usd).sum::<i64>() == total_micro_usd`
+/// will be surprised at saturation. The test
+/// `multiple_saturated_models_total_caps_at_i64_max` documents this.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cost {
     pub per_model: Vec<ModelCost>,
     pub total_micro_usd: i64,
     pub skipped_models: Vec<String>,
+    /// Total events the function saw, regardless of whether their model was
+    /// found in the price table, was an unknown model, or had an empty model
+    /// string. Use this for "events processed" metrics. **Do NOT sum
+    /// `per_model.iter().map(|m| m.event_count)`** for that purpose —
+    /// `event_count` only counts events whose model was known at price-table
+    /// lookup time.
+    pub total_event_count: usize,
+    /// Events whose `event.model` was an empty string. `claude_parser` emits
+    /// an empty model string when the JSONL line omits the model field —
+    /// this is a parser-quirk count, not a price-table-gap count, so it
+    /// lives separate from `skipped_models`.
+    pub unparsed_event_count: usize,
 }
 
 /// Per-model cost row.
+///
+/// `event_count` counts only events whose model was found in the price
+/// table for this model name. Unknown-model events route into
+/// `Cost::skipped_models`; empty-model events route into
+/// `Cost::unparsed_event_count`. For "total events processed" use
+/// `Cost::total_event_count`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCost {
     pub model: String,
@@ -67,9 +94,21 @@ impl ModelCost {
 pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
     let mut by_model: BTreeMap<String, ModelCost> = BTreeMap::new();
     let mut skipped: BTreeMap<String, ()> = BTreeMap::new();
+    let mut unparsed_event_count: usize = 0;
+    let total_event_count = events.len();
 
     for event in events {
         let model = &event.model;
+
+        // Empty model string: `claude_parser` emits this when the JSONL line
+        // doesn't include a model field. Route to `unparsed_event_count`
+        // rather than `skipped_models` so the empty string doesn't end up
+        // as a blank entry in the renderer's "unknown models" list.
+        if model.is_empty() {
+            unparsed_event_count += 1;
+            continue;
+        }
+
         let Some(model_prices) = prices.models.get(model) else {
             skipped.insert(model.clone(), ());
             continue;
@@ -127,6 +166,8 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
         per_model,
         total_micro_usd,
         skipped_models,
+        total_event_count,
+        unparsed_event_count,
     }
 }
 
@@ -223,6 +264,8 @@ mod tests {
         assert_eq!(cost.total_micro_usd, 0);
         assert!(cost.per_model.is_empty());
         assert!(cost.skipped_models.is_empty());
+        assert_eq!(cost.total_event_count, 0);
+        assert_eq!(cost.unparsed_event_count, 0);
     }
 
     #[test]
@@ -453,6 +496,16 @@ mod tests {
 
         assert_eq!(cost.per_model.len(), 2);
         assert_eq!(cost.skipped_models, vec!["claude-future-model".to_string()]);
+        assert_eq!(cost.total_event_count, 5);
+        assert_eq!(cost.unparsed_event_count, 0);
+        // event_count only counts priced events (3); the 2 skipped ones are
+        // accounted for via total_event_count.
+        let priced_event_count: usize = cost.per_model.iter().map(|m| m.event_count).sum();
+        assert_eq!(priced_event_count, 3);
+        assert_eq!(
+            cost.total_event_count - priced_event_count - cost.unparsed_event_count,
+            2 // events with unknown model
+        );
 
         // Sonnet totals:
         //   input: (1000+2000)*3000 nano = 9e6 nano = 9000 micro
@@ -490,5 +543,89 @@ mod tests {
 
         // Grand total: 13530 + 7500 = 21030
         assert_eq!(cost.total_micro_usd, 21_030);
+    }
+
+    #[test]
+    fn empty_model_event_counted_as_unparsed_not_skipped() {
+        // claude_parser emits "" for `model` when the JSONL omits the field.
+        // It must NOT show up in skipped_models — that list is for genuinely
+        // unknown model NAMES; empty-string is a parser-quirk separate channel.
+        let events = vec![event("", 1000, 100, 0, 0), event("", 2000, 200, 0, 0)];
+        let cost = compute_cost(&events, &fixture_prices());
+        assert!(cost.per_model.is_empty());
+        assert!(
+            cost.skipped_models.is_empty(),
+            "empty-string model leaked into skipped_models: {:?}",
+            cost.skipped_models
+        );
+        assert_eq!(cost.unparsed_event_count, 2);
+        assert_eq!(cost.total_event_count, 2);
+        assert_eq!(cost.total_micro_usd, 0);
+    }
+
+    #[test]
+    fn total_event_count_counts_all_event_types() {
+        // 1 priced + 1 skipped (unknown model) + 1 unparsed (empty model) =
+        // total_event_count of 3. event_count for the priced model is 1.
+        let events = vec![
+            event("claude-sonnet-4-6", 1000, 100, 0, 0),
+            event("claude-future-model", 1000, 100, 0, 0),
+            event("", 1000, 100, 0, 0),
+        ];
+        let cost = compute_cost(&events, &fixture_prices());
+        assert_eq!(cost.total_event_count, 3);
+        assert_eq!(cost.unparsed_event_count, 1);
+        assert_eq!(cost.skipped_models, vec!["claude-future-model".to_string()]);
+        assert_eq!(cost.per_model.len(), 1);
+        assert_eq!(cost.per_model[0].event_count, 1);
+    }
+
+    #[test]
+    fn multiple_saturated_models_total_caps_at_i64_max() {
+        // F4 from adversarial review: when 2+ models each saturate to i64::MAX,
+        // the grand total also caps at i64::MAX rather than overflowing.
+        // The conceptual sum (2 * i64::MAX) would exceed i64::MAX; the
+        // saturating-add semantics protect against panic but mean callers
+        // cannot assert `sum(rows) == total` at saturation. This test pins
+        // the documented behavior.
+        let mut models = BTreeMap::new();
+        models.insert(
+            "claude-huge-a".to_string(),
+            ModelPrices {
+                input_nano_per_token: 3000,
+                output_nano_per_token: 0,
+                cache_creation_nano_per_token: None,
+                cache_read_nano_per_token: None,
+            },
+        );
+        models.insert(
+            "claude-huge-b".to_string(),
+            ModelPrices {
+                input_nano_per_token: 3000,
+                output_nano_per_token: 0,
+                cache_creation_nano_per_token: None,
+                cache_read_nano_per_token: None,
+            },
+        );
+        let prices = PriceTable {
+            models,
+            commit: "t",
+            fetched_at: "t",
+        };
+        // u64::MAX/4 tokens × 3000 nano = ~1.4e22 nano = ~1.4e19 micro,
+        // far exceeding i64::MAX (~9.2e18). Saturates.
+        let events = vec![
+            event("claude-huge-a", u64::MAX / 4, 0, 0, 0),
+            event("claude-huge-b", u64::MAX / 4, 0, 0, 0),
+        ];
+        let cost = compute_cost(&events, &prices);
+        assert_eq!(cost.per_model.len(), 2);
+        assert_eq!(cost.per_model[0].total_micro_usd, i64::MAX);
+        assert_eq!(cost.per_model[1].total_micro_usd, i64::MAX);
+        // Grand total saturates at i64::MAX — NOT i64::MAX * 2.
+        assert_eq!(cost.total_micro_usd, i64::MAX);
+        // Documenting that the naive sum is meaningless at saturation:
+        // sum(saturating) would overflow without saturating_add. We rely
+        // on the iter().fold() in compute_cost to handle this.
     }
 }

@@ -10,6 +10,12 @@
 use std::path::Path;
 
 fn main() {
+    // Re-run when the vendored data changes OR when this script itself
+    // changes. The default cargo rerun trigger is bypassed once we emit any
+    // `rerun-if-changed` line, so we must list every relevant path. Without
+    // the `build.rs` entry, edits to this script don't re-emit the
+    // PRICE_TABLE_COMMIT/DATE env consts until `cargo clean`.
+    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=data/");
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");

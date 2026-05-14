@@ -22,13 +22,34 @@ println!(
 - `compute_cost` is infallible. Unknown models go into
   `Cost.skipped_models`, never into an error.
 - `load_bundled_prices` fails only if the compile-time-embedded JSON is
-  malformed (impossible for the data shipped here; the variant exists so
-  the parser helper can be exercised on synthetic input in tests, and to
-  leave a useful error path if a future refresh ever produces an
-  unparseable file).
+  malformed, contains a non-finite / negative / wildly-large price, or
+  has zero model entries. Compile-time impossible for the data shipped
+  here; the variant exists so the parser helper can be exercised on
+  synthetic input in tests, and to leave a useful error path if a future
+  refresh ever produces an unparseable file.
+- **Price validation**: every parsed price must be finite, non-negative,
+  and below `$1/token`. The `$1/token` upper bound is a typo guard — no
+  real Anthropic price is anywhere near (Opus is `$75/M = 7.5e-5/token`).
 - Currency math: `i64` micro-USD outputs, `i64` nano-USD per-token
   storage, `i128` intermediate products to avoid overflow. Saturates at
-  `i64::MAX` / `i64::MIN` rather than panicking.
+  `i64::MAX` / `i64::MIN` rather than panicking. **Caveat**: at saturation,
+  the grand-total `total_micro_usd` caps at `i64::MAX`, so summing
+  `per_model.iter().map(|m| m.total_micro_usd)` may exceed
+  `total_micro_usd`. Callers should not assert equality at saturation.
+
+## Event counting
+
+`Cost` exposes three event-count signals because "how many events did we
+see?" has three honest answers:
+
+- `Cost.total_event_count` — every event the function saw (priced +
+  skipped + unparsed). Use this for "events processed" metrics.
+- `ModelCost.event_count` (per-row) — events whose model was found in
+  the price table. Sum across rows gives the priced subset only.
+- `Cost.unparsed_event_count` — events whose `event.model` was empty.
+  `claude_parser` emits empty strings when the JSONL line omits the
+  field; counted separately from `skipped_models` because it's a parser
+  quirk, not a price-table gap.
 
 ## Provenance
 
