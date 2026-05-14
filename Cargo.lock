@@ -265,6 +265,7 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
+ "state_coordinator",
  "tokio",
  "tracing",
  "tracing-subscriber",
