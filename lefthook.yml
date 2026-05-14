@@ -1,0 +1,45 @@
+# Lefthook — git hooks runner. https://github.com/evilmartians/lefthook
+#
+# Installed automatically via the `prepare` script in package.json on
+# `bun install`. To install manually:  bun run lefthook install
+#
+# Pre-commit runs only fast checks (sub-second) so the dev loop stays tight.
+# Pre-push runs the same gates CI runs, so a push that's about to fail CI
+# fails locally first.
+
+pre-commit:
+  parallel: true
+  commands:
+    rustfmt:
+      tags: rust
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+      fail_text: |
+        rustfmt found formatting drift. Run `cargo fmt --all` and stage the changes.
+
+    svelte-check:
+      tags: frontend
+      glob: "*.{svelte,ts,js,mjs,cjs}"
+      run: bun run check
+      fail_text: |
+        svelte-check found a typecheck issue. Fix and re-commit.
+
+pre-push:
+  parallel: false
+  commands:
+    clippy:
+      tags: rust
+      run: cargo clippy --workspace --all-targets -- -D warnings
+      fail_text: |
+        clippy is not clean. CI will reject this push. Fix locally first.
+
+    test:
+      tags: rust
+      run: cargo test --workspace
+      fail_text: |
+        cargo test --workspace failed. Don't push broken main.
+
+# Skip hooks for any command in an emergency:   git commit --no-verify
+# (Or:   LEFTHOOK=0 git commit  to disable hooks for one invocation.)
+# AGENTS.md §8 says: don't skip hooks unless you've already understood the
+# failure and have a real reason. Default to fixing, not bypassing.

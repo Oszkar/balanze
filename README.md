@@ -95,9 +95,14 @@ Prerequisites:
 cargo run --release -p balanze_cli -- status
 
 # Desktop app (scaffold only — tray icon, no data yet):
-bun install
+bun install         # also installs lefthook git hooks (see Dev tooling below)
 bun run tauri dev
 ```
+
+`bun install` runs `lefthook install` automatically — that wires
+`pre-commit` (rustfmt + svelte-check) and `pre-push` (clippy + tests)
+hooks so the same gates CI enforces fail locally first. Bypass for one
+commit with `git commit --no-verify`, or `LEFTHOOK=0` for one session.
 
 Provide an OpenAI Admin key one of two ways:
 
