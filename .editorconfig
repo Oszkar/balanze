@@ -1,0 +1,28 @@
+# EditorConfig — https://editorconfig.org
+# Keeps line endings, indentation, and trailing whitespace consistent across
+# any editor that reads .editorconfig (most do, including VS Code, JetBrains,
+# Vim, Emacs, Sublime, etc.). Rust's rustfmt + Svelte's prettier both already
+# enforce stricter rules per filetype; this file is the cross-cutting baseline.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Web + config formats conventionally use 2-space indent.
+[*.{svelte,ts,js,mjs,cjs,json,jsonc,html,css,yml,yaml,toml,md}]
+indent_size = 2
+
+# Markdown trailing whitespace is sometimes meaningful (line breaks). Leave it.
+[*.md]
+trim_trailing_whitespace = false
+
+# Generated lockfiles shouldn't be reformatted by an editor save.
+[{Cargo.lock,bun.lock,package-lock.json}]
+insert_final_newline = unset
+trim_trailing_whitespace = unset
