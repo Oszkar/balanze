@@ -1,0 +1,67 @@
+# Dependabot configuration.
+#
+# Weekly cadence — high enough to catch security advisories quickly, low enough
+# not to drown a single-developer side project in version-bump PRs. The
+# `open-pull-requests-limit` further caps noise.
+#
+# Security advisories: GitHub raises these independently of this schedule and
+# at "open" they bypass the limit, so safety-critical fixes still surface fast.
+
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Budapest
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # Bundle minor + patch bumps so we don't get one PR per workspace dep
+      # each week. Major bumps still land as their own PRs (default behavior).
+      cargo-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Budapest
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - frontend
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Budapest
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: chore
+      include: scope
