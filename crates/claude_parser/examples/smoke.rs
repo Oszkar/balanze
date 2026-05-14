@@ -84,7 +84,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let mut models: Vec<_> = by_model.into_iter().collect();
-    models.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    models.sort_by_key(|m| std::cmp::Reverse(m.1 .1));
     if !models.is_empty() {
         println!();
         println!("By model (sorted by total tokens):");

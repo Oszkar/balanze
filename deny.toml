@@ -30,6 +30,12 @@ yanked = "warn"
 # Specific RUSTSEC IDs to ignore — leave empty until something actually
 # justifies it; record the reason inline when adding.
 ignore = []
+# Only check WORKSPACE crates for unmaintained status. Transitive
+# unmaintained crates (e.g., Unicode helpers Tauri pulls in via Windows
+# Webview2 deps) aren't actionable from this repo — Dependabot tracks
+# upstream advisories for us. Tighten to "all" once we have direct
+# control over the dep graph.
+unmaintained = "workspace"
 
 # --- License policy --------------------------------------------------------
 
