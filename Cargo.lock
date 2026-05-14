@@ -536,8 +536,10 @@ dependencies = [
 name = "claude_cost"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "claude_parser",
+ "directories",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
