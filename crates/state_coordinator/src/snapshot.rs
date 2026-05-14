@@ -22,11 +22,20 @@ use crate::messages::{Source, SourcePartial};
 // debate that doesn't pay off. Tests compare individual fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// Wall-clock time of the most recent coordinator-side merge. Updated on
+    /// every successful `Update` message.
     pub fetched_at: DateTime<Utc>,
+    /// Most recent successful Anthropic OAuth usage fetch. `None` until the
+    /// first success.
     pub claude_oauth: Option<ClaudeOAuthSnapshot>,
+    /// Most recent failure from the Anthropic OAuth poller. Coexists with
+    /// `claude_oauth` when a previously-good fetch is now stale.
     pub claude_oauth_error: Option<String>,
+    /// Most recent JSONL parse + window summary.
     pub claude_jsonl: Option<JsonlSnapshot>,
+    /// Most recent JSONL parse failure (filesystem error, schema drift).
     pub claude_jsonl_error: Option<String>,
+    /// Most recent successful OpenAI Admin Costs fetch.
     pub openai: Option<OpenAiCosts>,
     /// `None` means: OpenAI not configured (no key). Some(err) means
     /// configured but the fetch failed.
@@ -55,7 +64,11 @@ impl Snapshot {
 /// flat for compatibility with the CLI's existing --json output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonlSnapshot {
+    /// Number of `.jsonl` files the producer (CLI today; watcher later)
+    /// touched on this update. Distinct from events scanned.
     pub files_scanned: usize,
+    /// Pure window math from [`window::summarize_window`]. Flattened in the
+    /// wire JSON so the `--json` shape stays unchanged from pre-refactor.
     #[serde(flatten)]
     pub window: WindowSummary,
 }

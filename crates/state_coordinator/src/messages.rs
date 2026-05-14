@@ -10,8 +10,11 @@ use crate::snapshot::{JsonlSnapshot, Snapshot};
 /// Which source produced an update or failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
+    /// `anthropic_oauth::fetch_usage` — the 5h / 7d / per-model cadence bars.
     ClaudeOAuth,
+    /// `claude_parser` + `window::summarize_window` — local JSONL activity.
     ClaudeJsonl,
+    /// `openai_client::costs_this_month` — month-to-date OpenAI spend.
     OpenAiCosts,
 }
 
@@ -25,6 +28,8 @@ pub enum SourcePartial {
 }
 
 impl SourcePartial {
+    /// Map a partial back to its [`Source`] tag. Used by the coordinator to
+    /// cross-check `SourceUpdate.source` against the payload variant.
     pub fn source(&self) -> Source {
         match self {
             SourcePartial::ClaudeOAuth(_) => Source::ClaudeOAuth,

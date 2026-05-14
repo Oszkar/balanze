@@ -21,13 +21,20 @@ pub const DEFAULT_BURN_WINDOW: Duration = Duration::minutes(30);
 /// Below this we'd be amplifying noise from one or two sparse calls.
 pub const DEFAULT_MIN_BURN_EVENTS: usize = 3;
 
+/// Per-model row in a [`WindowSummary::by_model`] breakdown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ByModel {
+    /// Anthropic model name as it appears in the JSONL (e.g.
+    /// `claude-sonnet-4-6`). May be the empty string for events that arrived
+    /// without a model field.
     pub model: String,
     pub events: usize,
     pub total_tokens: u64,
 }
 
+/// Result of [`summarize_window`] — aggregated state for one rolling window
+/// of `UsageEvent`s. Pure data, derivable from `(events, now, window,
+/// burn_window, min_burn_events)`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowSummary {
     pub window_start: DateTime<Utc>,

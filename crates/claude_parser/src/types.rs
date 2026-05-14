@@ -2,31 +2,47 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Which AI provider produced this event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Provider {
     Claude,
     OpenAi,
 }
 
+/// How the event was billed — Anthropic subscription (Claude Max etc.) or
+/// metered API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AccountType {
     Subscription,
     Api,
 }
 
+/// Where this event's data came from. Surfaced in `--json` so consumers can
+/// distinguish authoritative sources from inferred / scraped ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DataSource {
+    /// `~/.claude/projects/**/*.jsonl` — local Claude Code session files.
     Jsonl,
+    /// OpenAI Admin Costs API (`/v1/organization/costs`).
     OpenAiBilling,
+    /// Anthropic Console (cookie-based scrape, planned for v0.2).
     AnthropicConsole,
+    /// Derived locally (e.g., burn-rate extrapolations); not authoritative.
     Inferred,
 }
 
+/// One billing-relevant assistant turn. Produced by `parse_str` and consumed
+/// downstream by `dedup_events` (via `(message_id, request_id)`),
+/// `window::summarize_window`, and eventually the predictor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageEvent {
+    /// Wall-clock timestamp Claude Code recorded for this turn (top-level
+    /// `timestamp` field).
     pub ts: DateTime<Utc>,
     pub provider: Provider,
     pub account_type: AccountType,
+    /// Anthropic model name (e.g. `claude-sonnet-4-6`). Empty string when the
+    /// JSONL omits it.
     pub model: String,
     pub input_tokens: u64,
     pub output_tokens: u64,

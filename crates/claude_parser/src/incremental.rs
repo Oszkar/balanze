@@ -21,19 +21,35 @@ use std::time::SystemTime;
 use crate::parser::parse_str;
 use crate::types::{ParseError, UsageEvent};
 
+/// Snapshot of a single file's state at the last `read_incremental` call.
+/// Used by the next call to decide where to resume reading.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileCursor {
+    /// Byte offset of the first un-parsed byte. Equal to the end of the last
+    /// complete (`\n`-terminated) line we parsed.
     pub byte_pos: u64,
+    /// Total file size at the last call. Used together with `mtime` to
+    /// detect rewrites (size unchanged + mtime advanced) and shrinkage.
     pub size: u64,
+    /// File modification time at the last call.
     pub mtime: SystemTime,
 }
 
+/// Stateful per-file byte-cursor reader. Construct once, call
+/// `read_incremental(path)` repeatedly; only newly-appended bytes are parsed
+/// after the first call.
+///
+/// Per AGENTS.md §3.1, watcher / poller code uses this to keep parser CPU
+/// flat during active Claude Code sessions. The CLI is stateless and
+/// re-parses fully on each invocation, so it doesn't use this type.
 #[derive(Debug, Default)]
 pub struct IncrementalParser {
     cursors: HashMap<PathBuf, FileCursor>,
 }
 
 impl IncrementalParser {
+    /// Create an empty parser with no cursors. First `read_incremental` call
+    /// for each path reads that file in full.
     pub fn new() -> Self {
         Self::default()
     }
@@ -89,17 +105,21 @@ impl IncrementalParser {
         Ok(events)
     }
 
-    /// Forget cursor state for one file. Next read starts from byte 0.
+    /// Forget cursor state for one file. The next `read_incremental` for that
+    /// path starts from byte 0. Use when you've detected drift the cursor
+    /// can't catch on its own (e.g., a file moved + restored).
     pub fn invalidate(&mut self, path: &Path) {
         self.cursors.remove(path);
     }
 
-    /// Forget all cursor state.
+    /// Forget all cursor state. Equivalent to dropping and rebuilding the
+    /// parser. Useful after a `refresh_now()` from the user.
     pub fn clear(&mut self) {
         self.cursors.clear();
     }
 
-    /// Inspect the cursor for a given file (for diagnostics / tests).
+    /// Inspect the cursor for one path. Diagnostic / test surface; not part
+    /// of the runtime read path.
     pub fn cursor_for(&self, path: &Path) -> Option<&FileCursor> {
         self.cursors.get(path)
     }

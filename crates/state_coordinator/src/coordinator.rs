@@ -55,8 +55,11 @@ impl StateCoordinatorHandle {
     }
 }
 
+/// Errors that can surface from [`StateCoordinatorHandle::query`].
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
+    /// The coordinator's tokio task has exited — usually because all handle
+    /// clones were dropped (graceful shutdown) or the task panicked.
     #[error("coordinator task has shut down")]
     CoordinatorClosed,
 }
