@@ -86,12 +86,13 @@ fn main() -> ExitCode {
 
 fn cmd_status(args: &[String]) -> Result<()> {
     let json_mode = args.iter().any(|a| a == "--json");
+    let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
     let snapshot = tokio::runtime::Runtime::new()?.block_on(build_snapshot());
 
     if json_mode {
         println!("{}", serde_json::to_string_pretty(&snapshot)?);
     } else {
-        print_pretty(&snapshot);
+        print_pretty(&snapshot, verbose);
     }
     Ok(())
 }
@@ -182,7 +183,9 @@ fn print_help() {
     eprintln!();
     eprintln!("Subcommands:");
     eprintln!("  balanze                       Print pretty status (default)");
-    eprintln!("  balanze status [--json]       Same as above; --json is machine-readable");
+    eprintln!("  balanze status [--json] [-v]  Same as above; --json is machine-readable;");
+    eprintln!("                                -v / --verbose adds account-identifying fields");
+    eprintln!("                                (org uuid) — safe to share at home, dox-y in public.");
     eprintln!("  balanze set-openai-key [KEY]  Store KEY in the OS keychain. Reads from stdin if KEY is omitted.");
     eprintln!("  balanze clear-openai-key      Remove the OpenAI key from the keychain");
     eprintln!("  balanze settings              Print current settings.json contents");
@@ -345,7 +348,7 @@ fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSummary> {
     })
 }
 
-fn print_pretty(snapshot: &CliSnapshot) {
+fn print_pretty(snapshot: &CliSnapshot, verbose: bool) {
     let _ = io::stdout().flush();
     println!("=== Balanze Status ===");
     println!("fetched: {}", snapshot.fetched_at.format("%Y-%m-%d %H:%M:%S UTC"));
@@ -358,8 +361,13 @@ fn print_pretty(snapshot: &CliSnapshot) {
             oauth.subscription_type.as_deref().unwrap_or("?"),
             oauth.rate_limit_tier.as_deref().unwrap_or("?"),
         );
-        if let Some(uuid) = &oauth.org_uuid {
-            println!("org uuid:     {uuid}");
+        // org_uuid identifies the user's Anthropic consumer org. Useful for
+        // bug reports but doxes the account when pasted publicly, so it's
+        // gated behind --verbose / -v.
+        if verbose {
+            if let Some(uuid) = &oauth.org_uuid {
+                println!("org uuid:     {uuid}");
+            }
         }
         println!();
         println!("CADENCE BARS (from Anthropic OAuth):");
