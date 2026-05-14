@@ -55,7 +55,7 @@ Correctness > Cleverness · Security > Convenience · Simplicity > Flexibility �
 | Currency | `i64` micro-USD (1e-6 USD units) internally; convert to `f64` only at the display boundary. **Never** use `f64` for sums or threshold comparisons |
 | Cap unit | Tokens for the Claude subscription rolling-window cap; micro-USD for OpenAI API cap. No synthetic-dollar pricing table on the cap math path |
 | Frontend framework | Svelte **5 runes** (`$state`, `$derived`, `$props`). No Svelte 4 stores. SvelteKit with `adapter-static` in SPA mode (Tauri serves the static build) |
-| Frontend bundler | Vite 6; TypeScript strict via `tsconfig.json` |
+| Frontend bundler | Vite 8; TypeScript strict via `tsconfig.json` |
 | Frontend env | `import.meta.env.VITE_*`; never read raw `process.env` |
 | IPC contract | Frontend ↔ Backend: only via the commands + events enumerated in the design doc (`get_snapshot`, `get_history`, `refresh_now`, `set_api_key`, `get_settings`, `set_settings`; events `usage_updated`, `degraded_state`). Adding to this surface needs a doc update first |
 | Filesystem paths | All persistent locations go through the `directories` crate (`ProjectDirs::from("me", "oszkar", "Balanze")`) — never hardcode `~/Library/...` or `%APPDATA%\...` inline |
