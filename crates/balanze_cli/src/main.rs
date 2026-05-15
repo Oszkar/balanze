@@ -748,7 +748,9 @@ const REFRESH_MARGIN: Duration = Duration::seconds(300);
 
 /// Pure: true if `expires_at_ms` is in the past or within `margin` of now.
 fn token_needs_refresh(expires_at_ms: i64, now: DateTime<Utc>, margin: Duration) -> bool {
-    now.timestamp_millis() >= expires_at_ms - margin.num_milliseconds()
+    // Fix 5: saturating_sub so a pathological/hostile expires_at_ms near
+    // i64::MIN cannot cause an arithmetic underflow panic in debug builds.
+    now.timestamp_millis() >= expires_at_ms.saturating_sub(margin.num_milliseconds())
 }
 
 /// Refresh the bearer and best-effort persist it. A skipped/failed write is
@@ -1270,5 +1272,8 @@ mod tests {
             now,
             margin
         ));
+        // Fix 5: pathological/hostile expires_at near i64::MIN must not panic
+        // and must return true (absurdly-past expiry → needs refresh).
+        assert!(super::token_needs_refresh(i64::MIN, now, margin));
     }
 }

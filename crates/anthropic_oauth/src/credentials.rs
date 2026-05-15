@@ -10,7 +10,10 @@
 //! file (never invents a new one), and touches only the OAuth token fields
 //! (AGENTS.md §3.4). No other crate reads or writes these credentials.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::{Credentials, OAuthError, RefreshedTokens};
 
@@ -149,17 +152,59 @@ pub fn write_back(path: &Path, refreshed: &RefreshedTokens) -> Result<WriteBack,
         })?;
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let tmp = dir.join(format!(
-        ".credentials.json.balanze-{}.tmp",
-        std::process::id()
-    ));
-    std::fs::write(&tmp, &serialized).map_err(|e| OAuthError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
 
-    // Preserve the original file's permissions on Unix (mode bits). Windows
-    // has no mode; the rename inherits the directory ACL.
+    // Fix 2: unique name = pid + nanosecond timestamp + monotonic counter,
+    // avoiding collisions on the 401-retry double-refresh path and on PID reuse.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let tmp = dir.join(format!(
+        ".credentials.json.balanze-{}-{}-{}.tmp",
+        std::process::id(),
+        nanos,
+        seq,
+    ));
+
+    // Fix 3 (unix): create the tmp file with mode 0o600 from the start so
+    // there is never a world/group-readable window for this secret file.
+    // Windows: the file inherits the parent directory's ACL (user profile),
+    // which is the documented, acceptable Windows behavior (no mode concept;
+    // same-dir inheritance preserves access scope).
+    let write_result = (|| -> std::io::Result<()> {
+        #[cfg(unix)]
+        let mut f = {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?
+        };
+        #[cfg(not(unix))]
+        let mut f = std::fs::File::create_new(&tmp)?;
+
+        f.write_all(&serialized)?;
+        // Fix 1: fsync the tmp before rename so a crash/power-loss between
+        // write and rename cannot lose the refreshed credentials.
+        f.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(e) = write_result {
+        // Fix 2: clean up tmp on write failure too (not only on rename failure).
+        let _ = std::fs::remove_file(&tmp);
+        return Err(OAuthError::Io {
+            path: tmp,
+            source: e,
+        });
+    }
+
+    // Fix 3 (unix): copy the original file's permissions onto the tmp.
+    // The tmp is already 0o600 (safe), so a copy failure is safe to ignore
+    // (original is typically 0o600 anyway; we simply keep our restrictive default).
     #[cfg(unix)]
     {
         if let Ok(meta) = std::fs::metadata(path) {
@@ -174,6 +219,16 @@ pub fn write_back(path: &Path, refreshed: &RefreshedTokens) -> Result<WriteBack,
             source: e,
         }
     })?;
+
+    // Fix 1: fsync the parent directory on Unix so the rename itself is
+    // durable. Best-effort — a dir-fsync failure must not fail the write
+    // since the data is already renamed into place.
+    // On Windows, opening a directory as a File for sync is not supported;
+    // the file fsync + rename is the portable durability guarantee.
+    #[cfg(unix)]
+    {
+        let _ = std::fs::File::open(dir).and_then(|f| f.sync_all());
+    }
 
     Ok(WriteBack::Written)
 }

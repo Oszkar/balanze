@@ -55,6 +55,34 @@ async fn refresh_non_200_is_refresh_failed_with_redacted_body() {
     }
 }
 
+/// Fix 4 (TDD): non-positive `expires_in` must be rejected — a malformed or
+/// hostile response must not yield an already-expired credential.
+#[tokio::test]
+async fn refresh_zero_expires_in_is_response_shape_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "a",
+            "refresh_token": "b",
+            "expires_in": 0
+        })))
+        .mount(&server)
+        .await;
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/oauth/token", server.uri());
+
+    match refresh_access_token(&client, &url, "client-x", "rt", 0).await {
+        Err(OAuthError::ResponseShape(msg)) => {
+            assert!(
+                msg.contains("expires_in"),
+                "error message should mention expires_in: {msg}"
+            );
+        }
+        other => panic!("expected ResponseShape, got {other:?}"),
+    }
+}
+
 // Real-endpoint smoke. NOT run in CI (no creds there). Maintainer runs:
 //   cargo test -p anthropic_oauth -- --ignored refresh_real_endpoint_smoke
 // with a valid refresh token exported, before tagging a release. Confirms
