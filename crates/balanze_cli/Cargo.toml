@@ -24,6 +24,7 @@ codex_local = { path = "../codex_local" }
 keychain = { path = "../keychain" }
 openai_client = { path = "../openai_client" }
 settings = { path = "../settings" }
+snapshot_composer = { path = "../snapshot_composer" }
 state_coordinator = { path = "../state_coordinator" }
 window = { path = "../window" }
 

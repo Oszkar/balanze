@@ -31,9 +31,8 @@ use claude_parser::{
 use openai_client::{
     costs_this_month, OpenAiCosts, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE,
 };
-use state_coordinator::{JsonlSnapshot, Snapshot};
+use state_coordinator::Snapshot;
 use tracing::{info, warn};
-use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
 
 /// Format an `i64` micro-USD value as a human-readable USD string. Pure
 /// display path per AGENTS.md §2.1: integer math everywhere internally;
@@ -546,107 +545,30 @@ fn print_help() {
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
 
-// TODO(v0.2): this function is the source-orchestration policy — per-source
-// fetch, error→string mapping, the "JSONL load fails ⇒ both claude_jsonl and
-// anthropic_api_cost stay None without duplicating the error" rule, and the
-// "Codex not installed ⇒ Ok(None), not an error" rule. When `src-tauri` lands
-// its pollers feeding `state_coordinator`, this exact policy will be
-// reimplemented on the poller side and the two entry-points can silently
-// diverge, violating the AGENTS.md §4 #8 parity contract ("identical inputs ⇒
-// identical Snapshot"). The fix is to extract this orchestration into a shared
-// crate (or a `state_coordinator` compose fn) that both `balanze_cli` and the
-// pollers call. NOT done now on purpose: the second consumer (pollers) does
-// not exist yet, so extracting today is YAGNI — the marker exists so the
-// extraction happens WITH the pollers, not after a divergence bug.
-// Note: this policy now also includes the OAuth→window data dependency
-// (the five_hour_reset anchor feeding the JSONL window) — the v0.2
-// extraction must replicate it too or the two composition paths diverge.
+// The source-orchestration policy now lives in `snapshot_composer::compose`
+// (AGENTS.md §4 #8): the CLI runs it via `LiveSources`, the future watcher
+// will run it via its own `SnapshotSources` impl, and `integration_4quadrant`
+// runs it via `FixtureSources` — one policy, no silent divergence.
 async fn build_snapshot() -> Snapshot {
-    let now = Utc::now();
+    snapshot_composer::compose(&LiveSources, Utc::now()).await
+}
 
-    let (claude_oauth, claude_oauth_error) = match fetch_oauth().await {
-        Ok(s) => (Some(s), None),
-        Err(e) => {
-            warn!("OAuth source failed: {e}");
-            (None, Some(e.to_string()))
-        }
-    };
+/// The production `SnapshotSources`: real network + filesystem + keychain.
+/// Every method body delegates to the pre-extraction helper, moved unchanged.
+struct LiveSources;
 
-    // Anchor the JSONL rolling window to Anthropic's authoritative 5-hour
-    // reset when we have it (removes local clock-drift error); fall back to
-    // now-relative when OAuth is unavailable. AGENTS.md v0.1.1 / §7.
-    let window_anchor = claude_oauth
-        .as_ref()
-        .and_then(ClaudeOAuthSnapshot::five_hour_reset);
-
-    // JSONL events power BOTH the window summary (claude_jsonl) and the
-    // API-rate cost synthesis (anthropic_api_cost). Read once, summarize
-    // twice. If the load fails entirely, both downstream slots stay None
-    // and claude_jsonl_error carries the reason — we don't duplicate the
-    // error into anthropic_api_cost_error (the renderer correlates).
-    let mut claude_jsonl: Option<JsonlSnapshot> = None;
-    let mut claude_jsonl_error: Option<String> = None;
-    let mut anthropic_api_cost: Option<claude_cost::Cost> = None;
-    let mut anthropic_api_cost_error: Option<String> = None;
-    match load_and_dedup_claude_events() {
-        Ok((events, files_scanned)) => {
-            claude_jsonl = Some(summarize_for_jsonl_snapshot(
-                &events,
-                files_scanned,
-                now,
-                window_anchor,
-            ));
-            match compute_anthropic_api_cost(&events) {
-                Ok(cost) => {
-                    info!(
-                        "claude_cost: total_micro_usd={} per_model_rows={} skipped={}",
-                        cost.total_micro_usd,
-                        cost.per_model.len(),
-                        cost.skipped_models.len()
-                    );
-                    anthropic_api_cost = Some(cost);
-                }
-                Err(e) => {
-                    warn!("anthropic_api_cost source failed: {e}");
-                    anthropic_api_cost_error = Some(e.to_string());
-                }
-            }
-        }
-        Err(e) => {
-            warn!("JSONL source failed: {e}");
-            claude_jsonl_error = Some(e.to_string());
-        }
+impl snapshot_composer::SnapshotSources for LiveSources {
+    async fn fetch_oauth(&self) -> Result<ClaudeOAuthSnapshot> {
+        live_fetch_oauth().await
     }
-
-    let (codex_quota, codex_quota_error) = match fetch_codex_quota() {
-        Ok(snap) => (snap, None),
-        Err(e) => {
-            warn!("codex_quota source failed: {e}");
-            (None, Some(e.to_string()))
-        }
-    };
-
-    let (openai, openai_error) = match fetch_openai().await {
-        Ok(Some(g)) => (Some(g), None),
-        Ok(None) => (None, None),
-        Err(e) => {
-            warn!("OpenAI source failed: {e}");
-            (None, Some(e.to_string()))
-        }
-    };
-
-    Snapshot {
-        fetched_at: now,
-        claude_oauth,
-        claude_oauth_error,
-        claude_jsonl,
-        claude_jsonl_error,
-        anthropic_api_cost,
-        anthropic_api_cost_error,
-        codex_quota,
-        codex_quota_error,
-        openai,
-        openai_error,
+    async fn load_claude_events(&self) -> Result<(Vec<UsageEvent>, usize)> {
+        load_and_dedup_claude_events()
+    }
+    async fn fetch_codex_quota(&self) -> Result<Option<codex_local::CodexQuotaSnapshot>> {
+        live_fetch_codex_quota()
+    }
+    async fn fetch_openai(&self) -> Result<Option<OpenAiCosts>> {
+        live_fetch_openai().await
     }
 }
 
@@ -696,36 +618,10 @@ fn load_and_dedup_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
     Ok((all_events, files.len()))
 }
 
-fn summarize_for_jsonl_snapshot(
-    events: &[UsageEvent],
-    files_scanned: usize,
-    now: DateTime<Utc>,
-    window_anchor: Option<DateTime<Utc>>,
-) -> JsonlSnapshot {
-    let window = summarize_window(
-        events,
-        now,
-        DEFAULT_WINDOW,
-        DEFAULT_BURN_WINDOW,
-        DEFAULT_MIN_BURN_EVENTS,
-        window_anchor,
-    );
-    JsonlSnapshot {
-        files_scanned,
-        window,
-    }
-}
-
-fn compute_anthropic_api_cost(events: &[UsageEvent]) -> Result<claude_cost::Cost> {
-    let prices = claude_cost::load_bundled_prices()
-        .map_err(|e| anyhow!("claude_cost: bundled price table failed to load: {e}"))?;
-    Ok(claude_cost::compute_cost(events, &prices))
-}
-
 /// Read the latest Codex rate-limit snapshot. Treats "Codex not installed"
 /// as `Ok(None)` (not a failure — just an unconfigured source); only
 /// surfaces actual errors (permission denied, schema drift, etc.).
-fn fetch_codex_quota() -> Result<Option<codex_local::CodexQuotaSnapshot>> {
+fn live_fetch_codex_quota() -> Result<Option<codex_local::CodexQuotaSnapshot>> {
     match codex_local::read_codex_quota() {
         Ok(snap) => {
             if let Some(ref s) = snap {
@@ -786,7 +682,7 @@ async fn refresh_and_persist(
     Ok(next)
 }
 
-async fn fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
+async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
     let path = locate_credentials()?;
     let creds = load_credentials_from(&path)?;
     let mut oauth = creds.claude_ai_oauth;
@@ -847,7 +743,7 @@ async fn fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
 ///
 /// Returns `Ok(None)` when nothing is configured; `Err` only for real
 /// fetch failures (401, 403, network, etc.).
-async fn fetch_openai() -> Result<Option<OpenAiCosts>> {
+async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
     let key = if let Ok(env_key) = env::var("BALANZE_OPENAI_KEY") {
         if env_key.trim().is_empty() {
             return Ok(None);
@@ -882,12 +778,6 @@ async fn fetch_openai() -> Result<Option<OpenAiCosts>> {
         Err(e) => Err(e.into()),
     }
 }
-
-// Legacy `build_jsonl_summary` removed in step 5; superseded by
-// `load_and_dedup_claude_events` + `summarize_for_jsonl_snapshot` so the
-// JSONL parse output can be reused by both `summarize_window` (jsonl
-// snapshot) and `claude_cost::compute_cost` (anthropic_api_cost) without
-// scanning the directory twice.
 
 fn print_sections(snapshot: &Snapshot, verbose: bool) {
     let _ = io::stdout().flush();
