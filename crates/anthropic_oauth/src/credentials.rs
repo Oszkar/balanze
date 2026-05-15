@@ -90,6 +90,13 @@ pub enum WriteBack {
 /// permissions, reuse Anthropic's file (never invent a new one), touch only
 /// the three token fields, never regress a concurrently-newer on-disk token.
 ///
+/// Note: the file is rewritten via `serde_json::to_vec_pretty`, so it is
+/// normalized to pretty-printed JSON with object keys in sorted order
+/// (`serde_json::Value` is a `BTreeMap`; the workspace does not enable the
+/// `preserve_order` feature). This is semantically safe — Claude Code and
+/// Balanze both re-parse by key — but the rewritten file is intentionally
+/// not byte-identical to Claude Code's original compact layout.
+///
 /// TODO(v0.2): the read→refresh→write race with Claude Code's own refresh is
 /// only "skip if disk newer" here. A long-running watcher must serialize
 /// refreshes and re-read on `SkippedDiskNewer`; for the one-shot CLI the race
@@ -331,5 +338,37 @@ mod tests {
         write_back(&path, &r).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "mode not preserved");
+    }
+
+    #[test]
+    fn write_back_malformed_existing_file_is_credentials_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".credentials.json");
+        std::fs::write(&path, b"{not valid json").unwrap();
+        let r = RefreshedTokens {
+            access_token: "a".into(),
+            refresh_token: "b".into(),
+            expires_at_ms: 1,
+        };
+        match write_back(&path, &r) {
+            Err(OAuthError::CredentialsMalformed { .. }) => {}
+            other => panic!("expected CredentialsMalformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_back_missing_claude_ai_oauth_is_credentials_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".credentials.json");
+        std::fs::write(&path, br#"{"somethingElse": {}}"#).unwrap();
+        let r = RefreshedTokens {
+            access_token: "a".into(),
+            refresh_token: "b".into(),
+            expires_at_ms: 1,
+        };
+        match write_back(&path, &r) {
+            Err(OAuthError::CredentialsMalformed { .. }) => {}
+            other => panic!("expected CredentialsMalformed, got {other:?}"),
+        }
     }
 }
