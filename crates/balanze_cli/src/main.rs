@@ -794,6 +794,10 @@ async fn fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
             Ok(s)
         }
         Err(OAuthError::AuthExpired) => {
+            // Note: if pre-flight already refreshed and we still 401, this does
+            // one more refresh+retry. Intentional and bounded — the retry uses
+            // `?`, so a second AuthExpired propagates (no loop). Do not "optimize"
+            // into a did-we-already-refresh flag; KISS over a rare cold path.
             warn!("oauth: 401 despite pre-flight — one refresh+retry");
             let oauth = refresh_and_persist(&client, &path, oauth).await?;
             let s = fetch_usage(
@@ -1243,5 +1247,11 @@ mod tests {
         assert!(super::token_needs_refresh(now_ms - 1, now, margin));
         assert!(super::token_needs_refresh(now_ms + 200_000, now, margin));
         assert!(!super::token_needs_refresh(now_ms + 3_600_000, now, margin));
+        // Boundary: token expiring exactly `margin` from now → refresh now.
+        assert!(super::token_needs_refresh(
+            now_ms + margin.num_milliseconds(),
+            now,
+            margin
+        ));
     }
 }
