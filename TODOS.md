@@ -11,6 +11,13 @@ Each item:
 - **Depends on / blocked by**: prerequisites.
 - **Captured**: when + by which review.
 
+> **Promoted to the roadmap:** TODO-002 (criterion benchmarks for `claude_cost`
+> + `codex_local`) is no longer a loose deferred item — it is now scheduled in
+> `docs/prd.md` Phase 2 (v0.2 Track E), riding with the watcher so the live
+> refresh cadence has a measured performance budget. Removed here on
+> 2026-05-15 (reference-review roadmap consolidation) to avoid two sources of
+> truth.
+
 ---
 
 ## TODO-001 — Refresh script for the vendored LiteLLM price table
@@ -34,44 +41,10 @@ Each item:
 - Filter to `claude-*` keys (Anthropic subset only, ~5KB after filtering).
 - After refresh: update `Cargo.toml`'s `include_str!` path (or symlink), regenerate provenance const via `build.rs`, run `cargo test -p claude_cost`.
 - The script lives in `scripts/` (workspace-level), not inside the crate.
+- Note (2026-05-15): v0.2 Track C demotes the LiteLLM recompute to a *diagnostic fallback* (Claude Code's own pre-calculated cost becomes primary). This lowers TODO-001's priority but does not remove it — the fallback path still needs a current table for events lacking a pre-calculated cost.
 
 **Depends on / blocked by**:
 - claude_cost crate exists (v0.1).
 - Not blocked on anything else; can be added in any later release.
-
-**Captured**: 2026-05-14, /plan-eng-review session for v0.1 claude_cost + codex_local.
-
----
-
-## TODO-002 — Performance benchmarks for claude_cost + codex_local
-
-**What**: criterion-based benchmarks for `claude_cost::compute_cost` and `codex_local::parse_str`/`dedup_events`/`IncrementalParser`.
-
-**Why**: Both crates are O(events) and currently presumed fast. When v0.2's `watcher` arrives, the 30s tray repaint cadence needs both crates to run in well under 30s on realistic data. We have no baseline today. A regression in v0.3 (e.g., adding logging in a hot loop) could degrade performance silently. /benchmark consumes these to track trends across PRs.
-
-**Pros**:
-- Quantitative answer to "is the parser fast enough?" — gut feel becomes a graph.
-- /benchmark skill detects regressions automatically.
-- v0.2 watcher work has measurable performance budget.
-
-**Cons**:
-- criterion runs are slow in CI (~30s each); adds ~1 min to total CI time.
-- Pre-empts the question before there's real evidence either crate is slow (YAGNI risk).
-- Maintenance: benchmark code can rot if not run regularly.
-
-**Context**:
-- Targets:
-  - `claude_cost::compute_cost` over 10K / 100K / 1M synthetic UsageEvents.
-  - `codex_local::parse_str` over a 10MB / 100MB fixture JSONL file.
-  - `codex_local::IncrementalParser` cycle (first-read + append + skip-unchanged).
-- Crate layout: `crates/claude_cost/benches/`, `crates/codex_local/benches/`.
-- criterion is already a likely dev-dep (verify with `cargo tree`).
-- Run with `cargo bench --workspace`.
-- CI gate: not required (don't fail PR on regression); informational via /benchmark only.
-
-**Depends on / blocked by**:
-- Both crates exist (v0.1).
-- /benchmark skill is set up (check `gstack` skill availability).
-- Best added when v0.2 watcher work starts (gives the benchmark a clear consumer).
 
 **Captured**: 2026-05-14, /plan-eng-review session for v0.1 claude_cost + codex_local.
