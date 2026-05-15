@@ -10,7 +10,10 @@
 # sidesteps all the quoting/templating ambiguity. POSIX sh, no Node/commitlint
 # dependency (matches the project's lean ethos).
 
-msg=$(head -n1 "$1")
+# `tr -d '\r'`: defensive — a commit message authored in a Windows editor
+# can carry a trailing CR that would otherwise defeat the `: .+` / `*` match.
+# (The script file itself is kept LF by .gitattributes; see README.)
+msg=$(head -n1 "$1" | tr -d '\r')
 
 # Exempt the messages git / rebase generate automatically.
 case "$msg" in
