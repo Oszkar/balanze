@@ -81,6 +81,11 @@ fn cmd_status(args: &[String]) -> Result<()> {
     let sections = args.iter().any(|a| a == "--sections");
     let snapshot = tokio::runtime::Runtime::new()?.block_on(build_snapshot());
 
+    // Precedence (documented in `balanze help`): --json wins over
+    // --sections if both are passed. --json is the scripting/machine
+    // path; if a caller asked for it, honor it even alongside a stray
+    // --sections. Not an error — silently ignoring --sections here is
+    // the least-surprising behavior for `balanze status --json --sections`.
     if json_mode {
         println!("{}", serde_json::to_string_pretty(&snapshot)?);
     } else if sections {
@@ -495,12 +500,14 @@ fn print_help() {
     eprintln!();
     eprintln!("Subcommands:");
     eprintln!("  balanze                       Print 4-quadrant compact status (default)");
-    eprintln!("  balanze status [--json|--sections] [-v]");
+    eprintln!("  balanze status [--json] [--sections] [-v]");
     eprintln!("                                Same as above. Flags:");
     eprintln!("                                  --sections   per-source detailed view");
     eprintln!("                                               (cadence bars, model breakdown,");
     eprintln!("                                               codex window, etc.)");
-    eprintln!("                                  --json       machine-readable Snapshot JSON");
+    eprintln!("                                  --json       machine-readable Snapshot JSON.");
+    eprintln!("                                               Takes precedence over --sections");
+    eprintln!("                                               if both are given.");
     eprintln!("                                  -v/--verbose adds account-identifying fields");
     eprintln!("                                               (org uuid, codex session_id)");
     eprintln!("                                               — safe at home, dox-y in public.");
@@ -1008,18 +1015,16 @@ fn compact_anthropic_quota(s: &Snapshot) -> String {
             if oauth.cadences.is_empty() {
                 "✓ ready (no cadence bars reported)".to_string()
             } else {
-                // Concatenate up to two cadences (typically 5h + 7d).
+                // First two cadences. `anthropic_oauth` pre-sorts by
+                // cadence_sort_key (five_hour=0, seven_day=1, …), so the
+                // common case is "5h + 7d". {:.1} (not {:.0}) so a
+                // genuine 0.4% doesn't render as "0%" — indistinguishable
+                // from the no-usage case.
                 let parts: Vec<String> = oauth
                     .cadences
                     .iter()
                     .take(2)
-                    .map(|c| {
-                        format!(
-                            "{:.0}% {}",
-                            c.utilization_percent,
-                            short_cadence(&c.display_label)
-                        )
-                    })
+                    .map(|c| format!("{:.1}% {}", c.utilization_percent, short_cadence(&c.key)))
                     .collect();
                 format!("✓ {} (oauth)", parts.join(", "))
             }
@@ -1031,6 +1036,11 @@ fn compact_anthropic_quota(s: &Snapshot) -> String {
 
 fn compact_anthropic_cost(s: &Snapshot) -> String {
     match (&s.anthropic_api_cost, &s.anthropic_api_cost_error) {
+        // JSONL loaded fine but zero billable events (fresh install, no
+        // Claude Code sessions yet). Rendering "~$0.00 (estimated)"
+        // would imply a real computation against data; it's actually
+        // "nothing to compute". Treat it like the no-data case.
+        (Some(cost), _) if cost.total_event_count == 0 => "○ no jsonl data yet".to_string(),
         (Some(cost), _) => format!(
             "~{} (estimated, jsonl)",
             micro_usd_to_display_dollars(cost.total_micro_usd)
@@ -1045,8 +1055,10 @@ fn compact_codex_quota(s: &Snapshot) -> String {
     match (&s.codex_quota, &s.codex_quota_error) {
         (Some(q), _) => {
             let days = q.primary.window_duration_minutes as f64 / 1440.0;
+            // {:.1} for the same reason as the anthropic quota cell — a
+            // genuine 0.4% must not collapse to "0%".
             format!(
-                "✓ {:.0}% {}d (codex {})",
+                "✓ {:.1}% {}d (codex {})",
                 q.primary.used_percent,
                 days.round() as i64,
                 q.plan_type
@@ -1065,23 +1077,27 @@ fn compact_openai_cost(s: &Snapshot) -> String {
     }
 }
 
-/// Shorten cadence display labels for the compact view. The full label
-/// (e.g. "Current 5-hour session") is too long for a one-line row; the
-/// short form ("5h", "7d") still conveys the window without ambiguity.
-fn short_cadence(display_label: &str) -> &'static str {
-    let lower = display_label.to_lowercase();
-    if lower.contains("5-hour") || lower.contains("five-hour") {
-        "5h"
-    } else if lower.contains("7-day")
-        || lower.contains("seven-day")
-        || lower.contains("7 days")
-        || (lower.contains("sonnet") && lower.contains("7"))
-    {
-        "7d"
-    } else {
-        // Fallback: we don't recognize the cadence; the user sees the
-        // raw label in --sections mode.
-        "?"
+/// Short cadence tag for the compact view, keyed off the **stable
+/// cadence `key`** (e.g. "five_hour", "seven_day_sonnet") rather than
+/// the free-form `display_label`. `anthropic_oauth` documents
+/// `display_label` as curated-but-free-form, so matching on it is
+/// fragile; the `key` is the wire-stable identifier.
+///
+/// Each 7-day sub-variant gets a distinct suffix so a user on a
+/// Sonnet-only or Opus-only flow doesn't see two indistinguishable
+/// "7d" cells (e.g. "19% 7d, 84% 7d-son"). Unknown / internal-codename
+/// cadences render "?" here on purpose — the full label is visible in
+/// `--sections`; the compact row is a glance, not the source of truth.
+fn short_cadence(key: &str) -> &'static str {
+    match key {
+        "five_hour" => "5h",
+        "seven_day" => "7d",
+        "seven_day_sonnet" => "7d-son",
+        "seven_day_opus" => "7d-opus",
+        "seven_day_oauth_apps" => "7d-apps",
+        "seven_day_cowork" => "7d-cowork",
+        "seven_day_omelette" => "7d-omel",
+        _ => "?",
     }
 }
 

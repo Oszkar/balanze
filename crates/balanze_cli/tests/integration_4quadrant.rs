@@ -83,8 +83,8 @@ fn full_pipeline_populates_anthropic_api_cost_in_snapshot() {
         "successful merge_partial must clear the error slot"
     );
 
-    // Spot-check structure: fixture has 3 events across 2 known models
-    // (sonnet-4-6 ×2, haiku-4-5 ×1). All three models are in the
+    // Spot-check structure: fixture has 3 events across 2 distinct
+    // models (sonnet-4-6 ×2, haiku-4-5 ×1). Both models are in the
     // bundled price table, so per_model should have 2 rows and zero
     // skipped models.
     assert_eq!(saved.total_event_count, 3, "all 3 fixture events processed");
@@ -168,10 +168,15 @@ fn full_pipeline_populates_codex_quota_in_snapshot() {
 }
 
 #[test]
-fn snapshot_serializes_to_json_with_all_four_cells_populated() {
-    // The `--json` output mode round-trips through serde. Make sure
-    // adding the new fields didn't break serialization (e.g., missing
-    // Serialize derive on a transitive type).
+fn snapshot_serializes_with_new_cost_and_codex_fields() {
+    // The `--json` output mode round-trips through serde. This test
+    // specifically exercises the TWO fields this PR adds
+    // (`anthropic_api_cost`, `codex_quota`) — the other two cells
+    // (`claude_oauth`, `openai`) serialize via code that predates this
+    // PR and is covered elsewhere. The point here is that adding the
+    // new fields didn't break serialization (e.g., a missing Serialize
+    // derive on a transitive type like claude_cost::Cost or
+    // codex_local::CodexQuotaSnapshot).
     let events = load_fixture_events();
     let prices = load_bundled_prices().unwrap();
     let cost = compute_cost(&events, &prices);
