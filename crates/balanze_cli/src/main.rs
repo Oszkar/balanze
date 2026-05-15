@@ -141,7 +141,7 @@ fn cmd_set_openai_key() -> Result<()> {
         eprintln!("endpoint Balanze uses requires an admin key (`sk-admin-…`); project keys");
         eprintln!("(`sk-proj-…`) and service-account keys will return 403 here. Create an");
         eprintln!("admin key at https://platform.openai.com/settings/organization/admin-keys");
-        eprintln!("and replace this one if the next `balanze` run shows an error.");
+        eprintln!("and replace this one if the next `balanze-cli` run shows an error.");
     }
 
     keychain::set(keychain::keys::OPENAI_API_KEY, &key)?;
@@ -155,7 +155,7 @@ fn cmd_set_openai_key() -> Result<()> {
         key.len()
     );
     if is_admin_key {
-        eprintln!("Run `balanze` to verify the tile shows spend data.");
+        eprintln!("Run `balanze-cli` to verify the tile shows spend data.");
     }
     Ok(())
 }
@@ -179,11 +179,11 @@ fn cmd_clear_openai_key() -> Result<()> {
 //         validate live against /v1/organization/costs, store in
 //         keychain, verify the keychain write took.
 //   [4/4] Print a 4-row readiness summary matching the eventual
-//         `balanze` output layout.
+//         `balanze-cli` output layout.
 //
 // Design decisions (recorded for future maintainers):
 //   - Live-validate before storing: catches typos at setup time
-//     rather than at first `balanze` run. One network call to OpenAI.
+//     rather than at first `balanze-cli` run. One network call to OpenAI.
 //   - No "setup complete" marker in settings.json: the CLI infers
 //     readiness from the keychain + file presence. Idempotent setup.
 //   - Windows keychain bug detection: keyring v3 silently no-ops on
@@ -482,7 +482,7 @@ fn print_readiness(
     eprintln!("  OpenAI Codex %               {codex_str}");
     eprintln!("  OpenAI API $                 {openai_str}");
     eprintln!();
-    eprintln!("Run `balanze` to see the live snapshot.");
+    eprintln!("Run `balanze-cli` to see the live snapshot.");
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -629,7 +629,7 @@ async fn build_snapshot() -> Snapshot {
 
 /// Load + dedup all UsageEvents from `~/.claude/projects/`. Shared input
 /// for both the window summary and the claude_cost synthesis — we don't
-/// want to walk + parse 491 JSONL files twice per `balanze` invocation.
+/// want to walk + parse 491 JSONL files twice per `balanze-cli` invocation.
 ///
 /// Returns `(events, files_scanned)`. Files that fail to read or parse
 /// are logged (warn level) but don't fail the whole call — matches the
@@ -997,7 +997,7 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
     }
 }
 
-/// Compact 4-quadrant matrix renderer — the default `balanze` output.
+/// Compact 4-quadrant matrix renderer — the default `balanze-cli` output.
 ///
 /// One screen, no scrolling. The layout maps directly onto the design
 /// doc's 4-quadrant matrix: rows are providers (Anthropic, OpenAI),
