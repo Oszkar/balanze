@@ -4,7 +4,7 @@
     {
       "id": 1,
       "subject": "Task 1: OAuth refresh-token grant primitive",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `anthropic_oauth` can exchange a refresh token for a fresh bearer via a typed, wiremock-tested async primitive that never logs secrets.\n\n**Files:** Create `crates/anthropic_oauth/src/refresh.rs`; modify `types.rs` (`RefreshedTokens` redacting Debug, `OAuthError::RefreshFailed`/`RefreshTokenMissing`), `client.rs:92` (`pub(crate) fn redact_for_display`), `lib.rs` (mod+re-exports); create `tests/refresh_wiremock.rs`.\n\n**Acceptance Criteria:** 200→RefreshedTokens w/ saturating expiry math; non-200→RefreshFailed redacted; Debug redacts both tokens; transport→Network; ignored real-endpoint smoke; clippy -D clean.\n\n**Verify:** `cargo test -p anthropic_oauth` green; manual `-- --ignored refresh_real_endpoint_smoke`.\n\n```json:metadata\n{\"files\":[\"crates/anthropic_oauth/src/refresh.rs\",\"crates/anthropic_oauth/src/types.rs\",\"crates/anthropic_oauth/src/client.rs\",\"crates/anthropic_oauth/src/lib.rs\",\"crates/anthropic_oauth/tests/refresh_wiremock.rs\"],\"verifyCommand\":\"cargo test -p anthropic_oauth && cargo clippy --workspace --all-targets -- -D warnings\",\"acceptanceCriteria\":[\"200→RefreshedTokens with correct expiry math\",\"non-200→RefreshFailed with redacted body\",\"RefreshedTokens Debug redacts both tokens\",\"transport error→Network\",\"ignored real-endpoint smoke present\",\"clippy -D warnings clean\"]}\n```"
     },
     {
@@ -36,5 +36,5 @@
       "description": "**Goal:** `balanze_cli` passes OAuth `five_hour` `resets_at` as the window anchor (fallback None), proven by the integration test.\n\n**Files:** modify `crates/balanze_cli/src/main.rs` (`summarize_for_jsonl_snapshot` gains param; `build_snapshot` derives+passes anchor) and `tests/integration_4quadrant.rs` (call site line 125 +`None,`; add `window_anchors_to_supplied_reset`).\n\n**Acceptance Criteria:** summarize_for_jsonl_snapshot gains+forwards window_anchor; build_snapshot derives five_hour resets_at w/ None fallback, no 2nd fetch; integration test asserts anchored window_start; workspace test+clippy+fmt clean.\n\n**Verify:** `cargo test --workspace` green incl. integration_4quadrant.\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/src/main.rs\",\"crates/balanze_cli/tests/integration_4quadrant.rs\"],\"verifyCommand\":\"cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check\",\"acceptanceCriteria\":[\"summarize_for_jsonl_snapshot gains+forwards window_anchor\",\"build_snapshot derives five_hour resets_at, None fallback, no 2nd fetch\",\"integration test asserts anchored window_start\",\"workspace test+clippy+fmt all clean\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-15"
+  "lastUpdated": "2026-05-15T00:00:01Z"
 }
