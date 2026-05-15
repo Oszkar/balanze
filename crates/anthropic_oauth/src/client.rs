@@ -89,7 +89,7 @@ pub async fn fetch_usage(
 /// violate YAGNI (§2). The `sk-` rule also covers Anthropic OAuth tokens,
 /// which are `sk-ant-oat01-…` / `sk-ant-ort01-…` shaped, so a reflected
 /// bearer cannot leak into the error string.
-fn redact_for_display(body: &str) -> String {
+pub(crate) fn redact_for_display(body: &str) -> String {
     const MAX_LEN: usize = 500;
     let truncated: String = if body.chars().count() > MAX_LEN {
         let head: String = body.chars().take(MAX_LEN).collect();

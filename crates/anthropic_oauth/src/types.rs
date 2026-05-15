@@ -115,6 +115,27 @@ pub struct ClaudeOAuthSnapshot {
     pub fetched_at: DateTime<Utc>,
 }
 
+/// Result of a successful refresh-token grant. Hand-written `Debug` (NOT
+/// derived) so the tokens cannot leak via `{:?}` — identical discipline to
+/// `CredentialsClaudeAiOauth` (AGENTS.md §3.4).
+#[derive(Clone)]
+pub struct RefreshedTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    /// Milliseconds since Unix epoch (matches `CredentialsClaudeAiOauth::expires_at`).
+    pub expires_at_ms: i64,
+}
+
+impl std::fmt::Debug for RefreshedTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshedTokens")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("expires_at_ms", &self.expires_at_ms)
+            .finish()
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum OAuthError {
     #[error("credentials file not found (looked at {searched:?})")]
@@ -135,6 +156,14 @@ pub enum OAuthError {
 
     #[error("oauth bearer expired or invalid (HTTP 401) — user must re-run `claude login` or refresh token must be exchanged")]
     AuthExpired,
+
+    #[error("oauth refresh-token grant failed (HTTP {status}): {body}")]
+    RefreshFailed { status: u16, body: String },
+
+    #[error(
+        "credentials file has no refreshToken — cannot refresh; user must re-run `claude login`"
+    )]
+    RefreshTokenMissing,
 
     #[error("unexpected HTTP status {status} from /api/oauth/usage: {body}")]
     UnexpectedStatus { status: u16, body: String },
