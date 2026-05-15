@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use claude_cost::{compute_cost, load_bundled_prices};
 use claude_parser::{dedup_events, find_jsonl_files, parse_str, UsageEvent};
 use codex_local::{find_latest_session, read_latest_quota_snapshot};
+use snapshot_composer::{compose, SnapshotSources};
 use state_coordinator::{merge_partial, JsonlSnapshot, Snapshot, SourcePartial};
 use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
 
@@ -250,4 +251,71 @@ fn window_anchors_to_supplied_reset() {
         Some(reset),
     );
     assert_eq!(anchored.window_start, reset - DEFAULT_WINDOW);
+}
+
+// ---------------------------------------------------------------------------
+// Task 3: FixtureSources + compose() parity test
+// ---------------------------------------------------------------------------
+
+/// Zero-network `SnapshotSources` implementation that feeds `compose()` the
+/// same committed fixtures the hand-rolled tests above use. This is the
+/// anti-divergence guard (AGENTS.md §4 #8): the SAME `compose()` path that
+/// `balanze_cli`'s `LiveSources` runs is exercised against fixtures, so a
+/// change to `snapshot_composer::compose` that silently breaks the wiring
+/// will fail here before it reaches production.
+struct FixtureSources;
+
+impl SnapshotSources for FixtureSources {
+    async fn fetch_oauth(&self) -> anyhow::Result<anthropic_oauth::ClaudeOAuthSnapshot> {
+        // No network in the integration test: oauth deliberately fails so
+        // we also exercise compose()'s now-relative window fallback.
+        anyhow::bail!("fixture: no oauth")
+    }
+    async fn load_claude_events(&self) -> anyhow::Result<(Vec<UsageEvent>, usize)> {
+        Ok((load_fixture_events(), 1))
+    }
+    async fn fetch_codex_quota(&self) -> anyhow::Result<Option<codex_local::CodexQuotaSnapshot>> {
+        let codex_dir = fixture_root().join("codex/sessions");
+        let path = find_latest_session(&codex_dir)?.expect("fixture session present");
+        Ok(read_latest_quota_snapshot(&path)?)
+    }
+    async fn fetch_openai(&self) -> anyhow::Result<Option<openai_client::OpenAiCosts>> {
+        Ok(None)
+    }
+}
+
+#[tokio::test]
+async fn compose_parity_against_fixtures() {
+    // Same fixed `now` as `full_pipeline_populates_claude_jsonl_in_snapshot`
+    // so all 3 fixture events fall in the 5h window deterministically.
+    let now = chrono::DateTime::parse_from_rfc3339("2026-05-15T11:02:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+
+    let snap = compose(&FixtureSources, now).await;
+
+    // OAuth deliberately errored ⇒ error slot set, data None, window
+    // falls back to now-relative.
+    assert!(snap.claude_oauth.is_none());
+    assert!(snap.claude_oauth_error.is_some());
+
+    let jsonl = snap.claude_jsonl.as_ref().expect("jsonl populated");
+    assert_eq!(jsonl.files_scanned, 1);
+    assert_eq!(
+        jsonl.window.total_events_in_window, 3,
+        "all 3 fixture events fall in the 5h window for the fixed now"
+    );
+
+    let cost = snap
+        .anthropic_api_cost
+        .as_ref()
+        .expect("anthropic_api_cost populated");
+    assert!(cost.total_micro_usd > 0);
+    assert_eq!(cost.total_event_count, 3, "dedup collapses 4 raw → 3");
+    assert_eq!(snap.anthropic_api_cost_error, None);
+
+    let codex = snap.codex_quota.as_ref().expect("codex populated");
+    assert!((codex.primary.used_percent - 17.5).abs() < 0.001);
+
+    assert!(snap.openai.is_none() && snap.openai_error.is_none());
 }
