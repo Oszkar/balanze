@@ -302,6 +302,10 @@ async fn compose_parity_against_fixtures() {
     let jsonl = snap.claude_jsonl.as_ref().expect("jsonl populated");
     assert_eq!(jsonl.files_scanned, 1);
     assert_eq!(
+        snap.claude_jsonl_error, None,
+        "JSONL load succeeded ⇒ no error slot"
+    );
+    assert_eq!(
         jsonl.window.total_events_in_window, 3,
         "all 3 fixture events fall in the 5h window for the fixed now"
     );
@@ -316,6 +320,10 @@ async fn compose_parity_against_fixtures() {
 
     let codex = snap.codex_quota.as_ref().expect("codex populated");
     assert!((codex.primary.used_percent - 17.5).abs() < 0.001);
+    assert_eq!(
+        snap.codex_quota_error, None,
+        "codex fixture read succeeded ⇒ no error slot"
+    );
 
     assert!(snap.openai.is_none() && snap.openai_error.is_none());
 }
