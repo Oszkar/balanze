@@ -1,6 +1,16 @@
 [workspace]
 resolver = "2"
 members = ["src-tauri", "crates/*"]
+# Bare `cargo build` / `test` / `run` operate on the crates only — NOT
+# `src-tauri`. The v0.1 deliverable is the `balanze-cli` binary, which has zero
+# system-library deps (pure Rust + rustls) and builds on Linux with nothing but
+# a Rust toolchain. `src-tauri` drags in the GTK/WebKit native stack, which a
+# CLI user should never have to install. Building the Tauri app is the explicit
+# opt-in: `cargo build --workspace` or `bun run tauri dev` (those need the
+# platform GUI deps — see README "Building the desktop app"). All CI and
+# git-hook gates pass `--workspace`/`-p` explicitly, so this changes only the
+# naive no-flag path, which is exactly the one we want GTK-free.
+default-members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"

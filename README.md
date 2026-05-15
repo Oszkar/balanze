@@ -90,28 +90,35 @@ item. `--json` emits the full `Snapshot` for scripting.
 ## Install (v0.1)
 
 v0.1 ships **from source only** — no binaries, no installers, no GitHub
-Releases. The audience (tinkerer power-users) accepts the Rust-toolchain
-prerequisite; signed binaries / Homebrew / WinGet are the v0.4 Distribution
-phase. Requires Rust 1.77+.
+Releases, and it is **not published to crates.io**. The audience (tinkerer
+power-users) accepts the Rust-toolchain prerequisite; signed binaries /
+Homebrew / WinGet are the v0.4 Distribution phase. Requires Rust 1.77+.
 
 ```bash
-# The repo root is a virtual workspace, so name the package (balanze_cli);
-# it builds the `balanze-cli` binary.
+# `--git` is REQUIRED (not on crates.io). The repo root is a virtual
+# workspace, so the package must be named: `balanze_cli` (it builds the
+# `balanze-cli` binary). `cargo install` / `cargo install balanze_cli`
+# alone will NOT work.
 cargo install --git https://github.com/Oszkar/balanze balanze_cli
 balanze-cli setup      # run this first — wizard for the OpenAI admin key
 balanze-cli            # 4-quadrant status
 ```
 
-Works on Windows 11, macOS 15+, and Linux (no separate Linux test matrix; the
-tray UI is a later phase anyway).
+**The CLI has zero system-library dependencies.** Windows 11, macOS 15+, and
+Linux all build with just the Rust toolchain (Linux also needs a C compiler —
+`build-essential` — for the `ring` TLS dependency; nothing else). In
+particular **no GTK/GLib/Cairo/WebKit** — that native stack belongs to the
+desktop app, not the CLI. If you hit `pkg-config`/`gdk-3.0`/`pango` errors on
+Linux, you ran a workspace-wide build that pulled in `src-tauri`; see
+"Building the desktop app" below — for the CLI you never need those.
 
 ## Quick start (dev)
 
 Prerequisites:
 
-- Rust 1.77+ (workspace MSRV)
-- Bun 1.3+ (for the Svelte frontend scaffold)
-- Platform build tools — Windows: WebView2 + VS Build Tools; macOS: Xcode CLI tools
+- Rust 1.77+ (workspace MSRV) — all you need for the CLI
+- Bun 1.3+ (only for the Svelte frontend scaffold / `tauri dev`)
+- GUI build tools **only for the desktop app** (`--workspace` / `tauri dev`) — see "Building the desktop app" below; the CLI needs none
 
 ```bash
 # CLI from the workspace:
@@ -156,6 +163,27 @@ bun run tauri build
 The `release.yml` workflow + Tauri bundling (`.msi`/`.exe`, `.dmg`/`.app`)
 exist but are **forward-looking** — v0.1 is source-install only. Signed,
 packaged binaries are the v0.4 Distribution phase.
+
+### Building the desktop app (only if you want the v0.3 scaffold)
+
+Bare `cargo build` / `cargo test` / `cargo run` operate on the **crates only**
+(`default-members`) — they do **not** touch `src-tauri`, so a CLI build never
+needs GUI libraries. `src-tauri` is opt-in: `cargo build --workspace` or
+`bun run tauri dev`. Those pull in the GTK/WebKit native stack and need the
+platform GUI dev packages:
+
+- **Windows:** WebView2 runtime + VS Build Tools (no GTK — Tauri uses WebView2).
+- **macOS:** Xcode Command Line Tools.
+- **Debian/Ubuntu:**
+  ```bash
+  sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
+    libayatana-appindicator3-dev librsvg2-dev build-essential \
+    libssl-dev libglib2.0-dev pkg-config
+  ```
+
+This is **not needed for v0.1** — the tray UI is v0.3. If you only want the
+CLI on Linux, never run a `--workspace` build and you'll never see a
+`gdk-3.0`/`pango`/`cairo` error.
 
 ## Layout
 

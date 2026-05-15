@@ -40,6 +40,8 @@ the contents below move under a `[0.1.0] - YYYY-MM-DD` heading.
 
 ### Changed
 - The CLI binary is **`balanze-cli`**, not `balanze`. `balanze` is reserved for the future src-tauri tray app to avoid a workspace build-artifact collision.
+- Workspace `default-members = ["crates/*"]`: bare `cargo build`/`test`/`run` no longer build `src-tauri`. The `balanze-cli` deliverable now builds on Linux with **only a Rust toolchain** (+ a C compiler for `ring`) — no GTK/WebKit/`pkg-config` chain. The desktop app is the explicit `--workspace` / `bun run tauri dev` opt-in; its GUI system deps are documented in the README.
+- `--sections` accepted as a bare top-level shortcut (peer of `--json`), so `balanze-cli --sections` works as the compact view's own footer and the docs advertise.
 - Pre-tag cleanup (multi-agent review follow-up): de-flaked the integration test (deterministic `now`), sharpened the compact estimate label + legend, redacted a serde-error log path and the OAuth `Debug`/error-body surfaces, and closed several §6 validation-matrix test gaps.
 
 ### Known issues
