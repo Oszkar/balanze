@@ -1,100 +1,121 @@
 # Balanze
 
-A local-first desktop utility that consolidates personal AI usage into one view —
-Claude subscription caps, Claude Code activity, and OpenAI API spend in the same
-glance. Tray-first; Tauri 2 + Rust + Svelte 5. Side project; Windows 11 and macOS
-15+ today, Linux and mobile later.
+A local-first utility that consolidates personal AI usage into one normalized
+view — Claude subscription quota, an estimate of Claude Code's API-rate value,
+OpenAI Codex quota, and real OpenAI API spend, in one glance. Rust + Tauri 2 +
+Svelte 5. Side project; Windows 11 and macOS 15+ (CLI also runs on Linux).
 
-## Status (v0.1, May 2026)
+## Status (v0.1 — "Data", May 2026)
 
-The backend data layer is shipped. The desktop tray UI is still scaffold; the
-working surface today is a CLI (`balanze-cli`) that emits the same status snapshot
-the tray popover will eventually show.
+v0.1's bar is a **complete, honest data layer** exposed as a CLI
+(`balanze-cli`). The tray UI is deliberately later (v0.3); the CLI prints the
+same normalized snapshot the eventual popover will show. The four-quadrant
+matrix lights up:
 
-- ✅ **Anthropic OAuth usage** — calls the same `/api/oauth/usage` endpoint
-  Claude Code uses; reports the live 5-hour / 7-day / per-model utilization bars
-  and `resets_at` clocks. No scraping.
-- ✅ **Claude Code JSONL** — incremental parse of `~/.claude/projects/**/*.jsonl`
-  with `(message_id, request_id)` dedup. On a real session, raw lines overcounted
-  tokens by ~50%; dedup brings the numbers in line with what Anthropic sees.
-- ✅ **OpenAI Admin Costs** — calls `/v1/organization/costs` with an
-  `sk-admin-…` admin key; reports this-month spend and per-line-item breakdown.
-- 🚧 **Tauri tray + popover UI** — designed in `docs/prd.md`; integration with
-  the actor-based `state_coordinator` is next.
-- 🛣️ **v0.2** — Anthropic Console scrape, alerts, history graph, refresh-token
-  flow, keychain v4 migration.
-- 🛣️ **v0.3+** — cross-device sync, Android, hosted wallboard.
+|            | Quota %                                   | API $                                              |
+|------------|-------------------------------------------|----------------------------------------------------|
+| **Anthropic** | ✅ OAuth usage (5h / 7-day / per-model) | ✅ estimated list-price from JSONL (**not** billed) |
+| **OpenAI**    | ✅ Codex CLI rate-limit %               | ✅ real billed spend (Admin Costs API)              |
+
+- ✅ **Anthropic OAuth usage** — the same `/api/oauth/usage` endpoint Claude
+  Code uses; live 5-hour / 7-day / per-model utilization bars + `resets_at`
+  clocks. No scraping.
+- ✅ **Anthropic API $ (estimated)** — `claude_cost` synthesizes a list-price
+  equivalent from local JSONL × a vendored LiteLLM price table. For Pro/Max
+  users this is **subscription leverage, not money billed** — the CLI labels
+  it that way. Anthropic's real cost API is enterprise-gated (see Known
+  issues); this estimate is the honest best-available signal.
+- ✅ **OpenAI Codex quota** — reads the local Codex CLI rollout files
+  (`~/.codex/sessions/`) for the server-computed `rate_limits.primary` %.
+- ✅ **OpenAI Admin Costs** — `/v1/organization/costs` with an `sk-admin-…`
+  key; this-month spend + per-line-item breakdown. Real billing data.
+- ✅ **`balanze-cli setup`** — interactive wizard: checks Anthropic OAuth +
+  Codex presence, prompts for the OpenAI admin key (masked), validates it
+  live, stores it.
+- 🛣️ **v0.2 — Liveness**: file watcher, predictor (EWMA + warm-up), `--watch`,
+  `statusline`.
+- 🛣️ **v0.3 — UI**: Tauri tray + popover, settings UI, keychain v4 migration,
+  alerts, Anthropic Console cookie-paste.
+- 🛣️ **v0.4 — Distribution**: signed binaries, Homebrew, WinGet, auto-update.
 
 Phasing detail: `docs/prd.md`. Architecture and discipline: `AGENTS.md`.
 
 ## CLI
 
-The CLI is the v0.1 reference for the eventual tray popover. Same composition,
-just stdout instead of an OS tray.
+`balanze-cli` is the v0.1 surface and the reference composition for the
+eventual tray popover. Subcommands:
 
 ```text
-$ balanze-cli help
-Balanze — local-first AI usage tracker.
+balanze-cli                       4-quadrant compact status (default)
+balanze-cli status [--json] [--sections] [-v]
+                                  --sections  per-source detail (cadence bars,
+                                              model breakdown, codex window)
+                                  --json      machine-readable Snapshot JSON
+                                              (wins over --sections if both)
+                                  -v          adds account-identifying fields
+                                              (org uuid, codex session_id)
+balanze-cli setup                 Interactive wizard — run this first
+balanze-cli set-openai-key [KEY]  Store an sk-admin-… key in the OS keychain
+balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
+balanze-cli settings              Print current settings.json
+balanze-cli help                  This help
 
-Subcommands:
-  balanze-cli                       Print pretty status (default)
-  balanze-cli status [--json]       Same as above; --json is machine-readable
-  balanze-cli set-openai-key [KEY]  Store KEY in the OS keychain
-  balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
-  balanze-cli settings              Print current settings.json contents
-  balanze-cli help                  This help
-
-Environment overrides:
-  BALANZE_OPENAI_KEY            sk-admin-… admin key. Takes precedence over
-                                keychain. Recommended on Windows until v0.2.
+Env override: BALANZE_OPENAI_KEY=sk-admin-…  (takes precedence over the
+keychain; recommended on Windows until the keyring-v4 migration in v0.3).
 ```
 
-Typical output:
+Default compact view — the four quadrants on one screen, with a legend that
+keeps the *estimated* Anthropic cell from being mistaken for the *real*
+OpenAI bill:
 
 ```text
-=== Balanze Status ===
-fetched: 2026-05-14 12:34:56 UTC
+=== Balanze status (2026-05-15 04:27:42 UTC) ===
 
-subscription: max (pro)
+                    Quota %                                 API $
+Anthropic           ✓ 82.0% 5h, 88.0% 7d (oauth)            ~$2197.11 (est. list-price, not billed)
+OpenAI              ✓ 6.0% 7d (codex go)                    ○ not configured (run `balanze-cli setup`)
 
-CADENCE BARS (from Anthropic OAuth):
-  Current 5-hour session             42.30%   resets in 2h 18m
-  Sonnet only (7 days)               18.05%   resets in 5d 13h
-  Opus only (7 days)                  3.10%   resets in 5d 13h
+Quota % = live server-reported utilization. API $: Anthropic =
+estimated list-price for local Claude Code tokens (subscription
+leverage — NOT money you were billed); OpenAI = real billed spend.
 
-OPENAI SPEND (2026-05-01 – 2026-05-14):
-  Total: $4.21
-
-  By line item:
-    gpt-5                            $    3.9100
-    whisper                          $    0.2100
-    embeddings                       $    0.0900
-
-CLAUDE CODE ACTIVITY (last 5h, from local JSONL):
-  files scanned:     463
-  events in window:  48
-  tokens in window:  10,783,227
-  recent burn:       ~38,420 tokens/min (last 30 min)
-
-  By model:
-    claude-opus-4-7                       events:   30  tokens:   8,210,940
-    claude-sonnet-4-6                     events:   15  tokens:   2,431,290
-    claude-haiku-4-5                      events:    3  tokens:     140,997
+Run `balanze-cli --sections` for per-source detail, or `balanze-cli --json` for machine-readable output.
 ```
+
+`--sections` expands each source: Anthropic cadence bars with reset clocks, the
+per-model JSONL breakdown + burn rate, the estimated-cost detail (with the
+LiteLLM price-table provenance), the Codex window, and OpenAI spend by line
+item. `--json` emits the full `Snapshot` for scripting.
+
+## Install (v0.1)
+
+v0.1 ships **from source only** — no binaries, no installers, no GitHub
+Releases. The audience (tinkerer power-users) accepts the Rust-toolchain
+prerequisite; signed binaries / Homebrew / WinGet are the v0.4 Distribution
+phase. Requires Rust 1.77+.
+
+```bash
+cargo install --git https://github.com/Oszkar/balanze --bin balanze-cli
+balanze-cli setup      # run this first — wizard for the OpenAI admin key
+balanze-cli            # 4-quadrant status
+```
+
+Works on Windows 11, macOS 15+, and Linux (no separate Linux test matrix; the
+tray UI is a later phase anyway).
 
 ## Quick start (dev)
 
 Prerequisites:
 
 - Rust 1.77+ (workspace MSRV)
-- Bun 1.3+ (for the Svelte frontend)
+- Bun 1.3+ (for the Svelte frontend scaffold)
 - Platform build tools — Windows: WebView2 + VS Build Tools; macOS: Xcode CLI tools
 
 ```bash
-# CLI (works today):
+# CLI from the workspace:
 cargo run --release -p balanze_cli -- status
 
-# Desktop app (scaffold only — tray icon, no data yet):
+# Desktop app (scaffold only — tray icon, no data yet; the real UI is v0.3):
 bun install         # also installs git hooks — see "Dev tooling" below
 bun run tauri dev
 ```
@@ -123,19 +144,16 @@ if Claude Code is already configured.
 ## Build (release)
 
 ```bash
-# CLI:
-cargo build --release -p balanze_cli
+# CLI (the v0.1 deliverable):
+cargo build --release -p balanze_cli   # → target/release/balanze-cli
 
-# Desktop app:
+# Desktop app (scaffold; the real UI lands in v0.3):
 bun run tauri build
 ```
 
-Tauri bundles land in `src-tauri/target/release/bundle/`:
-
-- Windows: `.msi` and `.exe` (NSIS)
-- macOS: `.dmg` and `.app`
-
-CI matrix-builds both on tags `v*.*.*`; see `.github/workflows/release.yml`.
+The `release.yml` workflow + Tauri bundling (`.msi`/`.exe`, `.dmg`/`.app`)
+exist but are **forward-looking** — v0.1 is source-install only. Signed,
+packaged binaries are the v0.4 Distribution phase.
 
 ## Layout
 
@@ -147,8 +165,10 @@ balanze/
 ├── src-tauri/                Tauri 2 app crate (scaffold tray + single-instance)
 ├── crates/
 │   ├── claude_parser/        JSONL parser + walker + dedup + IncrementalParser
+│   ├── claude_cost/          pure JSONL→estimated-$ synth (vendored LiteLLM prices)
 │   ├── anthropic_oauth/      Anthropic /api/oauth/usage client + credentials
 │   ├── openai_client/        OpenAI /v1/organization/costs client
+│   ├── codex_local/          reads ~/.codex/sessions/ for Codex rate-limit %
 │   ├── window/               pure rolling-window math (5h + 30m burn rate)
 │   ├── state_coordinator/    actor crate; owns Snapshot, notifies Sink
 │   ├── settings/             non-secret settings.json (atomic write)
@@ -164,7 +184,9 @@ balanze/
 - **Keychain backend broken on Windows (v0.1).** `keyring = "3.6.3"` silently
   no-ops: `set_password` returns `Ok` but the credential never lands in
   Credential Manager. Workaround: set `BALANZE_OPENAI_KEY` env var. Fix
-  scheduled for v0.2 via migration to `keyring-core`. Detail: `AGENTS.md` §10a.
+  scheduled for **v0.3** (the `keyring` → `keyring-core` v4 migration, which
+  rides with the settings UI where the key-input box exercises it on both
+  platforms). Detail: `AGENTS.md` §10a.
 
 - **Anthropic OAuth bearer expires every ~7–8h.** Today the CLI surfaces this
   as an `AuthExpired` error; re-run `claude login` and retry. Refresh-token
@@ -173,13 +195,13 @@ balanze/
 - **`extra_usage` block from OAuth suppressed.** Anthropic's OAuth response
   returns a `monthly_limit / used_credits` block whose semantics don't
   reconcile with the claude.ai/settings/usage UI. Suppressed in pretty CLI
-  output until a v0.2 HAR investigation resolves the meaning; raw values are
-  still in `--json` for diagnostics.
+  output until the v0.3 Anthropic Console (HAR) investigation resolves the
+  meaning; raw values are still in `--json` for diagnostics.
 
 ## Testing
 
 ```bash
-cargo test --workspace                              # 117 tests, ~5s
+cargo test --workspace                              # 186 tests (187 on Linux), ~5s
 cargo clippy --workspace --all-targets -- -D warnings
 bun run check                                       # svelte-check + tsc
 ```

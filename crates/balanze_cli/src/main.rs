@@ -533,7 +533,7 @@ fn print_help() {
     eprintln!(
         "                                Recommended on Windows until the keychain backend is"
     );
-    eprintln!("                                migrated to keyring v4 in v0.2.");
+    eprintln!("                                migrated to keyring v4 in v0.3.");
     eprintln!();
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
@@ -862,7 +862,7 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
         println!("OPENAI SPEND: not configured");
         println!("  Set the BALANZE_OPENAI_KEY env var to a `sk-admin-…` admin key, or run");
         println!("  `balanze-cli set-openai-key` (note: keychain backend currently unreliable on");
-        println!("  Windows; env var is the recommended path until v0.2).");
+        println!("  Windows; env var is the recommended path until v0.3).");
         println!(
             "  Create an admin key at https://platform.openai.com/settings/organization/admin-keys"
         );
