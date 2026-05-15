@@ -9,9 +9,13 @@ bumps are bug fixes only.
 
 ## [Unreleased]
 
-v0.1 — **"Data"**: a complete, honest four-quadrant data layer as a CLI. No
-tagged release yet (the maintainer is dogfooding before tagging). Once tagged,
-the contents below move under a `[0.1.0] - YYYY-MM-DD` heading.
+Nothing yet — next is **v0.1.1** (OAuth refresh-token flow; see Roadmap).
+
+## [0.1.0] - 2026-05-15
+
+v0.1 — **"Data"**: a complete, honest four-quadrant data layer as a CLI.
+Distribution is source-only (`cargo install --git … balanze_cli`); no
+binaries or GitHub Release artifacts (that's the v0.4 phase).
 
 ### Added
 - **`balanze-cli`** binary. Subcommands: `status` (default — 4-quadrant
@@ -62,9 +66,5 @@ Theme per phase: **Data → Liveness → UI → Distribution**.
 - **v0.4 — Distribution** — signed binaries (Windows cert, macOS notarization), Homebrew tap, WinGet manifest, Tauri auto-update.
 - **v1+** — Ubuntu GNOME, cross-device sync, Android companion, hosted wallboard.
 
-<!--
-  Until v0.1.0 is tagged, [Unreleased] points at the full commit history on
-  main. After the first tag, change to:
-    [Unreleased]: https://github.com/Oszkar/balanze/compare/v0.1.0...HEAD
--->
-[Unreleased]: https://github.com/Oszkar/balanze/commits/main
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Oszkar/balanze/releases/tag/v0.1.0
