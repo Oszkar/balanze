@@ -39,6 +39,17 @@ pre-push:
       fail_text: |
         cargo test --workspace failed. Don't push broken main.
 
+# Enforces Conventional Commits on the subject line. The squash-merge model
+# means a clean per-commit history also yields clean PR titles / changelog.
+# Merge / Revert / fixup! / squash! / amend! commits are exempt (git and
+# rebase generate those). Bypass in a real emergency with --no-verify.
+commit-msg:
+  scripts:
+    "conventional.sh":
+      runner: sh
+      fail_text: |
+        Commit message must follow Conventional Commits — see the message above.
+
 # Skip hooks for any command in an emergency:   git commit --no-verify
 # (Or:   LEFTHOOK=0 git commit  to disable hooks for one invocation.)
 # AGENTS.md §8 says: don't skip hooks unless you've already understood the

@@ -132,10 +132,12 @@ bun run tauri dev
 ### Dev tooling
 
 `bun install` runs `lefthook install` automatically (skipped when there's no
-`.git/` — e.g., source tarballs). That wires `pre-commit` (rustfmt +
-svelte-check) and `pre-push` (clippy + tests) hooks so the same gates CI
-enforces fail locally first. Bypass for one commit with `git commit
---no-verify`, or `LEFTHOOK=0` for one session.
+`.git/` — e.g., source tarballs). That wires `commit-msg` (Conventional
+Commits — blocking), `pre-commit` (rustfmt + svelte-check), and `pre-push`
+(clippy + tests) hooks so the same gates CI enforces fail locally first. If
+you edit `lefthook.yml`, re-run `bun run lefthook install` to sync the hooks.
+Bypass for one commit with `git commit --no-verify`, or `LEFTHOOK=0` for one
+session.
 
 Provide an OpenAI Admin key one of two ways:
 

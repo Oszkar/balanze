@@ -39,6 +39,7 @@ the contents below move under a `[0.1.0] - YYYY-MM-DD` heading.
 - CI on Windows + macOS (rustfmt + clippy + cargo test + svelte-check); Dependabot for cargo / npm / github-actions.
 
 ### Changed
+- Conventional Commits is now **enforced** by a blocking `commit-msg` lefthook hook (`<type>(scope)?: subject`; Merge/Revert/fixup!/squash! exempt). Keeps `git log` and squash-merge PR titles clean for the changelog.
 - The CLI binary is **`balanze-cli`**, not `balanze`. `balanze` is reserved for the future src-tauri tray app to avoid a workspace build-artifact collision.
 - Workspace `default-members = ["crates/*"]`: bare `cargo build`/`test`/`run` no longer build `src-tauri`. The `balanze-cli` deliverable now builds on Linux with **only a Rust toolchain** (+ a C compiler for `ring`) — no GTK/WebKit/`pkg-config` chain. The desktop app is the explicit `--workspace` / `bun run tauri dev` opt-in; its GUI system deps are documented in the README.
 - `--sections` accepted as a bare top-level shortcut (peer of `--json`), so `balanze-cli --sections` works as the compact view's own footer and the docs advertise.
