@@ -10,31 +10,31 @@
     {
       "id": 2,
       "subject": "Task 2: Atomic, anti-clobber credential write-back",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [1],
       "description": "**Goal:** persist refreshed tokens back into the existing credentials file per §3.4 — atomic tmp+rename, perms preserved, only the three token fields touched, never regressing a concurrently-newer on-disk token.\n\n**Files:** modify `crates/anthropic_oauth/src/credentials.rs` (`WriteBack`+`write_back`), `lib.rs` (re-export).\n\n**Acceptance Criteria:** only 3 token fields changed/others preserved; atomic tmp+rename same dir; unix mode preserved/windows documented; SkippedDiskNewer when disk expiresAt>=ours; tmp cleaned on failure; TODO(v0.2) marker.\n\n**Verify:** `cargo test -p anthropic_oauth credentials` green; clippy -D clean.\n\n```json:metadata\n{\"files\":[\"crates/anthropic_oauth/src/credentials.rs\",\"crates/anthropic_oauth/src/lib.rs\"],\"verifyCommand\":\"cargo test -p anthropic_oauth && cargo clippy --workspace --all-targets -- -D warnings\",\"acceptanceCriteria\":[\"only 3 token fields changed, other keys preserved\",\"atomic tmp+rename same dir\",\"unix mode preserved; windows documented\",\"SkippedDiskNewer when disk expiresAt>=ours\",\"tmp cleaned on rename failure\",\"TODO(v0.2) serialization marker present\"]}\n```"
     },
     {
       "id": 3,
       "subject": "Task 3: CLI refresh composition (pre-flight + 401 retry)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [2],
       "description": "**Goal:** `balanze_cli::fetch_oauth` proactively refreshes when expired/within 5-min margin, persists it, and recovers from a hard 401 with one refresh+retry.\n\n**Files:** modify `crates/balanze_cli/src/main.rs` (imports 21-24; replace `fetch_oauth`; add `REFRESH_MARGIN`, `token_needs_refresh`, `refresh_and_persist`; unit test).\n\n**Acceptance Criteria:** pure token_needs_refresh unit-tested; pre-flight refresh+persist+new bearer; exactly one 401 refresh+retry then propagate; missing refreshToken→RefreshTokenMissing no panic; write_back skip/err non-fatal; no secret logged.\n\n**Verify:** `cargo test --workspace` green; clippy -D clean.\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/src/main.rs\"],\"verifyCommand\":\"cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings\",\"acceptanceCriteria\":[\"token_needs_refresh pure+unit-tested\",\"pre-flight refresh+persist+new bearer\",\"exactly one 401 refresh+retry then propagate\",\"missing refreshToken→RefreshTokenMissing no panic\",\"write_back skip/err non-fatal\",\"no secret in any log line\"]}\n```"
     },
     {
       "id": 4,
       "subject": "Task 4: Anchor window::summarize_window to optional reset (§7 test-first)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [3],
       "description": "**Goal:** `summarize_window` accepts `window_anchor: Option<DateTime<Utc>>`; Some(reset)→`[reset-window,reset)`, None→unchanged `now-window`. Burn math unchanged.\n\n**Files:** modify `crates/window/src/lib.rs` (6th param; window_start match; doc; 10 in-crate call sites add `None,`; 2 new tests).\n\n**Acceptance Criteria:** new 6th param; None reproduces today exactly; Some(reset)→window_start=reset-window, burn still now-relative; §7 anchored test fails before impl.\n\n**Verify:** `cargo test -p window` green; clippy -D clean.\n\n```json:metadata\n{\"files\":[\"crates/window/src/lib.rs\"],\"verifyCommand\":\"cargo test -p window && cargo clippy --workspace --all-targets -- -D warnings\",\"acceptanceCriteria\":[\"6th param window_anchor Option<DateTime<Utc>>\",\"None == legacy now-window, all existing tests unchanged\",\"Some(reset)→window_start=reset-window, burn still now-relative\",\"§7 test-first: new test fails before impl\"]}\n```"
     },
     {
       "id": 5,
       "subject": "Task 5: Thread OAuth five_hour resets_at into the JSONL window",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [4],
       "description": "**Goal:** `balanze_cli` passes OAuth `five_hour` `resets_at` as the window anchor (fallback None), proven by the integration test.\n\n**Files:** modify `crates/balanze_cli/src/main.rs` (`summarize_for_jsonl_snapshot` gains param; `build_snapshot` derives+passes anchor) and `tests/integration_4quadrant.rs` (call site line 125 +`None,`; add `window_anchors_to_supplied_reset`).\n\n**Acceptance Criteria:** summarize_for_jsonl_snapshot gains+forwards window_anchor; build_snapshot derives five_hour resets_at w/ None fallback, no 2nd fetch; integration test asserts anchored window_start; workspace test+clippy+fmt clean.\n\n**Verify:** `cargo test --workspace` green incl. integration_4quadrant.\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/src/main.rs\",\"crates/balanze_cli/tests/integration_4quadrant.rs\"],\"verifyCommand\":\"cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check\",\"acceptanceCriteria\":[\"summarize_for_jsonl_snapshot gains+forwards window_anchor\",\"build_snapshot derives five_hour resets_at, None fallback, no 2nd fetch\",\"integration test asserts anchored window_start\",\"workspace test+clippy+fmt all clean\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-15T00:00:01Z"
+  "lastUpdated": "2026-05-15T00:00:05Z"
 }
