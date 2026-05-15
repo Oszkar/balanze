@@ -19,8 +19,9 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use anthropic_oauth::{
-    fetch_usage, load as load_credentials, ClaudeOAuthSnapshot,
-    DEFAULT_API_BASE as ANTHROPIC_API_BASE,
+    fetch_usage, load_from as load_credentials_from, locate_credentials, refresh_access_token,
+    write_back, ClaudeOAuthSnapshot, CredentialsClaudeAiOauth, OAuthError, WriteBack,
+    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, DEFAULT_API_BASE as ANTHROPIC_API_BASE,
 };
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -725,22 +726,92 @@ fn fetch_codex_quota() -> Result<Option<codex_local::CodexQuotaSnapshot>> {
     }
 }
 
+/// Refresh proactively if the access token is expired or expires within this.
+const REFRESH_MARGIN: Duration = Duration::seconds(300);
+
+/// Pure: true if `expires_at_ms` is in the past or within `margin` of now.
+fn token_needs_refresh(expires_at_ms: i64, now: DateTime<Utc>, margin: Duration) -> bool {
+    now.timestamp_millis() >= expires_at_ms - margin.num_milliseconds()
+}
+
+/// Refresh the bearer and best-effort persist it. A skipped/failed write is
+/// non-fatal as long as we hold a usable token in memory.
+async fn refresh_and_persist(
+    client: &reqwest::Client,
+    path: &std::path::Path,
+    oauth: CredentialsClaudeAiOauth,
+) -> Result<CredentialsClaudeAiOauth> {
+    let rt = oauth
+        .refresh_token
+        .as_deref()
+        .ok_or(OAuthError::RefreshTokenMissing)?;
+    let refreshed = refresh_access_token(
+        client,
+        CLAUDE_CODE_TOKEN_URL,
+        CLAUDE_CODE_CLIENT_ID,
+        rt,
+        Utc::now().timestamp_millis(),
+    )
+    .await?;
+    match write_back(path, &refreshed) {
+        Ok(WriteBack::Written) => info!("oauth: refreshed bearer, wrote back"),
+        Ok(WriteBack::SkippedDiskNewer) => {
+            info!("oauth: refreshed bearer; on-disk copy already newer, kept disk")
+        }
+        Err(e) => warn!("oauth: refresh ok but write-back failed (non-fatal): {e}"),
+    }
+    let mut next = oauth;
+    next.access_token = refreshed.access_token;
+    next.refresh_token = Some(refreshed.refresh_token);
+    next.expires_at = refreshed.expires_at_ms;
+    Ok(next)
+}
+
 async fn fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
-    let creds = load_credentials()?;
-    let oauth = creds.claude_ai_oauth;
+    let path = locate_credentials()?;
+    let creds = load_credentials_from(&path)?;
+    let mut oauth = creds.claude_ai_oauth;
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
         .build()?;
-    let snapshot = fetch_usage(
+
+    if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
+        info!("oauth: token expired/near-expiry — refreshing pre-flight");
+        oauth = refresh_and_persist(&client, &path, oauth).await?;
+    }
+
+    match fetch_usage(
         &client,
         ANTHROPIC_API_BASE,
         &oauth.access_token,
-        oauth.subscription_type,
-        oauth.rate_limit_tier,
+        oauth.subscription_type.clone(),
+        oauth.rate_limit_tier.clone(),
     )
-    .await?;
-    info!("oauth: fetched {} cadence bars", snapshot.cadences.len());
-    Ok(snapshot)
+    .await
+    {
+        Ok(s) => {
+            info!("oauth: fetched {} cadence bars", s.cadences.len());
+            Ok(s)
+        }
+        Err(OAuthError::AuthExpired) => {
+            warn!("oauth: 401 despite pre-flight — one refresh+retry");
+            let oauth = refresh_and_persist(&client, &path, oauth).await?;
+            let s = fetch_usage(
+                &client,
+                ANTHROPIC_API_BASE,
+                &oauth.access_token,
+                oauth.subscription_type,
+                oauth.rate_limit_tier,
+            )
+            .await?;
+            info!(
+                "oauth: fetched {} cadence bars after refresh",
+                s.cadences.len()
+            );
+            Ok(s)
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Fetch this-month OpenAI costs if the user has configured an admin key.
@@ -1159,4 +1230,18 @@ fn fmt_int(n: u64) -> String {
         out.push(*b as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn token_needs_refresh_logic() {
+        use chrono::TimeZone;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 5, 15, 12, 0, 0).unwrap();
+        let margin = chrono::Duration::seconds(300);
+        let now_ms = now.timestamp_millis();
+        assert!(super::token_needs_refresh(now_ms - 1, now, margin));
+        assert!(super::token_needs_refresh(now_ms + 200_000, now, margin));
+        assert!(!super::token_needs_refresh(now_ms + 3_600_000, now, margin));
+    }
 }
