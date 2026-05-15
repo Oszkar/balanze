@@ -562,7 +562,7 @@ impl snapshot_composer::SnapshotSources for LiveSources {
         live_fetch_oauth().await
     }
     async fn load_claude_events(&self) -> Result<(Vec<UsageEvent>, usize)> {
-        load_and_dedup_claude_events()
+        live_load_claude_events()
     }
     async fn fetch_codex_quota(&self) -> Result<Option<codex_local::CodexQuotaSnapshot>> {
         live_fetch_codex_quota()
@@ -579,7 +579,7 @@ impl snapshot_composer::SnapshotSources for LiveSources {
 /// Returns `(events, files_scanned)`. Files that fail to read or parse
 /// are logged (warn level) but don't fail the whole call — matches the
 /// existing tolerant policy.
-fn load_and_dedup_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
+fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
     let claude_dir = find_claude_projects_dir()?;
     let files = find_jsonl_files(&claude_dir)?;
     info!(

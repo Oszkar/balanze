@@ -26,7 +26,6 @@ openai_client = { path = "../openai_client" }
 settings = { path = "../settings" }
 snapshot_composer = { path = "../snapshot_composer" }
 state_coordinator = { path = "../state_coordinator" }
-window = { path = "../window" }
 
 # Setup-wizard masked input. Tiny, widely-used crate (cross-platform tty
 # detection + termios/console manipulation). Used only by `balanze-cli setup`.
@@ -40,3 +39,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# integration_4quadrant.rs calls window::summarize_window directly (composition-
+# contract test, not the CLI binary). The binary accesses window fields only
+# through state_coordinator::Snapshot public fields — no direct window:: call.
+window = { path = "../window" }
