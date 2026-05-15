@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 anthropic_oauth = { path = "../anthropic_oauth" }
+claude_cost = { path = "../claude_cost" }
 claude_parser = { path = "../claude_parser" }
 codex_local = { path = "../codex_local" }
 keychain = { path = "../keychain" }

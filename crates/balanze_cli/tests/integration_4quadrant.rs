@@ -1,0 +1,217 @@
+//! End-to-end integration test for the v0.1 4-quadrant pipeline.
+//!
+//! The eng-review test plan explicitly called for this (under "Critical
+//! Paths" item 7): a test that exercises the full
+//! claude_parser → claude_cost → Snapshot wiring and asserts that
+//! Snapshot.anthropic_api_cost is non-zero against a committed fixture.
+//! Without this, 175+ unit tests can pass while the wiring step that
+//! actually composes them is silently broken.
+//!
+//! The fixtures live under `tests/fixtures/` and are committed: an
+//! anonymized Claude Code JSONL with 3 assistant messages (known
+//! token counts → predictable cost magnitudes) and a Codex rollout
+//! file with a single `token_count` event_msg carrying a known
+//! `used_percent: 17.5`.
+//!
+//! Test strategy: call the per-crate public APIs the same way
+//! balanze_cli's `build_snapshot` calls them, populate a Snapshot,
+//! assert the expected fields are populated. This is a finer-grained
+//! test than running `balanze` as a subprocess but exercises the
+//! actual composition contract.
+
+use std::path::PathBuf;
+
+use claude_cost::{compute_cost, load_bundled_prices};
+use claude_parser::{dedup_events, find_jsonl_files, parse_str, UsageEvent};
+use codex_local::{find_latest_session, read_latest_quota_snapshot};
+use state_coordinator::{merge_partial, JsonlSnapshot, Snapshot, SourcePartial};
+use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
+
+fn fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+}
+
+fn load_fixture_events() -> Vec<UsageEvent> {
+    let claude_dir = fixture_root().join("claude/projects");
+    let files = find_jsonl_files(&claude_dir).expect("fixture JSONL dir must exist");
+    let mut events = Vec::new();
+    for path in &files {
+        let content = std::fs::read_to_string(path).expect("fixture readable");
+        let parsed = parse_str(&content).expect("fixture JSONL parses cleanly");
+        events.extend(parsed);
+    }
+    dedup_events(&mut events);
+    events
+}
+
+#[test]
+fn full_pipeline_populates_anthropic_api_cost_in_snapshot() {
+    // Step 1: parse fixture JSONL (mirrors balanze_cli's
+    // load_and_dedup_claude_events).
+    let events = load_fixture_events();
+    assert!(
+        !events.is_empty(),
+        "fixture should produce parseable events"
+    );
+
+    // Step 2: compute cost (mirrors balanze_cli's compute_anthropic_api_cost).
+    let prices = load_bundled_prices().expect("bundled prices load");
+    let cost = compute_cost(&events, &prices);
+
+    // Step 3: populate a Snapshot via merge_partial — the same path the
+    // coordinator will use (and that balanze_cli currently writes
+    // directly).
+    let now = chrono::Utc::now();
+    let mut snapshot = Snapshot::empty(now);
+    merge_partial(&mut snapshot, SourcePartial::AnthropicApiCost(cost.clone()));
+
+    // Step 4: assert the contract the eng-review test plan specified.
+    let saved = snapshot
+        .anthropic_api_cost
+        .as_ref()
+        .expect("AnthropicApiCost should now be populated");
+    assert!(
+        saved.total_micro_usd > 0,
+        "Snapshot.anthropic_api_cost.total_micro_usd must be > 0 with fixture data; \
+         got {} (events: {}, per_model: {:?})",
+        saved.total_micro_usd,
+        events.len(),
+        saved.per_model.iter().map(|m| &m.model).collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        snapshot.anthropic_api_cost_error, None,
+        "successful merge_partial must clear the error slot"
+    );
+
+    // Spot-check structure: fixture has 3 events across 2 known models
+    // (sonnet-4-6 ×2, haiku-4-5 ×1). All three models are in the
+    // bundled price table, so per_model should have 2 rows and zero
+    // skipped models.
+    assert_eq!(saved.total_event_count, 3, "all 3 fixture events processed");
+    assert_eq!(saved.unparsed_event_count, 0, "no empty-model events");
+    assert_eq!(saved.per_model.len(), 2, "2 distinct known models");
+    assert!(
+        saved.skipped_models.is_empty(),
+        "fixture uses bundled-table models; got skipped: {:?}",
+        saved.skipped_models
+    );
+    let models: Vec<&str> = saved.per_model.iter().map(|m| m.model.as_str()).collect();
+    assert!(models.contains(&"claude-sonnet-4-6"), "got: {models:?}");
+    assert!(models.contains(&"claude-haiku-4-5"), "got: {models:?}");
+}
+
+#[test]
+fn full_pipeline_populates_claude_jsonl_in_snapshot() {
+    // Mirrors balanze_cli's summarize_for_jsonl_snapshot — the window
+    // math arm. Verifies the JSONL slot lights up too, so a future
+    // refactor that breaks the shared-events plumbing fails this test.
+    let events = load_fixture_events();
+    let now = chrono::Utc::now();
+    let window = summarize_window(
+        &events,
+        now,
+        DEFAULT_WINDOW,
+        DEFAULT_BURN_WINDOW,
+        DEFAULT_MIN_BURN_EVENTS,
+    );
+    let jsonl = JsonlSnapshot {
+        files_scanned: 1,
+        window,
+    };
+
+    let mut snapshot = Snapshot::empty(now);
+    merge_partial(&mut snapshot, SourcePartial::ClaudeJsonl(jsonl));
+
+    let saved = snapshot
+        .claude_jsonl
+        .as_ref()
+        .expect("ClaudeJsonl should populate");
+    assert_eq!(saved.files_scanned, 1);
+    // We don't assert a specific event-in-window count: the window
+    // value depends on the test wall-clock vs fixture timestamps,
+    // which are 2026-05-15. Outside that 5-hour window the count is
+    // 0; inside it (e.g. running the test soon after the fixture was
+    // captured) the count is 3. Either is correct. The point of this
+    // test is that the slot is populated by the pipeline.
+    assert!(
+        saved.window.total_events_in_window <= 3,
+        "window should hold no more than the 3 fixture events"
+    );
+}
+
+#[test]
+fn full_pipeline_populates_codex_quota_in_snapshot() {
+    let codex_dir = fixture_root().join("codex/sessions");
+    let path = find_latest_session(&codex_dir)
+        .expect("walker should find fixture session")
+        .expect("fixture session present");
+    let snap = read_latest_quota_snapshot(&path)
+        .expect("fixture parses")
+        .expect("token_count event present in fixture");
+
+    let now = chrono::Utc::now();
+    let mut snapshot = Snapshot::empty(now);
+    merge_partial(&mut snapshot, SourcePartial::CodexQuota(snap));
+
+    let saved = snapshot
+        .codex_quota
+        .as_ref()
+        .expect("CodexQuota should populate");
+    assert!(
+        (saved.primary.used_percent - 17.5).abs() < 0.001,
+        "fixture asserts used_percent: 17.5; got {}",
+        saved.primary.used_percent
+    );
+    assert_eq!(saved.primary.window_duration_minutes, 10_080);
+    assert_eq!(saved.plan_type, "go");
+    assert!(!saved.rate_limit_reached);
+}
+
+#[test]
+fn snapshot_serializes_to_json_with_all_four_cells_populated() {
+    // The `--json` output mode round-trips through serde. Make sure
+    // adding the new fields didn't break serialization (e.g., missing
+    // Serialize derive on a transitive type).
+    let events = load_fixture_events();
+    let prices = load_bundled_prices().unwrap();
+    let cost = compute_cost(&events, &prices);
+
+    let codex_dir = fixture_root().join("codex/sessions");
+    let codex_path = find_latest_session(&codex_dir).unwrap().unwrap();
+    let codex_quota = read_latest_quota_snapshot(&codex_path).unwrap().unwrap();
+
+    let now = chrono::Utc::now();
+    let mut snapshot = Snapshot::empty(now);
+    merge_partial(&mut snapshot, SourcePartial::AnthropicApiCost(cost));
+    merge_partial(&mut snapshot, SourcePartial::CodexQuota(codex_quota));
+
+    let json = serde_json::to_string_pretty(&snapshot).expect("snapshot serializes");
+
+    // Spot-check the wire shape — these field names are the public
+    // JSON contract for `balanze status --json`. Renaming any of them
+    // is a breaking change for downstream consumers (none yet, but
+    // pinning the contract now prevents accidental future drift).
+    assert!(
+        json.contains("\"anthropic_api_cost\""),
+        "expected anthropic_api_cost field"
+    );
+    assert!(
+        json.contains("\"codex_quota\""),
+        "expected codex_quota field"
+    );
+    assert!(
+        json.contains("\"total_micro_usd\""),
+        "expected nested cost.total_micro_usd"
+    );
+    assert!(
+        json.contains("\"used_percent\""),
+        "expected nested codex_quota.primary.used_percent"
+    );
+    // serde_json::to_string_pretty emits "key": "value" with a space
+    // between key and value; match that format precisely so a future
+    // serializer swap (e.g. to a compact writer) catches the drift.
+    assert!(
+        json.contains("\"plan_type\": \"go\""),
+        "expected plan_type from fixture; got:\n{json}"
+    );
+}

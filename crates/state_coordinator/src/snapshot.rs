@@ -7,6 +7,8 @@
 
 use anthropic_oauth::ClaudeOAuthSnapshot;
 use chrono::{DateTime, Utc};
+use claude_cost::Cost;
+use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
 use serde::{Deserialize, Serialize};
 use window::WindowSummary;
@@ -17,6 +19,17 @@ use crate::messages::{Source, SourcePartial};
 /// fields hold the most recent failure for that source. Successful data and
 /// an error can coexist: the data stays (stale) while the error explains
 /// why it isn't fresh.
+///
+/// The shape maps onto the 4-quadrant matrix (see `Source` for the
+/// per-cell mapping):
+///
+/// - Anthropic quota %      ← `claude_oauth`
+/// - Anthropic API $ (est.) ← `anthropic_api_cost`  (derived from JSONL)
+/// - OpenAI Codex %         ← `codex_quota`
+/// - OpenAI API $           ← `openai`
+///
+/// Plus `claude_jsonl` which holds the raw JSONL window math that feeds
+/// both Anthropic cells.
 // PartialEq is intentionally NOT derived: `ClaudeOAuthSnapshot` doesn't
 // implement it, and the upstream change to add it would force a float-equality
 // debate that doesn't pay off. Tests compare individual fields.
@@ -35,6 +48,23 @@ pub struct Snapshot {
     pub claude_jsonl: Option<JsonlSnapshot>,
     /// Most recent JSONL parse failure (filesystem error, schema drift).
     pub claude_jsonl_error: Option<String>,
+    /// Most recent successful Anthropic API-cost synthesis. Derived from the
+    /// same JSONL slice as `claude_jsonl` via `claude_cost::compute_cost`;
+    /// see that crate's docs for the "API-rate equivalent" vs "actual spend"
+    /// framing. None until the first success.
+    pub anthropic_api_cost: Option<Cost>,
+    /// Most recent claude_cost failure. Usually means the bundled price
+    /// table is malformed (shouldn't happen on a release build); occasionally
+    /// surfaces if a new model name has prices the table doesn't know yet.
+    pub anthropic_api_cost_error: Option<String>,
+    /// Most recent successful Codex CLI rate-limit snapshot from
+    /// `codex_local::read_codex_quota`. None means Codex isn't installed
+    /// or no sessions have been recorded yet.
+    pub codex_quota: Option<CodexQuotaSnapshot>,
+    /// Most recent codex_local failure. `None` for "Codex not installed" — the
+    /// `codex_quota` slot just stays None; we only set this when Codex IS
+    /// installed but reading failed (permission denied, schema drift, etc.).
+    pub codex_quota_error: Option<String>,
     /// Most recent successful OpenAI Admin Costs fetch.
     pub openai: Option<OpenAiCosts>,
     /// `None` means: OpenAI not configured (no key). Some(err) means
@@ -52,6 +82,10 @@ impl Snapshot {
             claude_oauth_error: None,
             claude_jsonl: None,
             claude_jsonl_error: None,
+            anthropic_api_cost: None,
+            anthropic_api_cost_error: None,
+            codex_quota: None,
+            codex_quota_error: None,
             openai: None,
             openai_error: None,
         }
@@ -88,6 +122,14 @@ pub fn merge_partial(snapshot: &mut Snapshot, partial: SourcePartial) {
             snapshot.claude_jsonl = Some(j);
             snapshot.claude_jsonl_error = None;
         }
+        SourcePartial::AnthropicApiCost(c) => {
+            snapshot.anthropic_api_cost = Some(c);
+            snapshot.anthropic_api_cost_error = None;
+        }
+        SourcePartial::CodexQuota(q) => {
+            snapshot.codex_quota = Some(q);
+            snapshot.codex_quota_error = None;
+        }
         SourcePartial::OpenAiCosts(c) => {
             snapshot.openai = Some(c);
             snapshot.openai_error = None;
@@ -102,6 +144,8 @@ pub fn record_error(snapshot: &mut Snapshot, source: Source, error: &str) {
     let slot = match source {
         Source::ClaudeOAuth => &mut snapshot.claude_oauth_error,
         Source::ClaudeJsonl => &mut snapshot.claude_jsonl_error,
+        Source::AnthropicApiCost => &mut snapshot.anthropic_api_cost_error,
+        Source::CodexQuota => &mut snapshot.codex_quota_error,
         Source::OpenAiCosts => &mut snapshot.openai_error,
     };
     *slot = Some(error.to_string());
@@ -110,7 +154,9 @@ pub fn record_error(snapshot: &mut Snapshot, source: Source, error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{fixture_now, jsonl_snapshot, oauth_snapshot, openai_costs};
+    use crate::test_support::{
+        anthropic_api_cost, codex_quota, fixture_now, jsonl_snapshot, oauth_snapshot, openai_costs,
+    };
 
     #[test]
     fn merge_oauth_overwrites_data_and_clears_error() {
@@ -140,6 +186,27 @@ mod tests {
     }
 
     #[test]
+    fn merge_anthropic_api_cost_overwrites_data_and_clears_error() {
+        let mut s = Snapshot::empty(fixture_now());
+        s.anthropic_api_cost_error = Some("price table corrupt".to_string());
+        merge_partial(
+            &mut s,
+            SourcePartial::AnthropicApiCost(anthropic_api_cost()),
+        );
+        assert!(s.anthropic_api_cost.is_some());
+        assert!(s.anthropic_api_cost_error.is_none());
+    }
+
+    #[test]
+    fn merge_codex_quota_overwrites_data_and_clears_error() {
+        let mut s = Snapshot::empty(fixture_now());
+        s.codex_quota_error = Some("schema drift".to_string());
+        merge_partial(&mut s, SourcePartial::CodexQuota(codex_quota()));
+        assert!(s.codex_quota.is_some());
+        assert!(s.codex_quota_error.is_none());
+    }
+
+    #[test]
     fn record_error_preserves_existing_data() {
         let mut s = Snapshot::empty(fixture_now());
         merge_partial(&mut s, SourcePartial::ClaudeOAuth(oauth_snapshot()));
@@ -155,8 +222,15 @@ mod tests {
         let mut s = Snapshot::empty(fixture_now());
         record_error(&mut s, Source::ClaudeJsonl, "jsonl err");
         record_error(&mut s, Source::OpenAiCosts, "openai err");
+        record_error(&mut s, Source::AnthropicApiCost, "price err");
+        record_error(&mut s, Source::CodexQuota, "codex err");
         assert_eq!(s.claude_jsonl_error.as_deref(), Some("jsonl err"));
         assert_eq!(s.openai_error.as_deref(), Some("openai err"));
-        assert!(s.claude_oauth_error.is_none());
+        assert_eq!(s.anthropic_api_cost_error.as_deref(), Some("price err"));
+        assert_eq!(s.codex_quota_error.as_deref(), Some("codex err"));
+        assert!(
+            s.claude_oauth_error.is_none(),
+            "untouched source stays clean"
+        );
     }
 }
