@@ -369,22 +369,40 @@ mod tests {
     #[test]
     fn anchored_window_uses_reset_minus_window_not_now() {
         let n = now(); // 2026-05-14 12:00:00
-        let reset = n + Duration::hours(2); // server says 5h window resets in 2h
-                                            // Event 4h before the reset → inside [reset-5h, reset); but it is
-                                            // 6h before `now`, so the OLD now-5h window would EXCLUDE it.
-        let e = ev(reset - Duration::hours(4), "sonnet", 100, 50);
-        let s = summarize_window(
-            &[e],
+                       // Server says the 5h window resets 2h from now → the active anchored
+                       // window is [reset - 5h, reset) = [n - 3h, n + 2h).
+        let reset = n + Duration::hours(2);
+        // One event 4h ago: INSIDE the legacy now-5h window [n - 5h, n) but
+        // OUTSIDE the anchored window (which starts at n - 3h). Same input,
+        // both code paths — the only difference is the anchor.
+        let evs = [ev(n - Duration::hours(4), "sonnet", 100, 50)];
+
+        let anchored = summarize_window(
+            &evs,
             n,
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
             Some(reset),
         );
-        assert_eq!(s.window_start, reset - DEFAULT_WINDOW);
+        assert_eq!(anchored.window_start, reset - DEFAULT_WINDOW);
         assert_eq!(
-            s.total_events_in_window, 1,
-            "anchored window must include it"
+            anchored.total_events_in_window, 0,
+            "anchored window [n-3h, ..) must EXCLUDE the n-4h event"
+        );
+
+        let now_based = summarize_window(
+            &evs,
+            n,
+            DEFAULT_WINDOW,
+            DEFAULT_BURN_WINDOW,
+            DEFAULT_MIN_BURN_EVENTS,
+            None,
+        );
+        assert_eq!(now_based.window_start, n - DEFAULT_WINDOW);
+        assert_eq!(
+            now_based.total_events_in_window, 1,
+            "legacy now-window [n-5h, ..) INCLUDES it — the two paths genuinely differ"
         );
     }
 
