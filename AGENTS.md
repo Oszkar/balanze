@@ -257,6 +257,8 @@ bun run tauri build              # produces MSI/NSIS on Win, DMG/app on Mac
 
 Hot-reload: `bun run tauri dev` hot-reloads the Svelte frontend on save. The Rust backend does **not** — restart manually (`Ctrl-C` then re-run). For tight Rust iteration use `cargo watch -x 'check --workspace'` in a side terminal.
 
+**`default-members = ["crates/*"]`:** bare `cargo build`/`test`/`run` (no flags) skip `src-tauri` — that's deliberate, so the CLI builds with zero GUI/system libs (critical on Linux: `src-tauri` drags in GTK/WebKit; the CLI must never require it). Use `--workspace` (or `bun run tauri dev`) to include `src-tauri`; on Linux that needs the GUI dev packages (README → "Building the desktop app"). All gates here pass `--workspace`/`-p` explicitly, so they're unaffected — only the no-flag path changed.
+
 ## 6. Validation Matrix
 
 Before claiming work is done:
