@@ -1,0 +1,24 @@
+[package]
+name = "snapshot_composer"
+description = "Shared source-orchestration policy: composes the backend crates into one Snapshot. The single composition path used by balanze_cli today and the watcher/pollers later (AGENTS.md §4 #8) so they cannot silently diverge."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+anthropic_oauth = { path = "../anthropic_oauth" }
+claude_cost = { path = "../claude_cost" }
+claude_parser = { path = "../claude_parser" }
+codex_local = { path = "../codex_local" }
+openai_client = { path = "../openai_client" }
+state_coordinator = { path = "../state_coordinator" }
+window = { path = "../window" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
