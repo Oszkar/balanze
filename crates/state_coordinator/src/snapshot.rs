@@ -233,4 +233,28 @@ mod tests {
             "untouched source stays clean"
         );
     }
+
+    #[test]
+    fn merge_one_source_does_not_clear_another_sources_error() {
+        // Cross-source isolation invariant: a successful merge clears ONLY
+        // the merged source's `_error` slot. A mis-routed slot write (e.g. a
+        // future refactor that clears the wrong field) would blank an
+        // unrelated source's degraded indicator and silently hide a failure.
+        let mut s = Snapshot::empty(fixture_now());
+        s.openai_error = Some("openai 500".to_string());
+        s.claude_jsonl_error = Some("jsonl perm denied".to_string());
+
+        merge_partial(&mut s, SourcePartial::ClaudeJsonl(jsonl_snapshot()));
+
+        assert!(s.claude_jsonl.is_some());
+        assert!(
+            s.claude_jsonl_error.is_none(),
+            "merged source's own error is cleared"
+        );
+        assert_eq!(
+            s.openai_error.as_deref(),
+            Some("openai 500"),
+            "an unrelated source's error must be left untouched"
+        );
+    }
 }

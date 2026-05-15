@@ -166,6 +166,38 @@ mod tests {
         }
     }
 
+    // §6 validation matrix requires a "permission denied" case for the
+    // walker. Unix-only: Windows directory ACLs don't map onto the simple
+    // 0o000 trick and `read_dir` semantics differ.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_subdir_returns_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let locked = root.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root ignores permission bits; the matrix case is still exercised on
+        // non-root CI/dev machines, so skip the assertion rather than fail.
+        if fs::read_dir(&locked).is_ok() {
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("running as root — permission bits bypassed; skipping");
+            return;
+        }
+
+        let result = find_jsonl_files(root);
+        // Restore before tempdir drop so cleanup can recurse into `locked`.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+        match result {
+            Err(ParseError::PermissionDenied(p)) => assert_eq!(p, locked),
+            other => panic!("expected PermissionDenied for {locked:?}, got {other:?}"),
+        }
+    }
+
     #[test]
     fn empty_dir_returns_empty_vec() {
         let dir = tempfile::tempdir().unwrap();

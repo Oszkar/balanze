@@ -286,6 +286,31 @@ mod tests {
     }
 
     #[test]
+    fn explicit_version_zero_is_migrated_to_current() {
+        // Distinct from the omitted-version case below: a file that
+        // *explicitly* carries `version: 0` (the pre-versioning sentinel)
+        // must be migrated up to the current schema on load. Exercises the
+        // `parsed.version == 0` branch in load_from, which the
+        // serde-defaulted (omitted) case never reaches.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":0,"providers":{"openai_enabled":true}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.version, SCHEMA_VERSION,
+            "explicit version 0 must migrate to current"
+        );
+        assert!(
+            s.providers.openai_enabled,
+            "data preserved through migration"
+        );
+    }
+
+    #[test]
     fn unset_version_field_treated_as_current() {
         // Older settings files may omit the version field entirely.
         let dir = tempfile::tempdir().unwrap();

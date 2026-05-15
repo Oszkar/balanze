@@ -9,7 +9,11 @@ authors.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "balanze"
+# `balanze` (no suffix) is reserved for the src-tauri package's binary (the tray
+# app, which becomes the headline product in v0.2+). The CLI is the power-user
+# tool; distinct artifact names avoid a `target/<profile>/balanze` write race
+# when `cargo build --workspace` builds both.
+name = "balanze-cli"
 path = "src/main.rs"
 
 [dependencies]
@@ -24,7 +28,7 @@ state_coordinator = { path = "../state_coordinator" }
 window = { path = "../window" }
 
 # Setup-wizard masked input. Tiny, widely-used crate (cross-platform tty
-# detection + termios/console manipulation). Used only by `balanze setup`.
+# detection + termios/console manipulation). Used only by `balanze-cli setup`.
 rpassword = "7"
 
 tokio = { workspace = true }

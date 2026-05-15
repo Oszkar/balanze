@@ -83,11 +83,18 @@ fn full_pipeline_populates_anthropic_api_cost_in_snapshot() {
         "successful merge_partial must clear the error slot"
     );
 
-    // Spot-check structure: fixture has 3 events across 2 distinct
-    // models (sonnet-4-6 ×2, haiku-4-5 ×1). Both models are in the
-    // bundled price table, so per_model should have 2 rows and zero
-    // skipped models.
-    assert_eq!(saved.total_event_count, 3, "all 3 fixture events processed");
+    // Spot-check structure: the fixture has 4 raw JSONL lines — 3 distinct
+    // assistant messages (sonnet-4-6 ×2, haiku-4-5 ×1) plus 1 line that
+    // duplicates msg_fixture_001's (message_id, request_id) with inflated
+    // tokens. `load_fixture_events` runs `dedup_events`, so the pipeline
+    // must see exactly 3: a `== 3` here now genuinely exercises dedup (a
+    // regression that skipped it would yield 4 and the huge dup tokens
+    // would also blow up total_micro_usd). Both surviving models are in
+    // the bundled price table → 2 per_model rows, zero skipped.
+    assert_eq!(
+        saved.total_event_count, 3,
+        "dedup must collapse the 4 raw lines (1 duplicate) to 3 events"
+    );
     assert_eq!(saved.unparsed_event_count, 0, "no empty-model events");
     assert_eq!(saved.per_model.len(), 2, "2 distinct known models");
     assert!(
@@ -106,7 +113,15 @@ fn full_pipeline_populates_claude_jsonl_in_snapshot() {
     // math arm. Verifies the JSONL slot lights up too, so a future
     // refactor that breaks the shared-events plumbing fails this test.
     let events = load_fixture_events();
-    let now = chrono::Utc::now();
+    // Fixed `now` one hour after the last fixture event (2026-05-15T10:02Z)
+    // so all 3 fixtures fall inside the 5-hour main window deterministically.
+    // Using Utc::now() here made the assertion tautological: once the fixture
+    // timestamps aged out of the live window the count went to 0 and the old
+    // `<= 3` bound passed vacuously, so a window-math regression would not
+    // have been caught.
+    let now = chrono::DateTime::parse_from_rfc3339("2026-05-15T11:02:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
     let window = summarize_window(
         &events,
         now,
@@ -127,15 +142,13 @@ fn full_pipeline_populates_claude_jsonl_in_snapshot() {
         .as_ref()
         .expect("ClaudeJsonl should populate");
     assert_eq!(saved.files_scanned, 1);
-    // We don't assert a specific event-in-window count: the window
-    // value depends on the test wall-clock vs fixture timestamps,
-    // which are 2026-05-15. Outside that 5-hour window the count is
-    // 0; inside it (e.g. running the test soon after the fixture was
-    // captured) the count is 3. Either is correct. The point of this
-    // test is that the slot is populated by the pipeline.
-    assert!(
-        saved.window.total_events_in_window <= 3,
-        "window should hold no more than the 3 fixture events"
+    // With the fixed `now` above, all 3 fixture events fall inside the
+    // 5-hour main window, so the count is exact and deterministic. This
+    // now actually exercises the window-math arm of the pipeline rather
+    // than passing vacuously.
+    assert_eq!(
+        saved.window.total_events_in_window, 3,
+        "all 3 fixture events fall in the 5h window relative to the fixed now"
     );
 }
 

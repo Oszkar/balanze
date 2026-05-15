@@ -166,7 +166,7 @@ balanze/
 │   ├── watcher/                (planned) notify + 1s debounce + 60s safety poll
 │   ├── keychain/               `keyring` wrapper, service="me.oszkar.Balanze". Only crate that imports keyring per §4 #5. 1 inline test + 1 #[ignore]'d real-keychain smoke. **KNOWN ISSUE**: keyring v3.6.3 set→get round-trip fails on Windows (smoke test fails). CLI honors `BALANZE_OPENAI_KEY` env var as a fallback. Migration to keyring-core (v4 successor) is a v0.2 task — see Known Issues section below.
 │   ├── settings/               config serde + atomic write (tmp + rename), schema versioned. Path via `directories::ProjectDirs`. 9 unit tests. Stores non-secrets only — keys live in keychain crate.
-│   └── balanze_cli/            binary entry-point that composes the backend crates into a Snapshot. Same composition role that `src-tauri/` will play when the front-end lands; useful as a dev tool and as a reference for the eventual Tauri wiring. Binary name: `balanze`.
+│   └── balanze_cli/            binary entry-point that composes the backend crates into a Snapshot. Same composition role that `src-tauri/` will play when the front-end lands; useful as a dev tool and as a reference for the eventual Tauri wiring. Binary name: `balanze-cli` (the `balanze` artifact name is reserved for the src-tauri tray app to avoid a workspace build collision).
 └── .github/
     └── workflows/
         ├── ci.yml              fmt + clippy + cargo test + svelte-check on Win + Mac

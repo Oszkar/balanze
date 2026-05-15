@@ -8,7 +8,7 @@ glance. Tray-first; Tauri 2 + Rust + Svelte 5. Side project; Windows 11 and macO
 ## Status (v0.1, May 2026)
 
 The backend data layer is shipped. The desktop tray UI is still scaffold; the
-working surface today is a CLI (`balanze`) that emits the same status snapshot
+working surface today is a CLI (`balanze-cli`) that emits the same status snapshot
 the tray popover will eventually show.
 
 - ✅ **Anthropic OAuth usage** — calls the same `/api/oauth/usage` endpoint
@@ -33,16 +33,16 @@ The CLI is the v0.1 reference for the eventual tray popover. Same composition,
 just stdout instead of an OS tray.
 
 ```text
-$ balanze help
+$ balanze-cli help
 Balanze — local-first AI usage tracker.
 
 Subcommands:
-  balanze                       Print pretty status (default)
-  balanze status [--json]       Same as above; --json is machine-readable
-  balanze set-openai-key [KEY]  Store KEY in the OS keychain
-  balanze clear-openai-key      Remove the OpenAI key from the keychain
-  balanze settings              Print current settings.json contents
-  balanze help                  This help
+  balanze-cli                       Print pretty status (default)
+  balanze-cli status [--json]       Same as above; --json is machine-readable
+  balanze-cli set-openai-key [KEY]  Store KEY in the OS keychain
+  balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
+  balanze-cli settings              Print current settings.json contents
+  balanze-cli help                  This help
 
 Environment overrides:
   BALANZE_OPENAI_KEY            sk-admin-… admin key. Takes precedence over
