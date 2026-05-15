@@ -42,9 +42,9 @@ A small team or technically inclined individual who wants a local dashboard and 
 
 ### MVP goals
 
-The MVP is the eventual smallest-viable end-state described in the rest of this document. The Phasing section below splits delivery into v0.1, v0.2, v0.3, and v1+ stages.
+The MVP is the eventual smallest-viable end-state described in the rest of this document. The Phasing section below splits delivery into v0.1, v0.2, v0.3, v0.4, and v1+ stages (themes: Data → Liveness → UI → Distribution → long tail).
 
-- Ship on Windows 11, macOS 15+, and Ubuntu 24.04 LTS+ GNOME.
+- Ship the desktop story on Windows 11 and macOS 15+ (CLI in v0.1 → tray UI in v0.3); Ubuntu 24.04 LTS+ GNOME follows in v1+ — see the Supported platforms table and Phasing for the per-stage rollout.
 - Support at least OpenAI and Anthropic as the first two providers.
 - Show current usage snapshot, reset timing where available, spend or credits where available, and lightweight recent history.
 - Allow threshold alerts for spend, quota, or estimated remaining usage.
@@ -91,11 +91,12 @@ The MVP is the eventual smallest-viable end-state described in the rest of this 
 
 | Platform | Support level | Notes |
 |---|---|---|
-| Windows 11 | Phase 1 (v0.1) | Desktop tray-first experience. Windows 10 excluded. |
-| macOS 15+ | Phase 1 (v0.1) | Menu-bar-first experience with hidden main window that opens via tray. |
-| Ubuntu 24.04 LTS+ GNOME | Phase 3 (v0.3) | GNOME only, with AppIndicator tray support. Deferred until the Win + Mac story is mature; Linux tray fragility makes it the wrong place to start. |
-| Android | Phase 4+ (v1+) | Companion app only after desktop proves value. Read-only feed of the desktop state via Phase 3's sync layer. |
-| Hosted web dashboard | Phase 4+ (v1+) | Separate surface for wallboard or TV use, reusing normalized backend contracts. |
+| Windows 11 | CLI v0.1; tray UI v0.3 | CLI works from v0.1 (`cargo install`); tray-first desktop experience arrives in the v0.3 UI phase. Windows 10 excluded. |
+| macOS 15+ | CLI v0.1; tray UI v0.3 | CLI works from v0.1; menu-bar-first experience with hidden main window in v0.3. |
+| Linux (generic) | CLI v0.1 | `cargo install` works trivially; no separate test matrix. CLI only — tray UI not targeted here. |
+| Ubuntu 24.04 LTS+ GNOME | Phase 5+ (v1+) | GNOME tray UI with AppIndicator support. Deferred until the Win + Mac tray story is mature; Linux tray fragility makes it the wrong place to start. |
+| Android | Phase 5+ (v1+) | Companion app only after desktop proves value. Read-only feed of the desktop state via the sync layer. |
+| Hosted web dashboard | Phase 5+ (v1+) | Separate surface for wallboard or TV use, reusing normalized backend contracts. |
 
 ## Key use cases
 
@@ -230,66 +231,76 @@ For an MVP side project, success should be measured qualitatively and with a few
 - Two providers work reliably enough for personal use.
 - The tray or compact popup answers the core status question in a few seconds.
 - Setup time for one provider is under 10 minutes.
-- Alerting reduces surprise credit depletion or quota exhaustion (Phase 2 onward; v0.1 ships without alerts).
+- Alerting reduces surprise credit depletion or quota exhaustion (v0.3 onward, configured in the settings UI; v0.1–v0.2 ship without alerts).
 
 ## Phasing
 
-The MVP described above lands across four phases. v0.1 is the current build target; later phases respond to v0.1 usage and the design's deferred work.
+The MVP lands across four release phases plus a long tail. Each phase has **one dominant theme** — Data → Liveness → UI → Distribution — so "done" for each is hard to fudge and risk is sequenced correctly (read-only data primitives first, asymmetric/UI work later). This replaces an earlier phasing that tried to ship the full tray UI + predictor in v0.1; the design doc's roadmap review (Approach A) re-scoped v0.1 down to a complete, honest data layer after the Anthropic Admin API spike came back NO-GO for non-enterprise accounts. The detailed build sequence lives in the design doc; this is the product-level summary.
 
-### Phase 1 — v0.1 (current target)
+### Phase 1 — v0.1: Data (shipped, pre-tag)
 
-Tightest possible side-project ship. The goal is to replace the user's existing fragmented setup with one local-first binary on Windows and macOS. Detailed architecture and step-by-step build sequence live in the design doc; this is the product-level summary.
+A complete, honest **data layer** exposed as a CLI (`balanze-cli`). No tray UI yet — the CLI prints the same normalized snapshot the eventual popover will show. The bar for v0.1 is the **four-quadrant matrix fully lit**:
 
-- Tauri 2 + Rust + Svelte 5 desktop app. Windows 11 and macOS 15+ only (Ubuntu deferred to Phase 3).
-- Claude subscription utilization + reset clock via Anthropic's OAuth usage endpoint (`GET api.anthropic.com/api/oauth/usage`, Bearer from `~/.claude/.credentials.json`). This is the authoritative signal — replaces what would otherwise have been a multi-week empirical heuristic. Searched in both `~/.claude/` and `~/.config/claude/` (Claude Code v1.0.30+ uses the latter on some platforms).
-- Per-event detail (per-model breakdown, sparkline, burn rate) via local JSONL parsing of `<claude_home>/projects/**/*.jsonl` — no API, no scraping, no auth. Approach proven by ccusage; reimplemented in Rust to keep the binary self-contained. Events deduped by `(message_id, request_id)` to avoid double-counting retries and subagent forwarding.
-- Claude API spend + extra credits via Anthropic Console — **deferred to v0.2** after the step-1 spike. The Console (platform.claude.com) does expose stable JSON endpoints, but auth is via expiring session cookies rather than an API key; cookie-paste UX deserves first-class design and a `DegradedState::auth_expired` flow, neither of which fits in v0.1's scope. v0.1 ships without Anthropic API spend visibility on the Console side; subscription usage from `~/.claude/projects/` JSONL is still fully covered.
-- OpenAI API spend + credits via documented billing endpoints.
-- Tray icon as a color-shifting gauge (idle → green → amber → red) with hover tooltip; macOS additionally shows a `Title` text slot with the current percentage.
-- Tray menu: Open Balanze / Settings… / Quit.
-- Main window (popover-shaped, hidden on launch): one progress bar per Anthropic-exposed reset cadence (5h, 7-day, plus any model-specific bars like "Sonnet only" if OAuth exposes them) each with its own "Resets in …" subline; sparkline of recent burn; predictive reset countdown ("~42 min to cap" with confidence band, or "uncertain" / "??" during warm-up); OpenAI spend tile.
-- Predictive reset is the headline feature: EWMA over the rolling window with an explicit warm-up state (Insufficient → Uncertain → Confident) so the predictor never lies immediately after a window reset.
-- Settings UI: paste API keys, save to OS keychain.
-- Local secure storage (keychain for secrets; `directories`-crate per-OS paths for logs and non-secret settings).
-- `tauri-plugin-single-instance` wired from day one so the user cannot accidentally double-launch.
-- Distribution: unsigned MSI/NSIS (Windows) + DMG/app (macOS) via GitHub Releases. No auto-update in v0.1; users download new versions manually.
-- No alerts in v0.1. Learn from real use first; alerts arrive in v0.2 with thresholds informed by observation.
-- No full dashboard window in v0.1. The popover covers the read use case; the dashboard arrives in v0.2.
+| | Quota % | API $ |
+|---|---|---|
+| **Anthropic** | OAuth usage endpoint (5h / 7-day / per-model cadence bars + reset clocks) | estimated, JSONL-derived (see below) |
+| **OpenAI** | Codex CLI rate-limit % (local `~/.codex/sessions/` rollout files) | real billed spend (Admin Costs API) |
 
-### Phase 2 — v0.2 (post-v0.1 completion + polish)
+- Claude subscription utilization + reset clock via Anthropic's OAuth usage endpoint (`GET api.anthropic.com/api/oauth/usage`, Bearer from `~/.claude/.credentials.json`). Authoritative signal; no scraping. Searched in both `~/.claude/` and `~/.config/claude/`.
+- Per-event detail (per-model breakdown, burn rate, rolling window) via local JSONL parsing of `<claude_home>/projects/**/*.jsonl` — no API, no scraping, no auth. Events deduped by `(message_id, request_id)`.
+- **Anthropic API $ is an estimate, not real spend.** The Phase 0 spike confirmed Anthropic's official Usage & Cost API is gated to enterprise/org-admin accounts — inaccessible to the modal v0.1 user. Instead `claude_cost` synthesizes a list-price equivalent from the same JSONL × a vendored LiteLLM price table. For Pro/Max users this is "subscription leverage," **not** money billed; the CLI labels it as such and never presents it next to the real OpenAI bill without that distinction. (A real-spend source via the Admin API is a v0.2+ research note, contingent on the author obtaining enterprise access or a user requesting it.)
+- OpenAI Codex quota % from the local Codex CLI rollout files (`~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-*.jsonl`) — server-computed `rate_limits.primary`, a real number.
+- OpenAI API spend via the documented Admin Costs API (`GET /v1/organization/costs`, `sk-admin-…` Bearer).
+- `balanze-cli setup` — interactive wizard: checks Anthropic OAuth presence, checks Codex sessions, prompts for the OpenAI admin key (masked input), validates it live, stores it in the OS keychain. No Anthropic admin-key prompt (no admin API in v0.1).
+- `--sections` (per-source detail) and `--json` (machine-readable snapshot) output modes — flags on `status`, and also accepted as bare top-level shortcuts (`balanze-cli --sections` / `balanze-cli --json`). (Originally slated for v0.2 but shipped early in v0.1 alongside the 4-quadrant integration.)
+- Local secure storage (keychain for secrets; `directories`-crate per-OS paths for non-secret settings). Known Windows keychain limitation documented, with a `BALANZE_OPENAI_KEY` env-var fallback.
+- **Distribution: source only.** `cargo install --git https://github.com/Oszkar/balanze balanze_cli` (the repo root is a virtual workspace, so the package is named explicitly; it builds the `balanze-cli` binary). No binaries, no installers, no GitHub Releases in v0.1 — the audience (org-admin tinkerer power-users) accepts the Rust-toolchain prerequisite. Linux works via `cargo install` (no separate test matrix; tray UI is later anyway).
+- **Not in v0.1:** tray UI, popover, predictor, file watcher, alerts, dashboard window. All deliberately moved to later phases.
 
-Round out what was deferred from v0.1 and respond to the first weeks of real use.
+### Phase 2 — v0.2: Liveness
 
-- Alerts for spend thresholds, credits below threshold, subscription approaching cap, reset windows, and connector failure / stale data — with thresholds informed by v0.1 observation.
-- Optional full dashboard window for per-provider detail pages, recent trends, account source and confidence indicators, settings, connectors, and troubleshooting.
-- Auto-update via Tauri updater (pointed at the GitHub Releases JSON manifest).
-- Anthropic Console integration via session-cookie paste-from-DevTools flow (endpoints already discovered and documented in the design doc's Open Questions section). Tile shows `auth_expired` state on 401 and prompts the user to re-paste cookies.
-- "Send Logs" tray menu item that bundles rotated logs + recent state snapshot for support.
-- Subscription "estimated $ value" tile (synthetic-dollar display via a hardcoded pricing table — kept separate from the cap math, which stays denominated in tokens).
-- Code signing investigation (Windows certificate, macOS notarization) if external users start appearing.
-- Integration robustness improvements informed by real failures observed in v0.1.
+Make the data update itself and project forward. No UI yet; the CLI gets "alive."
 
-### Phase 3 — v0.3 (breadth + cross-device)
+- File watcher (`notify` + debounce + a safety poll) so JSONL-derived numbers update without a manual re-run.
+- Predictive reset: EWMA over the rolling window with an explicit warm-up state machine (Insufficient → Uncertain → Confident) so the predictor never lies immediately after a window reset.
+- `--watch` (long-running refresh loop) and a `statusline` mode for shell prompts / status bars.
+- Integration robustness improvements informed by the first weeks of real v0.1 use.
 
-Features that need a base of confidence on the desktop story before expanding outward.
+### Phase 3 — v0.3: UI
 
-- Ubuntu 24.04 LTS+ GNOME support — the third tier from the original PRD, deferred until the Windows + macOS experience is solid because GNOME tray behavior is the most fragile of the three.
-- Cross-device sync via a small relay (GitHub Gist / Cloudflare KV / iCloud Drive) — one Balanze identity reads and writes the same numbers across devices. Sets up Android + hosted dashboard cleanly.
-- Export and snapshot reporting.
-- Additional provider connectors as repeated personal need surfaces (Gemini, Cursor, OpenRouter, others).
+The Tauri surface, and the secret-storage and provider work that naturally rides with a real settings screen.
 
-### Phase 4+ — v1.0 and beyond
+- Tauri 2 popover/tray UI: color-shifting gauge tray icon, hidden-on-launch popover with one progress bar per Anthropic cadence + reset sublines, burn sparkline, the predictive countdown from v0.2, and the 4-quadrant tiles. `tauri-plugin-single-instance` wired so the user cannot double-launch.
+- Settings UI: paste API keys, save to OS keychain — and with a real key-input box the keychain code is exercised on both platforms, so this is where the **`keyring` → `keyring-core` (v4) migration** lands (fixes the v0.1 Windows keychain no-op).
+- Degraded-state events surfaced visually (stale data shown with a warning rather than blanked).
+- Optional full dashboard window: per-provider detail, recent trends, source/confidence indicators, troubleshooting.
+- Alerts for spend thresholds, credits/quota below threshold, subscription approaching cap, reset windows, and connector failure / stale data — thresholds informed by v0.1–v0.2 observation, configured in the new settings UI.
+- Anthropic Console integration via the session-cookie paste-from-DevTools flow (cookie-paste UX needs the UI; tile shows an `auth_expired` state and prompts a re-paste on 401).
 
-The original PRD's long-tail vision, contingent on the product proving sticky enough on the desktop to justify mobile and hosted surfaces.
+### Phase 4 — v0.4: Distribution
 
-- Android companion app — read-only feed of the desktop's state via Phase 3's sync layer.
+Make it installable without a Rust toolchain.
+
+- Signed binaries: Windows code-signing certificate, macOS notarization.
+- Packaged installers (MSI/NSIS, DMG/app) via GitHub Releases; Homebrew tap and WinGet manifest.
+- Auto-update via the Tauri updater pointed at the Releases JSON manifest.
+- "Send Logs" menu item bundling rotated logs + a recent state snapshot for support.
+
+### Phase 5+ — v1.0 and beyond
+
+The long-tail vision, contingent on the product proving sticky on the desktop.
+
+- Ubuntu 24.04 LTS+ GNOME support — deferred until the Windows + macOS experience is solid (GNOME tray behavior is the most fragile of the three).
+- Cross-device sync via a small relay (GitHub Gist / Cloudflare KV / iCloud Drive) — one Balanze identity reading/writing the same numbers across devices; sets up Android + hosted dashboard cleanly.
+- Additional provider connectors as repeated personal need surfaces (Gemini, Cursor, OpenRouter, others); export/snapshot reporting.
+- Android companion app — read-only feed of the desktop's state via the sync layer.
 - Hosted web dashboard for wallboard / TV use, reusing the normalized backend contracts.
 
 ## Open questions
 
 Items still genuinely unresolved at the product level. The design doc carries the technical open questions and spike plan.
 
-- Which provider metrics are realistically obtainable through stable official integration versus inference? Step-1 spike of v0.1 will resolve the Anthropic Console question concretely; broader provider coverage in later phases will need similar investigation per provider.
+- Which provider metrics are realistically obtainable through stable official integration versus inference? The v0.1 Phase-0 spike resolved the Anthropic side (official Usage & Cost API is enterprise/admin-gated → NO-GO for the modal user; JSONL-derived estimate ships instead). The Anthropic Console cookie-paste path is a v0.3 research item; broader provider coverage in later phases needs similar per-provider investigation.
 - Should onboarding ask users to choose a trust mode, such as "official only" versus "include estimated subscription metrics"? Deferred — v0.1 marks every metric with its source per the Transparency requirement, which may make an explicit trust-mode setting unnecessary.
 - How much locally-stored history is needed before the product becomes meaningfully better than a simple current-status tool? v0.1 keeps a rolling-window-sized in-memory history; SQLite persistence is deferred to v0.2 unless startup re-parse latency becomes a real problem.
-- What is the right default alert threshold mix (Phase 2)? Decide after observing real-use patterns in v0.1 — premature thresholds are noise.
+- What is the right default alert threshold mix (alerts land in v0.3)? Decide after observing real-use patterns through v0.1–v0.2 — premature thresholds are noise.

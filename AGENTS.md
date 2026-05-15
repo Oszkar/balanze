@@ -35,7 +35,7 @@ Apply at all times:
 
 - **12-Factor App** — Config in env, stateless processes where possible, strict dev/prod parity.
 - **DRY** — No duplication of domain logic. JSONL parsing happens in one crate; rolling-window math in one crate; etc.
-- **YAGNI** — No speculative abstractions. The v0.1 design has 10 crates (8 shipped + `predictor` + `watcher` planned); don't add an 11th because it "might be useful."
+- **YAGNI** — No speculative abstractions. The crate set is fixed and enumerated in the Repo Map (plus `predictor` + `watcher` still planned for v0.2); don't add a new crate because it "might be useful" — the Repo Map is the allowlist.
 - **KISS** — Simplest viable implementation.
 - **PoLP** — Least privilege always. Keychain reads happen in one crate; nothing else touches the `keyring` crate.
 - **MVP Bias** — Solo developer; ship fast, document tech debt, do not gold-plate, do not architect for imaginary scale.
@@ -69,7 +69,7 @@ Correctness > Cleverness · Security > Convenience · Simplicity > Flexibility �
 There is no internal rate-limit gate — the only thing being rate-limited is *us* against Anthropic and OpenAI. Rules:
 
 - OpenAI billing endpoints: poll at most every 5 minutes. Billing data updates infrequently; aggressive polling burns the user's rate quota for no gain.
-- Anthropic Console (if step-1 spike finds a usable source): poll at most every 5 minutes. Respect any rate-limit headers; back off on 429 with exponential backoff (start 30s, cap 10 min).
+- Anthropic Console (the v0.3 cookie-paste integration, if/when it lands): poll at most every 5 minutes. Respect any rate-limit headers; back off on 429 with exponential backoff (start 30s, cap 10 min).
 - Claude JSONL: local file I/O, no rate limit, but read **incrementally** via per-file byte cursor (`HashMap<PathBuf, FileCursor { byte_pos, mtime, size }>`). Full reparse only on launch or `refresh_now()`. Detect atomic rewrites (size unchanged but mtime changed) and truncations (size < cursor).
 - Tray icon repaint: 30s cadence, **deduped** by `(ColorBucket, title_text)`. Never call `tray.set_icon` if the bucket and title haven't changed since the last paint.
 
@@ -100,7 +100,7 @@ Default level: `INFO` for app modules, `WARN` for the parser (DEBUG-per-file JSO
 Balanze reads:
 - The user's own local Claude JSONL files at `~/.claude/projects/**/*.jsonl` (created by their own Claude Code installation — no scraping, no remote calls).
 - OpenAI's documented billing API (`/v1/usage`, `/v1/dashboard/billing/*` — these are official surfaces; we use the same auth the user already configured for their account).
-- Anthropic Console (if step-1 spike finds an accessible endpoint) — if this requires scraping rather than a documented API, the data must be marked `DataSource::AnthropicConsoleScrape` with `Confidence::Estimated` per the PRD's transparency principle, and the user must be informed it may break.
+- Anthropic Console (the v0.3 cookie-paste integration) — if this requires scraping rather than a documented API, the data must be marked `DataSource::AnthropicConsoleScrape` with `Confidence::Estimated` per the PRD's transparency principle, and the user must be informed it may break.
 
 This is for personal use only. Not affiliated with Anthropic or OpenAI. If a provider revokes access or their UI changes break a scrape, the right answer is to degrade gracefully (mark data stale) and never to circumvent their controls.
 
@@ -155,18 +155,19 @@ balanze/
 │   └── src/
 │       ├── main.rs             entrypoint shim
 │       └── lib.rs              single_instance plugin + tray menu via app.tray_by_id("main")
-├── crates/                     workspace members; populated as build sequence progresses
-│   ├── .gitkeep                placeholder so the dir is committed
-│   ├── claude_parser/          parser + walker + dedup + IncrementalParser. Exposes `find_claude_projects_dir()` (XDG + dual-path), `dedup_events()` (collapse by `(message_id, request_id)`; ~50% reduction on real data — Claude Code emits each assistant message multiple times), and `IncrementalParser` (stateful per-file byte cursor with truncation + same-size-rewrite detection, for the future watcher). 49 unit tests + smoke example against real ~/.claude/projects/
-│   ├── anthropic_oauth/        client + credentials loader + types. Calls `GET api.anthropic.com/api/oauth/usage` and parses dynamic-keyed response with curated display labels (`Current 5-hour session` / `Sonnet only (7 days)` / etc.) and titlecased fallback for unknown future cadence keys. 14 unit tests + 5 wiremock tests + smoke example against the real endpoint. Refresh-token flow on 401 is TODO for step 4.
-│   ├── window/                 pure rolling-window math over `UsageEvent` slices: 5h main window + 30m burn rate + per-model breakdown (descending by tokens; ties name-asc for determinism). No I/O, no logging above debug. 10 unit tests covering empty / outside-window / boundary inclusion / burn under-threshold / burn at-threshold / burn-window narrower than main / sort order / tied-model determinism / same-model aggregation.
-│   ├── predictor/              (planned) EWMA + warm-up state machine
-│   ├── openai_client/          Admin Costs API client (`GET /v1/organization/costs` with `sk-admin-…` Bearer). Sums spend across daily buckets, groups by line_item. 18 parser unit tests (incl. 6 for the HTTP-error-body redactor) + 5 wiremock. 401 → AuthInvalid; 403 → InsufficientScope with admin-key hint. Originally targeted the legacy credit_grants endpoint; pivoted in May 2026 when OpenAI stopped issuing legacy user keys.
-│   ├── state_coordinator/      actor crate. Owns the in-memory `Snapshot` (canonical merge of all sources); receives `StateMsg::Update`/`Query`/`Refresh`/`SettingsChanged` on a bounded mpsc; notifies a `Sink` for side effects. Tauri-free — src-tauri later provides a `TauriSink` that does `app.emit("usage_updated", ...)` + `tray.set_icon`/`set_title`. 12 unit tests (one per StateMsg variant + mpsc backpressure burst + handle-clone fanout + snapshot merge_partial + record_error).
-│   ├── watcher/                (planned) notify + 1s debounce + 60s safety poll
-│   ├── keychain/               `keyring` wrapper, service="me.oszkar.Balanze". Only crate that imports keyring per §4 #5. 1 inline test + 1 #[ignore]'d real-keychain smoke. **KNOWN ISSUE**: keyring v3.6.3 set→get round-trip fails on Windows (smoke test fails). CLI honors `BALANZE_OPENAI_KEY` env var as a fallback. Migration to keyring-core (v4 successor) is a v0.2 task — see Known Issues section below.
-│   ├── settings/               config serde + atomic write (tmp + rename), schema versioned. Path via `directories::ProjectDirs`. 9 unit tests. Stores non-secrets only — keys live in keychain crate.
-│   └── balanze_cli/            binary entry-point that composes the backend crates into a Snapshot. Same composition role that `src-tauri/` will play when the front-end lands; useful as a dev tool and as a reference for the eventual Tauri wiring. Binary name: `balanze-cli` (the `balanze` artifact name is reserved for the src-tauri tray app to avoid a workspace build collision).
+├── crates/                     workspace members (one-line purpose; mechanism lives in the code + the boundaries below)
+│   ├── claude_parser/          owns the Claude JSONL wire format: parse + walker + `dedup_events()` (by `(message_id, request_id)`) + `IncrementalParser` (byte-cursor, for the future watcher) + `find_claude_projects_dir()` (XDG + dual-path)
+│   ├── claude_cost/            pure JSONL→**estimated**-$ synthesis vs a vendored LiteLLM price subset. Infallible (unknown models → `skipped_models`). i64 micro-USD / i128 intermediates / saturating. Output is subscription-leverage, never real spend
+│   ├── anthropic_oauth/        only HTTP client for `GET /api/oauth/usage` AND only reader of `~/.claude/.credentials.json`. Curated cadence labels + titlecased fallback. Refresh-token-on-401 is a later-phase TODO
+│   ├── window/                 pure rolling-window math: 5h main window + 30m burn rate + per-model breakdown (desc by tokens, ties name-asc for determinism)
+│   ├── predictor/              (planned, v0.2) EWMA + warm-up state machine
+│   ├── openai_client/          only HTTP client for the Admin Costs API (`GET /v1/organization/costs`, `sk-admin-…`). 401 → AuthInvalid; 403 → InsufficientScope (admin-key hint). Redacts `sk-` in error bodies
+│   ├── codex_local/            **only reader of `~/.codex/`** (boundary #11). Latest `rate_limits.primary` → one `CodexQuotaSnapshot` (no stream/dedup in v0.1). Honors `CODEX_CONFIG_DIR`
+│   ├── state_coordinator/      actor: owns the canonical `Snapshot`; bounded-mpsc `StateMsg` loop; notifies a `Sink`. Tauri-free (src-tauri later provides a `TauriSink`)
+│   ├── watcher/                (planned, v0.2) notify + debounce + safety poll
+│   ├── keychain/               the ONLY importer of `keyring` (boundary #5). **Known bug:** keyring 3.6.3 set→get fails on Windows; `BALANZE_OPENAI_KEY` env-var fallback; keyring-core (v4) migration is v0.3 — see §10a
+│   ├── settings/               owns `settings.json` (boundary #6): serde + atomic write, schema-versioned, non-secrets only
+│   └── balanze_cli/            glue entry-point composing the crates into a `Snapshot` (mirrors what src-tauri will do). Binary name `balanze-cli`; `balanze` is reserved for the src-tauri tray app (artifact-name collision)
 └── .github/
     └── workflows/
         ├── ci.yml              fmt + clippy + cargo test + svelte-check on Win + Mac
@@ -205,15 +206,16 @@ Tauri commands ───────────────StateMsg::Query─�
 Strict layering — agents must respect:
 
 1. **`claude_parser` knows the JSONL wire format; nothing else does.** Other crates consume `UsageEvent` structs only. Don't leak schema details (field names, optionality, line-format quirks) outside this crate.
-2. **`window` and `predictor` are pure functions.** No I/O, no `tokio::spawn`, no logging above `debug` level. Pure functions on event slices.
+2. **`window`, `predictor`, and `claude_cost` are pure functions.** No I/O, no `tokio::spawn`, no logging above `debug` level. Pure functions on event slices (`claude_cost` also takes a `&PriceTable`). `claude_cost` is infallible by design — unknown models route to `skipped_models`, never an error.
 3. **`anthropic_oauth` and `openai_client` (and v0.2's Console source) are the only HTTP clients.** They expose typed `fetch_*` async functions that return `anyhow::Result<Partial>`. Other crates do not import `reqwest`. `anthropic_oauth` is additionally the only reader of `~/.claude/.credentials.json` — see §3.4 for the secrets discipline this implies.
 4. **`watcher` owns `notify` + the debounce + the 60s safety poll.** No other crate imports `notify`. The watcher exposes an `mpsc::Receiver<WatchEvent>` and that's it.
 5. **`keychain` is the only caller of the `keyring` crate.** All secret reads and writes route through this crate's API. Settings UI commands invoke `keychain::set/get/delete`, not `keyring::*` directly.
 6. **`settings` owns the `settings.json` file on disk.** Atomic writes (tmp + rename). No other crate reads or writes this file.
 7. **`state_coordinator` is the ONLY writer of the in-memory Snapshot AND the ONLY caller of Tauri tray APIs (`tray.set_icon`, `tray.set_title`).** Pollers send `StateMsg::Update(SourcePartial)`; the coordinator merges, dedups by `last_painted`, emits to Tauri, paints the tray. The 30s tray ticker is a dumb `StateMsg::Refresh` sender — it never touches OS tray state itself.
-8. **`src-tauri` and `balanze_cli` are the two glue entry-points.** Both compose the backend crates into a `Snapshot`. Neither contains business logic; if you're tempted to add a `#[tauri::command] fn compute_…` in `src-tauri` or a parallel computation in `balanze_cli`, that computation belongs in a crate. The two entry-points must produce identical `Snapshot`s for identical inputs; when they diverge, the underlying crate is wrong.
+8. **`src-tauri` and `balanze_cli` are the two glue entry-points.** Both compose the backend crates into a `Snapshot`. Neither contains business logic; if you're tempted to add a `#[tauri::command] fn compute_…` in `src-tauri` or a parallel computation in `balanze_cli`, that computation belongs in a crate. The two entry-points must produce identical `Snapshot`s for identical inputs; when they diverge, the underlying crate is wrong. **Open tech debt:** the source-orchestration policy (per-source fetch + error mapping + the "JSONL fail ⇒ both Anthropic cells None, no duplicate error" and "Codex absent ⇒ Ok(None)" rules) currently lives only in `balanze_cli::build_snapshot`. When v0.2's watcher/`--watch` (or v0.3's Tauri pollers) add a second composition path, this MUST be extracted into a shared crate so the two cannot silently diverge — see the `// TODO(v0.2):` marker on `build_snapshot`. Not extracted in v0.1 because the second consumer doesn't exist yet (YAGNI).
 9. **Frontend talks to backend only via the IPC contract.** Commands: `get_snapshot`, `get_history`, `refresh_now`, `set_api_key`, `get_settings`, `set_settings`. Events: `usage_updated`, `degraded_state`. Adding a new command or event requires a design-doc update first.
-10. **Currency math uses `i64` micro-USD.** Float arithmetic on money is a footgun (`0.1 + 0.2 != 0.3`, threshold comparisons flake near boundaries). Convert to `f64` ONLY at the display boundary.
+10. **Currency math uses `i64` micro-USD.** Float arithmetic on money is a footgun (`0.1 + 0.2 != 0.3`, threshold comparisons flake near boundaries). Convert to `f64` ONLY at the display boundary. `claude_cost` additionally keeps per-token prices in i64 nano-USD with i128 intermediates and saturates at `i64::MAX`.
+11. **`codex_local` knows the Codex rollout-JSONL format and is the only reader of `~/.codex/`.** Exposes `CodexQuotaSnapshot`; no other crate parses Codex session files or imports its schema. Analogous to boundary #1 for `claude_parser`. Honors the `CODEX_CONFIG_DIR` override.
 
 ## 5. Quick Start for Agents
 
@@ -232,7 +234,7 @@ Avoid drive-by refactors.
 
 - `docs/prd.md` — product spec and phasing.
 - The design doc at `~/.gstack/projects/balanze/oszka-*-design-*.md` — architecture, IPC contract, state coordination diagram, predictor state machine, test strategy, build sequence. This is the load-bearing document; if a section in this AGENTS.md is missing detail, check there.
-- The backend data layer is shipped (8 crates: claude_parser, anthropic_oauth, openai_client, settings, keychain, window, state_coordinator, balanze_cli). The Tauri frontend is still scaffold only (greet form + tray menu). As remaining crates land (`predictor`, `watcher`) this AGENTS.md grows with them — each adds an entry to the Repo Map and may add a row to the Validation Matrix.
+- The backend data layer is shipped — see the Repo Map for the crate set. The Tauri frontend is still scaffold only (greet form + tray menu). As the planned crates land (`predictor`, `watcher`) this AGENTS.md grows with them — each adds a Repo Map line and may add a Validation Matrix row.
 
 ### Local dev (for agents that can run commands)
 
@@ -261,22 +263,17 @@ Before claiming work is done:
 
 | Change touches | Required gates |
 |---|---|
-| Any `**/*.rs` in workspace | `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` |
-| `crates/claude_parser/**` | All Rust gates + fixture-based tests (happy / file missing / partial line / schema drift / empty / permission denied) + dedup tests (none / no-dups / first-wins / order / missing-key passthrough / mixed) + IncrementalParser tests (decision logic + tempfile cycles) + smoke run against real `~/.claude/projects/` data |
-| `crates/window/**` | All Rust gates + inline unit tests covering empty / outside-window / boundary inclusion / burn under-threshold / burn at-threshold / burn-window narrower than main / sort order / tied-model determinism / same-model aggregation |
-| `crates/predictor/**` | All Rust gates + fixture-based unit tests covering warm-up (Insufficient) / steady-burst (Confident) / high-variance (Uncertain) / mid-window reset (back to Insufficient) |
-| `crates/state_coordinator/**` | All Rust gates + one unit test per `StateMsg` variant + an mpsc-saturation test |
-| `crates/anthropic_oauth/**` | All Rust gates + wiremock unit tests (happy / 401-then-successful-refresh / 401-then-failed-refresh / network offline / unexpected response shape). Manual verification with the real credentials file on each developer machine. |
-| `crates/openai_client/**` | All Rust gates + 12 parser unit tests (multi-bucket aggregation, line-item sort, null-line-item-as-unknown, missing-amount-skipped, truncation flag, amount-as-string-OR-number deserializer) + 6 redaction unit tests (sk- pattern, multi-key, short-string passthrough, length truncation) + 5 wiremock integration tests (happy with admin Bearer + query params, 401, 403 with admin-key hint, 500, invalid-JSON). |
-| `crates/watcher/**` | All Rust gates + `tokio::time::pause()` timing tests (notify+debounce single-fire / burst dedupe / safety poll on silence / notify-during-safety-poll dedupe) |
-| `crates/keychain/**` | All Rust gates + 1 inline keys-constant test + 1 `#[ignore]` real-keychain smoke. Run smoke manually on each developer machine before tagging a release (cross-OS keychain in CI is unreliable). |
-| `crates/settings/**` | All Rust gates + 9 unit tests (load missing → defaults, load corrupt → Malformed, atomic save uses tmp + rename, schema version handling, unknown extra-fields tolerated, minimal version-only file loads). |
-| `src-tauri/src/**/*.rs` | All Rust gates + `bun run tauri dev` smoke test (tray icon appears, click opens window, Quit exits cleanly) |
-| `src-tauri/tauri.conf.json` | All Rust gates + verify `bun run tauri build --no-bundle` succeeds (validates config without the slow bundling step) |
+| Any `**/*.rs` in workspace | `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo fmt --all -- --check` |
+| Any crate's logic | That crate's own tests stay green **and** you add/extend a test for the specific invariant you changed. For pure crates (`window`, `claude_cost`, future `predictor`): write the test **before** the impl change. Don't weaken an assertion to make it pass — see §7. |
+| `crates/claude_parser/**` | + the documented failure modes still pass (file missing / partial final line / schema drift / empty / permission denied) + a real-data smoke (`cargo run -p claude_parser --example claude_parser_smoke`) |
+| `crates/keychain/**` | + run the `#[ignore]`'d real-keychain smoke **manually on each OS before tagging a release** — cross-OS keychain in CI is unreliable, so CI green ≠ keychain works |
+| `crates/{anthropic_oauth,openai_client}/**` | + the wiremock suite (the only thing exercising the HTTP layer); manual check against the real endpoint/credentials on the dev machine |
+| `src-tauri/src/**/*.rs` | + `bun run tauri dev` smoke (tray icon appears, click opens window, Quit exits cleanly) |
+| `src-tauri/tauri.conf.json` | + `bun run tauri build --no-bundle` succeeds (validates config without the slow bundle) |
 | `src/**/*.{svelte,ts}` | `bun run check`; visually verify in `bun run tauri dev` |
-| Workspace `Cargo.toml` | `cargo check --workspace` to verify all crates pick up changes; `cargo tree --workspace --duplicates` if you added a dep, to catch version skew |
-| `.github/workflows/*.yml` | YAML lints clean; for release.yml changes, trigger via `workflow_dispatch` after merge to verify before tagging |
-| `docs/prd.md`, `README.md`, `AGENTS.md` | Cross-reference internal links; check code snippets still match `tauri.conf.json` and current crate names; verify Phasing section in `prd.md` matches reality if scope shifted |
+| Workspace `Cargo.toml` | `cargo check --workspace`; `cargo tree --workspace --duplicates` if you added a dep |
+| `.github/workflows/*.yml` | YAML lints clean; for `release.yml`, trigger via `workflow_dispatch` after merge before tagging |
+| `docs/prd.md`, `README.md`, `AGENTS.md` | Cross-reference internal links; check snippets still match current crate/command names; verify `prd.md` Phasing matches reality if scope shifted |
 
 `cargo clippy -D warnings` is **strict**. The repo passes clippy clean from the scaffold and CI enforces it. Do not add `#[allow]` to silence lints unless there's a documented technical reason in a comment immediately above.
 
@@ -292,25 +289,15 @@ State the exact command and request output from a human. Don't claim the work is
 - Tests encode invariants — treat them accordingly. Tests should be strict.
 - **When you change a load-bearing pure function, add a test before changing the implementation.** Especially true for `window`, `predictor`, `claude_parser`.
 
-### Test locations
+### Where tests live
 
-Current state: ~123 tests across 8 shipped crates (7 backend + balanze_cli glue); 2 crates still planned (predictor, watcher, plus the Tauri smoke). One `#[ignore]`'d keychain smoke. As crates land, the table fills in.
+- **Unit tests:** inline `#[cfg(test)] mod tests` in each crate's `src/`. This is the bulk of coverage; `cargo test --workspace` is the gate.
+- **Integration:** `crates/<crate>/tests/` — `anthropic_oauth` / `openai_client` use `wiremock`; `balanze_cli/tests/integration_4quadrant.rs` is the end-to-end composition test (real `claude_parser → claude_cost → Snapshot` + `codex_local → Snapshot` against committed fixtures, with a fixed `now` so it can't go wall-clock-flaky).
+- **Real-data smokes:** `cargo run -p <crate> --example <name>` against the developer's actual `~/.claude` / `~/.codex` — not run in CI; the maintainer runs them before tagging.
+- **`#[ignore]`'d:** the real-keychain smoke (CI keychain is unreliable; run manually per §6).
+- **Planned, not yet built:** `predictor` + `watcher` (v0.2), the `src-tauri` Tauri smoke (v0.3), any frontend tests.
 
-| Subject | Location | What's there |
-|---|---|---|
-| Claude JSONL parsing | `crates/claude_parser/src/{parser,walker,dedup,incremental}.rs` (inline `#[cfg(test)]`) + `examples/smoke.rs` | 49 unit tests: parser (happy/zero-cache/extra-fields/blank/malformed/missing-ts/blank-skips/error-line-numbers/partial-final-line/message_id-request_id extraction/missing-ids) + walker (recursive find/missing-root/empty-dir/mtime-sort) + `find_claude_projects_dir` (XDG present/absent/empty, dot-claude existence, dot-config-claude fallback, XDG-over-dot-claude preference) + dedup (8: empty/no-dups/first-wins/order-preserved/None msg_id passthrough/None req_id passthrough/same-msg-different-req distinct/mixed keyed-and-unkeyed) + IncrementalParser (18: 6 pure-decision + 5 prefix-length + 7 tempfile cycles for first-read / unchanged / append / partial-then-complete / truncation / invalidate / missing). Smoke example runs against real `~/.claude/projects/` (`cargo run --release -p claude_parser --example claude_parser_smoke`). |
-| Claude OAuth usage | `crates/anthropic_oauth/src/{client,credentials}.rs` (inline `#[cfg(test)]`) + `tests/wiremock_tests.rs` + `examples/smoke.rs` | 14 unit tests covering parser response-shape happy/null-cadences/unknown-key-titlecase/sort-order/malformed-cadence/non-object-root + credentials happy/minimal/missing/malformed/missing-key. 5 wiremock integration tests for HTTP layer: happy/401/500/invalid-json/missing-org-header. Smoke example runs against the real endpoint (`cargo run --release -p anthropic_oauth --example anthropic_oauth_smoke`). Refresh-token flow lands in step 4. |
-| Rolling window | `crates/window/src/lib.rs` (inline `#[cfg(test)]`) | 10 unit tests: empty events / outside-window / window-start boundary inclusion / single-event token sum / burn under threshold / burn at threshold / burn-window narrower than main / by-model sort descending / tied-model alphabetical determinism / same-model aggregation. Pure functions; no fixtures, no I/O. |
-| Predictor state machine | `crates/predictor/tests/` | (planned) warm-up (Insufficient) / steady-burst (Confident ±10%) / high-variance (Uncertain) / mid-window reset (back to Insufficient) |
-| OpenAI billing client | `crates/openai_client/src/client.rs` (inline `#[cfg(test)]`) + `tests/wiremock_tests.rs` | 12 parser unit tests (multi-bucket aggregation, line-item sort, null-line-item-as-unknown, missing-amount-skipped, truncation flag, amount-as-string-OR-number deserializer, etc.) + 5 wiremock integration tests (happy with admin Bearer + query params, 401 → AuthInvalid, 403 → InsufficientScope with admin-key hint, 500, invalid-JSON). |
-| StateCoordinator actor | `crates/state_coordinator/src/{snapshot,coordinator}.rs` (inline `#[cfg(test)]`) | 12 unit tests: snapshot (5: merge_partial per source clears matching _error, record_error preserves data, record_error routes correctly) + coordinator (7: Update happy → merge + on_snapshot, Update Err → record_error + on_degraded, Query returns current Snapshot, Refresh re-notifies sink, SettingsChanged is non-panicking, mpsc-burst-no-drops with tight 4-slot channel + 32 messages, handle clone shares same coordinator). |
-| File watcher | `crates/watcher/tests/` | (planned) `tokio::time::pause()` timing tests |
-| Settings serde | `crates/settings/src/lib.rs` (inline `#[cfg(test)]`) | 9 unit tests: load missing → defaults, load corrupt → Malformed, atomic save uses tmp + rename, schema version handling, unknown extra-fields tolerated, minimal version-only file loads. |
-| Keychain | `crates/keychain/src/lib.rs` (inline `#[cfg(test)]`) | 1 inline keys-constant test + 1 `#[ignore]`'d real-keychain smoke (documents the v3 Windows bug; re-runs manually). |
-| Tauri command smoke | `src-tauri/tests/smoke.rs` | (planned) boot app with fixture data dir, assert `usage_updated` event fires, `get_snapshot` returns expected shape |
-| Frontend | none yet | Manual verification in `bun run tauri dev`. If complexity grows, Vitest is the conventional choice for a Svelte 5 SPA |
-
-When a test moves from "planned" to "shipped," update this table in the same commit.
+What each crate must keep covered is the §6 matrix's "that crate's invariant" rule — the authority is the tests in the tree, not a count here.
 
 ## 8. Change Control
 
@@ -338,7 +325,7 @@ Add tests when behavior changes or bug fixes could regress. Prefer tests that en
 - Be concise. Short bullets, concrete next steps.
 - Ask targeted questions early when requirements are ambiguous.
 - Present 1–3 options with trade-offs when decisions are needed.
-- Push back on: security risk, architectural violations, overengineering, violation of best practices, premature scope expansion (this is a side project — alerts and dashboard are Phase 2, not v0.1, no matter how easy they look).
+- Push back on: security risk, architectural violations, overengineering, violation of best practices, premature scope expansion (this is a side project — alerts and dashboard are v0.3, the UI phase, not v0.1, no matter how easy they look).
 - Be correct first, agreeable second.
 - Do not add busywork (summary docs, status reports, recap markdown files) unless explicitly asked.
 - Persist until the task is complete or genuinely blocked; if blocked, state what you tried and what you need.
@@ -353,13 +340,13 @@ Add tests when behavior changes or bug fixes could regress. Prefer tests that en
   `BALANZE_OPENAI_KEY` env var, which takes precedence over the keychain.
   Real fix is migrating to `keyring-core` (the v4 successor crate, which uses
   an explicit "store" initialization pattern rather than the v3 implicit
-  default backend). Scheduled for v0.2 alongside the Tauri settings UI, where
+  default backend). Scheduled for v0.3 alongside the Tauri settings UI, where
   the user will paste their key into a real input box anyway and the
   keychain code will be exercised on both Win and macOS during development.
 
 ## 10. Troubleshooting
 
-The v0.1 backend data layer is shipped (8 crates, 123 tests); the Tauri tray UI is still scaffold. This section captures the footguns the design surfaced plus anything observed in development.
+The v0.1 backend data layer is shipped; the Tauri tray UI is still scaffold. This section captures the footguns the design surfaced plus anything observed in development.
 
 ### "Tray icon doesn't appear" or "two tray icons in the menu bar"
 
@@ -406,8 +393,8 @@ The `settings` crate must use the atomic-write pattern: write to `settings.json.
 
 ### "Anthropic Console scrape stopped working overnight"
 
-Expected. Console UI changes will break scrapes regularly — that's why the design defers this to v0.2 and treats it as best-effort. The user-facing fix is to mark the data as stale via `DegradedState::parse_error` and inform the user. Do not try to "make the scrape more robust" by spending a week on it; if the official endpoint isn't there, that's the answer.
+Expected. Console UI changes will break scrapes regularly — that's why the design defers this to v0.3 and treats it as best-effort. The user-facing fix is to mark the data as stale via `DegradedState::parse_error` and inform the user. Do not try to "make the scrape more robust" by spending a week on it; if the official endpoint isn't there, that's the answer.
 
 ### "I want to test against a fixture directory of JSONL"
 
-Once `claude_parser` exists, point it at any directory shaped like `~/.claude/projects/` (anonymized excerpts in a `crates/claude_parser/tests/fixtures/` are the canonical test set). For end-to-end testing of the live data path, set the parse-root env var before launch (variable name TBD in step 2).
+The committed fixtures are the canonical set: `crates/balanze_cli/tests/fixtures/` (a small Claude-JSONL + Codex-rollout tree the E2E test runs against). For ad-hoc real-data checks, the example smokes read your actual `~/.claude` / `~/.codex`. There is no dedicated parse-root env override in v0.1 — discovery follows `HOME` / `XDG_CONFIG_HOME` (and `CODEX_CONFIG_DIR` for Codex); point those at a fixture tree if you need to redirect it.

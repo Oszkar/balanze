@@ -50,7 +50,14 @@ fn main() -> ExitCode {
     let cmd = args.get(1).map(String::as_str).unwrap_or("status");
 
     let result = match cmd {
-        "status" | "--json" => cmd_status(&args),
+        // `--json` and `--sections` are top-level aliases for
+        // `status --json` / `status --sections`: they're peer output
+        // modes, the compact view's footer + the README advertise the
+        // bare form, and cmd_status already inspects the full argv (and
+        // applies the documented --json-wins precedence) regardless of
+        // which token routed here. `-v` is intentionally NOT an alias —
+        // it's a modifier on a mode, never advertised standalone.
+        "status" | "--json" | "--sections" => cmd_status(&args),
         "setup" => cmd_setup(),
         "set-openai-key" => cmd_set_openai_key(),
         "clear-openai-key" => cmd_clear_openai_key(),
@@ -533,7 +540,7 @@ fn print_help() {
     eprintln!(
         "                                Recommended on Windows until the keychain backend is"
     );
-    eprintln!("                                migrated to keyring v4 in v0.2.");
+    eprintln!("                                migrated to keyring v4 in v0.3.");
     eprintln!();
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
@@ -862,7 +869,7 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
         println!("OPENAI SPEND: not configured");
         println!("  Set the BALANZE_OPENAI_KEY env var to a `sk-admin-…` admin key, or run");
         println!("  `balanze-cli set-openai-key` (note: keychain backend currently unreliable on");
-        println!("  Windows; env var is the recommended path until v0.2).");
+        println!("  Windows; env var is the recommended path until v0.3).");
         println!(
             "  Create an admin key at https://platform.openai.com/settings/organization/admin-keys"
         );
