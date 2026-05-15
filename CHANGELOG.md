@@ -14,10 +14,12 @@ tagged release yet (the maintainer is dogfooding before tagging). Once tagged,
 the contents below move under a `[0.1.0] - YYYY-MM-DD` heading.
 
 ### Added
-- **`balanze-cli`** binary: `status` (default 4-quadrant compact view with a
-  confidence legend) / `--sections` (per-source detail) / `--json` (machine
-  Snapshot) / `-v` / `setup` / `set-openai-key` / `clear-openai-key` /
-  `settings` / `help`.
+- **`balanze-cli`** binary. Subcommands: `status` (default — 4-quadrant
+  compact view with a confidence legend) / `setup` / `set-openai-key` /
+  `clear-openai-key` / `settings` / `help`. `status` takes `--sections`
+  (per-source detail), `--json` (machine Snapshot; wins over `--sections`),
+  and `-v` (account-identifying fields); `--sections` / `--json` are also
+  accepted as bare top-level shortcuts (e.g. `balanze-cli --json`).
 - **Four-quadrant matrix**: Anthropic quota % (OAuth) · Anthropic API $
   *estimated* (JSONL × LiteLLM prices — subscription leverage, not real spend)
   · OpenAI Codex quota % (`~/.codex/sessions/`) · OpenAI API $ real billed

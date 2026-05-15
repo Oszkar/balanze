@@ -44,7 +44,7 @@ A small team or technically inclined individual who wants a local dashboard and 
 
 The MVP is the eventual smallest-viable end-state described in the rest of this document. The Phasing section below splits delivery into v0.1, v0.2, v0.3, v0.4, and v1+ stages (themes: Data → Liveness → UI → Distribution → long tail).
 
-- Ship on Windows 11, macOS 15+, and Ubuntu 24.04 LTS+ GNOME.
+- Ship the desktop story on Windows 11 and macOS 15+ (CLI in v0.1 → tray UI in v0.3); Ubuntu 24.04 LTS+ GNOME follows in v1+ — see the Supported platforms table and Phasing for the per-stage rollout.
 - Support at least OpenAI and Anthropic as the first two providers.
 - Show current usage snapshot, reset timing where available, spend or credits where available, and lightweight recent history.
 - Allow threshold alerts for spend, quota, or estimated remaining usage.
@@ -252,9 +252,9 @@ A complete, honest **data layer** exposed as a CLI (`balanze-cli`). No tray UI y
 - OpenAI Codex quota % from the local Codex CLI rollout files (`~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-*.jsonl`) — server-computed `rate_limits.primary`, a real number.
 - OpenAI API spend via the documented Admin Costs API (`GET /v1/organization/costs`, `sk-admin-…` Bearer).
 - `balanze-cli setup` — interactive wizard: checks Anthropic OAuth presence, checks Codex sessions, prompts for the OpenAI admin key (masked input), validates it live, stores it in the OS keychain. No Anthropic admin-key prompt (no admin API in v0.1).
-- `--sections` (per-source detail) and `--json` (machine-readable snapshot) output modes. (These were originally slated for v0.2 but shipped early in v0.1 alongside the 4-quadrant integration.)
+- `--sections` (per-source detail) and `--json` (machine-readable snapshot) output modes — flags on `status`, and also accepted as bare top-level shortcuts (`balanze-cli --sections` / `balanze-cli --json`). (Originally slated for v0.2 but shipped early in v0.1 alongside the 4-quadrant integration.)
 - Local secure storage (keychain for secrets; `directories`-crate per-OS paths for non-secret settings). Known Windows keychain limitation documented, with a `BALANZE_OPENAI_KEY` env-var fallback.
-- **Distribution: source only.** `cargo install --git https://github.com/Oszkar/balanze`. No binaries, no installers, no GitHub Releases in v0.1 — the audience (org-admin tinkerer power-users) accepts the Rust-toolchain prerequisite. Linux works via `cargo install` (no separate test matrix; tray UI is later anyway).
+- **Distribution: source only.** `cargo install --git https://github.com/Oszkar/balanze balanze_cli` (the repo root is a virtual workspace, so the package is named explicitly; it builds the `balanze-cli` binary). No binaries, no installers, no GitHub Releases in v0.1 — the audience (org-admin tinkerer power-users) accepts the Rust-toolchain prerequisite. Linux works via `cargo install` (no separate test matrix; tray UI is later anyway).
 - **Not in v0.1:** tray UI, popover, predictor, file watcher, alerts, dashboard window. All deliberately moved to later phases.
 
 ### Phase 2 — v0.2: Liveness

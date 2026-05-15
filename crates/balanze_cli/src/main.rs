@@ -50,7 +50,14 @@ fn main() -> ExitCode {
     let cmd = args.get(1).map(String::as_str).unwrap_or("status");
 
     let result = match cmd {
-        "status" | "--json" => cmd_status(&args),
+        // `--json` and `--sections` are top-level aliases for
+        // `status --json` / `status --sections`: they're peer output
+        // modes, the compact view's footer + the README advertise the
+        // bare form, and cmd_status already inspects the full argv (and
+        // applies the documented --json-wins precedence) regardless of
+        // which token routed here. `-v` is intentionally NOT an alias —
+        // it's a modifier on a mode, never advertised standalone.
+        "status" | "--json" | "--sections" => cmd_status(&args),
         "setup" => cmd_setup(),
         "set-openai-key" => cmd_set_openai_key(),
         "clear-openai-key" => cmd_clear_openai_key(),

@@ -95,7 +95,9 @@ prerequisite; signed binaries / Homebrew / WinGet are the v0.4 Distribution
 phase. Requires Rust 1.77+.
 
 ```bash
-cargo install --git https://github.com/Oszkar/balanze --bin balanze-cli
+# The repo root is a virtual workspace, so name the package (balanze_cli);
+# it builds the `balanze-cli` binary.
+cargo install --git https://github.com/Oszkar/balanze balanze_cli
 balanze-cli setup      # run this first — wizard for the OpenAI admin key
 balanze-cli            # 4-quadrant status
 ```
