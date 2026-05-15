@@ -23,8 +23,11 @@ use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEF
 ///
 /// `async fn` in a trait is stable since Rust 1.75 (MSRV here is 1.77). We
 /// only ever use STATIC dispatch (`compose<S: SnapshotSources>`), never
-/// `dyn SnapshotSources`, so the `async_fn_in_trait` lint's Send-bound
-/// caveat does not apply — hence the documented allow.
+/// `dyn SnapshotSources`. With static dispatch the future's `Send`-ness is
+/// inferred at the concrete call site — e.g. the watcher's `tokio::spawn` on
+/// the multi-thread runtime resolves it automatically, since the watcher's own
+/// `SnapshotSources` impl returns `Send` futures and `compose` holds nothing
+/// non-`Send` across an `.await`.
 #[allow(async_fn_in_trait)]
 pub trait SnapshotSources {
     /// Anthropic OAuth usage. The impl owns credential load + proactive
@@ -253,5 +256,41 @@ mod tests {
             now() - window::DEFAULT_WINDOW,
             "no oauth ⇒ now-relative window"
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_present_anchors_window_to_five_hour_reset() {
+        use anthropic_oauth::CadenceBar;
+        let n = now();
+        let reset = n + chrono::Duration::hours(2); // anchored window [reset-5h, reset)
+        let oauth = ClaudeOAuthSnapshot {
+            cadences: vec![CadenceBar {
+                key: "five_hour".to_string(),
+                display_label: "Current 5-hour session".to_string(),
+                utilization_percent: 42.0,
+                resets_at: reset,
+            }],
+            extra_usage: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            org_uuid: None,
+            fetched_at: n,
+        };
+        let f = Fake {
+            oauth: Some(Ok(oauth)),
+            events: Some(Ok((vec![one_event(n)], 1))),
+            ..Default::default()
+        };
+        let snap = compose(&f, n).await;
+        assert!(snap.claude_oauth.is_some());
+        assert!(snap.claude_oauth_error.is_none());
+        let w = snap.claude_jsonl.expect("jsonl populated").window;
+        assert_eq!(
+            w.window_start,
+            reset - window::DEFAULT_WINDOW,
+            "a present five_hour reset must anchor the window (NOT now - 5h)"
+        );
+        assert!(snap.anthropic_api_cost.is_some());
+        assert!(snap.anthropic_api_cost_error.is_none());
     }
 }

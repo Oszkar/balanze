@@ -3604,6 +3604,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
+name = "snapshot_composer"
+version = "0.1.0"
+dependencies = [
+ "anthropic_oauth",
+ "anyhow",
+ "chrono",
+ "claude_cost",
+ "claude_parser",
+ "codex_local",
+ "openai_client",
+ "state_coordinator",
+ "tokio",
+ "tracing",
+ "window",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
