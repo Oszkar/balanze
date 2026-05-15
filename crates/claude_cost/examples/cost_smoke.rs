@@ -24,7 +24,7 @@
 use std::fs;
 
 use claude_cost::{compute_cost, load_bundled_prices, PRICE_TABLE_COMMIT, PRICE_TABLE_DATE};
-use claude_parser::{find_jsonl_files, parse_str};
+use claude_parser::{dedup_events, find_jsonl_files, parse_str};
 
 fn main() -> anyhow::Result<()> {
     let base_dirs = directories::BaseDirs::new()
@@ -67,10 +67,16 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let raw_count = all_events.len();
+    // Claude Code emits each assistant message multiple times; without dedup
+    // this example over-counts ~2x vs the real CLI path (which dedups in
+    // `load_and_dedup_claude_events`). Dedup here so the smoke total
+    // reconciles with `balanze-cli` and with what Anthropic actually sees.
+    dedup_events(&mut all_events);
     println!(
-        "Parsed {} raw events ({} files had parse errors)",
-        all_events.len(),
-        parse_error_files
+        "Parsed {raw_count} raw events ({parse_error_files} files had parse errors); \
+         {} after (message_id, request_id) dedup",
+        all_events.len()
     );
 
     let prices = load_bundled_prices()?;

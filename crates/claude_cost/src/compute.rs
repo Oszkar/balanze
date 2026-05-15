@@ -178,7 +178,9 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
 
 /// Multiply (tokens, optional nano-per-token) → i64 micro-USD with
 /// `i128` intermediate to avoid overflow, **rounding nano→micro to nearest
-/// (half away from zero)** before the final cast, and saturating at
+/// (half up — correct here only because the product is non-negative; this
+/// is NOT general half-away-from-zero, which would need a sign check)**
+/// before the final cast, and saturating at
 /// `i64::MAX` / `i64::MIN` on the cast itself. Returns 0 when the
 /// per-token price is `None` (e.g. older models that lack cache_read
 /// pricing).

@@ -1,13 +1,13 @@
 //! Balanze CLI — composes the backend crates into a single status view.
 //!
 //! Subcommands:
-//!   balanze                       Print pretty status (default)
-//!   balanze status [--json]       Same as above; --json is machine-readable
-//!   balanze setup                 Interactive wizard: check Anthropic OAuth + Codex + OpenAI key
-//!   balanze set-openai-key        Read sk-... from stdin, store in OS keychain (non-interactive)
-//!   balanze clear-openai-key      Remove the OpenAI key from the keychain
-//!   balanze settings              Print current settings.json contents
-//!   balanze help                  This help
+//!   balanze-cli                      Print pretty status (default)
+//!   balanze-cli status [--json]       Same as above; --json is machine-readable
+//!   balanze-cli setup                 Interactive wizard: check Anthropic OAuth + Codex + OpenAI key
+//!   balanze-cli set-openai-key        Read sk-... from stdin, store in OS keychain (non-interactive)
+//!   balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
+//!   balanze-cli settings              Print current settings.json contents
+//!   balanze-cli help                  This help
 //!
 //! When the Tauri front-end lands, the same composition logic will live
 //! behind the `get_snapshot` IPC command in `src-tauri`. This CLI is the
@@ -81,11 +81,11 @@ fn cmd_status(args: &[String]) -> Result<()> {
     let sections = args.iter().any(|a| a == "--sections");
     let snapshot = tokio::runtime::Runtime::new()?.block_on(build_snapshot());
 
-    // Precedence (documented in `balanze help`): --json wins over
+    // Precedence (documented in `balanze-cli help`): --json wins over
     // --sections if both are passed. --json is the scripting/machine
     // path; if a caller asked for it, honor it even alongside a stray
     // --sections. Not an error — silently ignoring --sections here is
-    // the least-surprising behavior for `balanze status --json --sections`.
+    // the least-surprising behavior for `balanze-cli status --json --sections`.
     if json_mode {
         println!("{}", serde_json::to_string_pretty(&snapshot)?);
     } else if sections {
@@ -94,7 +94,7 @@ fn cmd_status(args: &[String]) -> Result<()> {
         print_sections(&snapshot, verbose);
     } else {
         // Default: glanceable 4-quadrant matrix mirroring the readiness
-        // summary from `balanze setup`. Run `balanze --sections` for the
+        // summary from `balanze-cli setup`. Run `balanze-cli --sections` for the
         // extended per-source breakdown.
         print_compact(&snapshot);
     }
@@ -102,7 +102,7 @@ fn cmd_status(args: &[String]) -> Result<()> {
 }
 
 fn cmd_set_openai_key() -> Result<()> {
-    // Accept the key as a positional argument (`balanze set-openai-key sk-…`)
+    // Accept the key as a positional argument (`balanze-cli set-openai-key sk-…`)
     // or, if no argv is provided, read one line from stdin. We always use
     // `read_line` regardless of TTY status — `read_to_string` waited for EOF
     // and made the command look hung under `cargo run` on Windows.
@@ -118,7 +118,7 @@ fn cmd_set_openai_key() -> Result<()> {
         let n = io::stdin().read_line(&mut input)?;
         if n == 0 {
             return Err(anyhow!(
-                "stdin closed without input. Tip: pass the key as an argument instead — `balanze set-openai-key sk-...`"
+                "stdin closed without input. Tip: pass the key as an argument instead — `balanze-cli set-openai-key sk-...`"
             ));
         }
         input
@@ -170,7 +170,7 @@ fn cmd_clear_openai_key() -> Result<()> {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// `balanze setup` — interactive auth wizard.
+// `balanze-cli setup` — interactive auth wizard.
 //
 // Flow:
 //   [1/4] Check Anthropic OAuth credentials file presence.
@@ -352,7 +352,7 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
                 }
                 Err(e) => {
                     eprintln!("  ✗ Existing key rejected: {e}");
-                    eprintln!("    Re-run `balanze setup` and choose to replace.");
+                    eprintln!("    Re-run `balanze-cli setup` and choose to replace.");
                     OpenAiKeyStatus::ValidationFailed
                 }
             });
@@ -364,7 +364,7 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
     eprintln!("  Validating against OpenAI Admin Costs API...");
     if let Err(e) = validate_openai_key_blocking(&key) {
         eprintln!("  ✗ {e}");
-        eprintln!("    Key NOT saved. Re-run `balanze setup` with a working key.");
+        eprintln!("    Key NOT saved. Re-run `balanze-cli setup` with a working key.");
         return Ok(OpenAiKeyStatus::ValidationFailed);
     }
 
@@ -394,7 +394,7 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
     // propagate loudly. A silent save failure here would leave
     // `settings.providers.openai_enabled = false` while the key IS in
     // the keychain — exactly the kind of desync that makes "why doesn't
-    // it show up in `balanze status`?" debugging painful.
+    // it show up in `balanze-cli status`?" debugging painful.
     let mut s = settings::load().unwrap_or_default();
     s.providers.openai_enabled = true;
     settings::save(&s)?;
@@ -499,8 +499,8 @@ fn print_help() {
     eprintln!("Balanze — local-first AI usage tracker.");
     eprintln!();
     eprintln!("Subcommands:");
-    eprintln!("  balanze                       Print 4-quadrant compact status (default)");
-    eprintln!("  balanze status [--json] [--sections] [-v]");
+    eprintln!("  balanze-cli                      Print 4-quadrant compact status (default)");
+    eprintln!("  balanze-cli status [--json] [--sections] [-v]");
     eprintln!("                                Same as above. Flags:");
     eprintln!("                                  --sections   per-source detailed view");
     eprintln!("                                               (cadence bars, model breakdown,");
@@ -511,18 +511,20 @@ fn print_help() {
     eprintln!("                                  -v/--verbose adds account-identifying fields");
     eprintln!("                                               (org uuid, codex session_id)");
     eprintln!("                                               — safe at home, dox-y in public.");
-    eprintln!("  balanze setup                 Interactive wizard. Checks Anthropic OAuth,");
+    eprintln!("  balanze-cli setup                 Interactive wizard. Checks Anthropic OAuth,");
     eprintln!(
         "                                Codex sessions, prompts for OpenAI admin key (masked"
     );
     eprintln!(
         "                                input), validates it live, stores it. Run this first."
     );
-    eprintln!("  balanze set-openai-key [KEY]  Non-interactive: stores KEY in the OS keychain.");
+    eprintln!(
+        "  balanze-cli set-openai-key [KEY]  Non-interactive: stores KEY in the OS keychain."
+    );
     eprintln!("                                Reads from stdin if KEY is omitted.");
-    eprintln!("  balanze clear-openai-key      Remove the OpenAI key from the keychain");
-    eprintln!("  balanze settings              Print current settings.json contents");
-    eprintln!("  balanze help                  This help");
+    eprintln!("  balanze-cli clear-openai-key      Remove the OpenAI key from the keychain");
+    eprintln!("  balanze-cli settings              Print current settings.json contents");
+    eprintln!("  balanze-cli help                  This help");
     eprintln!();
     eprintln!("Environment overrides:");
     eprintln!(
@@ -536,6 +538,18 @@ fn print_help() {
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
 
+// TODO(v0.2): this function is the source-orchestration policy — per-source
+// fetch, error→string mapping, the "JSONL load fails ⇒ both claude_jsonl and
+// anthropic_api_cost stay None without duplicating the error" rule, and the
+// "Codex not installed ⇒ Ok(None), not an error" rule. When `src-tauri` lands
+// its pollers feeding `state_coordinator`, this exact policy will be
+// reimplemented on the poller side and the two entry-points can silently
+// diverge, violating the AGENTS.md §4 #8 parity contract ("identical inputs ⇒
+// identical Snapshot"). The fix is to extract this orchestration into a shared
+// crate (or a `state_coordinator` compose fn) that both `balanze_cli` and the
+// pollers call. NOT done now on purpose: the second consumer (pollers) does
+// not exist yet, so extracting today is YAGNI — the marker exists so the
+// extraction happens WITH the pollers, not after a divergence bug.
 async fn build_snapshot() -> Snapshot {
     let now = Utc::now();
 
@@ -759,7 +773,7 @@ async fn fetch_openai() -> Result<Option<OpenAiCosts>> {
             Ok(Some(costs))
         }
         Err(OpenAiError::AuthInvalid { .. }) => Err(anyhow!(
-            "OpenAI admin key rejected (HTTP 401). Run `balanze set-openai-key` with a fresh `sk-admin-…` key."
+            "OpenAI admin key rejected (HTTP 401). Run `balanze-cli set-openai-key` with a fresh `sk-admin-…` key."
         )),
         Err(OpenAiError::InsufficientScope { .. }) => Err(anyhow!(
             "OpenAI returned 403. organization/costs requires an admin API key (`sk-admin-…`), not a project or service-account key. Generate one at https://platform.openai.com/settings/organization/admin-keys."
@@ -847,7 +861,7 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
     } else {
         println!("OPENAI SPEND: not configured");
         println!("  Set the BALANZE_OPENAI_KEY env var to a `sk-admin-…` admin key, or run");
-        println!("  `balanze set-openai-key` (note: keychain backend currently unreliable on");
+        println!("  `balanze-cli set-openai-key` (note: keychain backend currently unreliable on");
         println!("  Windows; env var is the recommended path until v0.2).");
         println!(
             "  Create an admin key at https://platform.openai.com/settings/organization/admin-keys"
@@ -1006,7 +1020,16 @@ fn print_compact(snapshot: &Snapshot) {
     println!("Anthropic           {anth_quota:38}  {anth_cost}");
     println!("OpenAI              {openai_quota:38}  {openai_cost}");
     println!();
-    println!("Run `balanze --sections` for per-source detail, or `balanze --json` for machine-readable output.");
+    // The four cells are NOT the same kind of number. Two are live
+    // server-reported utilization, one is a local estimate, one is a
+    // real bill. Flattening them into a grid makes them look uniformly
+    // authoritative; this legend re-establishes the confidence split so
+    // a ~$4,000 estimate is never mistaken for ~$4,000 of real spend.
+    println!("Quota % = live server-reported utilization. API $: Anthropic =");
+    println!("estimated list-price for local Claude Code tokens (subscription");
+    println!("leverage — NOT money you were billed); OpenAI = real billed spend.");
+    println!();
+    println!("Run `balanze-cli --sections` for per-source detail, or `balanze-cli --json` for machine-readable output.");
 }
 
 fn compact_anthropic_quota(s: &Snapshot) -> String {
@@ -1042,7 +1065,7 @@ fn compact_anthropic_cost(s: &Snapshot) -> String {
         // "nothing to compute". Treat it like the no-data case.
         (Some(cost), _) if cost.total_event_count == 0 => "○ no jsonl data yet".to_string(),
         (Some(cost), _) => format!(
-            "~{} (estimated, jsonl)",
+            "~{} (est. list-price, not billed)",
             micro_usd_to_display_dollars(cost.total_micro_usd)
         ),
         (None, Some(_)) => "✗ cost synthesis failed".to_string(),
@@ -1073,7 +1096,7 @@ fn compact_openai_cost(s: &Snapshot) -> String {
     match (&s.openai, &s.openai_error) {
         (Some(costs), _) => format!("${:.2} (admin costs)", costs.total_usd),
         (None, Some(_)) => "✗ admin costs fetch failed".to_string(),
-        (None, None) => "○ not configured (run `balanze setup`)".to_string(),
+        (None, None) => "○ not configured (run `balanze-cli setup`)".to_string(),
     }
 }
 

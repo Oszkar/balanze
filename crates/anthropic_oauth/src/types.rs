@@ -4,7 +4,13 @@ use thiserror::Error;
 
 /// Subset of `~/.claude/.credentials.json::claudeAiOauth` that Balanze reads.
 /// We never write back to disk; everything is consumed read-only.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// `Debug` is hand-written (NOT derived) so `access_token` / `refresh_token`
+/// cannot leak via a stray `{:?}` / `tracing::debug!(?creds)`. Per AGENTS.md
+/// §3.4 these are secrets identical to OpenAI keys — never logged at any
+/// level. `Credentials` keeps a derived `Debug`; it delegates to this impl,
+/// so the wrapper is safe too.
+#[derive(Clone, Deserialize)]
 pub struct CredentialsClaudeAiOauth {
     #[serde(rename = "accessToken")]
     pub access_token: String,
@@ -19,6 +25,24 @@ pub struct CredentialsClaudeAiOauth {
     pub rate_limit_tier: Option<String>,
     #[serde(default)]
     pub scopes: Vec<String>,
+}
+
+impl std::fmt::Debug for CredentialsClaudeAiOauth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialsClaudeAiOauth")
+            .field("access_token", &"<redacted>")
+            // Reveal presence (Some/None) but never the value — useful for
+            // diagnosing "no refresh token" without leaking the token.
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("expires_at", &self.expires_at)
+            .field("subscription_type", &self.subscription_type)
+            .field("rate_limit_tier", &self.rate_limit_tier)
+            .field("scopes", &self.scopes)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

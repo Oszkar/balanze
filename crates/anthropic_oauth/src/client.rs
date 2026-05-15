@@ -67,7 +67,7 @@ pub async fn fetch_usage(
         _ => {
             return Err(OAuthError::UnexpectedStatus {
                 status: status.as_u16(),
-                body,
+                body: redact_for_display(&body),
             });
         }
     }
@@ -79,6 +79,44 @@ pub async fn fetch_usage(
         rate_limit_tier,
         Utc::now(),
     )
+}
+
+/// Redact secret-shaped substrings before a response body is surfaced via
+/// `OAuthError::UnexpectedStatus` (whose `Display` the CLI prints and logs).
+/// Deliberately mirrors `openai_client::redact_for_display`: the two HTTP
+/// clients are the only crates that touch provider response bodies
+/// (AGENTS.md §4 #3), and a shared util crate for exactly two callers would
+/// violate YAGNI (§2). The `sk-` rule also covers Anthropic OAuth tokens,
+/// which are `sk-ant-oat01-…` / `sk-ant-ort01-…` shaped, so a reflected
+/// bearer cannot leak into the error string.
+fn redact_for_display(body: &str) -> String {
+    const MAX_LEN: usize = 500;
+    let truncated: String = if body.chars().count() > MAX_LEN {
+        let head: String = body.chars().take(MAX_LEN).collect();
+        format!("{head}…[truncated, {} bytes]", body.len())
+    } else {
+        body.to_string()
+    };
+
+    let mut out = String::with_capacity(truncated.len());
+    let mut rest = truncated.as_str();
+    while let Some(idx) = rest.find("sk-") {
+        out.push_str(&rest[..idx]);
+        let after = &rest[idx + 3..];
+        let key_len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .unwrap_or(after.len());
+        if key_len >= 15 {
+            out.push_str("sk-…REDACTED");
+            rest = &after[key_len..];
+        } else {
+            // Not key-shaped; emit the literal "sk-" and continue scanning.
+            out.push_str("sk-");
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn parse_response(
@@ -117,7 +155,16 @@ fn parse_response(
                     });
                 }
                 Err(e) => {
-                    warn!("oauth/usage: failed to parse extra_usage block: {e}");
+                    // Log only serde's error *category*, never the Display
+                    // string: for a type-mismatch the message can quote the
+                    // offending value, and `extra_usage` carries the user's
+                    // billing figures (monthly_limit / used_credits), which
+                    // §3.4 treats as sensitive — never logged at any level.
+                    warn!(
+                        "oauth/usage: failed to parse extra_usage block \
+                         (serde category: {:?}; raw values suppressed)",
+                        e.classify()
+                    );
                 }
             }
             continue;
@@ -339,5 +386,33 @@ mod tests {
         assert_eq!(titlecase_key("foo_bar_baz"), "Foo Bar Baz");
         assert_eq!(titlecase_key(""), "");
         assert_eq!(titlecase_key("a_b"), "A B");
+    }
+
+    #[test]
+    fn redact_masks_anthropic_oauth_token() {
+        // A reflected Anthropic OAuth bearer is sk-ant-oat01-… shaped and
+        // must never survive into the error string.
+        let body = r#"{"error":"bad token sk-ant-oat01-AbCdEf0123456789xyz used"}"#;
+        let out = redact_for_display(body);
+        assert!(!out.contains("AbCdEf0123456789xyz"), "token leaked: {out}");
+        assert!(
+            out.contains("sk-…REDACTED"),
+            "expected redaction marker: {out}"
+        );
+    }
+
+    #[test]
+    fn redact_passes_short_non_key_sk_prefix() {
+        // "sk-" not followed by 15+ key chars is ordinary text, not a secret.
+        let body = "the sk-1 ticket is unrelated";
+        assert_eq!(redact_for_display(body), body);
+    }
+
+    #[test]
+    fn redact_truncates_overlong_body() {
+        let body = "x".repeat(600);
+        let out = redact_for_display(&body);
+        assert!(out.contains("[truncated, 600 bytes]"), "got: {out}");
+        assert!(out.chars().count() < 600, "should be shortened");
     }
 }
