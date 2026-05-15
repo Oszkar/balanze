@@ -234,3 +234,20 @@ fn snapshot_serializes_with_new_cost_and_codex_fields() {
         "expected plan_type from fixture; got:\n{json}"
     );
 }
+
+#[test]
+fn window_anchors_to_supplied_reset() {
+    use chrono::Duration as ChronoDuration;
+    let events = load_fixture_events();
+    let now = chrono::Utc::now();
+    let reset = now + ChronoDuration::minutes(90);
+    let anchored = summarize_window(
+        &events,
+        now,
+        DEFAULT_WINDOW,
+        DEFAULT_BURN_WINDOW,
+        DEFAULT_MIN_BURN_EVENTS,
+        Some(reset),
+    );
+    assert_eq!(anchored.window_start, reset - DEFAULT_WINDOW);
+}

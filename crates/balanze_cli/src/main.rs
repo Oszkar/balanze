@@ -569,6 +569,14 @@ async fn build_snapshot() -> Snapshot {
         }
     };
 
+    // Anchor the JSONL rolling window to Anthropic's authoritative 5-hour
+    // reset when we have it (removes local clock-drift error); fall back to
+    // now-relative when OAuth is unavailable. AGENTS.md v0.1.1 / §7.
+    let window_anchor = claude_oauth
+        .as_ref()
+        .and_then(|s| s.cadences.iter().find(|c| c.key == "five_hour"))
+        .map(|c| c.resets_at);
+
     // JSONL events power BOTH the window summary (claude_jsonl) and the
     // API-rate cost synthesis (anthropic_api_cost). Read once, summarize
     // twice. If the load fails entirely, both downstream slots stay None
@@ -580,7 +588,12 @@ async fn build_snapshot() -> Snapshot {
     let mut anthropic_api_cost_error: Option<String> = None;
     match load_and_dedup_claude_events() {
         Ok((events, files_scanned)) => {
-            claude_jsonl = Some(summarize_for_jsonl_snapshot(&events, files_scanned, now));
+            claude_jsonl = Some(summarize_for_jsonl_snapshot(
+                &events,
+                files_scanned,
+                now,
+                window_anchor,
+            ));
             match compute_anthropic_api_cost(&events) {
                 Ok(cost) => {
                     info!(
@@ -685,6 +698,7 @@ fn summarize_for_jsonl_snapshot(
     events: &[UsageEvent],
     files_scanned: usize,
     now: DateTime<Utc>,
+    window_anchor: Option<DateTime<Utc>>,
 ) -> JsonlSnapshot {
     let window = summarize_window(
         events,
@@ -692,7 +706,7 @@ fn summarize_for_jsonl_snapshot(
         DEFAULT_WINDOW,
         DEFAULT_BURN_WINDOW,
         DEFAULT_MIN_BURN_EVENTS,
-        None,
+        window_anchor,
     );
     JsonlSnapshot {
         files_scanned,
