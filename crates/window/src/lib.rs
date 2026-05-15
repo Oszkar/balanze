@@ -34,7 +34,7 @@ pub struct ByModel {
 
 /// Result of [`summarize_window`] — aggregated state for one rolling window
 /// of `UsageEvent`s. Pure data, derivable from `(events, now, window,
-/// burn_window, min_burn_events)`.
+/// burn_window, min_burn_events, window_anchor)`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowSummary {
     pub window_start: DateTime<Utc>,
@@ -80,6 +80,12 @@ pub fn summarize_window(
         Some(reset) => reset - window,
         None => now - window,
     };
+    // When anchored, the cap window is the half-open interval
+    // [reset - window, reset): events at or after the server reset belong to
+    // the NEXT window, not this one. Unanchored (`None`) keeps the legacy
+    // open-ended `[now - window, ..)` behavior so existing callers are
+    // byte-identical.
+    let window_end = window_anchor; // Some(reset) => exclusive upper bound
     let burn_window_start = now - burn_window;
 
     let mut by_model_map: BTreeMap<String, (usize, u64)> = BTreeMap::new();
@@ -89,7 +95,8 @@ pub fn summarize_window(
     let mut burn_events: usize = 0;
 
     for ev in events {
-        if ev.ts >= window_start {
+        let in_main_window = ev.ts >= window_start && window_end.map_or(true, |end| ev.ts < end);
+        if in_main_window {
             total_events_in_window += 1;
             let tokens = ev.total_tokens();
             total_tokens_in_window = total_tokens_in_window.saturating_add(tokens);
@@ -420,5 +427,29 @@ mod tests {
         );
         assert_eq!(s.window_start, n - DEFAULT_WINDOW);
         assert_eq!(s.total_events_in_window, 1);
+    }
+
+    #[test]
+    fn anchored_window_excludes_events_at_or_after_reset() {
+        let n = now(); // 2026-05-14 12:00:00
+        let reset = n + Duration::hours(2); // anchored window [n-3h, n+2h)
+        let evs = [
+            ev(reset - Duration::minutes(1), "sonnet", 10, 5), // inside [.., reset)
+            ev(reset, "sonnet", 10, 5),                        // AT reset -> excluded
+            ev(reset + Duration::hours(1), "sonnet", 10, 5),   // after reset -> excluded
+        ];
+        let s = summarize_window(
+            &evs,
+            n,
+            DEFAULT_WINDOW,
+            DEFAULT_BURN_WINDOW,
+            DEFAULT_MIN_BURN_EVENTS,
+            Some(reset),
+        );
+        assert_eq!(s.window_start, reset - DEFAULT_WINDOW);
+        assert_eq!(
+            s.total_events_in_window, 1,
+            "only the pre-reset event is in the half-open [reset-window, reset)"
+        );
     }
 }
