@@ -128,6 +128,7 @@ fn full_pipeline_populates_claude_jsonl_in_snapshot() {
         DEFAULT_WINDOW,
         DEFAULT_BURN_WINDOW,
         DEFAULT_MIN_BURN_EVENTS,
+        None,
     );
     let jsonl = JsonlSnapshot {
         files_scanned: 1,

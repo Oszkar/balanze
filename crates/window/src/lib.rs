@@ -56,6 +56,12 @@ pub struct WindowSummary {
 /// burn-rate hint. Burn rate is `Some(tokens / burn_window_minutes)` only
 /// when at least `min_burn_events` events fall in the burn window.
 ///
+/// `window_anchor`: when `Some(reset)`, the main window is `[reset - window,
+/// reset)` — pinned to Anthropic's server-reported reset timestamp so the cap
+/// math is not skewed by local clock drift. `None` keeps the legacy
+/// `now - window` window for callers without an OAuth reset (degraded path).
+/// Burn math is always `now`-relative regardless of the anchor.
+///
 /// The function is pure: same input, same output. Defaults are exposed via
 /// the `DEFAULT_*` consts for callers that want the canonical 5h / 30m / 3.
 pub fn summarize_window(
@@ -64,8 +70,16 @@ pub fn summarize_window(
     window: Duration,
     burn_window: Duration,
     min_burn_events: usize,
+    window_anchor: Option<DateTime<Utc>>,
 ) -> WindowSummary {
-    let window_start = now - window;
+    // Anthropic's 5h cap window ENDS at the server-reported reset; the active
+    // window is [reset - window, reset). Anchoring removes local clock-drift
+    // error from the cap math (AGENTS.md v0.1.1). `None` keeps the legacy
+    // now-relative window for callers without an OAuth reset (degraded path).
+    let window_start = match window_anchor {
+        Some(reset) => reset - window,
+        None => now - window,
+    };
     let burn_window_start = now - burn_window;
 
     let mut by_model_map: BTreeMap<String, (usize, u64)> = BTreeMap::new();
@@ -152,6 +166,7 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         assert_eq!(s.total_events_in_window, 0);
         assert_eq!(s.total_tokens_in_window, 0);
@@ -170,6 +185,7 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         assert_eq!(s.total_events_in_window, 0);
         assert_eq!(s.total_tokens_in_window, 0);
@@ -185,6 +201,7 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         assert_eq!(s.total_events_in_window, 1);
         assert_eq!(s.total_tokens_in_window, 150);
@@ -213,6 +230,7 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         assert_eq!(s.total_events_in_window, 1);
         assert_eq!(s.total_tokens_in_window, 170); // 100 + 50 + 7 + 13
@@ -235,6 +253,7 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         assert_eq!(s.recent_burn_tokens_per_min, None);
     }
@@ -255,6 +274,7 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         assert_eq!(s.recent_burn_tokens_per_min, Some(150.0));
     }
@@ -275,6 +295,7 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         // All 3 are inside the 5h main window:
         assert_eq!(s.total_events_in_window, 3);
@@ -296,6 +317,7 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         let models: Vec<&str> = s.by_model.iter().map(|m| m.model.as_str()).collect();
         assert_eq!(models, vec!["opus", "sonnet", "haiku"]);
@@ -315,6 +337,7 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         // All tied at 100 tokens; expect alpha-ascending order preserved by
         // stable sort.
@@ -336,9 +359,48 @@ mod tests {
             DEFAULT_WINDOW,
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
+            None,
         );
         assert_eq!(s.by_model.len(), 1);
         assert_eq!(s.by_model[0].events, 3);
         assert_eq!(s.by_model[0].total_tokens, 525); // 150 + 300 + 75
+    }
+
+    #[test]
+    fn anchored_window_uses_reset_minus_window_not_now() {
+        let n = now(); // 2026-05-14 12:00:00
+        let reset = n + Duration::hours(2); // server says 5h window resets in 2h
+                                            // Event 4h before the reset → inside [reset-5h, reset); but it is
+                                            // 6h before `now`, so the OLD now-5h window would EXCLUDE it.
+        let e = ev(reset - Duration::hours(4), "sonnet", 100, 50);
+        let s = summarize_window(
+            &[e],
+            n,
+            DEFAULT_WINDOW,
+            DEFAULT_BURN_WINDOW,
+            DEFAULT_MIN_BURN_EVENTS,
+            Some(reset),
+        );
+        assert_eq!(s.window_start, reset - DEFAULT_WINDOW);
+        assert_eq!(
+            s.total_events_in_window, 1,
+            "anchored window must include it"
+        );
+    }
+
+    #[test]
+    fn none_anchor_is_identical_to_now_minus_window() {
+        let n = now();
+        let e = ev(n - Duration::hours(1), "sonnet", 10, 5);
+        let s = summarize_window(
+            &[e],
+            n,
+            DEFAULT_WINDOW,
+            DEFAULT_BURN_WINDOW,
+            DEFAULT_MIN_BURN_EVENTS,
+            None,
+        );
+        assert_eq!(s.window_start, n - DEFAULT_WINDOW);
+        assert_eq!(s.total_events_in_window, 1);
     }
 }

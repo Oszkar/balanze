@@ -692,6 +692,7 @@ fn summarize_for_jsonl_snapshot(
         DEFAULT_WINDOW,
         DEFAULT_BURN_WINDOW,
         DEFAULT_MIN_BURN_EVENTS,
+        None,
     );
     JsonlSnapshot {
         files_scanned,
