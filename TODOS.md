@@ -11,6 +11,13 @@ Each item:
 - **Depends on / blocked by**: prerequisites.
 - **Captured**: when + by which review.
 
+> **Promoted to the roadmap:** TODO-002 (criterion benchmarks for `claude_cost`
+> + `codex_local`) is no longer a loose deferred item — it is now scheduled in
+> `docs/prd.md` Phase 2 (v0.2 Track E), riding with the watcher so the live
+> refresh cadence has a measured performance budget. Removed here on
+> 2026-05-15 (reference-review roadmap consolidation) to avoid two sources of
+> truth.
+
 ---
 
 ## TODO-001 — Refresh script for the vendored LiteLLM price table
@@ -34,6 +41,7 @@ Each item:
 - Filter to `claude-*` keys (Anthropic subset only, ~5KB after filtering).
 - After refresh: update `Cargo.toml`'s `include_str!` path (or symlink), regenerate provenance const via `build.rs`, run `cargo test -p claude_cost`.
 - The script lives in `scripts/` (workspace-level), not inside the crate.
+- Note (2026-05-15): v0.2 Track C demotes the LiteLLM recompute to a *diagnostic fallback* (Claude Code's own pre-calculated cost becomes primary). This lowers TODO-001's priority but does not remove it — the fallback path still needs a current table for events lacking a pre-calculated cost.
 
 **Depends on / blocked by**:
 - claude_cost crate exists (v0.1).
@@ -43,35 +51,26 @@ Each item:
 
 ---
 
-## TODO-002 — Performance benchmarks for claude_cost + codex_local
+## TODO-003 — Uniformly redact serde error `Display` on the `ResponseShape` / JSON-parse paths
 
-**What**: criterion-based benchmarks for `claude_cost::compute_cost` and `codex_local::parse_str`/`dedup_events`/`IncrementalParser`.
+**What**: Run the serde error through `redact_for_display` (or use `e.classify()` instead of `{e}`) on the three top-level JSON-parse error sites: `anthropic_oauth/src/refresh.rs` (`refresh response: {e}`), `anthropic_oauth/src/client.rs:130` (`invalid JSON: {e}`), and `openai_client/src/client.rs:171`.
 
-**Why**: Both crates are O(events) and currently presumed fast. When v0.2's `watcher` arrives, the 30s tray repaint cadence needs both crates to run in well under 30s on realistic data. We have no baseline today. A regression in v0.3 (e.g., adding logging in a hot loop) could degrade performance silently. /benchmark consumes these to track trends across PRs.
+**Why**: A type-confused provider response (e.g. a 200 whose numeric field holds an `sk-…`-shaped string) makes serde's `Display` quote the offending value verbatim; that string flows into `OAuthError::ResponseShape` / the OpenAI equivalent, whose `Display` the CLI prints and logs. This is the exact leak class the team already hardened against for the nested `extra_usage` parse (`client.rs:157-168`, which logs only `e.classify()`). The top-level parse sites were never given the same treatment.
 
 **Pros**:
-- Quantitative answer to "is the parser fast enough?" — gut feel becomes a graph.
-- /benchmark skill detects regressions automatically.
-- v0.2 watcher work has measurable performance budget.
+- Closes a defense-in-depth secret-leak gap consistently across both HTTP clients.
+- Removes the inconsistency where only the nested billing parse is hardened.
 
 **Cons**:
-- criterion runs are slow in CI (~30s each); adds ~1 min to total CI time.
-- Pre-empts the question before there's real evidence either crate is slow (YAGNI risk).
-- Maintenance: benchmark code can rot if not run regularly.
+- Low realistic probability (requires a provider to return a 200 with a type-confused secret).
+- Touches two crates; wants its own small focused diff + a test per site.
 
 **Context**:
-- Targets:
-  - `claude_cost::compute_cost` over 10K / 100K / 1M synthetic UsageEvents.
-  - `codex_local::parse_str` over a 10MB / 100MB fixture JSONL file.
-  - `codex_local::IncrementalParser` cycle (first-read + append + skip-unchanged).
-- Crate layout: `crates/claude_cost/benches/`, `crates/codex_local/benches/`.
-- criterion is already a likely dev-dep (verify with `cargo tree`).
-- Run with `cargo bench --workspace`.
-- CI gate: not required (don't fail PR on regression); informational via /benchmark only.
+- Surfaced by the Task 1 code-quality review (Track A v0.1.1, commit `034ee17`). The reviewer explicitly recommended a single uniform pass over all three sites rather than a one-off patch in `refresh.rs` (patching one site alone creates an inconsistency).
+- Not a regression introduced by Task 1 — the pattern pre-exists at `client.rs:130` and in `openai_client`. Task 1 followed the established convention deliberately; this TODO is the convention-level fix.
+- Preferred fix: mirror the `client.rs:157-168` precedent (`e.classify()` only) OR wrap with the existing `redact_for_display`. Add a test per site: a 200 body with a secret-shaped value in a wrong-typed field → assert the error string contains no `sk-…` and (if redactor used) the `sk-…REDACTED` marker.
 
 **Depends on / blocked by**:
-- Both crates exist (v0.1).
-- /benchmark skill is set up (check `gstack` skill availability).
-- Best added when v0.2 watcher work starts (gives the benchmark a clear consumer).
+- Nothing. `redact_for_display` is already `pub(crate)` in `anthropic_oauth` (Task 1); `openai_client` has its own equivalent.
 
-**Captured**: 2026-05-14, /plan-eng-review session for v0.1 claude_cost + codex_local.
+**Captured**: 2026-05-15, Track A v0.1.1 Task 1 code-quality review.

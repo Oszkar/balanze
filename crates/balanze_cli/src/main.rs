@@ -19,8 +19,9 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use anthropic_oauth::{
-    fetch_usage, load as load_credentials, ClaudeOAuthSnapshot,
-    DEFAULT_API_BASE as ANTHROPIC_API_BASE,
+    fetch_usage, load_from as load_credentials_from, locate_credentials, refresh_access_token,
+    write_back, ClaudeOAuthSnapshot, CredentialsClaudeAiOauth, OAuthError, WriteBack,
+    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, DEFAULT_API_BASE as ANTHROPIC_API_BASE,
 };
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -557,6 +558,9 @@ fn print_help() {
 // pollers call. NOT done now on purpose: the second consumer (pollers) does
 // not exist yet, so extracting today is YAGNI — the marker exists so the
 // extraction happens WITH the pollers, not after a divergence bug.
+// Note: this policy now also includes the OAuth→window data dependency
+// (the five_hour_reset anchor feeding the JSONL window) — the v0.2
+// extraction must replicate it too or the two composition paths diverge.
 async fn build_snapshot() -> Snapshot {
     let now = Utc::now();
 
@@ -567,6 +571,13 @@ async fn build_snapshot() -> Snapshot {
             (None, Some(e.to_string()))
         }
     };
+
+    // Anchor the JSONL rolling window to Anthropic's authoritative 5-hour
+    // reset when we have it (removes local clock-drift error); fall back to
+    // now-relative when OAuth is unavailable. AGENTS.md v0.1.1 / §7.
+    let window_anchor = claude_oauth
+        .as_ref()
+        .and_then(ClaudeOAuthSnapshot::five_hour_reset);
 
     // JSONL events power BOTH the window summary (claude_jsonl) and the
     // API-rate cost synthesis (anthropic_api_cost). Read once, summarize
@@ -579,7 +590,12 @@ async fn build_snapshot() -> Snapshot {
     let mut anthropic_api_cost_error: Option<String> = None;
     match load_and_dedup_claude_events() {
         Ok((events, files_scanned)) => {
-            claude_jsonl = Some(summarize_for_jsonl_snapshot(&events, files_scanned, now));
+            claude_jsonl = Some(summarize_for_jsonl_snapshot(
+                &events,
+                files_scanned,
+                now,
+                window_anchor,
+            ));
             match compute_anthropic_api_cost(&events) {
                 Ok(cost) => {
                     info!(
@@ -684,6 +700,7 @@ fn summarize_for_jsonl_snapshot(
     events: &[UsageEvent],
     files_scanned: usize,
     now: DateTime<Utc>,
+    window_anchor: Option<DateTime<Utc>>,
 ) -> JsonlSnapshot {
     let window = summarize_window(
         events,
@@ -691,6 +708,7 @@ fn summarize_for_jsonl_snapshot(
         DEFAULT_WINDOW,
         DEFAULT_BURN_WINDOW,
         DEFAULT_MIN_BURN_EVENTS,
+        window_anchor,
     );
     JsonlSnapshot {
         files_scanned,
@@ -725,22 +743,98 @@ fn fetch_codex_quota() -> Result<Option<codex_local::CodexQuotaSnapshot>> {
     }
 }
 
+/// Refresh proactively if the access token is expired or expires within this.
+const REFRESH_MARGIN: Duration = Duration::seconds(300);
+
+/// Pure: true if `expires_at_ms` is in the past or within `margin` of now.
+fn token_needs_refresh(expires_at_ms: i64, now: DateTime<Utc>, margin: Duration) -> bool {
+    // Fix 5: saturating_sub so a pathological/hostile expires_at_ms near
+    // i64::MIN cannot cause an arithmetic underflow panic in debug builds.
+    now.timestamp_millis() >= expires_at_ms.saturating_sub(margin.num_milliseconds())
+}
+
+/// Refresh the bearer and best-effort persist it. A skipped/failed write is
+/// non-fatal as long as we hold a usable token in memory.
+async fn refresh_and_persist(
+    client: &reqwest::Client,
+    path: &std::path::Path,
+    oauth: CredentialsClaudeAiOauth,
+) -> Result<CredentialsClaudeAiOauth> {
+    let rt = oauth
+        .refresh_token
+        .as_deref()
+        .ok_or(OAuthError::RefreshTokenMissing)?;
+    let refreshed = refresh_access_token(
+        client,
+        CLAUDE_CODE_TOKEN_URL,
+        CLAUDE_CODE_CLIENT_ID,
+        rt,
+        Utc::now().timestamp_millis(),
+    )
+    .await?;
+    match write_back(path, &refreshed) {
+        Ok(WriteBack::Written) => info!("oauth: refreshed bearer, wrote back"),
+        Ok(WriteBack::SkippedDiskNewer) => {
+            info!("oauth: refreshed bearer; on-disk copy already newer, kept disk")
+        }
+        Err(e) => warn!("oauth: refresh ok but write-back failed (non-fatal): {e}"),
+    }
+    let mut next = oauth;
+    next.access_token = refreshed.access_token;
+    next.refresh_token = Some(refreshed.refresh_token);
+    next.expires_at = refreshed.expires_at_ms;
+    Ok(next)
+}
+
 async fn fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
-    let creds = load_credentials()?;
-    let oauth = creds.claude_ai_oauth;
+    let path = locate_credentials()?;
+    let creds = load_credentials_from(&path)?;
+    let mut oauth = creds.claude_ai_oauth;
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
         .build()?;
-    let snapshot = fetch_usage(
+
+    if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
+        info!("oauth: token expired/near-expiry — refreshing pre-flight");
+        oauth = refresh_and_persist(&client, &path, oauth).await?;
+    }
+
+    match fetch_usage(
         &client,
         ANTHROPIC_API_BASE,
         &oauth.access_token,
-        oauth.subscription_type,
-        oauth.rate_limit_tier,
+        oauth.subscription_type.clone(),
+        oauth.rate_limit_tier.clone(),
     )
-    .await?;
-    info!("oauth: fetched {} cadence bars", snapshot.cadences.len());
-    Ok(snapshot)
+    .await
+    {
+        Ok(s) => {
+            info!("oauth: fetched {} cadence bars", s.cadences.len());
+            Ok(s)
+        }
+        Err(OAuthError::AuthExpired) => {
+            // Note: if pre-flight already refreshed and we still 401, this does
+            // one more refresh+retry. Intentional and bounded — the retry uses
+            // `?`, so a second AuthExpired propagates (no loop). Do not "optimize"
+            // into a did-we-already-refresh flag; KISS over a rare cold path.
+            warn!("oauth: 401 despite pre-flight — one refresh+retry");
+            let oauth = refresh_and_persist(&client, &path, oauth).await?;
+            let s = fetch_usage(
+                &client,
+                ANTHROPIC_API_BASE,
+                &oauth.access_token,
+                oauth.subscription_type,
+                oauth.rate_limit_tier,
+            )
+            .await?;
+            info!(
+                "oauth: fetched {} cadence bars after refresh",
+                s.cadences.len()
+            );
+            Ok(s)
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Fetch this-month OpenAI costs if the user has configured an admin key.
@@ -1159,4 +1253,27 @@ fn fmt_int(n: u64) -> String {
         out.push(*b as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn token_needs_refresh_logic() {
+        use chrono::TimeZone;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 5, 15, 12, 0, 0).unwrap();
+        let margin = chrono::Duration::seconds(300);
+        let now_ms = now.timestamp_millis();
+        assert!(super::token_needs_refresh(now_ms - 1, now, margin));
+        assert!(super::token_needs_refresh(now_ms + 200_000, now, margin));
+        assert!(!super::token_needs_refresh(now_ms + 3_600_000, now, margin));
+        // Boundary: token expiring exactly `margin` from now → refresh now.
+        assert!(super::token_needs_refresh(
+            now_ms + margin.num_milliseconds(),
+            now,
+            margin
+        ));
+        // Fix 5: pathological/hostile expires_at near i64::MIN must not panic
+        // and must return true (absurdly-past expiry → needs refresh).
+        assert!(super::token_needs_refresh(i64::MIN, now, margin));
+    }
 }

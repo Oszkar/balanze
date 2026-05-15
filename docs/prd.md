@@ -248,7 +248,7 @@ A complete, honest **data layer** exposed as a CLI (`balanze-cli`). No tray UI y
 
 - Claude subscription utilization + reset clock via Anthropic's OAuth usage endpoint (`GET api.anthropic.com/api/oauth/usage`, Bearer from `~/.claude/.credentials.json`). Authoritative signal; no scraping. Searched in both `~/.claude/` and `~/.config/claude/`.
 - Per-event detail (per-model breakdown, burn rate, rolling window) via local JSONL parsing of `<claude_home>/projects/**/*.jsonl` — no API, no scraping, no auth. Events deduped by `(message_id, request_id)`.
-- **Anthropic API $ is an estimate, not real spend.** The Phase 0 spike confirmed Anthropic's official Usage & Cost API is gated to enterprise/org-admin accounts — inaccessible to the modal v0.1 user. Instead `claude_cost` synthesizes a list-price equivalent from the same JSONL × a vendored LiteLLM price table. For Pro/Max users this is "subscription leverage," **not** money billed; the CLI labels it as such and never presents it next to the real OpenAI bill without that distinction. (A real-spend source via the Admin API is a v0.2+ research note, contingent on the author obtaining enterprise access or a user requesting it.)
+- **Anthropic API $ is an estimate, not real spend.** The Phase 0 spike confirmed Anthropic's official Usage & Cost API is gated to enterprise/org-admin accounts — inaccessible to the modal v0.1 user. Instead `claude_cost` synthesizes a list-price equivalent from the same JSONL × a vendored LiteLLM price table. For Pro/Max users this is "subscription leverage," **not** money billed; the CLI labels it as such and never presents it next to the real OpenAI bill without that distinction. (v0.2's Track C redesigns this cell: Claude Code's *own* pre-calculated per-event cost becomes the primary figure with the recompute demoted to a diagnostic fallback, plus a reconciliation spike on the OAuth spend block — see Phase 2. A real prepaid-credit balance via the org-gated Admin API or the v0.3 Console cookie-paste path remains contingent on access.)
 - OpenAI Codex quota % from the local Codex CLI rollout files (`~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-*.jsonl`) — server-computed `rate_limits.primary`, a real number.
 - OpenAI API spend via the documented Admin Costs API (`GET /v1/organization/costs`, `sk-admin-…` Bearer).
 - `balanze-cli setup` — interactive wizard: checks Anthropic OAuth presence, checks Codex sessions, prompts for the OpenAI admin key (masked input), validates it live, stores it in the OS keychain. No Anthropic admin-key prompt (no admin API in v0.1).
@@ -259,12 +259,32 @@ A complete, honest **data layer** exposed as a CLI (`balanze-cli`). No tray UI y
 
 ### Phase 2 — v0.2: Liveness
 
-Make the data update itself and project forward. No UI yet; the CLI gets "alive."
+Make the data update itself, make the Anthropic API $ figure honest, and project forward. No UI yet; the CLI gets "alive." Delivery is sequenced into tracks so the riskiest work (a live loop) is preceded by the de-risking it depends on. Schema, new-crate, and secret-surface changes called out below pass through the `AGENTS.md` §8 change-control gate at implementation time.
+
+**v0.1.1 — base (Track A; ships first, may fold into the v0.2 base).** Two correctness fixes the live loop depends on:
+
+- **Proactive OAuth refresh.** Today the Anthropic OAuth bearer expires every ~7–8h and the CLI surfaces an `AuthExpired` error (re-run `claude login`). v0.1.1 refreshes the token *before* expiry (keepalive with a margin), not reactively on a 401 — a background watcher that silently goes stale every 8h is not "live." Touches the credentials secret surface (§3.4); the refresh mechanism (implement the refresh-token grant with atomic write-back vs. delegate to the `claude` CLI) is the one open design decision for the Track A plan.
+- **Anchor the cap window to the server reset.** The rolling window is currently computed as `now − 5h`; v0.1.1 anchors it to the OAuth-reported `resets_at` (the authoritative reset the same endpoint already returns), removing clock-drift error from the cap math.
+
+**Foundational de-risk (Track B; before any polling).** A single source-orchestration policy shared by the CLI and the future live loop, so the two composition paths cannot silently diverge; and the provider-politeness backoff (exponential, capped) the §3.1 API-politeness rule requires before any repeated polling exists.
+
+**Anthropic API $ — honesty redesign (Track C; the headline product change).** v0.1's Anthropic API $ cell is a list-price figure recomputed from local JSONL × a vendored price table. v0.2 stops leading with that synthetic number:
+
+- **Primary figure becomes Claude Code's own pre-calculated cost.** Claude Code already records a per-event cost in the JSONL Balanze parses; that is Claude's own number, not Balanze's reconstruction. v0.2 uses it as the primary figure (recompute-from-prices demoted to a diagnostic fallback for events that lack it). This is the ecosystem-standard honest framing and needs no new data source. Touches the parsed-event and `Snapshot` schemas (§8).
+- **Reconciliation spike on the OAuth spend block.** The OAuth usage endpoint already returns an `extra_usage` / `used_credits` block (currently suppressed because it doesn't reconcile with the claude.ai usage UI — see Known issues). v0.2 runs a bounded spike to reconcile its units/period against the live UI. If it reconciles, it is promoted to a real "Anthropic spend this month" figure with explicit source/confidence; if not, it stays diagnostic and the discrepancy is documented. Either outcome closes the open `extra_usage` question.
+- The true prepaid-credit **balance** (a real $ figure for pay-as-you-go API users) has no documented per-user API — the Admin API is org-admin-gated (Phase-0 NO-GO) and the Console cookie-paste path is fragile/unofficial. It stays a **v0.3** item, unchanged.
+
+**Official statusline source (Track D).** Claude Code's statusline hook hands its script a stdin feed containing real 5h/7d utilization %, the server `resets_at`, and a session cost — zero-auth, no-scrape, official. v0.2 ingests this as a corroborating source (a new schema-owning reader crate, §8) that cross-checks the OAuth numbers, and pairs naturally with the `statusline` output mode below.
+
+**Liveness features (Track E; the phase headline).**
 
 - File watcher (`notify` + debounce + a safety poll) so JSONL-derived numbers update without a manual re-run.
-- Predictive reset: EWMA over the rolling window with an explicit warm-up state machine (Insufficient → Uncertain → Confident) so the predictor never lies immediately after a window reset.
+- Predictive reset: EWMA over the rolling window with an explicit warm-up state machine (Insufficient → Uncertain → Confident) so the predictor never lies immediately after a window reset. Its output contract (a `Snapshot` field vs. a separate event) is a §8 decision made before the crate is built.
 - `--watch` (long-running refresh loop) and a `statusline` mode for shell prompts / status bars.
+- Performance benchmarks (criterion) for the cost/parse hot paths land here, so the live refresh cadence has a measured budget and regressions are caught rather than guessed at.
 - Integration robustness improvements informed by the first weeks of real v0.1 use.
+
+Sequencing: Track A → Track B → Track C → (Track D ∥) → Track E.
 
 ### Phase 3 — v0.3: UI
 
@@ -300,7 +320,7 @@ The long-tail vision, contingent on the product proving sticky on the desktop.
 
 Items still genuinely unresolved at the product level. The design doc carries the technical open questions and spike plan.
 
-- Which provider metrics are realistically obtainable through stable official integration versus inference? The v0.1 Phase-0 spike resolved the Anthropic side (official Usage & Cost API is enterprise/admin-gated → NO-GO for the modal user; JSONL-derived estimate ships instead). The Anthropic Console cookie-paste path is a v0.3 research item; broader provider coverage in later phases needs similar per-provider investigation.
+- Which provider metrics are realistically obtainable through stable official integration versus inference? The v0.1 Phase-0 spike resolved the Anthropic side at the API-availability level (official Usage & Cost API is enterprise/admin-gated → NO-GO for the modal user; JSONL-derived estimate shipped instead). v0.2's Track C narrows it further: Claude Code's own pre-calculated cost replaces the recompute as the primary figure, and a bounded spike reconciles the OAuth `extra_usage` block against the live usage UI to decide whether it can be promoted to a real "spend this month" figure. The Anthropic Console cookie-paste path (true prepaid-credit balance) remains a v0.3 research item; broader provider coverage in later phases needs similar per-provider investigation.
 - Should onboarding ask users to choose a trust mode, such as "official only" versus "include estimated subscription metrics"? Deferred — v0.1 marks every metric with its source per the Transparency requirement, which may make an explicit trust-mode setting unnecessary.
 - How much locally-stored history is needed before the product becomes meaningfully better than a simple current-status tool? v0.1 keeps a rolling-window-sized in-memory history; SQLite persistence is deferred to v0.2 unless startup re-parse latency becomes a real problem.
 - What is the right default alert threshold mix (alerts land in v0.3)? Decide after observing real-use patterns through v0.1–v0.2 — premature thresholds are noise.

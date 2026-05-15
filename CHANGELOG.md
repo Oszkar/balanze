@@ -9,7 +9,37 @@ bumps are bug fixes only.
 
 ## [Unreleased]
 
-Nothing yet — next is **v0.1.1** (OAuth refresh-token flow; see Roadmap).
+**v0.1.1 base** — Track A of the v0.2 roadmap (Liveness foundations). The
+JSONL→estimate honesty redesign, statusline source, and the watcher/predictor
+are later v0.2 tracks; see `docs/prd.md` Phase 2.
+
+### Added
+- **Proactive Anthropic OAuth refresh.** `anthropic_oauth` gained a
+  refresh-token grant (`refresh_access_token`) and an atomic, anti-clobber
+  credential write-back (`write_back`: tmp+rename, preserves permissions,
+  reuses Anthropic's file, never regresses a concurrently-newer on-disk
+  token). `balanze-cli` now refreshes the bearer pre-flight when it is
+  expired or within a 5-minute margin, and recovers from a hard 401 with one
+  refresh + retry — the bearer no longer hard-fails every ~7–8 h. Refresh
+  failure still surfaces as `AuthExpired` (re-run `claude login`); no new
+  `DegradedState`. Tokens are never logged; the refresh endpoint/client-id
+  constants are gated by an `#[ignore]`'d real-endpoint smoke run pre-tag.
+- `window::summarize_window` takes an optional `window_anchor`; the cap
+  window is anchored to Anthropic's server-reported `five_hour` `resets_at`
+  (half-open `[reset − 5h, reset)`), falling back to the legacy `now − 5h`
+  when OAuth is unavailable — removing local clock-drift error from the cap
+  math. `ClaudeOAuthSnapshot::five_hour_reset()` keeps the OAuth wire key in
+  the schema-owning crate.
+
+### Changed
+- The secret surface expanded: `anthropic_oauth` is now a *writer* of
+  `~/.claude/.credentials.json` (was read-only). The write obeys AGENTS.md
+  §3.4 (atomic, perms-preserving, Anthropic's own file, OAuth fields only).
+
+### Fixed
+- `extra_usage` Known-issue note retargeted: the OAuth `extra_usage`
+  reconciliation is now a scheduled v0.2 Track C spike (was a vague v0.3 HAR
+  item) — see README / `docs/prd.md`.
 
 ## [0.1.0] - 2026-05-15
 

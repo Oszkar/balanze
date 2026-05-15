@@ -32,10 +32,16 @@ matrix lights up:
 - ✅ **`balanze-cli setup`** — interactive wizard: checks Anthropic OAuth +
   Codex presence, prompts for the OpenAI admin key (masked), validates it
   live, stores it.
-- 🛣️ **v0.2 — Liveness**: file watcher, predictor (EWMA + warm-up), `--watch`,
-  `statusline`.
+- 🛣️ **v0.1.1 — base**: proactive OAuth token refresh (before expiry, not
+  reactive on 401); anchor the cap window to the server-reported `resets_at`.
+- 🛣️ **v0.2 — Liveness**: **Anthropic API $ honesty redesign** (Claude Code's
+  *own* pre-calculated per-event cost becomes the primary figure; the
+  list-price recompute is demoted to a diagnostic fallback; a spike reconciles
+  the OAuth `extra_usage` block to decide if it can show a real "spend this
+  month"); Claude Code statusline ingested as an official zero-auth source;
+  file watcher; predictor (EWMA + warm-up); `--watch`; `statusline`.
 - 🛣️ **v0.3 — UI**: Tauri tray + popover, settings UI, keychain v4 migration,
-  alerts, Anthropic Console cookie-paste.
+  alerts, Anthropic Console cookie-paste (the true prepaid-credit balance).
 - 🛣️ **v0.4 — Distribution**: signed binaries, Homebrew, WinGet, auto-update.
 
 Phasing detail: `docs/prd.md`. Architecture and discipline: `AGENTS.md`.
@@ -221,14 +227,15 @@ balanze/
   platforms). Detail: `AGENTS.md` §10a.
 
 - **Anthropic OAuth bearer expires every ~7–8h.** Today the CLI surfaces this
-  as an `AuthExpired` error; re-run `claude login` and retry. Refresh-token
-  flow is v0.1.1 work.
+  as an `AuthExpired` error; re-run `claude login` and retry. v0.1.1 adds
+  proactive refresh (keepalive before expiry, not reactive on 401).
 
 - **`extra_usage` block from OAuth suppressed.** Anthropic's OAuth response
   returns a `monthly_limit / used_credits` block whose semantics don't
   reconcile with the claude.ai/settings/usage UI. Suppressed in pretty CLI
-  output until the v0.3 Anthropic Console (HAR) investigation resolves the
-  meaning; raw values are still in `--json` for diagnostics.
+  output; raw values are still in `--json` for diagnostics. v0.2's Track C
+  runs a bounded reconciliation spike to decide whether it can be promoted to
+  a real "spend this month" figure or stays diagnostic-only.
 
 ## Testing
 
