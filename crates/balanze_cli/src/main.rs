@@ -189,6 +189,13 @@ enum CodexStatus {
     HasSessions,
     InstalledNoSessions,
     NotInstalled,
+    /// Sessions dir is present but we couldn't read it (permission
+    /// denied, disk I/O failure, etc.). Distinct from `NotInstalled`
+    /// so the readiness summary doesn't lie about which problem the
+    /// user is hitting. The specific error was already eprintln'd at
+    /// step 2; this variant just lets the summary echo a truthful
+    /// label.
+    Error,
 }
 
 #[derive(Debug)]
@@ -254,7 +261,7 @@ fn check_codex() -> CodexStatus {
         }
         Err(e) => {
             eprintln!("  ✗ Error finding Codex sessions dir: {e}");
-            CodexStatus::NotInstalled
+            CodexStatus::Error
         }
         Ok(dir) => match codex_local::find_latest_session(&dir) {
             Ok(Some(path)) => {
@@ -271,7 +278,7 @@ fn check_codex() -> CodexStatus {
             }
             Err(e) => {
                 eprintln!("  ✗ Error walking Codex sessions: {e}");
-                CodexStatus::NotInstalled
+                CodexStatus::Error
             }
         },
     }
@@ -297,8 +304,16 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
         }
     }
 
-    let existing = keychain::exists(keychain::keys::OPENAI_API_KEY).unwrap_or(false);
-    let key = if existing {
+    // Single `keychain::get` instead of `exists` + `get` — `exists` is
+    // implemented as `get(...).is_ok_or_not_found()` under the hood
+    // (see `keychain::exists`), so an `exists`+`get` sequence is two
+    // keychain reads. On macOS that's two ACL prompts.
+    let existing_key = match keychain::get(keychain::keys::OPENAI_API_KEY) {
+        Ok(k) => Some(k),
+        Err(keychain::KeychainError::NotFound(_)) => None,
+        Err(e) => return Err(e.into()),
+    };
+    let key = if let Some(existing_key) = existing_key {
         eprintln!("  An OpenAI key is already saved in the keychain.");
         eprint!("  Replace it? [y/N]: ");
         let _ = io::stderr().flush();
@@ -307,8 +322,9 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
         if answer.trim().eq_ignore_ascii_case("y") {
             prompt_for_openai_key()?
         } else {
+            // Keep + validate the already-loaded value. No second
+            // keychain hit; no second ACL prompt on macOS.
             eprintln!("  Keeping existing key; validating against OpenAI Admin Costs API...");
-            let existing_key = keychain::get(keychain::keys::OPENAI_API_KEY)?;
             return Ok(match validate_openai_key_blocking(&existing_key) {
                 Ok(()) => {
                     eprintln!("  ✓ Existing key still works.");
@@ -353,10 +369,15 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
         return Ok(OpenAiKeyStatus::KeychainBroken);
     }
 
-    if let Ok(mut s) = settings::load() {
-        s.providers.openai_enabled = true;
-        let _ = settings::save(&s);
-    }
+    // Mirror `cmd_set_openai_key`'s pattern: load-or-default (corrupt
+    // settings.json shouldn't block the setup wizard), but save errors
+    // propagate loudly. A silent save failure here would leave
+    // `settings.providers.openai_enabled = false` while the key IS in
+    // the keychain — exactly the kind of desync that makes "why doesn't
+    // it show up in `balanze status`?" debugging painful.
+    let mut s = settings::load().unwrap_or_default();
+    s.providers.openai_enabled = true;
+    settings::save(&s)?;
     eprintln!("  ✓ Key validated and saved to the OS keychain.");
     Ok(OpenAiKeyStatus::SavedAndValidated)
 }
@@ -422,6 +443,7 @@ fn print_readiness(
         CodexStatus::HasSessions => "✓ ready (codex_local)",
         CodexStatus::InstalledNoSessions => "○ installed, no sessions yet — run `codex` once",
         CodexStatus::NotInstalled => "✗ Codex CLI not installed",
+        CodexStatus::Error => "✗ error reading Codex sessions (see message above)",
     };
     let openai_str = match openai {
         OpenAiKeyStatus::SavedAndValidated | OpenAiKeyStatus::KeptExistingKey => {
