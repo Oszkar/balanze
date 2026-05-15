@@ -5,8 +5,10 @@
 //!   2. `~/.claude/.credentials.json` — legacy, still used on Windows + many macOS installs
 //!   3. `~/.config/claude/.credentials.json` — Claude Code v1.0.30+ on some platforms
 //!
-//! Loads are READ-ONLY. The crate never writes to this file in v0.1. When the
-//! refresh-token flow lands in step 4, writes will use atomic tmp+rename.
+//! Loads are read-only. `write_back` is the ONLY writer of this file and uses
+//! atomic tmp+rename, preserves the original's permissions, reuses Anthropic's
+//! file (never invents a new one), and touches only the OAuth token fields
+//! (AGENTS.md §3.4). No other crate reads or writes these credentials.
 
 use std::path::{Path, PathBuf};
 
