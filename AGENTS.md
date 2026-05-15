@@ -59,8 +59,9 @@ Correctness > Cleverness · Security > Convenience · Simplicity > Flexibility �
 | Frontend env | `import.meta.env.VITE_*`; never read raw `process.env` |
 | IPC contract | Frontend ↔ Backend: only via the commands + events enumerated in the design doc (`get_snapshot`, `get_history`, `refresh_now`, `set_api_key`, `get_settings`, `set_settings`; events `usage_updated`, `degraded_state`). Adding to this surface needs a doc update first |
 | Filesystem paths | All persistent locations go through the `directories` crate (`ProjectDirs::from("me", "oszkar", "Balanze")`) — never hardcode `~/Library/...` or `%APPDATA%\...` inline |
-| Code style | `cargo fmt` defaults; `prettier` not configured (small frontend surface — match surrounding style) |
+| Code style | `cargo fmt` defaults own Rust line width (`max_width` 100, enforced by CI + the pre-commit hook) — don't hand-wrap code/comments to fight rustfmt. Markdown has **no** column cap (Repo Map / matrix rows are intentionally long; never reflow a doc to hit a width). `prettier` not configured (small frontend surface — match surrounding style) |
 | Lint floor | `cargo clippy --workspace --all-targets -- -D warnings` passes; `bun run check` (svelte-check + tsc) passes |
+| Commit messages | Conventional Commits: `<type>(scope)?(!)?: subject`. **Enforced** by a blocking `commit-msg` lefthook hook. Types: feat/fix/chore/docs/style/refactor/perf/test/build/ci/revert. Merge / Revert / fixup! / squash! / amend! are exempt. Squash-merge lands the PR title on `main`, so the PR title must match too |
 
 ## 3. Non-Negotiables
 

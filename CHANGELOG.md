@@ -39,6 +39,7 @@ the contents below move under a `[0.1.0] - YYYY-MM-DD` heading.
 - CI on Windows + macOS (rustfmt + clippy + cargo test + svelte-check); Dependabot for cargo / npm / github-actions.
 
 ### Changed
+- Conventional Commits is now **enforced** by a blocking `commit-msg` lefthook hook (`<type>(scope)?: subject`; Merge/Revert/fixup!/squash! exempt). Keeps `git log` and squash-merge PR titles clean for the changelog.
 - The CLI binary is **`balanze-cli`**, not `balanze`. `balanze` is reserved for the future src-tauri tray app to avoid a workspace build-artifact collision.
 - Pre-tag cleanup (multi-agent review follow-up): de-flaked the integration test (deterministic `now`), sharpened the compact estimate label + legend, redacted a serde-error log path and the OAuth `Debug`/error-body surfaces, and closed several §6 validation-matrix test gaps.
 
