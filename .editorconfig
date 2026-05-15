@@ -1,8 +1,10 @@
 # EditorConfig — https://editorconfig.org
 # Keeps line endings, indentation, and trailing whitespace consistent across
 # any editor that reads .editorconfig (most do, including VS Code, JetBrains,
-# Vim, Emacs, Sublime, etc.). Rust's rustfmt + Svelte's prettier both already
-# enforce stricter rules per filetype; this file is the cross-cutting baseline.
+# Vim, Emacs, Sublime, etc.). rustfmt (Rust) and svelte-check/tsc (frontend)
+# enforce stricter per-filetype rules in CI; .gitattributes git-enforces LF.
+# This file is the cross-cutting editor baseline. (Prettier is intentionally
+# NOT used — see AGENTS.md §2.1.)
 
 root = true
 

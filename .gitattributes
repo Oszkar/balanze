@@ -1,0 +1,21 @@
+# Normalize line endings. Text files are LF in the repo AND on checkout —
+# `eol=lf` overrides a contributor's `core.autocrlf`, so Windows/WSL stop
+# fighting and the "LF will be replaced by CRLF" warnings disappear for good.
+# Git auto-detects text vs binary; the explicit `binary` lines below are
+# belt-and-suspenders so raster assets are never line-ending-touched or
+# text-diffed. The index is already pure-LF, so adding this file is a
+# zero-content-change normalization (verified via `git add --renormalize`).
+* text=auto eol=lf
+
+# Raster icon assets (Tauri scaffold) — never treat as text.
+*.png  binary
+*.ico  binary
+*.icns binary
+
+# SVG is XML/text — keep it LF (the default covers it; explicit for clarity).
+*.svg  text eol=lf
+
+# Committed lockfiles: LF text, but collapse them in PR diffs and exclude
+# them from GitHub's language stats (generated, not authored).
+Cargo.lock  text eol=lf linguist-generated=true
+bun.lock    text eol=lf linguist-generated=true
