@@ -1,9 +1,14 @@
 name: release
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  # Manual-only until v0.4 (Distribution). v0.1–v0.3 ship from source
+  # (`cargo install --git … balanze_cli`) — no binaries, no GitHub Releases
+  # (see README "Install" / docs/prd.md phasing). The `push: tags` auto-trigger
+  # is intentionally NOT enabled yet: it would build/publish the src-tauri
+  # *scaffold* (placeholder, not the CLI deliverable) on every vX.Y.Z tag.
+  # Re-add the tag trigger at v0.4 when signed binaries are real:
+  #   push:
+  #     tags: ['v*.*.*']
   workflow_dispatch:
 
 permissions:
