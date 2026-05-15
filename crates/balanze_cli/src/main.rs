@@ -558,6 +558,9 @@ fn print_help() {
 // pollers call. NOT done now on purpose: the second consumer (pollers) does
 // not exist yet, so extracting today is YAGNI — the marker exists so the
 // extraction happens WITH the pollers, not after a divergence bug.
+// Note: this policy now also includes the OAuth→window data dependency
+// (the five_hour_reset anchor feeding the JSONL window) — the v0.2
+// extraction must replicate it too or the two composition paths diverge.
 async fn build_snapshot() -> Snapshot {
     let now = Utc::now();
 
@@ -574,8 +577,7 @@ async fn build_snapshot() -> Snapshot {
     // now-relative when OAuth is unavailable. AGENTS.md v0.1.1 / §7.
     let window_anchor = claude_oauth
         .as_ref()
-        .and_then(|s| s.cadences.iter().find(|c| c.key == "five_hour"))
-        .map(|c| c.resets_at);
+        .and_then(ClaudeOAuthSnapshot::five_hour_reset);
 
     // JSONL events power BOTH the window summary (claude_jsonl) and the
     // API-rate cost synthesis (anthropic_api_cost). Read once, summarize
