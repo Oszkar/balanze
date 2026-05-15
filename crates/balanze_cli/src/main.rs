@@ -3,7 +3,8 @@
 //! Subcommands:
 //!   balanze                       Print pretty status (default)
 //!   balanze status [--json]       Same as above; --json is machine-readable
-//!   balanze set-openai-key        Read sk-... from stdin, store in OS keychain
+//!   balanze setup                 Interactive wizard: check Anthropic OAuth + Codex + OpenAI key
+//!   balanze set-openai-key        Read sk-... from stdin, store in OS keychain (non-interactive)
 //!   balanze clear-openai-key      Remove the OpenAI key from the keychain
 //!   balanze settings              Print current settings.json contents
 //!   balanze help                  This help
@@ -43,6 +44,7 @@ fn main() -> ExitCode {
 
     let result = match cmd {
         "status" | "--json" => cmd_status(&args),
+        "setup" => cmd_setup(),
         "set-openai-key" => cmd_set_openai_key(),
         "clear-openai-key" => cmd_clear_openai_key(),
         "settings" => cmd_settings(),
@@ -147,6 +149,324 @@ fn cmd_clear_openai_key() -> Result<()> {
     Ok(())
 }
 
+// ────────────────────────────────────────────────────────────────────
+// `balanze setup` — interactive auth wizard.
+//
+// Flow:
+//   [1/4] Check Anthropic OAuth credentials file presence.
+//   [2/4] Check Codex sessions presence (codex_local).
+//   [3/4] Prompt for OpenAI admin key (masked input via rpassword),
+//         validate live against /v1/organization/costs, store in
+//         keychain, verify the keychain write took.
+//   [4/4] Print a 4-row readiness summary matching the eventual
+//         `balanze` output layout.
+//
+// Design decisions (recorded for future maintainers):
+//   - Live-validate before storing: catches typos at setup time
+//     rather than at first `balanze` run. One network call to OpenAI.
+//   - No "setup complete" marker in settings.json: the CLI infers
+//     readiness from the keychain + file presence. Idempotent setup.
+//   - Windows keychain bug detection: keyring v3 silently no-ops on
+//     Windows; we write then read back to detect, then point the user
+//     at BALANZE_OPENAI_KEY as the workaround.
+//   - Existing key handling: if a key is already saved, validate it
+//     (don't re-prompt). User can answer 'y' to replace.
+// ────────────────────────────────────────────────────────────────────
+
+// Status enums only carry the discriminants — paths and error messages
+// are already eprintln'd at the moment they're known. If a future step
+// (balanze_cli wiring) needs to thread the paths into a Snapshot, add
+// the payload then. YAGNI for now.
+
+#[derive(Debug)]
+enum AnthropicOAuthStatus {
+    Found,
+    NotFound,
+}
+
+#[derive(Debug)]
+enum CodexStatus {
+    HasSessions,
+    InstalledNoSessions,
+    NotInstalled,
+    /// Sessions dir is present but we couldn't read it (permission
+    /// denied, disk I/O failure, etc.). Distinct from `NotInstalled`
+    /// so the readiness summary doesn't lie about which problem the
+    /// user is hitting. The specific error was already eprintln'd at
+    /// step 2; this variant just lets the summary echo a truthful
+    /// label.
+    Error,
+}
+
+#[derive(Debug)]
+enum OpenAiKeyStatus {
+    SavedAndValidated,
+    KeptExistingKey,
+    EnvVarOverride,
+    ValidationFailed,
+    KeychainBroken,
+}
+
+fn cmd_setup() -> Result<()> {
+    eprintln!("Balanze setup");
+    eprintln!("=============");
+    eprintln!();
+    eprintln!("This wizard:");
+    eprintln!("  1. Checks your Anthropic OAuth credentials (~/.claude/.credentials.json).");
+    eprintln!("  2. Checks your Codex sessions (~/.codex/sessions/).");
+    eprintln!("  3. Prompts for your OpenAI admin key, validates it live, stores it.");
+    eprintln!("  4. Prints a readiness summary for all four data sources.");
+    eprintln!();
+
+    eprintln!("[1/4] Anthropic OAuth credentials");
+    let anthropic = check_anthropic_oauth();
+    eprintln!();
+
+    eprintln!("[2/4] Codex CLI sessions");
+    let codex = check_codex();
+    eprintln!();
+
+    eprintln!("[3/4] OpenAI admin key");
+    let openai = setup_openai_key()?;
+    eprintln!();
+
+    eprintln!("[4/4] Readiness summary");
+    print_readiness(&anthropic, &codex, &openai);
+
+    Ok(())
+}
+
+fn check_anthropic_oauth() -> AnthropicOAuthStatus {
+    match anthropic_oauth::locate_credentials() {
+        Ok(path) => {
+            eprintln!("  ✓ Found at {}", path.display());
+            AnthropicOAuthStatus::Found
+        }
+        Err(_) => {
+            eprintln!("  ✗ Not found.");
+            eprintln!("    To enable: run `claude login` (writes ~/.claude/.credentials.json).");
+            eprintln!("    Balanze still derives Claude API cost from JSONL session files");
+            eprintln!("    without this, but the subscription-quota cell will be empty.");
+            AnthropicOAuthStatus::NotFound
+        }
+    }
+}
+
+fn check_codex() -> CodexStatus {
+    match codex_local::find_codex_sessions_dir() {
+        Err(codex_local::ParseError::FileMissing(_)) => {
+            eprintln!("  ✗ Codex CLI not installed (no ~/.codex/sessions/ directory).");
+            eprintln!("    The Codex quota cell will be empty.");
+            CodexStatus::NotInstalled
+        }
+        Err(e) => {
+            eprintln!("  ✗ Error finding Codex sessions dir: {e}");
+            CodexStatus::Error
+        }
+        Ok(dir) => match codex_local::find_latest_session(&dir) {
+            Ok(Some(path)) => {
+                eprintln!("  ✓ Latest session: {}", path.display());
+                CodexStatus::HasSessions
+            }
+            Ok(None) => {
+                eprintln!("  ○ Codex installed but no sessions yet.");
+                eprintln!(
+                    "    Run `codex` once to populate {} with a session file.",
+                    dir.display()
+                );
+                CodexStatus::InstalledNoSessions
+            }
+            Err(e) => {
+                eprintln!("  ✗ Error walking Codex sessions: {e}");
+                CodexStatus::Error
+            }
+        },
+    }
+}
+
+fn setup_openai_key() -> Result<OpenAiKeyStatus> {
+    // Env-var override takes precedence over keychain everywhere in the
+    // CLI; honor that here too. Validate without writing to keychain.
+    if let Ok(env_key) = env::var("BALANZE_OPENAI_KEY") {
+        let trimmed = env_key.trim();
+        if !trimmed.is_empty() {
+            eprintln!("  BALANZE_OPENAI_KEY env var is set; validating without keychain write.");
+            return Ok(match validate_openai_key_blocking(trimmed) {
+                Ok(()) => {
+                    eprintln!("  ✓ Env-var key validated against OpenAI Admin Costs API.");
+                    OpenAiKeyStatus::EnvVarOverride
+                }
+                Err(e) => {
+                    eprintln!("  ✗ Env-var key rejected by OpenAI: {e}");
+                    OpenAiKeyStatus::ValidationFailed
+                }
+            });
+        }
+    }
+
+    // Single `keychain::get` instead of `exists` + `get` — `exists` is
+    // implemented as `get(...).is_ok_or_not_found()` under the hood
+    // (see `keychain::exists`), so an `exists`+`get` sequence is two
+    // keychain reads. On macOS that's two ACL prompts.
+    let existing_key = match keychain::get(keychain::keys::OPENAI_API_KEY) {
+        Ok(k) => Some(k),
+        Err(keychain::KeychainError::NotFound(_)) => None,
+        Err(e) => return Err(e.into()),
+    };
+    let key = if let Some(existing_key) = existing_key {
+        eprintln!("  An OpenAI key is already saved in the keychain.");
+        eprint!("  Replace it? [y/N]: ");
+        let _ = io::stderr().flush();
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        if answer.trim().eq_ignore_ascii_case("y") {
+            prompt_for_openai_key()?
+        } else {
+            // Keep + validate the already-loaded value. No second
+            // keychain hit; no second ACL prompt on macOS.
+            eprintln!("  Keeping existing key; validating against OpenAI Admin Costs API...");
+            return Ok(match validate_openai_key_blocking(&existing_key) {
+                Ok(()) => {
+                    eprintln!("  ✓ Existing key still works.");
+                    OpenAiKeyStatus::KeptExistingKey
+                }
+                Err(e) => {
+                    eprintln!("  ✗ Existing key rejected: {e}");
+                    eprintln!("    Re-run `balanze setup` and choose to replace.");
+                    OpenAiKeyStatus::ValidationFailed
+                }
+            });
+        }
+    } else {
+        prompt_for_openai_key()?
+    };
+
+    eprintln!("  Validating against OpenAI Admin Costs API...");
+    if let Err(e) = validate_openai_key_blocking(&key) {
+        eprintln!("  ✗ {e}");
+        eprintln!("    Key NOT saved. Re-run `balanze setup` with a working key.");
+        return Ok(OpenAiKeyStatus::ValidationFailed);
+    }
+
+    // Write to keychain, then read back to detect the known `keyring`
+    // v3 Windows silent-no-op bug. set→get→compare exposes the bug as
+    // an Err(NotFound) or value mismatch on read.
+    keychain::set(keychain::keys::OPENAI_API_KEY, &key)?;
+    let read_back = match keychain::get(keychain::keys::OPENAI_API_KEY) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  ✗ Keychain write didn't persist (read-back failed: {e}).");
+            eprintln!("    Known `keyring` v3 issue on Windows. Workaround:");
+            eprintln!("      export BALANZE_OPENAI_KEY=sk-admin-...   (Unix shells)");
+            eprintln!("      $env:BALANZE_OPENAI_KEY = 'sk-admin-...' (PowerShell)");
+            eprintln!("    The CLI honors this env var with precedence over the keychain.");
+            return Ok(OpenAiKeyStatus::KeychainBroken);
+        }
+    };
+    if read_back != key {
+        eprintln!("  ✗ Keychain write didn't persist (read-back value mismatch).");
+        eprintln!("    Known `keyring` v3 issue. Workaround: use BALANZE_OPENAI_KEY env var.");
+        return Ok(OpenAiKeyStatus::KeychainBroken);
+    }
+
+    // Mirror `cmd_set_openai_key`'s pattern: load-or-default (corrupt
+    // settings.json shouldn't block the setup wizard), but save errors
+    // propagate loudly. A silent save failure here would leave
+    // `settings.providers.openai_enabled = false` while the key IS in
+    // the keychain — exactly the kind of desync that makes "why doesn't
+    // it show up in `balanze status`?" debugging painful.
+    let mut s = settings::load().unwrap_or_default();
+    s.providers.openai_enabled = true;
+    settings::save(&s)?;
+    eprintln!("  ✓ Key validated and saved to the OS keychain.");
+    Ok(OpenAiKeyStatus::SavedAndValidated)
+}
+
+fn prompt_for_openai_key() -> Result<String> {
+    eprintln!("  Paste your OpenAI admin key (sk-admin-...) and press Enter.");
+    eprintln!("  Input is hidden; nothing will echo to the terminal.");
+    let raw = rpassword::prompt_password("  Key: ")
+        .map_err(|e| anyhow!("failed to read key from stdin: {e}"))?;
+    let key = raw.trim().to_string();
+    if key.is_empty() {
+        anyhow::bail!("no key provided; aborting setup");
+    }
+    if !key.starts_with("sk-") {
+        anyhow::bail!("key doesn't look like an OpenAI key (expected sk-...); aborting");
+    }
+    if !key.starts_with("sk-admin-") {
+        eprintln!("  ⚠ Heads up: this isn't an admin key (sk-admin-...). The");
+        eprintln!("    /v1/organization/costs endpoint Balanze uses requires admin keys;");
+        eprintln!("    project (sk-proj-) and service-account keys get HTTP 403. Live");
+        eprintln!("    validation will tell you for sure.");
+    }
+    Ok(key)
+}
+
+fn validate_openai_key_blocking(key: &str) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .user_agent("balanze-cli/0.1.0")
+            .build()?;
+        match costs_this_month(&client, OPENAI_API_BASE, key).await {
+            Ok(_) => Ok(()),
+            Err(OpenAiError::AuthInvalid { body }) => {
+                Err(anyhow!("OpenAI rejected the key (HTTP 401). Body: {body}"))
+            }
+            Err(OpenAiError::InsufficientScope { .. }) => Err(anyhow!(
+                "OpenAI returned 403 — this key lacks admin scope. \
+                 Generate an admin key at \
+                 https://platform.openai.com/settings/organization/admin-keys"
+            )),
+            Err(e) => Err(anyhow!("OpenAI request failed: {e}")),
+        }
+    })
+}
+
+fn print_readiness(
+    anthropic: &AnthropicOAuthStatus,
+    codex: &CodexStatus,
+    openai: &OpenAiKeyStatus,
+) {
+    let anthropic_quota = match anthropic {
+        AnthropicOAuthStatus::Found => "✓ ready (anthropic_oauth)",
+        AnthropicOAuthStatus::NotFound => "✗ not configured — run `claude login`",
+    };
+    // Anthropic API $ derivation only needs JSONL files; OAuth isn't required.
+    let claude_cost = if claude_parser::find_claude_projects_dir().is_ok() {
+        "✓ ready (claude_cost — estimated from JSONL)"
+    } else {
+        "✗ no Claude Code JSONL found"
+    };
+    let codex_str = match codex {
+        CodexStatus::HasSessions => "✓ ready (codex_local)",
+        CodexStatus::InstalledNoSessions => "○ installed, no sessions yet — run `codex` once",
+        CodexStatus::NotInstalled => "✗ Codex CLI not installed",
+        CodexStatus::Error => "✗ error reading Codex sessions (see message above)",
+    };
+    let openai_str = match openai {
+        OpenAiKeyStatus::SavedAndValidated | OpenAiKeyStatus::KeptExistingKey => {
+            "✓ ready (openai_client)"
+        }
+        OpenAiKeyStatus::EnvVarOverride => "✓ ready (via BALANZE_OPENAI_KEY env var)",
+        OpenAiKeyStatus::ValidationFailed => "✗ key validation failed — re-run setup",
+        OpenAiKeyStatus::KeychainBroken => "✗ keychain broken — use BALANZE_OPENAI_KEY env var",
+    };
+
+    eprintln!();
+    eprintln!("  Source                       Status");
+    eprintln!("  ───────────────────────────  ───────────────────────────────────────");
+    eprintln!("  Anthropic subscription %     {anthropic_quota}");
+    eprintln!("  Anthropic API $ (estimated)  {claude_cost}");
+    eprintln!("  OpenAI Codex %               {codex_str}");
+    eprintln!("  OpenAI API $                 {openai_str}");
+    eprintln!();
+    eprintln!("Run `balanze` to see the live snapshot.");
+}
+
+// ────────────────────────────────────────────────────────────────────
+
 fn cmd_settings() -> Result<()> {
     let s = settings::load()?;
     println!("{}", serde_json::to_string_pretty(&s)?);
@@ -165,7 +485,15 @@ fn print_help() {
     eprintln!(
         "                                (org uuid) — safe to share at home, dox-y in public."
     );
-    eprintln!("  balanze set-openai-key [KEY]  Store KEY in the OS keychain. Reads from stdin if KEY is omitted.");
+    eprintln!("  balanze setup                 Interactive wizard. Checks Anthropic OAuth,");
+    eprintln!(
+        "                                Codex sessions, prompts for OpenAI admin key (masked"
+    );
+    eprintln!(
+        "                                input), validates it live, stores it. Run this first."
+    );
+    eprintln!("  balanze set-openai-key [KEY]  Non-interactive: stores KEY in the OS keychain.");
+    eprintln!("                                Reads from stdin if KEY is omitted.");
     eprintln!("  balanze clear-openai-key      Remove the OpenAI key from the keychain");
     eprintln!("  balanze settings              Print current settings.json contents");
     eprintln!("  balanze help                  This help");
