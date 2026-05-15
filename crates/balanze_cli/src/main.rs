@@ -34,6 +34,13 @@ use state_coordinator::{JsonlSnapshot, Snapshot};
 use tracing::{info, warn};
 use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
 
+/// Format an `i64` micro-USD value as a human-readable USD string. Pure
+/// display path per AGENTS.md §2.1: integer math everywhere internally;
+/// f64 only at the boundary.
+fn micro_usd_to_display_dollars(micro: i64) -> String {
+    format!("${:.2}", micro as f64 / 1_000_000.0)
+}
+
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -71,12 +78,25 @@ fn main() -> ExitCode {
 fn cmd_status(args: &[String]) -> Result<()> {
     let json_mode = args.iter().any(|a| a == "--json");
     let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+    let sections = args.iter().any(|a| a == "--sections");
     let snapshot = tokio::runtime::Runtime::new()?.block_on(build_snapshot());
 
+    // Precedence (documented in `balanze help`): --json wins over
+    // --sections if both are passed. --json is the scripting/machine
+    // path; if a caller asked for it, honor it even alongside a stray
+    // --sections. Not an error — silently ignoring --sections here is
+    // the least-surprising behavior for `balanze status --json --sections`.
     if json_mode {
         println!("{}", serde_json::to_string_pretty(&snapshot)?);
+    } else if sections {
+        // Per-source detailed view — useful for debugging, dev work, and
+        // anyone who wants the full window math + cadence bars in one go.
+        print_sections(&snapshot, verbose);
     } else {
-        print_pretty(&snapshot, verbose);
+        // Default: glanceable 4-quadrant matrix mirroring the readiness
+        // summary from `balanze setup`. Run `balanze --sections` for the
+        // extended per-source breakdown.
+        print_compact(&snapshot);
     }
     Ok(())
 }
@@ -479,12 +499,18 @@ fn print_help() {
     eprintln!("Balanze — local-first AI usage tracker.");
     eprintln!();
     eprintln!("Subcommands:");
-    eprintln!("  balanze                       Print pretty status (default)");
-    eprintln!("  balanze status [--json] [-v]  Same as above; --json is machine-readable;");
-    eprintln!("                                -v / --verbose adds account-identifying fields");
-    eprintln!(
-        "                                (org uuid) — safe to share at home, dox-y in public."
-    );
+    eprintln!("  balanze                       Print 4-quadrant compact status (default)");
+    eprintln!("  balanze status [--json] [--sections] [-v]");
+    eprintln!("                                Same as above. Flags:");
+    eprintln!("                                  --sections   per-source detailed view");
+    eprintln!("                                               (cadence bars, model breakdown,");
+    eprintln!("                                               codex window, etc.)");
+    eprintln!("                                  --json       machine-readable Snapshot JSON.");
+    eprintln!("                                               Takes precedence over --sections");
+    eprintln!("                                               if both are given.");
+    eprintln!("                                  -v/--verbose adds account-identifying fields");
+    eprintln!("                                               (org uuid, codex session_id)");
+    eprintln!("                                               — safe at home, dox-y in public.");
     eprintln!("  balanze setup                 Interactive wizard. Checks Anthropic OAuth,");
     eprintln!(
         "                                Codex sessions, prompts for OpenAI admin key (masked"
@@ -512,6 +538,7 @@ fn print_help() {
 
 async fn build_snapshot() -> Snapshot {
     let now = Utc::now();
+
     let (claude_oauth, claude_oauth_error) = match fetch_oauth().await {
         Ok(s) => (Some(s), None),
         Err(e) => {
@@ -519,13 +546,49 @@ async fn build_snapshot() -> Snapshot {
             (None, Some(e.to_string()))
         }
     };
-    let (claude_jsonl, claude_jsonl_error) = match build_jsonl_summary(now) {
-        Ok(s) => (Some(s), None),
+
+    // JSONL events power BOTH the window summary (claude_jsonl) and the
+    // API-rate cost synthesis (anthropic_api_cost). Read once, summarize
+    // twice. If the load fails entirely, both downstream slots stay None
+    // and claude_jsonl_error carries the reason — we don't duplicate the
+    // error into anthropic_api_cost_error (the renderer correlates).
+    let mut claude_jsonl: Option<JsonlSnapshot> = None;
+    let mut claude_jsonl_error: Option<String> = None;
+    let mut anthropic_api_cost: Option<claude_cost::Cost> = None;
+    let mut anthropic_api_cost_error: Option<String> = None;
+    match load_and_dedup_claude_events() {
+        Ok((events, files_scanned)) => {
+            claude_jsonl = Some(summarize_for_jsonl_snapshot(&events, files_scanned, now));
+            match compute_anthropic_api_cost(&events) {
+                Ok(cost) => {
+                    info!(
+                        "claude_cost: total_micro_usd={} per_model_rows={} skipped={}",
+                        cost.total_micro_usd,
+                        cost.per_model.len(),
+                        cost.skipped_models.len()
+                    );
+                    anthropic_api_cost = Some(cost);
+                }
+                Err(e) => {
+                    warn!("anthropic_api_cost source failed: {e}");
+                    anthropic_api_cost_error = Some(e.to_string());
+                }
+            }
+        }
         Err(e) => {
             warn!("JSONL source failed: {e}");
+            claude_jsonl_error = Some(e.to_string());
+        }
+    }
+
+    let (codex_quota, codex_quota_error) = match fetch_codex_quota() {
+        Ok(snap) => (snap, None),
+        Err(e) => {
+            warn!("codex_quota source failed: {e}");
             (None, Some(e.to_string()))
         }
     };
+
     let (openai, openai_error) = match fetch_openai().await {
         Ok(Some(g)) => (Some(g), None),
         Ok(None) => (None, None),
@@ -534,14 +597,110 @@ async fn build_snapshot() -> Snapshot {
             (None, Some(e.to_string()))
         }
     };
+
     Snapshot {
         fetched_at: now,
         claude_oauth,
         claude_oauth_error,
         claude_jsonl,
         claude_jsonl_error,
+        anthropic_api_cost,
+        anthropic_api_cost_error,
+        codex_quota,
+        codex_quota_error,
         openai,
         openai_error,
+    }
+}
+
+/// Load + dedup all UsageEvents from `~/.claude/projects/`. Shared input
+/// for both the window summary and the claude_cost synthesis — we don't
+/// want to walk + parse 491 JSONL files twice per `balanze` invocation.
+///
+/// Returns `(events, files_scanned)`. Files that fail to read or parse
+/// are logged (warn level) but don't fail the whole call — matches the
+/// existing tolerant policy.
+fn load_and_dedup_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
+    let claude_dir = find_claude_projects_dir()?;
+    let files = find_jsonl_files(&claude_dir)?;
+    info!(
+        "jsonl: scanning {} files under {}",
+        files.len(),
+        claude_dir.display()
+    );
+
+    let mut all_events: Vec<UsageEvent> = Vec::new();
+    for path in &files {
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("jsonl: skipping {} ({e})", path.display());
+                continue;
+            }
+        };
+        match parse_str(&content) {
+            Ok(events) => all_events.extend(events),
+            Err(e) => warn!("jsonl: parse error in {} ({e})", path.display()),
+        }
+    }
+
+    let before = all_events.len();
+    dedup_events(&mut all_events);
+    let after = all_events.len();
+    if before != after {
+        info!(
+            "jsonl: deduped {} → {} events ({} duplicates collapsed by (msg_id, req_id))",
+            before,
+            after,
+            before - after
+        );
+    }
+
+    Ok((all_events, files.len()))
+}
+
+fn summarize_for_jsonl_snapshot(
+    events: &[UsageEvent],
+    files_scanned: usize,
+    now: DateTime<Utc>,
+) -> JsonlSnapshot {
+    let window = summarize_window(
+        events,
+        now,
+        DEFAULT_WINDOW,
+        DEFAULT_BURN_WINDOW,
+        DEFAULT_MIN_BURN_EVENTS,
+    );
+    JsonlSnapshot {
+        files_scanned,
+        window,
+    }
+}
+
+fn compute_anthropic_api_cost(events: &[UsageEvent]) -> Result<claude_cost::Cost> {
+    let prices = claude_cost::load_bundled_prices()
+        .map_err(|e| anyhow!("claude_cost: bundled price table failed to load: {e}"))?;
+    Ok(claude_cost::compute_cost(events, &prices))
+}
+
+/// Read the latest Codex rate-limit snapshot. Treats "Codex not installed"
+/// as `Ok(None)` (not a failure — just an unconfigured source); only
+/// surfaces actual errors (permission denied, schema drift, etc.).
+fn fetch_codex_quota() -> Result<Option<codex_local::CodexQuotaSnapshot>> {
+    match codex_local::read_codex_quota() {
+        Ok(snap) => {
+            if let Some(ref s) = snap {
+                info!(
+                    "codex_quota: used_percent={} plan_type={} rate_limit_reached={}",
+                    s.primary.used_percent, s.plan_type, s.rate_limit_reached
+                );
+            } else {
+                info!("codex_quota: no session data yet");
+            }
+            Ok(snap)
+        }
+        Err(codex_local::ParseError::FileMissing(_)) => Ok(None),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -609,57 +768,13 @@ async fn fetch_openai() -> Result<Option<OpenAiCosts>> {
     }
 }
 
-fn build_jsonl_summary(now: DateTime<Utc>) -> Result<JsonlSnapshot> {
-    let claude_dir = find_claude_projects_dir()?;
-    let files = find_jsonl_files(&claude_dir)?;
-    info!(
-        "jsonl: scanning {} files under {}",
-        files.len(),
-        claude_dir.display()
-    );
+// Legacy `build_jsonl_summary` removed in step 5; superseded by
+// `load_and_dedup_claude_events` + `summarize_for_jsonl_snapshot` so the
+// JSONL parse output can be reused by both `summarize_window` (jsonl
+// snapshot) and `claude_cost::compute_cost` (anthropic_api_cost) without
+// scanning the directory twice.
 
-    let mut all_events: Vec<UsageEvent> = Vec::new();
-    for path in &files {
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("jsonl: skipping {} ({e})", path.display());
-                continue;
-            }
-        };
-        match parse_str(&content) {
-            Ok(events) => all_events.extend(events),
-            Err(e) => warn!("jsonl: parse error in {} ({e})", path.display()),
-        }
-    }
-
-    let before = all_events.len();
-    dedup_events(&mut all_events);
-    let after = all_events.len();
-    if before != after {
-        info!(
-            "jsonl: deduped {} → {} events ({} duplicates collapsed by (msg_id, req_id))",
-            before,
-            after,
-            before - after
-        );
-    }
-
-    let window = summarize_window(
-        &all_events,
-        now,
-        DEFAULT_WINDOW,
-        DEFAULT_BURN_WINDOW,
-        DEFAULT_MIN_BURN_EVENTS,
-    );
-
-    Ok(JsonlSnapshot {
-        files_scanned: files.len(),
-        window,
-    })
-}
-
-fn print_pretty(snapshot: &Snapshot, verbose: bool) {
+fn print_sections(snapshot: &Snapshot, verbose: bool) {
     let _ = io::stdout().flush();
     println!("=== Balanze Status ===");
     println!(
@@ -773,6 +888,216 @@ fn print_pretty(snapshot: &Snapshot, verbose: bool) {
         }
     } else if let Some(err) = &snapshot.claude_jsonl_error {
         println!("CLAUDE CODE ACTIVITY: unavailable — {err}");
+    }
+
+    // Anthropic API cost (estimated, JSONL-derived via claude_cost).
+    println!();
+    if let Some(cost) = &snapshot.anthropic_api_cost {
+        println!(
+            "ANTHROPIC API COST (estimated, JSONL × LiteLLM prices @ {} / {}):",
+            claude_cost::PRICE_TABLE_COMMIT,
+            claude_cost::PRICE_TABLE_DATE,
+        );
+        println!(
+            "  Total:             {} (subscription leverage — not actual spend on Pro/Max)",
+            micro_usd_to_display_dollars(cost.total_micro_usd)
+        );
+        println!("  Events processed:  {}", cost.total_event_count);
+        if cost.unparsed_event_count > 0 {
+            println!(
+                "  Unparsed events:   {} (JSONL line lacked model field)",
+                cost.unparsed_event_count
+            );
+        }
+        if !cost.per_model.is_empty() {
+            println!();
+            println!("  By model (top 10 by spend):");
+            for m in cost.per_model.iter().take(10) {
+                println!(
+                    "    {:36}  events: {:>4}  {}",
+                    m.model,
+                    m.event_count,
+                    micro_usd_to_display_dollars(m.total_micro_usd)
+                );
+            }
+            if cost.per_model.len() > 10 {
+                println!("    … ({} more)", cost.per_model.len() - 10);
+            }
+        }
+        if !cost.skipped_models.is_empty() {
+            println!();
+            println!("  Skipped models (in JSONL but absent from price table):");
+            for name in &cost.skipped_models {
+                println!("    {name}");
+            }
+        }
+    } else if let Some(err) = &snapshot.anthropic_api_cost_error {
+        println!("ANTHROPIC API COST: unavailable — {err}");
+    } else if snapshot.claude_jsonl_error.is_some() {
+        // No separate cost error; the underlying JSONL load failed
+        // (already reported above).
+        println!("ANTHROPIC API COST: unavailable — JSONL load failed (see above).");
+    }
+
+    // OpenAI Codex CLI rate-limit snapshot (from codex_local).
+    println!();
+    if let Some(q) = &snapshot.codex_quota {
+        println!(
+            "OPENAI CODEX QUOTA (plan: {}, observed {}):",
+            q.plan_type,
+            q.observed_at.format("%Y-%m-%d %H:%M:%S UTC"),
+        );
+        let resets_in = q
+            .primary
+            .resets_at
+            .signed_duration_since(snapshot.fetched_at);
+        println!(
+            "  Primary window:    {:.2}% of {} minutes  (resets in {})",
+            q.primary.used_percent,
+            q.primary.window_duration_minutes,
+            pretty_duration(resets_in),
+        );
+        if let Some(secondary) = &q.secondary {
+            let s_resets = secondary
+                .resets_at
+                .signed_duration_since(snapshot.fetched_at);
+            println!(
+                "  Secondary window:  {:.2}% of {} minutes  (resets in {})",
+                secondary.used_percent,
+                secondary.window_duration_minutes,
+                pretty_duration(s_resets),
+            );
+        }
+        if q.rate_limit_reached {
+            println!("  ⚠  Rate-limit reached — Codex CLI is currently throttling requests.");
+        }
+        if verbose {
+            println!("  Session ID:        {}", q.session_id);
+        }
+    } else if let Some(err) = &snapshot.codex_quota_error {
+        println!("OPENAI CODEX QUOTA: unavailable — {err}");
+    } else {
+        println!(
+            "OPENAI CODEX QUOTA: not configured (Codex CLI not installed, or no sessions yet)."
+        );
+    }
+}
+
+/// Compact 4-quadrant matrix renderer — the default `balanze` output.
+///
+/// One screen, no scrolling. The layout maps directly onto the design
+/// doc's 4-quadrant matrix: rows are providers (Anthropic, OpenAI),
+/// columns are cells (Quota %, API $). Cell content shows ✓ / ○ / ✗
+/// plus a one-line summary. See `print_sections` for per-source depth.
+fn print_compact(snapshot: &Snapshot) {
+    let _ = io::stdout().flush();
+    println!(
+        "=== Balanze status ({}) ===",
+        snapshot.fetched_at.format("%Y-%m-%d %H:%M:%S UTC")
+    );
+    println!();
+
+    let anth_quota = compact_anthropic_quota(snapshot);
+    let anth_cost = compact_anthropic_cost(snapshot);
+    let openai_quota = compact_codex_quota(snapshot);
+    let openai_cost = compact_openai_cost(snapshot);
+
+    println!("                    {:38}  API $", "Quota %");
+    println!("Anthropic           {anth_quota:38}  {anth_cost}");
+    println!("OpenAI              {openai_quota:38}  {openai_cost}");
+    println!();
+    println!("Run `balanze --sections` for per-source detail, or `balanze --json` for machine-readable output.");
+}
+
+fn compact_anthropic_quota(s: &Snapshot) -> String {
+    match (&s.claude_oauth, &s.claude_oauth_error) {
+        (Some(oauth), _) => {
+            if oauth.cadences.is_empty() {
+                "✓ ready (no cadence bars reported)".to_string()
+            } else {
+                // First two cadences. `anthropic_oauth` pre-sorts by
+                // cadence_sort_key (five_hour=0, seven_day=1, …), so the
+                // common case is "5h + 7d". {:.1} (not {:.0}) so a
+                // genuine 0.4% doesn't render as "0%" — indistinguishable
+                // from the no-usage case.
+                let parts: Vec<String> = oauth
+                    .cadences
+                    .iter()
+                    .take(2)
+                    .map(|c| format!("{:.1}% {}", c.utilization_percent, short_cadence(&c.key)))
+                    .collect();
+                format!("✓ {} (oauth)", parts.join(", "))
+            }
+        }
+        (None, Some(_)) => "✗ oauth fetch failed".to_string(),
+        (None, None) => "○ not configured".to_string(),
+    }
+}
+
+fn compact_anthropic_cost(s: &Snapshot) -> String {
+    match (&s.anthropic_api_cost, &s.anthropic_api_cost_error) {
+        // JSONL loaded fine but zero billable events (fresh install, no
+        // Claude Code sessions yet). Rendering "~$0.00 (estimated)"
+        // would imply a real computation against data; it's actually
+        // "nothing to compute". Treat it like the no-data case.
+        (Some(cost), _) if cost.total_event_count == 0 => "○ no jsonl data yet".to_string(),
+        (Some(cost), _) => format!(
+            "~{} (estimated, jsonl)",
+            micro_usd_to_display_dollars(cost.total_micro_usd)
+        ),
+        (None, Some(_)) => "✗ cost synthesis failed".to_string(),
+        (None, None) if s.claude_jsonl_error.is_some() => "✗ jsonl load failed".to_string(),
+        (None, None) => "○ no jsonl data".to_string(),
+    }
+}
+
+fn compact_codex_quota(s: &Snapshot) -> String {
+    match (&s.codex_quota, &s.codex_quota_error) {
+        (Some(q), _) => {
+            let days = q.primary.window_duration_minutes as f64 / 1440.0;
+            // {:.1} for the same reason as the anthropic quota cell — a
+            // genuine 0.4% must not collapse to "0%".
+            format!(
+                "✓ {:.1}% {}d (codex {})",
+                q.primary.used_percent,
+                days.round() as i64,
+                q.plan_type
+            )
+        }
+        (None, Some(_)) => "✗ codex_local error".to_string(),
+        (None, None) => "○ not configured (codex)".to_string(),
+    }
+}
+
+fn compact_openai_cost(s: &Snapshot) -> String {
+    match (&s.openai, &s.openai_error) {
+        (Some(costs), _) => format!("${:.2} (admin costs)", costs.total_usd),
+        (None, Some(_)) => "✗ admin costs fetch failed".to_string(),
+        (None, None) => "○ not configured (run `balanze setup`)".to_string(),
+    }
+}
+
+/// Short cadence tag for the compact view, keyed off the **stable
+/// cadence `key`** (e.g. "five_hour", "seven_day_sonnet") rather than
+/// the free-form `display_label`. `anthropic_oauth` documents
+/// `display_label` as curated-but-free-form, so matching on it is
+/// fragile; the `key` is the wire-stable identifier.
+///
+/// Each 7-day sub-variant gets a distinct suffix so a user on a
+/// Sonnet-only or Opus-only flow doesn't see two indistinguishable
+/// "7d" cells (e.g. "19% 7d, 84% 7d-son"). Unknown / internal-codename
+/// cadences render "?" here on purpose — the full label is visible in
+/// `--sections`; the compact row is a glance, not the source of truth.
+fn short_cadence(key: &str) -> &'static str {
+    match key {
+        "five_hour" => "5h",
+        "seven_day" => "7d",
+        "seven_day_sonnet" => "7d-son",
+        "seven_day_opus" => "7d-opus",
+        "seven_day_oauth_apps" => "7d-apps",
+        "seven_day_cowork" => "7d-cowork",
+        "seven_day_omelette" => "7d-omel",
+        _ => "?",
     }
 }
 

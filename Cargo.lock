@@ -258,6 +258,7 @@ dependencies = [
  "anthropic_oauth",
  "anyhow",
  "chrono",
+ "claude_cost",
  "claude_parser",
  "codex_local",
  "keychain",
@@ -3672,7 +3673,9 @@ version = "0.1.0"
 dependencies = [
  "anthropic_oauth",
  "chrono",
+ "claude_cost",
  "claude_parser",
+ "codex_local",
  "openai_client",
  "serde",
  "serde_json",

@@ -1,6 +1,8 @@
 //! Message types for the coordinator actor's mpsc channel.
 
 use anthropic_oauth::ClaudeOAuthSnapshot;
+use claude_cost::Cost;
+use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
 use settings::Settings;
 use tokio::sync::oneshot;
@@ -8,12 +10,31 @@ use tokio::sync::oneshot;
 use crate::snapshot::{JsonlSnapshot, Snapshot};
 
 /// Which source produced an update or failure.
+///
+/// The five sources map 1-to-1 onto the cells / inputs of Balanze's
+/// 4-quadrant matrix:
+///
+/// ```text
+///           | Subscription / Quota (%)        | API / Pay-as-you-go ($)
+/// ----------|---------------------------------|---------------------------------
+/// Anthropic | ClaudeOAuth                     | AnthropicApiCost (from ClaudeJsonl)
+/// OpenAI    | CodexQuota                      | OpenAiCosts
+/// ```
+///
+/// `ClaudeJsonl` is the raw JSONL input that powers both Anthropic cells
+/// (window math for the quota display, token counts for AnthropicApiCost).
+/// It's a separate Source because its update cadence and failure modes
+/// differ from the API-rate cost derived from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     /// `anthropic_oauth::fetch_usage` — the 5h / 7d / per-model cadence bars.
     ClaudeOAuth,
     /// `claude_parser` + `window::summarize_window` — local JSONL activity.
     ClaudeJsonl,
+    /// `claude_cost::compute_cost` — Anthropic API-rate cost estimate.
+    AnthropicApiCost,
+    /// `codex_local::read_codex_quota` — OpenAI Codex CLI rate-limit snapshot.
+    CodexQuota,
     /// `openai_client::costs_this_month` — month-to-date OpenAI spend.
     OpenAiCosts,
 }
@@ -24,6 +45,8 @@ pub enum Source {
 pub enum SourcePartial {
     ClaudeOAuth(ClaudeOAuthSnapshot),
     ClaudeJsonl(JsonlSnapshot),
+    AnthropicApiCost(Cost),
+    CodexQuota(CodexQuotaSnapshot),
     OpenAiCosts(OpenAiCosts),
 }
 
@@ -34,6 +57,8 @@ impl SourcePartial {
         match self {
             SourcePartial::ClaudeOAuth(_) => Source::ClaudeOAuth,
             SourcePartial::ClaudeJsonl(_) => Source::ClaudeJsonl,
+            SourcePartial::AnthropicApiCost(_) => Source::AnthropicApiCost,
+            SourcePartial::CodexQuota(_) => Source::CodexQuota,
             SourcePartial::OpenAiCosts(_) => Source::OpenAiCosts,
         }
     }

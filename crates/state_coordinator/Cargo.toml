@@ -10,7 +10,9 @@ publish.workspace = true
 
 [dependencies]
 anthropic_oauth = { path = "../anthropic_oauth" }
+claude_cost = { path = "../claude_cost" }
 claude_parser = { path = "../claude_parser" }
+codex_local = { path = "../codex_local" }
 openai_client = { path = "../openai_client" }
 settings = { path = "../settings" }
 window = { path = "../window" }
