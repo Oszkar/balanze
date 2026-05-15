@@ -5,7 +5,7 @@ view — Claude subscription quota, an estimate of Claude Code's API-rate value,
 OpenAI Codex quota, and real OpenAI API spend, in one glance. Rust + Tauri 2 +
 Svelte 5. Side project; Windows 11 and macOS 15+ (CLI also runs on Linux).
 
-## Status (v0.1 — "Data", May 2026)
+## Status (v0.1 — "Data")
 
 v0.1's bar is a **complete, honest data layer** exposed as a CLI
 (`balanze-cli`). The tray UI is deliberately later (v0.3); the CLI prints the
@@ -201,7 +201,7 @@ balanze/
 ## Testing
 
 ```bash
-cargo test --workspace                              # 186 tests (187 on Linux), ~5s
+cargo test --workspace                              # full workspace suite
 cargo clippy --workspace --all-targets -- -D warnings
 bun run check                                       # svelte-check + tsc
 ```
