@@ -90,10 +90,8 @@ async fn refresh_zero_expires_in_is_response_shape_error() {
 #[tokio::test]
 #[ignore = "real Anthropic endpoint; run manually with BALANZE_SMOKE_REFRESH_TOKEN set"]
 async fn refresh_real_endpoint_smoke() {
-    let Ok(rt) = std::env::var("BALANZE_SMOKE_REFRESH_TOKEN") else {
-        eprintln!("set BALANZE_SMOKE_REFRESH_TOKEN to run this smoke");
-        return;
-    };
+    let rt = std::env::var("BALANZE_SMOKE_REFRESH_TOKEN")
+        .expect("BALANZE_SMOKE_REFRESH_TOKEN must be set to run this pre-tag release gate");
     let client = reqwest::Client::new();
     let out = refresh_access_token(
         &client,

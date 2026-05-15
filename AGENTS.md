@@ -116,9 +116,9 @@ Rules for user-supplied keys (OpenAI):
 - The settings UI's API-key input renders as `type="password"` (no clipboard side-effects, no autocomplete).
 
 Rules for Claude OAuth tokens at `~/.claude/.credentials.json`:
-- **Read-only.** `anthropic_oauth` is the only crate that reads this file. We do not copy, persist, mirror, or back up its contents anywhere — not to settings, not to logs, not to cache, not to telemetry.
+- **`anthropic_oauth` is the only crate that reads and writes this file.** The only write is the refreshed-OAuth-token write-back via `write_back`, which is atomic (tmp + fsync + rename), preserves the existing file permissions, reuses Anthropic's file (never a new one), touches only the `claudeAiOauth` token fields, and never regresses a concurrently-newer on-disk token. We do not copy, persist, mirror, or back up the file's contents anywhere — not to settings, not to logs, not to cache, not to telemetry.
 - The bearer token, refresh token, and any field of `claudeAiOauth.*` are treated as secrets identical to OpenAI keys: never logged at any level, never echoed in `--show-config` output, never displayed in the UI even partially.
-- If we ever write a refreshed access token back to `~/.claude/.credentials.json` (when we implement the refresh-token flow), the write uses atomic tmp+rename and preserves the existing file permissions. We do not invent a new credentials file; we use Anthropic's.
+- Writing a refreshed access token back to `~/.claude/.credentials.json` is implemented in v0.1.1: the write uses atomic tmp + fsync + rename and preserves the existing file permissions. We do not invent a new credentials file; we use Anthropic's.
 - The file path itself (and its existence) IS loggable at INFO ("found credentials at <path>") — the contents are not.
 
 General rules for both:
@@ -159,7 +159,7 @@ balanze/
 ├── crates/                     workspace members (one-line purpose; mechanism lives in the code + the boundaries below)
 │   ├── claude_parser/          owns the Claude JSONL wire format: parse + walker + `dedup_events()` (by `(message_id, request_id)`) + `IncrementalParser` (byte-cursor, for the future watcher) + `find_claude_projects_dir()` (XDG + dual-path)
 │   ├── claude_cost/            pure JSONL→**estimated**-$ synthesis vs a vendored LiteLLM price subset. Infallible (unknown models → `skipped_models`). i64 micro-USD / i128 intermediates / saturating. Output is subscription-leverage, never real spend
-│   ├── anthropic_oauth/        only HTTP client for `GET /api/oauth/usage` AND only reader of `~/.claude/.credentials.json`. Curated cadence labels + titlecased fallback. Refresh-token-on-401 is a later-phase TODO
+│   ├── anthropic_oauth/        only HTTP client for `GET /api/oauth/usage` AND only reader and writer of `~/.claude/.credentials.json`. Curated cadence labels + titlecased fallback. Pre-flight + on-401 refresh-token flow with atomic write-back shipped in v0.1.1
 │   ├── window/                 pure rolling-window math: 5h main window + 30m burn rate + per-model breakdown (desc by tokens, ties name-asc for determinism)
 │   ├── predictor/              (planned, v0.2) EWMA + warm-up state machine
 │   ├── openai_client/          only HTTP client for the Admin Costs API (`GET /v1/organization/costs`, `sk-admin-…`). 401 → AuthInvalid; 403 → InsufficientScope (admin-key hint). Redacts `sk-` in error bodies
@@ -208,7 +208,7 @@ Strict layering — agents must respect:
 
 1. **`claude_parser` knows the JSONL wire format; nothing else does.** Other crates consume `UsageEvent` structs only. Don't leak schema details (field names, optionality, line-format quirks) outside this crate.
 2. **`window`, `predictor`, and `claude_cost` are pure functions.** No I/O, no `tokio::spawn`, no logging above `debug` level. Pure functions on event slices (`claude_cost` also takes a `&PriceTable`). `claude_cost` is infallible by design — unknown models route to `skipped_models`, never an error.
-3. **`anthropic_oauth` and `openai_client` (and v0.2's Console source) are the only HTTP clients.** They expose typed `fetch_*` async functions that return `anyhow::Result<Partial>`. Other crates do not import `reqwest`. `anthropic_oauth` is additionally the only reader of `~/.claude/.credentials.json` — see §3.4 for the secrets discipline this implies.
+3. **`anthropic_oauth` and `openai_client` (and v0.2's Console source) are the only HTTP clients.** They expose typed `fetch_*` async functions that return `anyhow::Result<Partial>`. Other crates do not import `reqwest`. `anthropic_oauth` is additionally the only reader and writer of `~/.claude/.credentials.json` — see §3.4 for the secrets discipline this implies.
 4. **`watcher` owns `notify` + the debounce + the 60s safety poll.** No other crate imports `notify`. The watcher exposes an `mpsc::Receiver<WatchEvent>` and that's it.
 5. **`keychain` is the only caller of the `keyring` crate.** All secret reads and writes route through this crate's API. Settings UI commands invoke `keychain::set/get/delete`, not `keyring::*` directly.
 6. **`settings` owns the `settings.json` file on disk.** Atomic writes (tmp + rename). No other crate reads or writes this file.

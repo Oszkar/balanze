@@ -62,8 +62,12 @@ pub async fn refresh_access_token(
         });
     }
 
-    let raw: RawRefreshResponse = serde_json::from_str(&body)
-        .map_err(|e| OAuthError::ResponseShape(format!("refresh response: {e}")))?;
+    let raw: RawRefreshResponse = serde_json::from_str(&body).map_err(|e| {
+        OAuthError::ResponseShape(format!(
+            "refresh response: {}",
+            crate::client::redact_for_display(&e.to_string())
+        ))
+    })?;
 
     // Fix 4: reject a non-positive expires_in — a malformed or hostile
     // response must not yield an already-expired credential that would

@@ -56,9 +56,13 @@ pub struct WindowSummary {
 /// burn-rate hint. Burn rate is `Some(tokens / burn_window_minutes)` only
 /// when at least `min_burn_events` events fall in the burn window.
 ///
-/// `window_anchor`: when `Some(reset)`, the main window is `[reset - window,
-/// reset)` — pinned to Anthropic's server-reported reset timestamp so the cap
-/// math is not skewed by local clock drift. `None` keeps the legacy
+/// `window_anchor`: when `Some(reset)` and `reset > now`, the main window is
+/// `[reset - window, reset)` — pinned to Anthropic's server-reported reset
+/// timestamp so the cap math is not skewed by local clock drift. A non-future
+/// reset (clock skew near the 5h boundary, or the server briefly echoing the
+/// just-passed reset right after rollover) is ignored and the function
+/// transparently falls back to the now-relative window, so fresh new-window
+/// events are never silently under-counted. `None` likewise keeps the legacy
 /// `now - window` window for callers without an OAuth reset (degraded path).
 /// Burn math is always `now`-relative regardless of the anchor.
 ///
@@ -72,11 +76,14 @@ pub fn summarize_window(
     min_burn_events: usize,
     window_anchor: Option<DateTime<Utc>>,
 ) -> WindowSummary {
-    // Anthropic's 5h cap window ENDS at the server-reported reset; the active
-    // window is [reset - window, reset). Anchoring removes local clock-drift
-    // error from the cap math (AGENTS.md v0.1.1). `None` keeps the legacy
-    // now-relative window for callers without an OAuth reset (degraded path).
-    let window_start = match window_anchor {
+    // A server-reported reset that is already at/in the past is unusable as
+    // an anchor: clock skew near the 5h boundary or the server briefly
+    // echoing the just-passed reset right after rollover would otherwise
+    // exclude the user's fresh new-window events and slide the window onto
+    // the expired one. Fall back to the legacy now-relative window then.
+    // Only a strictly-future reset is honored as an anchor.
+    let effective_anchor = window_anchor.filter(|&reset| reset > now);
+    let window_start = match effective_anchor {
         Some(reset) => reset - window,
         None => now - window,
     };
@@ -85,7 +92,7 @@ pub fn summarize_window(
     // the NEXT window, not this one. Unanchored (`None`) keeps the legacy
     // open-ended `[now - window, ..)` behavior so existing callers are
     // byte-identical.
-    let window_end = window_anchor; // Some(reset) => exclusive upper bound
+    let window_end = effective_anchor; // Some(reset) => exclusive upper bound
     let burn_window_start = now - burn_window;
 
     let mut by_model_map: BTreeMap<String, (usize, u64)> = BTreeMap::new();
@@ -424,6 +431,46 @@ mod tests {
             DEFAULT_BURN_WINDOW,
             DEFAULT_MIN_BURN_EVENTS,
             None,
+        );
+        assert_eq!(s.window_start, n - DEFAULT_WINDOW);
+        assert_eq!(s.total_events_in_window, 1);
+    }
+
+    #[test]
+    fn anchored_window_with_past_reset_falls_back_to_now_window() {
+        let n = now(); // 2026-05-14 12:00:00
+                       // Server reports a reset 1h in the PAST (skew / rollover-echo).
+        let stale_reset = n - Duration::hours(1);
+        // A fresh event 30 min ago: inside the legacy now-5h window, and it is
+        // AFTER stale_reset — the buggy half-open bound would drop it.
+        let e = ev(n - Duration::minutes(30), "sonnet", 100, 50);
+        let s = summarize_window(
+            &[e],
+            n,
+            DEFAULT_WINDOW,
+            DEFAULT_BURN_WINDOW,
+            DEFAULT_MIN_BURN_EVENTS,
+            Some(stale_reset),
+        );
+        // Falls back to the now-window: start == now - window, event counted.
+        assert_eq!(s.window_start, n - DEFAULT_WINDOW);
+        assert_eq!(
+            s.total_events_in_window, 1,
+            "a past/stale reset must NOT drop fresh events"
+        );
+    }
+
+    #[test]
+    fn anchored_window_with_reset_equal_now_falls_back() {
+        let n = now();
+        let e = ev(n - Duration::minutes(10), "sonnet", 10, 5);
+        let s = summarize_window(
+            &[e],
+            n,
+            DEFAULT_WINDOW,
+            DEFAULT_BURN_WINDOW,
+            DEFAULT_MIN_BURN_EVENTS,
+            Some(n), // reset == now → not strictly future → fall back
         );
         assert_eq!(s.window_start, n - DEFAULT_WINDOW);
         assert_eq!(s.total_events_in_window, 1);
