@@ -34,53 +34,78 @@ struct RawRefreshResponse {
 /// `token_url` to point at wiremock). `now_ms` is injected so the expiry math
 /// is testable without a wall clock. Non-200 → `RefreshFailed` (body
 /// redacted); transport error → `Network`. Nothing here is ever logged.
+///
+/// `policy` controls backoff+retry for transient errors (429, 5xx, network).
+/// Pass `BackoffPolicy::fail_fast()` from one-shot CLI callers.
 pub async fn refresh_access_token(
     client: &Client,
     token_url: &str,
     client_id: &str,
     refresh_token: &str,
     now_ms: i64,
+    policy: &backoff::BackoffPolicy,
 ) -> Result<RefreshedTokens, OAuthError> {
-    let resp = client
-        .post(token_url)
-        .json(&serde_json::json!({
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": client_id,
-        }))
-        .header("Accept", "application/json")
-        .send()
-        .await?;
+    let classify = |e: &OAuthError| match e {
+        OAuthError::RateLimited { retry_after } => backoff::RetryDecision::RetryAfter(*retry_after),
+        OAuthError::Network(_) => backoff::RetryDecision::RetryAfter(None),
+        OAuthError::RefreshFailed { status, .. } if (500..=599).contains(status) => {
+            backoff::RetryDecision::RetryAfter(None)
+        }
+        _ => backoff::RetryDecision::DoNotRetry,
+    };
 
-    let status = resp.status();
-    let body = resp.text().await?;
+    backoff::retry(policy, classify, || async {
+        let resp = client
+            .post(token_url)
+            .json(&serde_json::json!({
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            }))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
 
-    if status != StatusCode::OK {
-        return Err(OAuthError::RefreshFailed {
-            status: status.as_u16(),
-            body: crate::client::redact_for_display(&body),
-        });
-    }
+        let status = resp.status();
 
-    let raw: RawRefreshResponse = serde_json::from_str(&body).map_err(|e| {
-        OAuthError::ResponseShape(format!(
-            "refresh response: {}",
-            crate::client::redact_for_display(&e.to_string())
-        ))
-    })?;
+        // Read Retry-After BEFORE consuming the body (headers are unavailable
+        // after `resp.text()` takes ownership).
+        let retry_after = crate::client::parse_retry_after(resp.headers());
 
-    // Fix 4: reject a non-positive expires_in — a malformed or hostile
-    // response must not yield an already-expired credential that would
-    // trigger confusing immediate retry behavior.
-    if raw.expires_in <= 0 {
-        return Err(OAuthError::ResponseShape(
-            "refresh response: non-positive expires_in".into(),
-        ));
-    }
+        let body = resp.text().await?;
 
-    Ok(RefreshedTokens {
-        access_token: raw.access_token,
-        refresh_token: raw.refresh_token,
-        expires_at_ms: now_ms.saturating_add(raw.expires_in.saturating_mul(1000)),
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Err(OAuthError::RateLimited { retry_after });
+        }
+
+        if status != StatusCode::OK {
+            return Err(OAuthError::RefreshFailed {
+                status: status.as_u16(),
+                body: crate::client::redact_for_display(&body),
+            });
+        }
+
+        let raw: RawRefreshResponse = serde_json::from_str(&body).map_err(|e| {
+            OAuthError::ResponseShape(format!(
+                "refresh response: {}",
+                crate::client::redact_for_display(&e.to_string())
+            ))
+        })?;
+
+        // Fix 4: reject a non-positive expires_in — a malformed or hostile
+        // response must not yield an already-expired credential that would
+        // trigger confusing immediate retry behavior.
+        if raw.expires_in <= 0 {
+            return Err(OAuthError::ResponseShape(
+                "refresh response: non-positive expires_in".into(),
+            ));
+        }
+
+        Ok(RefreshedTokens {
+            access_token: raw.access_token,
+            refresh_token: raw.refresh_token,
+            expires_at_ms: now_ms.saturating_add(raw.expires_in.saturating_mul(1000)),
+        })
     })
+    .await
 }

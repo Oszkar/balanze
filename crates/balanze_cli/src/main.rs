@@ -660,12 +660,14 @@ async fn refresh_and_persist(
         .refresh_token
         .as_deref()
         .ok_or(OAuthError::RefreshTokenMissing)?;
+    // One-shot CLI must not block on provider backoff; the watcher will pass standard().
     let refreshed = refresh_access_token(
         client,
         CLAUDE_CODE_TOKEN_URL,
         CLAUDE_CODE_CLIENT_ID,
         rt,
         Utc::now().timestamp_millis(),
+        &backoff::BackoffPolicy::fail_fast(),
     )
     .await?;
     match write_back(path, &refreshed) {
@@ -695,12 +697,16 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
         oauth = refresh_and_persist(&client, &path, oauth).await?;
     }
 
+    // One-shot CLI must not block on provider backoff; the watcher will pass standard().
+    let policy = backoff::BackoffPolicy::fail_fast();
+
     match fetch_usage(
         &client,
         ANTHROPIC_API_BASE,
         &oauth.access_token,
         oauth.subscription_type.clone(),
         oauth.rate_limit_tier.clone(),
+        &policy,
     )
     .await
     {
@@ -721,6 +727,7 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
                 &oauth.access_token,
                 oauth.subscription_type,
                 oauth.rate_limit_tier,
+                &policy,
             )
             .await?;
             info!(

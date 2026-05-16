@@ -173,6 +173,11 @@ pub enum OAuthError {
     #[error("oauth refresh-token grant failed (HTTP {status}): {body}")]
     RefreshFailed { status: u16, body: String },
 
+    #[error("rate limited by Anthropic (HTTP 429)")]
+    RateLimited {
+        retry_after: Option<std::time::Duration>,
+    },
+
     #[error(
         "credentials file has no refreshToken — cannot refresh; user must re-run `claude login`"
     )]

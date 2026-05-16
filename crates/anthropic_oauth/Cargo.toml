@@ -16,6 +16,7 @@ name = "anthropic_oauth_smoke"
 path = "examples/smoke.rs"
 
 [dependencies]
+backoff = { path = "../backoff" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
@@ -24,6 +25,7 @@ reqwest = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+backoff = { path = "../backoff" }
 tokio = { workspace = true }
 wiremock = { workspace = true }
 anyhow = { workspace = true }
