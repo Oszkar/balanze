@@ -48,7 +48,7 @@ fn load_fixture_events() -> Vec<UsageEvent> {
 #[test]
 fn full_pipeline_populates_anthropic_api_cost_in_snapshot() {
     // Step 1: parse fixture JSONL (mirrors balanze_cli's
-    // load_and_dedup_claude_events).
+    // live_load_claude_events).
     let events = load_fixture_events();
     assert!(
         !events.is_empty(),
@@ -110,9 +110,9 @@ fn full_pipeline_populates_anthropic_api_cost_in_snapshot() {
 
 #[test]
 fn full_pipeline_populates_claude_jsonl_in_snapshot() {
-    // Mirrors balanze_cli's summarize_for_jsonl_snapshot — the window
-    // math arm. Verifies the JSONL slot lights up too, so a future
-    // refactor that breaks the shared-events plumbing fails this test.
+    // Mirrors the window-math arm now in snapshot_composer::compose.
+    // Verifies the JSONL slot lights up too, so a future refactor that
+    // breaks the shared-events plumbing fails this test.
     let events = load_fixture_events();
     // Fixed `now` one hour after the last fixture event (2026-05-15T10:02Z)
     // so all 3 fixtures fall inside the 5-hour main window deterministically.
