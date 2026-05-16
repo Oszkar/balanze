@@ -266,7 +266,7 @@ Make the data update itself, make the Anthropic API $ figure honest, and project
 - **Proactive OAuth refresh.** Today the Anthropic OAuth bearer expires every ~7–8h and the CLI surfaces an `AuthExpired` error (re-run `claude login`). v0.1.1 refreshes the token *before* expiry (keepalive with a margin), not reactively on a 401 — a background watcher that silently goes stale every 8h is not "live." Touches the credentials secret surface (§3.4); the refresh mechanism (implement the refresh-token grant with atomic write-back vs. delegate to the `claude` CLI) is the one open design decision for the Track A plan.
 - **Anchor the cap window to the server reset.** The rolling window is currently computed as `now − 5h`; v0.1.1 anchors it to the OAuth-reported `resets_at` (the authoritative reset the same endpoint already returns), removing clock-drift error from the cap math.
 
-**Foundational de-risk (Track B; before any polling).** A single source-orchestration policy shared by the CLI and the future live loop, so the two composition paths cannot silently diverge; and the provider-politeness backoff (exponential, capped) the §3.1 API-politeness rule requires before any repeated polling exists.
+**Foundational de-risk (Track B; before any polling).** A single source-orchestration policy shared by the CLI and the future live loop, so the two composition paths cannot silently diverge; and the provider-politeness backoff (exponential, capped) the §3.1 API-politeness rule requires before any repeated polling exists. Track B shipped — composition policy extracted into the `snapshot_composer` crate (CLI ≡ future watcher, fixture-parity-tested) and a `backoff` exponential-retry layer added to both HTTP clients (CLI fail-fast; watcher will use the standard 30s×2ⁿ schedule).
 
 **Anthropic API $ — honesty redesign (Track C; the headline product change).** v0.1's Anthropic API $ cell is a list-price figure recomputed from local JSONL × a vendored price table. v0.2 stops leading with that synthetic number:
 
@@ -282,7 +282,7 @@ Make the data update itself, make the Anthropic API $ figure honest, and project
 - Predictive reset: EWMA over the rolling window with an explicit warm-up state machine (Insufficient → Uncertain → Confident) so the predictor never lies immediately after a window reset. Its output contract (a `Snapshot` field vs. a separate event) is a §8 decision made before the crate is built.
 - `--watch` (long-running refresh loop) and a `statusline` mode for shell prompts / status bars.
 - Performance benchmarks (criterion) for the cost/parse hot paths land here, so the live refresh cadence has a measured budget and regressions are caught rather than guessed at.
-- Integration robustness improvements informed by the first weeks of real v0.1 use.
+- Integration robustness improvements informed by the first weeks of real v0.1 use. The watcher spawns `compose()` with a concrete `SnapshotSources` impl (Send inferred via static dispatch); a generic spawn-helper over `S: SnapshotSources` would need `trait_variant`/boxing to prove the future `Send`.
 
 Sequencing: Track A → Track B → Track C → (Track D ∥) → Track E.
 

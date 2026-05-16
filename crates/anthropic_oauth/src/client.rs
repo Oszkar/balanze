@@ -8,6 +8,20 @@ use crate::types::{CadenceBar, ClaudeOAuthSnapshot, ExtraUsage, OAuthError};
 
 const BETA_HEADER: &str = "oauth-2025-04-20";
 
+/// Parse the delta-seconds form of `Retry-After` into a `Duration`.
+/// An HTTP-date value (not a plain integer) will fail `parse::<u64>()` and
+/// return `None`, causing the retry loop to fall back to the policy schedule.
+/// Only the delta-seconds form is honored; acceptable for v0.2.
+pub(crate) fn parse_retry_after(
+    headers: &reqwest::header::HeaderMap,
+) -> Option<std::time::Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(std::time::Duration::from_secs)
+}
+
 #[derive(Debug, Deserialize)]
 struct RawCadence {
     utilization: f32,
@@ -36,49 +50,78 @@ struct RawExtraUsage {
 /// attempt a token refresh). Unknown future cadence keys are preserved
 /// verbatim in the response so newly-added Anthropic meters render with a
 /// titlecased fallback label.
+///
+/// `policy` controls backoff+retry for transient errors (429, 5xx, network).
+/// Pass `BackoffPolicy::fail_fast()` from one-shot CLI callers so the user is
+/// never blocked for minutes. The future background watcher will pass
+/// `BackoffPolicy::standard()`.
 pub async fn fetch_usage(
     client: &Client,
     base_url: &str,
     access_token: &str,
     subscription_type: Option<String>,
     rate_limit_tier: Option<String>,
+    policy: &backoff::BackoffPolicy,
 ) -> Result<ClaudeOAuthSnapshot, OAuthError> {
     let url = format!("{}/api/oauth/usage", base_url.trim_end_matches('/'));
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("anthropic-beta", BETA_HEADER)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
 
-    let status = resp.status();
-    let org_uuid = resp
-        .headers()
-        .get("anthropic-organization-id")
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
-
-    let body = resp.text().await?;
-
-    match status {
-        StatusCode::OK => {}
-        StatusCode::UNAUTHORIZED => return Err(OAuthError::AuthExpired),
-        _ => {
-            return Err(OAuthError::UnexpectedStatus {
-                status: status.as_u16(),
-                body: redact_for_display(&body),
-            });
+    let classify = |e: &OAuthError| match e {
+        OAuthError::RateLimited { retry_after } => backoff::RetryDecision::RetryAfter(*retry_after),
+        OAuthError::Network(_) => backoff::RetryDecision::RetryAfter(None),
+        OAuthError::UnexpectedStatus { status, .. } if (500..=599).contains(status) => {
+            backoff::RetryDecision::RetryAfter(None)
         }
-    }
+        // AuthExpired / RefreshFailed / ResponseShape / CredentialsMissing / etc.
+        // must NOT be retried — especially AuthExpired, which triggers the
+        // caller's refresh+retry-once path (Track A).
+        _ => backoff::RetryDecision::DoNotRetry,
+    };
 
-    parse_response(
-        &body,
-        org_uuid,
-        subscription_type,
-        rate_limit_tier,
-        Utc::now(),
-    )
+    backoff::retry(policy, classify, || async {
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("anthropic-beta", BETA_HEADER)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let org_uuid = resp
+            .headers()
+            .get("anthropic-organization-id")
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+
+        // Read Retry-After BEFORE consuming the body (headers are unavailable
+        // after `resp.text()` takes ownership).
+        let retry_after = parse_retry_after(resp.headers());
+
+        let body = resp.text().await?;
+
+        match status {
+            StatusCode::OK => {}
+            StatusCode::UNAUTHORIZED => return Err(OAuthError::AuthExpired),
+            StatusCode::TOO_MANY_REQUESTS => {
+                return Err(OAuthError::RateLimited { retry_after });
+            }
+            _ => {
+                return Err(OAuthError::UnexpectedStatus {
+                    status: status.as_u16(),
+                    body: redact_for_display(&body),
+                });
+            }
+        }
+
+        parse_response(
+            &body,
+            org_uuid,
+            subscription_type.clone(),
+            rate_limit_tier.clone(),
+            Utc::now(),
+        )
+    })
+    .await
 }
 
 /// Redact secret-shaped substrings before a response body is surfaced via

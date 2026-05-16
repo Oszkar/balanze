@@ -1,0 +1,54 @@
+{
+  "planPath": "docs/superpowers/plans/2026-05-16-track-b-derisk.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: snapshot_composer crate — trait + compose() + parity unit tests",
+      "status": "completed",
+      "description": "**Goal:** New crate exposing `SnapshotSources` (I/O boundary) + `compose()` with the orchestration policy moved verbatim from `balanze_cli::build_snapshot`, fake-sources unit-tested.\n\n**Files:** Create `crates/snapshot_composer/Cargo.toml` + `src/lib.rs` (no reqwest dep).\n\n**Acceptance Criteria:** SnapshotSources trait (4 async fns); compose() reproduces build_snapshot byte-for-byte (oauth→five_hour_reset anchor; JSONL-err single-error rule; Codex/OpenAI Ok(None) no error); fake-sources tests; `#[allow(async_fn_in_trait)]` documented; clippy -D clean.\n\n**Verify:** `cargo test -p snapshot_composer && cargo clippy -p snapshot_composer --all-targets -- -D warnings`\n\n```json:metadata\n{\"files\":[\"crates/snapshot_composer/Cargo.toml\",\"crates/snapshot_composer/src/lib.rs\"],\"verifyCommand\":\"cargo test -p snapshot_composer && cargo clippy -p snapshot_composer --all-targets -- -D warnings\",\"acceptanceCriteria\":[\"SnapshotSources trait w/ 4 async fns\",\"compose() reproduces build_snapshot policy byte-for-byte\",\"fake-sources tests cover jsonl-err/codex-none/openai-none/oauth-err-fallback\",\"no reqwest dep\",\"clippy -D warnings clean\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Repoint balanze_cli onto the composer (no behavior change)",
+      "status": "completed",
+      "blockedBy": [1],
+      "description": "**Goal:** `LiveSources: SnapshotSources` (existing fetch bodies moved unchanged); `build_snapshot()` = `compose(&LiveSources, Utc::now())`; duplicated helpers deleted; behavior unchanged.\n\n**Files:** `crates/balanze_cli/Cargo.toml` (+snapshot_composer dep); `crates/balanze_cli/src/main.rs`.\n\n**Acceptance Criteria:** build_snapshot delegates to compose; LiveSources bodies = current helpers moved unchanged; 2 pure helpers deleted; TODO block rewritten; workspace tests green UNCHANGED (integration not modified here); clippy+fmt clean.\n\n**Verify:** `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check`\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/Cargo.toml\",\"crates/balanze_cli/src/main.rs\"],\"verifyCommand\":\"cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check\",\"acceptanceCriteria\":[\"build_snapshot delegates to compose(&LiveSources)\",\"LiveSources bodies = current helpers moved unchanged\",\"2 pure helpers deleted; TODO block rewritten\",\"workspace tests green unchanged (integration not modified)\",\"clippy+fmt clean\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Repoint integration_4quadrant.rs onto compose() (parity guard)",
+      "status": "completed",
+      "blockedBy": [2],
+      "description": "**Goal:** `FixtureSources: SnapshotSources` (fixtures, zero network) + a test asserting the SAME compose() the CLI runs.\n\n**Files:** `crates/balanze_cli/tests/integration_4quadrant.rs` (+ Cargo dev-deps only if compiler needs).\n\n**Acceptance Criteria:** FixtureSources (no network); compose_parity_against_fixtures asserts cost>0/event_count==3/window==3/codex≈17.5/openai None/oauth-err; all pre-existing tests unchanged + green.\n\n**Verify:** `cargo test -p balanze_cli --test integration_4quadrant && cargo test --workspace`\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/tests/integration_4quadrant.rs\",\"crates/balanze_cli/Cargo.toml\"],\"verifyCommand\":\"cargo test -p balanze_cli --test integration_4quadrant && cargo test --workspace\",\"acceptanceCriteria\":[\"FixtureSources impl (no network)\",\"compose_parity test asserts documented Snapshot fields\",\"oauth-err ⇒ now-relative window end-to-end\",\"all pre-existing tests unchanged + green\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: backoff crate — pure policy + generic retry combinator",
+      "status": "completed",
+      "blockedBy": [3],
+      "description": "**Goal:** Pure `BackoffPolicy` (standard 30s×2ⁿ cap 10min/6; fail_fast 0; custom) + `RetryDecision` + generic async `retry`, paused-time unit-tested.\n\n**Files:** Create `crates/backoff/Cargo.toml` + `src/lib.rs`.\n\n**Acceptance Criteria:** saturating delay_for_attempt; retry honors server Retry-After clamped to cap + max_retries budget; paused-time deterministic tests; clippy -D clean.\n\n**Verify:** `cargo test -p backoff && cargo clippy -p backoff --all-targets -- -D warnings`\n\n```json:metadata\n{\"files\":[\"crates/backoff/Cargo.toml\",\"crates/backoff/src/lib.rs\"],\"verifyCommand\":\"cargo test -p backoff && cargo clippy -p backoff --all-targets -- -D warnings\",\"acceptanceCriteria\":[\"standard/fail_fast/custom + saturating delay_for_attempt\",\"RetryDecision enum\",\"retry honors server Retry-After clamped to cap + max_retries budget\",\"paused-time tests deterministic\",\"clippy -D warnings clean\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Wire backoff into anthropic_oauth (CLI passes fail-fast)",
+      "status": "completed",
+      "blockedBy": [4],
+      "description": "**Goal:** fetch_usage + refresh_access_token accept &BackoffPolicy, retry transient/429/5xx (honor Retry-After), NEVER retry 401. CLI passes fail_fast(). Workspace compiles per-commit.\n\n**Files:** anthropic_oauth Cargo.toml/types.rs/client.rs/refresh.rs/tests/refresh_wiremock.rs; balanze_cli main.rs+Cargo.toml.\n\n**Acceptance Criteria:** +policy param; 429→RateLimited{retry_after}; classifier never retries 401/non-5xx; 401-no-retry proven by wiremock expect(1); 429-then-200 retry green; CLI fail_fast(); workspace+clippy green.\n\n**Verify:** `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings`\n\n```json:metadata\n{\"files\":[\"crates/anthropic_oauth/Cargo.toml\",\"crates/anthropic_oauth/src/types.rs\",\"crates/anthropic_oauth/src/client.rs\",\"crates/anthropic_oauth/src/refresh.rs\",\"crates/anthropic_oauth/tests/refresh_wiremock.rs\",\"crates/balanze_cli/src/main.rs\",\"crates/balanze_cli/Cargo.toml\"],\"verifyCommand\":\"cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings\",\"acceptanceCriteria\":[\"fetch_usage+refresh_access_token gain &BackoffPolicy param\",\"429→RateLimited w/ Retry-After; never retries 401/non-5xx\",\"401 no-retry proven by wiremock expect(1)\",\"429-then-200 retry test green\",\"CLI passes fail_fast()\",\"workspace+clippy green per-commit\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Wire backoff into openai_client (CLI passes fail-fast)",
+      "status": "completed",
+      "blockedBy": [5],
+      "description": "**Goal:** fetch_costs/costs_this_month accept &BackoffPolicy, retry transient/429/5xx, NEVER retry 401/403. CLI passes fail_fast().\n\n**Files:** openai_client Cargo.toml/types.rs/client.rs/tests/wiremock_tests.rs; balanze_cli main.rs.\n\n**Acceptance Criteria:** +policy param; 429→RateLimited; classifier never retries 401/403/non-5xx; 429-then-200 green; 403 no-retry proven; CLI fail_fast(); workspace+clippy+fmt clean.\n\n**Verify:** `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check`\n\n```json:metadata\n{\"files\":[\"crates/openai_client/Cargo.toml\",\"crates/openai_client/src/types.rs\",\"crates/openai_client/src/client.rs\",\"crates/openai_client/tests/wiremock_tests.rs\",\"crates/balanze_cli/src/main.rs\"],\"verifyCommand\":\"cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check\",\"acceptanceCriteria\":[\"costs_this_month+fetch_costs gain &BackoffPolicy param\",\"429→RateLimited; never retries 401/403/non-5xx\",\"429-then-200 green; 403 no-retry proven\",\"CLI passes fail_fast()\",\"workspace+clippy+fmt clean\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Docs — AGENTS.md Repo Map / §2 / §4 #8 + prd.md",
+      "status": "completed",
+      "blockedBy": [6],
+      "description": "**Goal:** Keep authoritative docs truthful (§8): Repo Map +2 crates, §2 YAGNI updated, §4 #8 marked extracted, prd Track-B-shipped note.\n\n**Files:** AGENTS.md; docs/prd.md.\n\n**Acceptance Criteria:** Repo Map +snapshot_composer +backoff lines (no sibling reflow); §2 YAGNI sentence updated; §4 #8 rewritten past-tense citing the parity test, YAGNI clause dropped; prd Phase 2 Track B shipped note; no unrelated reflow.\n\n**Verify:** `rg -n 'snapshot_composer|crates/backoff' AGENTS.md && git diff --stat AGENTS.md docs/prd.md`\n\n```json:metadata\n{\"files\":[\"AGENTS.md\",\"docs/prd.md\"],\"verifyCommand\":\"rg -n 'snapshot_composer|crates/backoff' AGENTS.md && git diff --stat AGENTS.md docs/prd.md\",\"acceptanceCriteria\":[\"Repo Map +2 crate lines, no sibling reflow\",\"§2 YAGNI sentence updated\",\"§4 #8 rewritten past-tense, parity test cited, YAGNI clause dropped\",\"prd Phase 2 Track B shipped note\",\"no unrelated reflow\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-05-16T00:00:07Z"
+}

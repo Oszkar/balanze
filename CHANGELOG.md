@@ -41,6 +41,35 @@ are later v0.2 tracks; see `docs/prd.md` Phase 2.
   reconciliation is now a scheduled v0.2 Track C spike (was a vague v0.3 HAR
   item) — see README / `docs/prd.md`.
 
+**v0.2 Track B (de-risk)** — foundations for a poller, no user-facing
+behavior change (the CLI is byte-identical; the new retry layer is inert
+under the CLI's fail-fast policy). See `docs/prd.md` Phase 2.
+
+### Added
+- **`snapshot_composer` crate.** The source-orchestration policy
+  (`build_snapshot`) is extracted behind a `SnapshotSources` trait into one
+  `compose()` function. `balanze-cli` runs it via `LiveSources`; the future
+  v0.2 watcher will run the *same* `compose()` via its own `SnapshotSources`
+  — so the two composition paths cannot silently diverge (AGENTS.md §4 #8).
+  A fixture-driven `compose_parity_against_fixtures` integration test guards
+  it.
+- **`backoff` crate.** Pure exponential-backoff policy
+  (`standard` = 30 s × 2ⁿ, cap 10 min / `fail_fast` = 0 retries / `custom`)
+  plus a generic async `retry` combinator with no HTTP knowledge. Wired into
+  `anthropic_oauth` and `openai_client` (each fetch fn takes a
+  `&BackoffPolicy`). Idempotent GETs retry on 429 + 5xx + transport; the
+  token-rotating `refresh_access_token` POST retries **429-only** (a
+  5xx/timeout retry could replay a consumed refresh token). `Retry-After`
+  honored (delta-seconds), clamped to the policy cap; no jitter (single
+  user). The one-shot CLI passes `fail_fast()` (never blocks an interactive
+  invocation); the v0.2 watcher will pass `standard()`.
+
+### Changed
+- `balanze-cli`'s `build_snapshot` is now a one-line delegate to
+  `snapshot_composer::compose`; the per-source fetch helpers moved into a
+  `LiveSources` impl. Behavior-preserving — the integration suite + the new
+  parity test pin it.
+
 ## [0.1.0] - 2026-05-15
 
 v0.1 — **"Data"**: a complete, honest four-quadrant data layer as a CLI.

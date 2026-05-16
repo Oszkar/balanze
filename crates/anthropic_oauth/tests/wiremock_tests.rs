@@ -42,6 +42,7 @@ async fn happy_path_parses_response_and_reads_org_header() {
         "test-token",
         Some("max".into()),
         Some("default_claude_max_5x".into()),
+        &backoff::BackoffPolicy::fail_fast(),
     )
     .await
     .expect("fetch_usage should succeed");
@@ -63,9 +64,16 @@ async fn http_401_returns_auth_expired() {
         .await;
 
     let client = Client::new();
-    let err = fetch_usage(&client, &server.uri(), "expired-token", None, None)
-        .await
-        .expect_err("should fail with 401");
+    let err = fetch_usage(
+        &client,
+        &server.uri(),
+        "expired-token",
+        None,
+        None,
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect_err("should fail with 401");
     assert!(matches!(err, OAuthError::AuthExpired), "got {err:?}");
 }
 
@@ -80,9 +88,16 @@ async fn http_500_returns_unexpected_status_with_body() {
         .await;
 
     let client = Client::new();
-    let err = fetch_usage(&client, &server.uri(), "token", None, None)
-        .await
-        .expect_err("should fail with 500");
+    let err = fetch_usage(
+        &client,
+        &server.uri(),
+        "token",
+        None,
+        None,
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect_err("should fail with 500");
     match err {
         OAuthError::UnexpectedStatus { status, body } => {
             assert_eq!(status, 500);
@@ -103,9 +118,16 @@ async fn invalid_json_body_with_200_returns_response_shape() {
         .await;
 
     let client = Client::new();
-    let err = fetch_usage(&client, &server.uri(), "token", None, None)
-        .await
-        .expect_err("should fail on invalid JSON");
+    let err = fetch_usage(
+        &client,
+        &server.uri(),
+        "token",
+        None,
+        None,
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect_err("should fail on invalid JSON");
     assert!(matches!(err, OAuthError::ResponseShape(_)), "got {err:?}");
 }
 
@@ -122,8 +144,15 @@ async fn missing_org_header_is_not_fatal() {
         .await;
 
     let client = Client::new();
-    let snapshot = fetch_usage(&client, &server.uri(), "token", None, None)
-        .await
-        .expect("should succeed without org header");
+    let snapshot = fetch_usage(
+        &client,
+        &server.uri(),
+        "token",
+        None,
+        None,
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect("should succeed without org header");
     assert!(snapshot.org_uuid.is_none());
 }

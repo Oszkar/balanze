@@ -30,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
         &oauth.access_token,
         oauth.subscription_type,
         oauth.rate_limit_tier,
+        &backoff::BackoffPolicy::fail_fast(),
     )
     .await?;
 

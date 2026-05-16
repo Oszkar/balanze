@@ -46,6 +46,7 @@ name = "anthropic_oauth"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "backoff",
  "chrono",
  "reqwest 0.12.28",
  "serde",
@@ -240,6 +241,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "backoff"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "balanze"
 version = "0.1.0"
 dependencies = [
@@ -257,6 +265,7 @@ version = "0.1.0"
 dependencies = [
  "anthropic_oauth",
  "anyhow",
+ "backoff",
  "chrono",
  "claude_cost",
  "claude_parser",
@@ -268,6 +277,7 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
+ "snapshot_composer",
  "state_coordinator",
  "tokio",
  "tracing",
@@ -2572,6 +2582,7 @@ name = "openai_client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "backoff",
  "chrono",
  "reqwest 0.12.28",
  "serde",
@@ -3602,6 +3613,23 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "snapshot_composer"
+version = "0.1.0"
+dependencies = [
+ "anthropic_oauth",
+ "anyhow",
+ "chrono",
+ "claude_cost",
+ "claude_parser",
+ "codex_local",
+ "openai_client",
+ "state_coordinator",
+ "tokio",
+ "tracing",
+ "window",
+]
 
 [[package]]
 name = "socket2"
