@@ -5,8 +5,10 @@
 //! - maps 403 → InsufficientScope (with hint message intact)
 //! - maps other non-200 → UnexpectedStatus
 
+use std::time::Duration;
+
 use chrono::{TimeZone, Utc};
-use openai_client::{fetch_costs, OpenAiError};
+use openai_client::{costs_this_month, fetch_costs, OpenAiError};
 use reqwest::Client;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -55,9 +57,16 @@ async fn happy_path_parses_response_and_sends_expected_query() {
         .await;
 
     let client = Client::new();
-    let costs = fetch_costs(&client, &server.uri(), "sk-admin-test", start, Some(end))
-        .await
-        .expect("should succeed");
+    let costs = fetch_costs(
+        &client,
+        &server.uri(),
+        "sk-admin-test",
+        start,
+        Some(end),
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect("should succeed");
 
     assert!((costs.total_usd - 1.73).abs() < 1e-9);
     assert_eq!(costs.by_line_item.len(), 2);
@@ -80,9 +89,16 @@ async fn http_401_returns_auth_invalid() {
 
     let client = Client::new();
     let (start, end) = window();
-    let err = fetch_costs(&client, &server.uri(), "sk-admin-bad", start, Some(end))
-        .await
-        .expect_err("should fail with 401");
+    let err = fetch_costs(
+        &client,
+        &server.uri(),
+        "sk-admin-bad",
+        start,
+        Some(end),
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect_err("should fail with 401");
     assert!(
         matches!(err, OpenAiError::AuthInvalid { .. }),
         "got {err:?}"
@@ -103,9 +119,16 @@ async fn http_403_returns_insufficient_scope_with_hint() {
 
     let client = Client::new();
     let (start, end) = window();
-    let err = fetch_costs(&client, &server.uri(), "sk-proj-XYZ", start, Some(end))
-        .await
-        .expect_err("should fail with 403");
+    let err = fetch_costs(
+        &client,
+        &server.uri(),
+        "sk-proj-XYZ",
+        start,
+        Some(end),
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect_err("should fail with 403");
     let displayed = format!("{err}");
     match &err {
         OpenAiError::InsufficientScope { body } => {
@@ -132,9 +155,16 @@ async fn http_500_returns_unexpected_status() {
 
     let client = Client::new();
     let (start, end) = window();
-    let err = fetch_costs(&client, &server.uri(), "sk-admin-test", start, Some(end))
-        .await
-        .expect_err("should fail with 500");
+    let err = fetch_costs(
+        &client,
+        &server.uri(),
+        "sk-admin-test",
+        start,
+        Some(end),
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect_err("should fail with 500");
     match err {
         OpenAiError::UnexpectedStatus { status, body } => {
             assert_eq!(status, 500);
@@ -156,8 +186,61 @@ async fn invalid_json_body_with_200_is_shape_error() {
 
     let client = Client::new();
     let (start, end) = window();
-    let err = fetch_costs(&client, &server.uri(), "sk-admin-test", start, Some(end))
-        .await
-        .expect_err("should fail on invalid JSON");
+    let err = fetch_costs(
+        &client,
+        &server.uri(),
+        "sk-admin-test",
+        start,
+        Some(end),
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect_err("should fail on invalid JSON");
     assert!(matches!(err, OpenAiError::ResponseShape(_)), "got {err:?}");
+}
+
+#[tokio::test]
+async fn costs_retry_on_429_then_succeed() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(ResponseTemplate::new(429))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"object":"page","data":[],"has_more":false}"#),
+        )
+        .mount(&server)
+        .await;
+    let client = reqwest::Client::new();
+    let zero = backoff::BackoffPolicy::custom(Duration::ZERO, 2, Duration::ZERO, 3);
+    let out = costs_this_month(&client, &server.uri(), "sk-admin-x", &zero).await;
+    assert!(out.is_ok(), "should succeed after one 429 retry: {out:?}");
+}
+
+#[tokio::test]
+async fn costs_403_does_not_retry() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    let mock = Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .named("openai 403");
+    server.register(mock).await;
+    let client = reqwest::Client::new();
+    let std_pol = backoff::BackoffPolicy::standard();
+    let out = costs_this_month(&client, &server.uri(), "sk-admin-x", &std_pol).await;
+    assert!(matches!(
+        out,
+        Err(openai_client::OpenAiError::InsufficientScope { .. })
+    ));
+    // server drop verifies .expect(1) — 403 was NOT retried.
 }

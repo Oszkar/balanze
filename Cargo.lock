@@ -2582,6 +2582,7 @@ name = "openai_client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "backoff",
  "chrono",
  "reqwest 0.12.28",
  "serde",

@@ -45,6 +45,11 @@ pub enum OpenAiError {
     #[error("unexpected HTTP status {status} from organization/costs: {body}")]
     UnexpectedStatus { status: u16, body: String },
 
+    #[error("rate limited by OpenAI (HTTP 429)")]
+    RateLimited {
+        retry_after: Option<std::time::Duration>,
+    },
+
     #[error("organization/costs response shape unexpected: {0}")]
     ResponseShape(String),
 

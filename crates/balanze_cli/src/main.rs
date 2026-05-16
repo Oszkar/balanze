@@ -436,7 +436,15 @@ fn validate_openai_key_blocking(key: &str) -> Result<()> {
         let client = reqwest::Client::builder()
             .user_agent("balanze-cli/0.1.0")
             .build()?;
-        match costs_this_month(&client, OPENAI_API_BASE, key).await {
+        // One-shot CLI must not block on provider backoff; watcher passes standard().
+        match costs_this_month(
+            &client,
+            OPENAI_API_BASE,
+            key,
+            &backoff::BackoffPolicy::fail_fast(),
+        )
+        .await
+        {
             Ok(_) => Ok(()),
             Err(OpenAiError::AuthInvalid { body }) => {
                 Err(anyhow!("OpenAI rejected the key (HTTP 401). Body: {body}"))
@@ -766,7 +774,10 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
         .build()?;
-    match costs_this_month(&client, OPENAI_API_BASE, &key).await {
+    // One-shot CLI must not block on provider backoff; watcher passes standard().
+    match costs_this_month(&client, OPENAI_API_BASE, &key, &backoff::BackoffPolicy::fail_fast())
+        .await
+    {
         Ok(costs) => {
             info!(
                 "openai: fetched costs total_usd={} buckets={} truncated={}",
