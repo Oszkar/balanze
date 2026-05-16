@@ -37,6 +37,9 @@ impl BackoffPolicy {
         }
     }
 
+    /// Escape hatch / test affordance. Note: `base = 0` (or `cap = 0`) with
+    /// `RetryDecision::RetryAfter(None)` yields immediate (zero-delay) retries
+    /// bounded by `max_retries` — intended for tests, not production polling.
     pub fn custom(base: Duration, factor: u32, cap: Duration, max_retries: u32) -> Self {
         Self {
             base,
@@ -203,5 +206,49 @@ mod tests {
         .await;
         // One retry, slept the server-suggested 5s (not the 30s schedule).
         assert_eq!(start.elapsed(), Duration::from_secs(5));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn exhaustion_returns_the_real_last_error_not_a_wrapper() {
+        // Track A's 401→refresh and the CLI error surface depend on `retry`
+        // surfacing the genuine final error (e.g. AuthExpired), never a
+        // synthetic "retries exhausted". Pin it with a sentinel value.
+        let policy = BackoffPolicy::custom(Duration::ZERO, 2, Duration::ZERO, 2);
+        let r: Result<(), u32> = retry(
+            &policy,
+            |_| RetryDecision::RetryAfter(None),
+            || async { Err(424242_u32) },
+        )
+        .await;
+        assert_eq!(r, Err(424242_u32), "must return the original error value");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn server_retry_after_exceeding_cap_is_clamped_to_cap() {
+        // A hostile/large `Retry-After: 86400` must not park the watcher for
+        // a day — the server delay is clamped to the policy cap.
+        let start = tokio::time::Instant::now();
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let policy = BackoffPolicy::standard(); // cap = 600s
+        let _ = retry::<(), &str, _, _>(
+            &policy,
+            |_| RetryDecision::RetryAfter(Some(Duration::from_secs(86_400))),
+            || {
+                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    if n == 0 {
+                        Err("rate limited")
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await;
+        assert_eq!(
+            start.elapsed(),
+            Duration::from_secs(600),
+            "server Retry-After above cap must clamp to the 600s cap"
+        );
     }
 }
