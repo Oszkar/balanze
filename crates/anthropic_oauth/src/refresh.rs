@@ -45,12 +45,17 @@ pub async fn refresh_access_token(
     now_ms: i64,
     policy: &backoff::BackoffPolicy,
 ) -> Result<RefreshedTokens, OAuthError> {
+    // The refresh-token grant is a token-ROTATING POST: Anthropic issues a
+    // new refresh token on every grant. Only HTTP 429 is provably safe to
+    // retry (rate-limited ⇒ rejected before the grant is processed ⇒ the
+    // old refresh token is untouched). A 5xx or transport timeout is
+    // ambiguous — the server may have already rotated the token while
+    // failing to respond, so a retry would replay a consumed token and
+    // strand the user. Fail fast on everything except 429; the caller
+    // re-derives from a fresh `claude login`. (Contrast `fetch_usage`,
+    // an idempotent GET, which DOES retry 5xx/transport.)
     let classify = |e: &OAuthError| match e {
         OAuthError::RateLimited { retry_after } => backoff::RetryDecision::RetryAfter(*retry_after),
-        OAuthError::Network(_) => backoff::RetryDecision::RetryAfter(None),
-        OAuthError::RefreshFailed { status, .. } if (500..=599).contains(status) => {
-            backoff::RetryDecision::RetryAfter(None)
-        }
         _ => backoff::RetryDecision::DoNotRetry,
     };
 
