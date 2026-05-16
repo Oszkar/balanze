@@ -57,17 +57,17 @@ impl BackoffPolicy {
         self.cap
     }
 
-    /// `min(base * factor^attempt, cap)`, saturating (no overflow panic).
+    /// Backoff delay before retry `attempt` (0-indexed): `base * factor^attempt`,
+    /// saturating to `cap`. Sub-second `base` is preserved (Duration math, not
+    /// whole-second truncation). Overflow (huge `attempt`) saturates to `cap`,
+    /// never panics.
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let mult = (self.factor as u64)
-            .checked_pow(attempt)
-            .unwrap_or(u64::MAX);
-        let secs = self.base.as_secs().saturating_mul(mult);
-        let d = Duration::from_secs(secs);
-        if d > self.cap {
-            self.cap
-        } else {
-            d
+        match self.factor.checked_pow(attempt) {
+            None => self.cap, // factor^attempt overflowed u32 ⇒ astronomically large ⇒ cap
+            Some(mult) => match self.base.checked_mul(mult) {
+                None => self.cap, // base*mult overflowed Duration ⇒ cap
+                Some(d) => d.min(self.cap),
+            },
         }
     }
 }
@@ -250,5 +250,19 @@ mod tests {
             Duration::from_secs(600),
             "server Retry-After above cap must clamp to the 600s cap"
         );
+    }
+
+    #[test]
+    fn custom_sub_second_base_is_preserved_not_truncated() {
+        // Regression: `base.as_secs()` silently zeroed sub-second policies.
+        let p = BackoffPolicy::custom(Duration::from_millis(500), 2, Duration::from_secs(10), 5);
+        assert_eq!(p.delay_for_attempt(0), Duration::from_millis(500));
+        assert_eq!(p.delay_for_attempt(1), Duration::from_secs(1));
+        assert_eq!(p.delay_for_attempt(2), Duration::from_secs(2));
+        assert_eq!(p.delay_for_attempt(3), Duration::from_secs(4));
+        // 500ms * 2^5 = 16s, capped at 10s:
+        assert_eq!(p.delay_for_attempt(5), Duration::from_secs(10));
+        // Huge attempt saturates to cap, no panic:
+        assert_eq!(p.delay_for_attempt(99), Duration::from_secs(10));
     }
 }

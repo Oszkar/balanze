@@ -27,7 +27,11 @@ use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEF
 /// inferred at the concrete call site — e.g. the watcher's `tokio::spawn` on
 /// the multi-thread runtime resolves it automatically, since the watcher's own
 /// `SnapshotSources` impl returns `Send` futures and `compose` holds nothing
-/// non-`Send` across an `.await`.
+/// non-`Send` across an `.await`. Note: a *generic* `tokio::spawn` helper over
+/// `S: SnapshotSources` cannot prove the future `Send` (the trait can't express
+/// it), so the watcher must spawn `compose()` with a concrete `SnapshotSources`
+/// type (Send inferred) or add `trait_variant`/boxed futures if a generic
+/// helper is ever needed.
 #[allow(async_fn_in_trait)]
 pub trait SnapshotSources {
     /// Anthropic OAuth usage. The impl owns credential load + proactive

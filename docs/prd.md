@@ -282,7 +282,7 @@ Make the data update itself, make the Anthropic API $ figure honest, and project
 - Predictive reset: EWMA over the rolling window with an explicit warm-up state machine (Insufficient → Uncertain → Confident) so the predictor never lies immediately after a window reset. Its output contract (a `Snapshot` field vs. a separate event) is a §8 decision made before the crate is built.
 - `--watch` (long-running refresh loop) and a `statusline` mode for shell prompts / status bars.
 - Performance benchmarks (criterion) for the cost/parse hot paths land here, so the live refresh cadence has a measured budget and regressions are caught rather than guessed at.
-- Integration robustness improvements informed by the first weeks of real v0.1 use.
+- Integration robustness improvements informed by the first weeks of real v0.1 use. The watcher spawns `compose()` with a concrete `SnapshotSources` impl (Send inferred via static dispatch); a generic spawn-helper over `S: SnapshotSources` would need `trait_variant`/boxing to prove the future `Send`.
 
 Sequencing: Track A → Track B → Track C → (Track D ∥) → Track E.
 
