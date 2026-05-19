@@ -78,9 +78,8 @@ pub struct CadenceBar {
 /// 3/3 against a Max-5x screenshot (`monthly_limit 2500 = $25.00`,
 /// `used_credits 2092 = $20.92`, `utilization 83.7 ≈ "84% used"`). It is
 /// NOT total spend and NOT the JSONL-derived subscription-leverage
-/// estimate; `balanze_cli` will render it as a distinct REAL line only
-/// when `is_enabled` (Track C Task 2 — not yet landed at the time of
-/// this doc).
+/// estimate; `balanze_cli` renders it as a distinct REAL line only when
+/// `is_enabled` (shipped in Track C).
 ///
 /// `resets_at` and the prepaid "current balance" are visible in the
 /// claude.ai UI but are NOT in the OAuth wire response (see the
