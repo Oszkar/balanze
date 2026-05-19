@@ -13,7 +13,6 @@ struct RawRoot {
 
 #[derive(Debug, Deserialize)]
 struct RawCost {
-    #[serde(default)]
     total_cost_usd: Option<f64>,
 }
 
@@ -152,6 +151,14 @@ mod tests {
             r#"{"rate_limits":{"five_hour":{"used_percentage":9.0,"resets_at":1747650600}}}"#;
         let rl = parse(body).unwrap().rate_limits.unwrap();
         assert!(rl.five_hour.is_some());
+        assert!(rl.seven_day.is_none());
+    }
+
+    #[test]
+    fn empty_rate_limits_object_is_some_with_no_windows() {
+        let body = r#"{"rate_limits":{}}"#;
+        let rl = parse(body).unwrap().rate_limits.unwrap();
+        assert!(rl.five_hour.is_none());
         assert!(rl.seven_day.is_none());
     }
 }

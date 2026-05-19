@@ -2,8 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// One server-authoritative subscription window from the statusLine feed.
-/// Field shapes mirror `anthropic_oauth::CadenceBar` (`used_percent` f32,
-/// `resets_at` DateTime<Utc>) so Track E can treat the two sources uniformly.
+/// `anthropic_oauth::CadenceBar`'s analogous field is `utilization_percent`;
+/// `RateWindow` uses the shorter `used_percent` and `resets_at: DateTime<Utc>`.
+/// Track E aligns the two sources (a small field-name mapping step).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RateWindow {
     pub used_percent: f32,
