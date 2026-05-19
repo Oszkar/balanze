@@ -578,12 +578,13 @@ fn cmd_settings() -> Result<()> {
 
 fn cmd_statusline() -> Result<()> {
     use std::io::Read as _;
+    let mut stdout = std::io::stdout().lock();
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_err() {
-        println!("bal (statusline: stdin unreadable)");
+        let _ = writeln!(stdout, "bal (statusline: stdin unreadable)");
         return Ok(());
     }
-    println!("{}", format_statusline(&buf));
+    let _ = writeln!(stdout, "{}", format_statusline(&buf));
     Ok(())
 }
 
