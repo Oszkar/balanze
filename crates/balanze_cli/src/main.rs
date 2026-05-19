@@ -835,8 +835,27 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
                 pretty_duration(resets_in)
             );
         }
-        // extra_usage block intentionally suppressed; see commit e14365f.
-        let _ = &oauth.extra_usage;
+        // Extra-usage = pay-as-you-go overage. Resolved 2026-05-19 spike:
+        // raw ints are cents; this is the claude.ai "Extra usage" meter —
+        // REAL billed money, distinct from the estimated API-rate figure
+        // below. Only meaningful when the user enabled it.
+        if let Some(eu) = &oauth.extra_usage {
+            println!();
+            if eu.is_enabled {
+                println!(
+                    "EXTRA USAGE (pay-as-you-go overage — REAL billed spend, from Anthropic OAuth):"
+                );
+                println!(
+                    "  Spent this cycle:  {} of {} ({:.1}%)",
+                    micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                    micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
+                    eu.utilization_percent
+                );
+                println!("  Real money billed beyond your subscription — NOT the estimate below.");
+            } else {
+                println!("EXTRA USAGE: disabled (no pay-as-you-go overage configured)");
+            }
+        }
     } else if let Some(err) = &snapshot.claude_oauth_error {
         println!("CADENCE BARS: unavailable — {err}");
     }
@@ -917,14 +936,15 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
     println!();
     if let Some(cost) = &snapshot.anthropic_api_cost {
         println!(
-            "ANTHROPIC API COST (estimated, JSONL × LiteLLM prices @ {} / {}):",
+            "ANTHROPIC API COST — ESTIMATE ONLY (JSONL × LiteLLM list-price @ {} / {}):",
             claude_cost::PRICE_TABLE_COMMIT,
             claude_cost::PRICE_TABLE_DATE,
         );
         println!(
-            "  Total:             {} (subscription leverage — not actual spend on Pro/Max)",
+            "  Est. list-price:   {} — subscription leverage, NOT money billed",
             micro_usd_to_display_dollars(cost.total_micro_usd)
         );
+        println!("  (Real out-of-pocket spend, when enabled, is the EXTRA USAGE block above.)");
         println!("  Events processed:  {}", cost.total_event_count);
         if cost.unparsed_event_count > 0 {
             println!(
