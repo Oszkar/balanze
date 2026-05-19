@@ -12,8 +12,10 @@
 //! the rarer user running Claude Code against direct-API auth, the figure
 //! approximates actual spend, subject to vendored-price-table freshness.
 //!
-//! Either way, [`Cost`] outputs are marked `Confidence::Estimated` by the
-//! Balanze data layer's convention (see AGENTS.md §2.1).
+//! Either way, [`Cost`] is an **estimate**, never billed spend. There is
+//! no `Confidence` type in the workspace; the render layer (`balanze_cli`)
+//! labels this figure "estimate / subscription leverage / not billed" in
+//! every surface, per AGENTS.md §2.1 and the [`Cost::total_micro_usd`] doc.
 //!
 //! # Hot path
 //!
