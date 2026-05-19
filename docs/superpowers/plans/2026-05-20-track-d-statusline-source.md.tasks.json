@@ -24,7 +24,7 @@
     {
       "id": 10,
       "subject": "Task 4: claude_statusline::wiring — own statusLine stanza in Claude settings.json",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [7],
       "description": "wiring.rs: dual-path locate_settings_path/default_settings_path (shape from anthropic_oauth::credentials), read_wire_status (Unwired/WiredToBalanze/OccupiedBy), wire_statusline atomic preserve-keys idempotent no-clobber (write_back technique, no token/expiresAt logic). tempfile tests mirror credentials.rs. lib.rs adds wiring module+pub use+doc. Verify: cargo test/clippy/fmt -p claude_statusline. Full detail: plan Task 4.\n\n```json:metadata\n{\"files\":[\"crates/claude_statusline/src/wiring.rs\",\"crates/claude_statusline/src/lib.rs\"],\"verifyCommand\":\"cargo test -p claude_statusline && cargo clippy -p claude_statusline --all-targets -- -D warnings && cargo fmt -p claude_statusline -- --check\",\"acceptanceCriteria\":[\"dual-path locate + default_settings_path\",\"read_wire_status 3 states\",\"wire_statusline atomic/preserve-keys/idempotent/no-clobber\",\"tempfile tests; no .tmp leftovers\"]}\n```"
     },
@@ -50,5 +50,5 @@
       "description": "Verification only. fmt --all --check + clippy --workspace --all-targets -D warnings + test --workspace + bun run check all exit 0; integration_4quadrant.rs UNCHANGED+green (no Snapshot drift); git diff --name-only origin/main..HEAD has no snapshot_composer/state_coordinator/Snapshot; manual statusline happy+fallback smoke exit 0. No commit; failing gate returns to owning task (§7). Full detail: plan Task 7.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"all 4 gates green\",\"integration_4quadrant.rs unchanged+passes\",\"no snapshot_composer/state_coordinator/Snapshot change in diff\",\"manual statusline happy+fallback exit 0\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-20T02:00:00Z"
+  "lastUpdated": "2026-05-20T03:00:00Z"
 }
