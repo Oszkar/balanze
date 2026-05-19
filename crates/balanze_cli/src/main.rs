@@ -532,6 +532,11 @@ fn format_statusline(payload: &str) -> String {
     };
     let mut parts: Vec<String> = Vec::new();
     if let Some(rl) = &snap.rate_limits {
+        // {:.0}: a statusline is a glance — sub-1% truncation is acceptable
+        // here. compact_anthropic_quota uses {:.1} to avoid the "0%" == "no
+        // usage" ambiguity in the full terminal view; that concern does not
+        // apply to a terse one-liner. Intentional inconsistency — do not
+        // "align" these without re-reading both rationales.
         if let Some(w) = &rl.five_hour {
             parts.push(format!("5h {:.0}%", w.used_percent));
         }
@@ -575,6 +580,11 @@ mod statusline_tests {
             format_statusline("not json"),
             "bal (statusline parse error)"
         );
+    }
+    #[test]
+    fn formats_only_seven_day() {
+        let p = r#"{"rate_limits":{"seven_day":{"used_percentage":72.0,"resets_at":1747915200}}}"#;
+        assert_eq!(format_statusline(p), "bal 7d 72%");
     }
 }
 
