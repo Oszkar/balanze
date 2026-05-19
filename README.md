@@ -159,12 +159,12 @@ error. Test discipline and the per-crate validation matrix live in
   Manager. Workaround: set `BALANZE_OPENAI_KEY`. Fix scheduled for v0.3
   (`keyring` → `keyring-core` v4, riding with the settings UI that exercises
   the key-input box on both platforms). Detail: `AGENTS.md` §10a.
-- **`extra_usage` block from OAuth suppressed.** Anthropic's OAuth response
-  returns a `monthly_limit / used_credits` block whose semantics don't
-  reconcile with the claude.ai usage UI. Suppressed in pretty CLI output;
-  raw values are still in `--json` for diagnostics. v0.2's Track C runs a
-  bounded reconciliation spike to decide whether it can be promoted to a
-  real "spend this month" figure or stays diagnostic-only.
+- **Extra-usage overage is now surfaced (resolved).** The OAuth
+  `extra_usage` block was reconciled (2026-05-19): raw values are cents and
+  it is the claude.ai pay-as-you-go *overage* meter — real billed money.
+  Balanze shows it as a distinct REAL line (only when you enabled extra
+  usage), separate from the JSONL list-price *estimate*. There is no
+  "total spend this month" API for Max users; that remains by design.
 
 ## Layout
 
