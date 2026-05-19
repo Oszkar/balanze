@@ -17,7 +17,7 @@
     {
       "id": 3,
       "subject": "Task 3: Compact grid — lead with real overage, mark estimate, fix legend",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [2],
       "description": "Rewrite compact_anthropic_cost (main.rs:1069-1084) so real overage leads when enabled and the estimate is always tagged leverage-not-billed; update the compact legend (main.rs:1037-1039) to name the overage. Verify: cargo build -p balanze_cli && cargo clippy -p balanze_cli --all-targets -- -D warnings && cargo test --workspace && cargo fmt -p balanze_cli -- --check. Full code in the plan .md Task 3.\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/src/main.rs\"],\"verifyCommand\":\"cargo build -p balanze_cli && cargo clippy -p balanze_cli --all-targets -- -D warnings && cargo test --workspace && cargo fmt -p balanze_cli -- --check\",\"acceptanceCriteria\":[\"compact cell = '$x/$y overage billed . ~$z est-leverage (not billed)' when enabled\",\"estimate-only cell when overage off\",\"legend names real pay-as-you-go overage\",\"cargo test --workspace green\"]}\n```"
     },
@@ -42,5 +42,5 @@
       "description": "Verification only. cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check, all green; integration_4quadrant.rs passes unchanged (proves no Snapshot/serde drift); manual --sections + compact eyeball recorded (OAuth 429 non-blocking, rely on unit/regression coverage). No commit. Full detail in the plan .md Task 6.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"fmt+clippy+test --workspace + bun run check all green\",\"integration_4quadrant.rs passes unchanged (no Snapshot/serde drift)\",\"manual --sections + compact eyeball recorded\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-19T02:00:00Z"
+  "lastUpdated": "2026-05-19T03:00:00Z"
 }
