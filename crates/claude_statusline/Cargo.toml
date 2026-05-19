@@ -1,0 +1,19 @@
+[package]
+name = "claude_statusline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Parses the Claude Code statusLine stdin payload and owns the statusLine stanza in Claude Code's settings.json. The only code that knows that wire format."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+tempfile = "3"  # used by wiring.rs atomic-write tests (Track D Task 4)

@@ -35,7 +35,7 @@ Apply at all times:
 
 - **12-Factor App** — Config in env, stateless processes where possible, strict dev/prod parity.
 - **DRY** — No duplication of domain logic. JSONL parsing happens in one crate; rolling-window math in one crate; etc.
-- **YAGNI** — No speculative abstractions. The crate set is fixed and enumerated in the Repo Map (`snapshot_composer` + `backoff` shipped in Track B; `predictor` + `watcher` remain the only planned v0.2 additions); don't add a new crate because it "might be useful" — the Repo Map is the allowlist.
+- **YAGNI** — No speculative abstractions. The crate set is fixed and enumerated in the Repo Map (`snapshot_composer` + `backoff` shipped in Track B; `claude_statusline` shipped in Track D; `predictor` + `watcher` remain the only remaining planned v0.2 additions); don't add a new crate because it "might be useful" — the Repo Map is the allowlist.
 - **KISS** — Simplest viable implementation.
 - **PoLP** — Least privilege always. Keychain reads happen in one crate; nothing else touches the `keyring` crate.
 - **MVP Bias** — Solo developer; ship fast, document tech debt, do not gold-plate, do not architect for imaginary scale.
@@ -165,6 +165,7 @@ balanze/
 │   ├── window/                 pure rolling-window math: 5h main window + 30m burn rate + per-model breakdown (desc by tokens, ties name-asc for determinism)
 │   ├── predictor/              (planned, v0.2) EWMA + warm-up state machine
 │   ├── openai_client/          only HTTP client for the Admin Costs API (`GET /v1/organization/costs`, `sk-admin-…`). 401 → AuthInvalid; 403 → InsufficientScope (admin-key hint). Redacts `sk-` in error bodies
+│   ├── claude_statusline/      parses Claude Code's statusLine stdin payload AND owns the statusLine stanza in Claude settings.json (read + atomic write); §4 boundary #12
 │   ├── codex_local/            **only reader of `~/.codex/`** (boundary #11). Latest `rate_limits.primary` → one `CodexQuotaSnapshot` (no stream/dedup in v0.1). Honors `CODEX_CONFIG_DIR`
 │   ├── snapshot_composer/      the single source-orchestration policy (`SnapshotSources` trait + `compose()`); `balanze_cli` + the future watcher both run it so they cannot diverge (§4 #8)
 │   ├── state_coordinator/      actor: owns the canonical `Snapshot`; bounded-mpsc `StateMsg` loop; notifies a `Sink`. Tauri-free (src-tauri later provides a `TauriSink`)
@@ -220,6 +221,7 @@ Strict layering — agents must respect:
 9. **Frontend talks to backend only via the IPC contract.** Commands: `get_snapshot`, `get_history`, `refresh_now`, `set_api_key`, `get_settings`, `set_settings`. Events: `usage_updated`, `degraded_state`. Adding a new command or event requires a design-doc update first.
 10. **Currency math uses `i64` micro-USD.** Float arithmetic on money is a footgun (`0.1 + 0.2 != 0.3`, threshold comparisons flake near boundaries). Convert to `f64` ONLY at the display boundary. `claude_cost` additionally keeps per-token prices in i64 nano-USD with i128 intermediates and saturates at `i64::MAX`.
 11. **`codex_local` knows the Codex rollout-JSONL format and is the only reader of `~/.codex/`.** Exposes `CodexQuotaSnapshot`; no other crate parses Codex session files or imports its schema. Analogous to boundary #1 for `claude_parser`. Honors the `CODEX_CONFIG_DIR` override.
+12. **`claude_statusline` knows the Claude Code `statusLine` wire format AND is the only reader/writer of the `statusLine` stanza in Claude Code's `settings.json`.** Other crates consume the typed `StatuslineSnapshot`; nothing else parses the payload or mutates that settings key (atomic, idempotent, no-clobber — mirrors `anthropic_oauth` for `.credentials.json`, boundary #3/§3.4 discipline). The parsed snapshot is exposed but NOT wired into `Snapshot`/`compose()` here — that live integration is v0.2 Track E.
 
 ## 5. Quick Start for Agents
 

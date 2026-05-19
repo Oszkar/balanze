@@ -62,6 +62,7 @@ fn main() -> ExitCode {
         "set-openai-key" => cmd_set_openai_key(),
         "clear-openai-key" => cmd_clear_openai_key(),
         "settings" => cmd_settings(),
+        "statusline" => cmd_statusline(),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -180,12 +181,13 @@ fn cmd_clear_openai_key() -> Result<()> {
 // `balanze-cli setup` — interactive auth wizard.
 //
 // Flow:
-//   [1/4] Check Anthropic OAuth credentials file presence.
-//   [2/4] Check Codex sessions presence (codex_local).
-//   [3/4] Prompt for OpenAI admin key (masked input via rpassword),
+//   [1/5] Check Anthropic OAuth credentials file presence.
+//   [2/5] Check Codex sessions presence (codex_local).
+//   [3/5] Prompt for OpenAI admin key (masked input via rpassword),
 //         validate live against /v1/organization/costs, store in
 //         keychain, verify the keychain write took.
-//   [4/4] Print a 4-row readiness summary matching the eventual
+//   [4/5] Offer to wire Claude Code's statusLine to balanze-cli statusline.
+//   [5/5] Print a 4-row readiness summary matching the eventual
 //         `balanze-cli` output layout.
 //
 // Design decisions (recorded for future maintainers):
@@ -242,22 +244,27 @@ fn cmd_setup() -> Result<()> {
     eprintln!("  1. Checks your Anthropic OAuth credentials (~/.claude/.credentials.json).");
     eprintln!("  2. Checks your Codex sessions (~/.codex/sessions/).");
     eprintln!("  3. Prompts for your OpenAI admin key, validates it live, stores it.");
-    eprintln!("  4. Prints a readiness summary for all four data sources.");
+    eprintln!("  4. Offers to wire Claude Code's statusLine to `balanze-cli statusline`.");
+    eprintln!("  5. Prints a readiness summary for all four data sources.");
     eprintln!();
 
-    eprintln!("[1/4] Anthropic OAuth credentials");
+    eprintln!("[1/5] Anthropic OAuth credentials");
     let anthropic = check_anthropic_oauth();
     eprintln!();
 
-    eprintln!("[2/4] Codex CLI sessions");
+    eprintln!("[2/5] Codex CLI sessions");
     let codex = check_codex();
     eprintln!();
 
-    eprintln!("[3/4] OpenAI admin key");
+    eprintln!("[3/5] OpenAI admin key");
     let openai = setup_openai_key()?;
     eprintln!();
 
-    eprintln!("[4/4] Readiness summary");
+    eprintln!("[4/5] Claude Code statusLine wiring");
+    setup_statusline();
+    eprintln!();
+
+    eprintln!("[5/5] Readiness summary");
     print_readiness(&anthropic, &codex, &openai);
 
     Ok(())
@@ -430,6 +437,65 @@ fn prompt_for_openai_key() -> Result<String> {
     Ok(key)
 }
 
+fn setup_statusline() {
+    use claude_statusline::{
+        default_settings_path, locate_settings_path, read_wire_status, wire_statusline, WireStatus,
+    };
+    // Bare `balanze-cli` assumes it is on PATH (true after `cargo install`).
+    let invocation = "balanze-cli statusline";
+
+    let path = match locate_settings_path() {
+        Ok(p) => p,
+        Err(_) => default_settings_path(),
+    };
+    match read_wire_status(&path) {
+        Ok(WireStatus::WiredToBalanze) => {
+            eprintln!(
+                "  ✓ Claude Code statusLine already calls balanze-cli ({}).",
+                path.display()
+            );
+            return;
+        }
+        Ok(WireStatus::OccupiedBy(cmd)) => {
+            eprintln!("  ○ Claude Code statusLine is already set to a different command:");
+            eprintln!("      {cmd}");
+            eprintln!("    Leaving it untouched. To use Balanze, set statusLine.command to");
+            eprintln!("    `{invocation}` in {} yourself.", path.display());
+            return;
+        }
+        Ok(WireStatus::Unwired) => {}
+        Err(e) => {
+            eprintln!(
+                "  ✗ Could not read {} ({e}); skipping statusLine wiring.",
+                path.display()
+            );
+            return;
+        }
+    }
+
+    eprintln!("  Balanze can wire Claude Code's statusLine to show live 5h/7d quota.");
+    eprintln!("  This will set \"statusLine\" in {} to:", path.display());
+    eprintln!("      {{ \"type\": \"command\", \"command\": \"{invocation}\" }}");
+    eprintln!("  (other settings preserved; reversible by editing that file).");
+    eprint!("  Wire it now? [y/N]: ");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let mut answer = String::new();
+    // read_line returns Ok(0) on EOF (not Err); an IO error is also non-fatal
+    // here (advisory step). Either way `answer` stays empty and falls through
+    // to the "Skipped" else branch below — never writes settings.json.
+    let _ = std::io::stdin().read_line(&mut answer);
+    if answer.trim().eq_ignore_ascii_case("y") {
+        match wire_statusline(&path, invocation) {
+            Ok(()) => {
+                eprintln!("  ✓ Wired. Restart Claude Code to see the Balanze status line.")
+            }
+            Err(e) => eprintln!("  ✗ Failed to write {} ({e}); not wired.", path.display()),
+        }
+    } else {
+        eprintln!("  ○ Skipped (settings.json untouched).");
+    }
+}
+
 fn validate_openai_key_blocking(key: &str) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
@@ -510,6 +576,84 @@ fn cmd_settings() -> Result<()> {
     Ok(())
 }
 
+fn cmd_statusline() -> Result<()> {
+    use std::io::Read as _;
+    let mut stdout = std::io::stdout().lock();
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_err() {
+        let _ = writeln!(stdout, "bal (statusline: stdin unreadable)");
+        return Ok(());
+    }
+    let _ = writeln!(stdout, "{}", format_statusline(&buf));
+    Ok(())
+}
+
+/// Pure: payload string → one status-line string. Track D = a minimal
+/// honest line. Rich/configurable formatting + feeding the live Snapshot
+/// is Track E (the redefined watcher).
+fn format_statusline(payload: &str) -> String {
+    let snap = match claude_statusline::parse(payload) {
+        Ok(s) => s,
+        Err(_) => return "bal (statusline parse error)".to_string(),
+    };
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(rl) = &snap.rate_limits {
+        // {:.0}: a statusline is a glance — sub-1% truncation is acceptable
+        // here. compact_anthropic_quota uses {:.1} to avoid the "0%" == "no
+        // usage" ambiguity in the full terminal view; that concern does not
+        // apply to a terse one-liner. Intentional inconsistency — do not
+        // "align" these without re-reading both rationales.
+        if let Some(w) = &rl.five_hour {
+            parts.push(format!("5h {:.0}%", w.used_percent));
+        }
+        if let Some(w) = &rl.seven_day {
+            parts.push(format!("7d {:.0}%", w.used_percent));
+        }
+    }
+    if let Some(c) = snap.session_cost_micro_usd {
+        parts.push(format!("sess {}", micro_usd_to_display_dollars(c)));
+    }
+    if parts.is_empty() {
+        "bal (no rate-limit data yet)".to_string()
+    } else {
+        format!("bal {}", parts.join(" · "))
+    }
+}
+
+#[cfg(test)]
+mod statusline_tests {
+    use super::format_statusline;
+
+    #[test]
+    fn formats_full_payload() {
+        let p = r#"{"rate_limits":{"five_hour":{"used_percentage":13.0,"resets_at":1747650600},"seven_day":{"used_percentage":44.0,"resets_at":1747915200}},"cost":{"total_cost_usd":12.5}}"#;
+        assert_eq!(format_statusline(p), "bal 5h 13% · 7d 44% · sess $12.50");
+    }
+    #[test]
+    fn formats_no_rate_limits() {
+        assert_eq!(
+            format_statusline(r#"{"cost":{"total_cost_usd":2.0}}"#),
+            "bal sess $2.00"
+        );
+    }
+    #[test]
+    fn formats_empty_payload() {
+        assert_eq!(format_statusline("{}"), "bal (no rate-limit data yet)");
+    }
+    #[test]
+    fn parse_error_is_nonempty_fallback_not_panic() {
+        assert_eq!(
+            format_statusline("not json"),
+            "bal (statusline parse error)"
+        );
+    }
+    #[test]
+    fn formats_only_seven_day() {
+        let p = r#"{"rate_limits":{"seven_day":{"used_percentage":72.0,"resets_at":1747915200}}}"#;
+        assert_eq!(format_statusline(p), "bal 7d 72%");
+    }
+}
+
 fn print_help() {
     eprintln!("Balanze — local-first AI usage tracker.");
     eprintln!();
@@ -531,14 +675,18 @@ fn print_help() {
         "                                Codex sessions, prompts for OpenAI admin key (masked"
     );
     eprintln!(
-        "                                input), validates it live, stores it. Run this first."
+        "                                input), validates it live, stores it. Also offers to"
     );
+    eprintln!("                                wire Claude Code's statusLine. Run this first.");
     eprintln!(
         "  balanze-cli set-openai-key [KEY]  Non-interactive: stores KEY in the OS keychain."
     );
     eprintln!("                                Reads from stdin if KEY is omitted.");
     eprintln!("  balanze-cli clear-openai-key      Remove the OpenAI key from the keychain");
     eprintln!("  balanze-cli settings              Print current settings.json contents");
+    eprintln!("  balanze-cli statusline            Read Claude Code's statusLine JSON on stdin,");
+    eprintln!("                                print a one-line status (used as Claude Code's");
+    eprintln!("                                statusLine command — see `balanze-cli setup`).");
     eprintln!("  balanze-cli help                  This help");
     eprintln!();
     eprintln!("Environment overrides:");

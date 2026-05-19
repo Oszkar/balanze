@@ -21,6 +21,7 @@ anthropic_oauth = { path = "../anthropic_oauth" }
 backoff = { path = "../backoff" }
 claude_cost = { path = "../claude_cost" }
 claude_parser = { path = "../claude_parser" }
+claude_statusline = { path = "../claude_statusline" }
 codex_local = { path = "../codex_local" }
 keychain = { path = "../keychain" }
 openai_client = { path = "../openai_client" }

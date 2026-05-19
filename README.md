@@ -60,12 +60,17 @@ balanze-cli setup                 Interactive wizard — run this first
 balanze-cli set-openai-key [KEY]  Store an sk-admin-… key in the OS keychain
 balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
 balanze-cli settings              Print current settings.json
+balanze-cli statusline            Claude Code statusLine command: reads the
+                                  statusLine JSON on stdin, prints a one-line
+                                  status (live 5h/7d quota + session cost).
 balanze-cli help                  This help
 
 Env override: BALANZE_OPENAI_KEY=sk-admin-…  (takes precedence over the
 keychain; recommended on Windows until the keyring-v4 migration — see
 Known issues).
 ```
+
+`balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) — shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit.
 
 Default compact view — the four quadrants on one screen, with a legend that
 keeps the *estimated* Anthropic cell from being mistaken for the *real*
@@ -171,6 +176,7 @@ balanze/
 ├── crates/
 │   ├── claude_parser/        JSONL parser + walker + dedup + IncrementalParser
 │   ├── claude_cost/          pure JSONL→estimated-$ synth (vendored LiteLLM prices)
+│   ├── claude_statusline/    Claude Code statusLine payload parser + settings.json wiring
 │   ├── anthropic_oauth/      /api/oauth/usage client + credentials read/write
 │   ├── openai_client/        OpenAI /v1/organization/costs client
 │   ├── codex_local/          reads ~/.codex/sessions/ for Codex rate-limit %
