@@ -12,10 +12,14 @@
 //! the rarer user running Claude Code against direct-API auth, the figure
 //! approximates actual spend, subject to vendored-price-table freshness.
 //!
-//! Either way, [`Cost`] is an **estimate**, never billed spend. There is
+//! Either way, [`Cost`] is **Balanze's estimate** (tokens × a vendored
+//! price table), never a first-party or authoritative billed figure: for
+//! Pro/Max it is subscription leverage (not money billed at all); for
+//! direct-API auth it *approximates* actual spend (subject to price-table
+//! freshness) but is still an estimate, not the provider's bill. There is
 //! no `Confidence` type in the workspace; the render layer (`balanze_cli`)
-//! labels this figure "estimate / subscription leverage / not billed" in
-//! every surface, per AGENTS.md §2.1 and the [`Cost::total_micro_usd`] doc.
+//! labels it accordingly in every surface, per AGENTS.md §2.1 and the
+//! [`Cost::total_micro_usd`] doc.
 //!
 //! # Hot path
 //!
