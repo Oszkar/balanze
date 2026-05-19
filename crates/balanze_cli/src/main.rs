@@ -480,10 +480,10 @@ fn setup_statusline() {
     eprint!("  Wire it now? [y/N]: ");
     let _ = std::io::Write::flush(&mut std::io::stderr());
     let mut answer = String::new();
-    if std::io::stdin().read_line(&mut answer).is_err() {
-        eprintln!("  ○ No input; skipped (settings.json untouched).");
-        return;
-    }
+    // read_line returns Ok(0) on EOF (not Err); an IO error is also non-fatal
+    // here (advisory step). Either way `answer` stays empty and falls through
+    // to the "Skipped" else branch below — never writes settings.json.
+    let _ = std::io::stdin().read_line(&mut answer);
     if answer.trim().eq_ignore_ascii_case("y") {
         match wire_statusline(&path, invocation) {
             Ok(()) => {
