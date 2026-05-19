@@ -24,7 +24,7 @@
     {
       "id": 4,
       "subject": "Task 4: Fix stale Confidence::Estimated reference in claude_cost",
-      "status": "pending",
+      "status": "completed",
       "description": "claude_cost/src/lib.rs:15-16 references a non-existent Confidence::Estimated enum; replace with prose-accurate text (render layer labels it; AGENTS.md §2.1). Verify: cargo test -p claude_cost && cargo clippy -p claude_cost --all-targets -- -D warnings && cargo fmt -p claude_cost -- --check. Full code in the plan .md Task 4.\n\n```json:metadata\n{\"files\":[\"crates/claude_cost/src/lib.rs\"],\"verifyCommand\":\"cargo test -p claude_cost && cargo clippy -p claude_cost --all-targets -- -D warnings && cargo fmt -p claude_cost -- --check\",\"acceptanceCriteria\":[\"no doc claims a Confidence::Estimated type\",\"replacement cites render-layer labeling + AGENTS.md §2.1\",\"cargo test -p claude_cost green\"]}\n```"
     },
     {
@@ -42,5 +42,5 @@
       "description": "Verification only. cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check, all green; integration_4quadrant.rs passes unchanged (proves no Snapshot/serde drift); manual --sections + compact eyeball recorded (OAuth 429 non-blocking, rely on unit/regression coverage). No commit. Full detail in the plan .md Task 6.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"fmt+clippy+test --workspace + bun run check all green\",\"integration_4quadrant.rs passes unchanged (no Snapshot/serde drift)\",\"manual --sections + compact eyeball recorded\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-19T03:00:00Z"
+  "lastUpdated": "2026-05-19T04:00:00Z"
 }
