@@ -10,7 +10,7 @@
     {
       "id": 2,
       "subject": "Task 2: Surface extra_usage + hard-label estimate in print_sections",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [1],
       "description": "Replace the extra_usage suppression (main.rs:838-839) with an honest EXTRA USAGE block; hard-label ANTHROPIC API COST (main.rs:919-927) as ESTIMATE ONLY / not billed. Verify: cargo build -p balanze_cli && cargo clippy -p balanze_cli --all-targets -- -D warnings && cargo test --workspace && cargo fmt -p balanze_cli -- --check. Full code in the plan .md Task 2.\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/src/main.rs\"],\"verifyCommand\":\"cargo build -p balanze_cli && cargo clippy -p balanze_cli --all-targets -- -D warnings && cargo test --workspace && cargo fmt -p balanze_cli -- --check\",\"acceptanceCriteria\":[\"EXTRA USAGE block renders when is_enabled, 'disabled' when off, nothing when None\",\"reuses micro_usd_to_display_dollars\",\"ANTHROPIC API COST hard-labeled ESTIMATE ONLY / not billed\",\"cargo test --workspace green\"]}\n```"
     },
@@ -42,5 +42,5 @@
       "description": "Verification only. cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check, all green; integration_4quadrant.rs passes unchanged (proves no Snapshot/serde drift); manual --sections + compact eyeball recorded (OAuth 429 non-blocking, rely on unit/regression coverage). No commit. Full detail in the plan .md Task 6.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"fmt+clippy+test --workspace + bun run check all green\",\"integration_4quadrant.rs passes unchanged (no Snapshot/serde drift)\",\"manual --sections + compact eyeball recorded\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-19T01:00:00Z"
+  "lastUpdated": "2026-05-19T02:00:00Z"
 }
