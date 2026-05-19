@@ -67,6 +67,8 @@ keychain; recommended on Windows until the keyring-v4 migration — see
 Known issues).
 ```
 
+`balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) — shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit.
+
 Default compact view — the four quadrants on one screen, with a legend that
 keeps the *estimated* Anthropic cell from being mistaken for the *real*
 OpenAI bill:
@@ -171,6 +173,7 @@ balanze/
 ├── crates/
 │   ├── claude_parser/        JSONL parser + walker + dedup + IncrementalParser
 │   ├── claude_cost/          pure JSONL→estimated-$ synth (vendored LiteLLM prices)
+│   ├── claude_statusline/    Claude Code statusLine payload parser + settings.json wiring
 │   ├── anthropic_oauth/      /api/oauth/usage client + credentials read/write
 │   ├── openai_client/        OpenAI /v1/organization/costs client
 │   ├── codex_local/          reads ~/.codex/sessions/ for Codex rate-limit %
