@@ -43,6 +43,7 @@ pub fn locate_settings_path() -> Result<PathBuf, StatuslineError> {
             return Ok(path.clone());
         }
     }
+    // candidate_paths() is empty only when no home/XDG var is set — unreachable on a normal desktop; mirrors anthropic_oauth::locate_credentials.
     Err(StatuslineError::SettingsMissing {
         searched: candidates,
     })
@@ -119,6 +120,7 @@ pub fn read_wire_status(path: &Path) -> Result<WireStatus, StatuslineError> {
     };
 
     match status_line.get("command").and_then(|v| v.as_str()) {
+        // Substring heuristic: "are we already wired" guard, not a security boundary. A user wrapper containing both tokens would read as ours; acceptable for this CLI.
         Some(cmd) if cmd.contains("balanze-cli") && cmd.contains("statusline") => {
             Ok(WireStatus::WiredToBalanze)
         }
@@ -137,27 +139,43 @@ pub fn read_wire_status(path: &Path) -> Result<WireStatus, StatuslineError> {
 /// Unconditionally sets `statusLine` — the no-clobber policy belongs to the
 /// caller (Task 5 will call `read_wire_status` first). Safe to call repeatedly
 /// (idempotent).
+///
+/// Note: the file is rewritten via `serde_json::to_vec_pretty`, so it is
+/// normalized to pretty-printed JSON with object keys sorted
+/// (`serde_json::Value` is a `BTreeMap`; the workspace does not enable
+/// `preserve_order`). Semantically safe — Claude Code re-parses by key —
+/// but a user who hand-ordered their settings.json will see keys sorted
+/// after the first wire. Same accepted trade-off as `anthropic_oauth`'s
+/// credentials write-back.
 pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineError> {
     // Load + parse existing content, or start with an empty object.
-    let mut root: serde_json::Value = if path.exists() {
-        let bytes = std::fs::read(path).map_err(|e| StatuslineError::SettingsIo {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
-        let v: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|e| StatuslineError::SettingsMalformed {
-                path: path.to_path_buf(),
-                reason: e.to_string(),
-            })?;
-        if !v.is_object() {
-            return Err(StatuslineError::SettingsMalformed {
-                path: path.to_path_buf(),
-                reason: "root is not a JSON object".to_string(),
-            });
+    // A single match on std::fs::read avoids the TOCTOU race of `if path.exists()
+    // { std::fs::read(path) }` where a delete between the two calls would yield
+    // a spurious SettingsIo instead of correctly creating the file.
+    let mut root: serde_json::Value = match std::fs::read(path) {
+        Ok(bytes) => {
+            let v: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|e| StatuslineError::SettingsMalformed {
+                    path: path.to_path_buf(),
+                    reason: e.to_string(),
+                })?;
+            if !v.is_object() {
+                return Err(StatuslineError::SettingsMalformed {
+                    path: path.to_path_buf(),
+                    reason: "root is not a JSON object".to_string(),
+                });
+            }
+            v
         }
-        v
-    } else {
-        serde_json::Value::Object(serde_json::Map::new())
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            serde_json::Value::Object(serde_json::Map::new())
+        }
+        Err(e) => {
+            return Err(StatuslineError::SettingsIo {
+                path: path.to_path_buf(),
+                source: e,
+            })
+        }
     };
 
     // Mutate only the statusLine key; all other keys are untouched.
@@ -175,15 +193,13 @@ pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineEr
             reason: format!("re-serialize: {e}"),
         })?;
 
-    // Ensure parent directory exists.
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| StatuslineError::SettingsIo {
-            path: dir.to_path_buf(),
-            source: e,
-        })?;
-    }
-
+    // Ensure parent directory exists (hoisted to a single derivation; also
+    // creates ~/.claude if it does not yet exist).
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| StatuslineError::SettingsIo {
+        path: dir.to_path_buf(),
+        source: e,
+    })?;
 
     // Unique tmp name: pid + nanosecond timestamp + monotonic counter.
     // Avoids collisions on concurrent calls or PID reuse (mirrors credentials.rs).
