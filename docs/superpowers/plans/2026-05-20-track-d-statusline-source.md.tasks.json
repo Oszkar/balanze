@@ -17,7 +17,7 @@
     {
       "id": 9,
       "subject": "Task 3: balanze-cli statusline subcommand",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [7],
       "description": "Add claude_statusline path dep; `\"statusline\" => cmd_statusline()`; cmd_statusline reads stdin→claude_statusline::parse→one line stdout, ALWAYS exit 0, never panics; format_statusline + 4 unit tests; print_help. Files: crates/balanze_cli/{Cargo.toml,src/main.rs}. Verify: stdin pipe smoke + cargo build/clippy/test --workspace/fmt. Full code: plan Task 3.\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/Cargo.toml\",\"crates/balanze_cli/src/main.rs\"],\"verifyCommand\":\"cargo build -p balanze_cli && cargo clippy -p balanze_cli --all-targets -- -D warnings && cargo test --workspace && cargo fmt -p balanze_cli -- --check\",\"acceptanceCriteria\":[\"path dep + dispatch arm\",\"cmd_statusline stdin→one line, always exit 0, never panics\",\"format_statusline 4 unit tests\",\"cargo test --workspace green\"]}\n```"
     },
@@ -50,5 +50,5 @@
       "description": "Verification only. fmt --all --check + clippy --workspace --all-targets -D warnings + test --workspace + bun run check all exit 0; integration_4quadrant.rs UNCHANGED+green (no Snapshot drift); git diff --name-only origin/main..HEAD has no snapshot_composer/state_coordinator/Snapshot; manual statusline happy+fallback smoke exit 0. No commit; failing gate returns to owning task (§7). Full detail: plan Task 7.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"all 4 gates green\",\"integration_4quadrant.rs unchanged+passes\",\"no snapshot_composer/state_coordinator/Snapshot change in diff\",\"manual statusline happy+fallback exit 0\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-20T01:00:00Z"
+  "lastUpdated": "2026-05-20T02:00:00Z"
 }
