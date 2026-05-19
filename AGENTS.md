@@ -35,7 +35,7 @@ Apply at all times:
 
 - **12-Factor App** — Config in env, stateless processes where possible, strict dev/prod parity.
 - **DRY** — No duplication of domain logic. JSONL parsing happens in one crate; rolling-window math in one crate; etc.
-- **YAGNI** — No speculative abstractions. The crate set is fixed and enumerated in the Repo Map (`snapshot_composer` + `backoff` shipped in Track B; `predictor` + `watcher` remain the only planned v0.2 additions); don't add a new crate because it "might be useful" — the Repo Map is the allowlist.
+- **YAGNI** — No speculative abstractions. The crate set is fixed and enumerated in the Repo Map (`snapshot_composer` + `backoff` shipped in Track B; `claude_statusline` shipped in Track D; `predictor` + `watcher` remain the only remaining planned v0.2 additions); don't add a new crate because it "might be useful" — the Repo Map is the allowlist.
 - **KISS** — Simplest viable implementation.
 - **PoLP** — Least privilege always. Keychain reads happen in one crate; nothing else touches the `keyring` crate.
 - **MVP Bias** — Solo developer; ship fast, document tech debt, do not gold-plate, do not architect for imaginary scale.

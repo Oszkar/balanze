@@ -60,6 +60,9 @@ balanze-cli setup                 Interactive wizard — run this first
 balanze-cli set-openai-key [KEY]  Store an sk-admin-… key in the OS keychain
 balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
 balanze-cli settings              Print current settings.json
+balanze-cli statusline            Claude Code statusLine command: reads the
+                                  statusLine JSON on stdin, prints a one-line
+                                  status (live 5h/7d quota + session cost).
 balanze-cli help                  This help
 
 Env override: BALANZE_OPENAI_KEY=sk-admin-…  (takes precedence over the

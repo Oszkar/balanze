@@ -14,7 +14,7 @@ bumps are bug fixes only.
   `balanze-cli statusline` subcommand: reads Claude Code's statusLine JSON and
   prints live 5h/7d subscription quota + session cost in your shell — zero-auth,
   no rate limit. `balanze-cli setup` offers to wire it (ask-first, never
-  clobbers an existing statusLine, reversible).
+  clobbers an existing statusLine, reversible by restoring your `settings.json`).
 - **Real pay-as-you-go overage surfaced.** If you enabled Anthropic
   "Extra usage", `balanze-cli` now shows your real billed overage
   (spent / limit / %) in both the compact grid and `--sections` — the
