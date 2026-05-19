@@ -181,12 +181,13 @@ fn cmd_clear_openai_key() -> Result<()> {
 // `balanze-cli setup` — interactive auth wizard.
 //
 // Flow:
-//   [1/4] Check Anthropic OAuth credentials file presence.
-//   [2/4] Check Codex sessions presence (codex_local).
-//   [3/4] Prompt for OpenAI admin key (masked input via rpassword),
+//   [1/5] Check Anthropic OAuth credentials file presence.
+//   [2/5] Check Codex sessions presence (codex_local).
+//   [3/5] Prompt for OpenAI admin key (masked input via rpassword),
 //         validate live against /v1/organization/costs, store in
 //         keychain, verify the keychain write took.
-//   [4/4] Print a 4-row readiness summary matching the eventual
+//   [4/5] Offer to wire Claude Code's statusLine to balanze-cli statusline.
+//   [5/5] Print a 4-row readiness summary matching the eventual
 //         `balanze-cli` output layout.
 //
 // Design decisions (recorded for future maintainers):
@@ -243,22 +244,27 @@ fn cmd_setup() -> Result<()> {
     eprintln!("  1. Checks your Anthropic OAuth credentials (~/.claude/.credentials.json).");
     eprintln!("  2. Checks your Codex sessions (~/.codex/sessions/).");
     eprintln!("  3. Prompts for your OpenAI admin key, validates it live, stores it.");
-    eprintln!("  4. Prints a readiness summary for all four data sources.");
+    eprintln!("  4. Offers to wire Claude Code's statusLine to `balanze-cli statusline`.");
+    eprintln!("  5. Prints a readiness summary for all four data sources.");
     eprintln!();
 
-    eprintln!("[1/4] Anthropic OAuth credentials");
+    eprintln!("[1/5] Anthropic OAuth credentials");
     let anthropic = check_anthropic_oauth();
     eprintln!();
 
-    eprintln!("[2/4] Codex CLI sessions");
+    eprintln!("[2/5] Codex CLI sessions");
     let codex = check_codex();
     eprintln!();
 
-    eprintln!("[3/4] OpenAI admin key");
+    eprintln!("[3/5] OpenAI admin key");
     let openai = setup_openai_key()?;
     eprintln!();
 
-    eprintln!("[4/4] Readiness summary");
+    eprintln!("[4/5] Claude Code statusLine wiring");
+    setup_statusline();
+    eprintln!();
+
+    eprintln!("[5/5] Readiness summary");
     print_readiness(&anthropic, &codex, &openai);
 
     Ok(())
@@ -429,6 +435,65 @@ fn prompt_for_openai_key() -> Result<String> {
         eprintln!("    validation will tell you for sure.");
     }
     Ok(key)
+}
+
+fn setup_statusline() {
+    use claude_statusline::{
+        default_settings_path, locate_settings_path, read_wire_status, wire_statusline, WireStatus,
+    };
+    // Bare `balanze-cli` assumes it is on PATH (true after `cargo install`).
+    let invocation = "balanze-cli statusline";
+
+    let path = match locate_settings_path() {
+        Ok(p) => p,
+        Err(_) => default_settings_path(),
+    };
+    match read_wire_status(&path) {
+        Ok(WireStatus::WiredToBalanze) => {
+            eprintln!(
+                "  ✓ Claude Code statusLine already calls balanze-cli ({}).",
+                path.display()
+            );
+            return;
+        }
+        Ok(WireStatus::OccupiedBy(cmd)) => {
+            eprintln!("  ○ Claude Code statusLine is already set to a different command:");
+            eprintln!("      {cmd}");
+            eprintln!("    Leaving it untouched. To use Balanze, set statusLine.command to");
+            eprintln!("    `{invocation}` in {} yourself.", path.display());
+            return;
+        }
+        Ok(WireStatus::Unwired) => {}
+        Err(e) => {
+            eprintln!(
+                "  ✗ Could not read {} ({e}); skipping statusLine wiring.",
+                path.display()
+            );
+            return;
+        }
+    }
+
+    eprintln!("  Balanze can wire Claude Code's statusLine to show live 5h/7d quota.");
+    eprintln!("  This will set \"statusLine\" in {} to:", path.display());
+    eprintln!("      {{ \"type\": \"command\", \"command\": \"{invocation}\" }}");
+    eprintln!("  (other settings preserved; reversible by editing that file).");
+    eprint!("  Wire it now? [y/N]: ");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        eprintln!("  ○ No input; skipped (settings.json untouched).");
+        return;
+    }
+    if answer.trim().eq_ignore_ascii_case("y") {
+        match wire_statusline(&path, invocation) {
+            Ok(()) => {
+                eprintln!("  ✓ Wired. Restart Claude Code to see the Balanze status line.")
+            }
+            Err(e) => eprintln!("  ✗ Failed to write {} ({e}); not wired.", path.display()),
+        }
+    } else {
+        eprintln!("  ○ Skipped (settings.json untouched).");
+    }
 }
 
 fn validate_openai_key_blocking(key: &str) -> Result<()> {
@@ -609,8 +674,9 @@ fn print_help() {
         "                                Codex sessions, prompts for OpenAI admin key (masked"
     );
     eprintln!(
-        "                                input), validates it live, stores it. Run this first."
+        "                                input), validates it live, stores it. Also offers to"
     );
+    eprintln!("                                wire Claude Code's statusLine. Run this first.");
     eprintln!(
         "  balanze-cli set-openai-key [KEY]  Non-interactive: stores KEY in the OS keychain."
     );
