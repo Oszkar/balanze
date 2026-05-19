@@ -840,8 +840,8 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
         // REAL billed money, distinct from the estimated API-rate figure
         // below. Only meaningful when the user enabled it.
         if let Some(eu) = &oauth.extra_usage {
-            println!();
             if eu.is_enabled {
+                println!();
                 println!(
                     "EXTRA USAGE (pay-as-you-go overage — REAL billed spend, from Anthropic OAuth):"
                 );
@@ -853,6 +853,7 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
                 );
                 println!("  Real money billed beyond your subscription — NOT the estimate below.");
             } else {
+                println!();
                 println!("EXTRA USAGE: disabled (no pay-as-you-go overage configured)");
             }
         }
@@ -944,7 +945,9 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
             "  Est. list-price:   {} — subscription leverage, NOT money billed",
             micro_usd_to_display_dollars(cost.total_micro_usd)
         );
-        println!("  (Real out-of-pocket spend, when enabled, is the EXTRA USAGE block above.)");
+        println!(
+            "  (Real out-of-pocket spend is in the EXTRA USAGE block, shown when extra usage is enabled.)"
+        );
         println!("  Events processed:  {}", cost.total_event_count);
         if cost.unparsed_event_count > 0 {
             println!(
