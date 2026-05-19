@@ -1,0 +1,54 @@
+{
+  "planPath": "docs/superpowers/plans/2026-05-20-track-d-statusline-source.md",
+  "tasks": [
+    {
+      "id": 7,
+      "subject": "Task 1: claude_statusline crate — parse the statusLine payload",
+      "status": "pending",
+      "description": "New pure crate: claude_statusline::parse(&str)->Result<StatuslineSnapshot,StatuslineError>. rate_limits Some/None (None not error), session_cost_micro_usd from total_cost_usd dollars×1e6 round-half-away saturating, schema-drift discipline. Files: crates/claude_statusline/{Cargo.toml,src/lib.rs,errors.rs,types.rs,parse.rs}. Verify: cargo test/clippy/fmt -p claude_statusline. Full code: plan Task 1.\n\n```json:metadata\n{\"files\":[\"crates/claude_statusline/Cargo.toml\",\"crates/claude_statusline/src/lib.rs\",\"crates/claude_statusline/src/errors.rs\",\"crates/claude_statusline/src/types.rs\",\"crates/claude_statusline/src/parse.rs\"],\"verifyCommand\":\"cargo test -p claude_statusline && cargo clippy -p claude_statusline --all-targets -- -D warnings && cargo fmt -p claude_statusline -- --check\",\"acceptanceCriteria\":[\"parse() pure\",\"full→rate_limits+cost; missing→None not error\",\"invalid JSON→InvalidJson; wrong-type→SchemaDrift; unknown tolerated\",\"gates green\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 2: Real captured payload fixture + version confirmation",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "USER-ORDERED GATE — NON-SKIPPABLE. Commit a REAL maintainer-captured statusLine payload (paths redacted, rate_limits+cost intact) + tests/real_payload.rs asserting rate_limits Some, five_hour Some, session_cost Some; record confirmed Claude Code version. Needs maintainer artifact (recipe already given) — do NOT fabricate; report NEEDS_CONTEXT if absent. Verify: cargo test -p claude_statusline --test real_payload. Full detail: plan Task 2.\n\n```json:metadata\n{\"files\":[\"crates/claude_statusline/tests/fixtures/real-payload.json\",\"crates/claude_statusline/tests/real_payload.rs\"],\"verifyCommand\":\"cargo test -p claude_statusline --test real_payload -- --nocapture\",\"acceptanceCriteria\":[\"real captured payload committed (redacted, rate_limits+cost intact)\",\"parse()→rate_limits Some, five_hour Some, session_cost Some\",\"confirmed version recorded\"],\"userGate\":true,\"tags\":[\"user-gate\"]}\n```"
+    },
+    {
+      "id": 9,
+      "subject": "Task 3: balanze-cli statusline subcommand",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "Add claude_statusline path dep; `\"statusline\" => cmd_statusline()`; cmd_statusline reads stdin→claude_statusline::parse→one line stdout, ALWAYS exit 0, never panics; format_statusline + 4 unit tests; print_help. Files: crates/balanze_cli/{Cargo.toml,src/main.rs}. Verify: stdin pipe smoke + cargo build/clippy/test --workspace/fmt. Full code: plan Task 3.\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/Cargo.toml\",\"crates/balanze_cli/src/main.rs\"],\"verifyCommand\":\"cargo build -p balanze_cli && cargo clippy -p balanze_cli --all-targets -- -D warnings && cargo test --workspace && cargo fmt -p balanze_cli -- --check\",\"acceptanceCriteria\":[\"path dep + dispatch arm\",\"cmd_statusline stdin→one line, always exit 0, never panics\",\"format_statusline 4 unit tests\",\"cargo test --workspace green\"]}\n```"
+    },
+    {
+      "id": 10,
+      "subject": "Task 4: claude_statusline::wiring — own statusLine stanza in Claude settings.json",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "wiring.rs: dual-path locate_settings_path/default_settings_path (shape from anthropic_oauth::credentials), read_wire_status (Unwired/WiredToBalanze/OccupiedBy), wire_statusline atomic preserve-keys idempotent no-clobber (write_back technique, no token/expiresAt logic). tempfile tests mirror credentials.rs. lib.rs adds wiring module+pub use+doc. Verify: cargo test/clippy/fmt -p claude_statusline. Full detail: plan Task 4.\n\n```json:metadata\n{\"files\":[\"crates/claude_statusline/src/wiring.rs\",\"crates/claude_statusline/src/lib.rs\"],\"verifyCommand\":\"cargo test -p claude_statusline && cargo clippy -p claude_statusline --all-targets -- -D warnings && cargo fmt -p claude_statusline -- --check\",\"acceptanceCriteria\":[\"dual-path locate + default_settings_path\",\"read_wire_status 3 states\",\"wire_statusline atomic/preserve-keys/idempotent/no-clobber\",\"tempfile tests; no .tmp leftovers\"]}\n```"
+    },
+    {
+      "id": 11,
+      "subject": "Task 5: balanze-cli setup — statusLine wiring step",
+      "status": "pending",
+      "blockedBy": [10],
+      "description": "cmd_setup [5/5] step renumbered; setup_statusline(): WiredToBalanze→no write; OccupiedBy→skip no clobber; Unwired→print exact change, prompt [y/N], write only on y; default No; empty/unreadable stdin→No; print_help mention. File: crates/balanze_cli/src/main.rs. Verify: cargo build/clippy/test --workspace/fmt + manual setup answering N. Full code: plan Task 5.\n\n```json:metadata\n{\"files\":[\"crates/balanze_cli/src/main.rs\"],\"verifyCommand\":\"cargo build -p balanze_cli && cargo clippy -p balanze_cli --all-targets -- -D warnings && cargo test --workspace && cargo fmt -p balanze_cli -- --check\",\"acceptanceCriteria\":[\"[5/5] step, renumbered, print_readiness unchanged\",\"WiredToBalanze/OccupiedBy/Unwired handled; ask-first; no clobber\",\"default No; empty stdin→No\",\"cargo test --workspace green\"]}\n```"
+    },
+    {
+      "id": 12,
+      "subject": "Task 6: Docs sync — Repo Map, boundary, README, CHANGELOG, prd/design",
+      "status": "pending",
+      "blockedBy": [8, 9, 10, 11],
+      "description": "AGENTS.md Repo Map line + new Architectural-Boundaries entry (claude_statusline owns statusLine wire format + settings.json stanza, analogous to #1/#11); README Layout + usage sentence; CHANGELOG [Unreleased] Added; prd.md Phase-2 Track D delivered note (Track E owns live integration); external design/spike one-liner (not staged). Confirm NO snapshot_composer/state_coordinator/Snapshot change. Verify: boundary grep empty + cargo test --workspace. Full detail: plan Task 6.\n\n```json:metadata\n{\"files\":[\"AGENTS.md\",\"README.md\",\"CHANGELOG.md\",\"docs/prd.md\"],\"verifyCommand\":\"git diff --stat origin/main..HEAD -- crates/snapshot_composer crates/state_coordinator ; cargo test --workspace\",\"acceptanceCriteria\":[\"AGENTS.md Repo Map + boundary entry\",\"README + CHANGELOG + prd.md updated\",\"no snapshot_composer/state_coordinator/Snapshot change\"]}\n```"
+    },
+    {
+      "id": 13,
+      "subject": "Task 7: Full workspace validation gate",
+      "status": "pending",
+      "blockedBy": [12],
+      "description": "Verification only. fmt --all --check + clippy --workspace --all-targets -D warnings + test --workspace + bun run check all exit 0; integration_4quadrant.rs UNCHANGED+green (no Snapshot drift); git diff --name-only origin/main..HEAD has no snapshot_composer/state_coordinator/Snapshot; manual statusline happy+fallback smoke exit 0. No commit; failing gate returns to owning task (§7). Full detail: plan Task 7.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"all 4 gates green\",\"integration_4quadrant.rs unchanged+passes\",\"no snapshot_composer/state_coordinator/Snapshot change in diff\",\"manual statusline happy+fallback exit 0\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-05-20T00:00:00Z"
+}
