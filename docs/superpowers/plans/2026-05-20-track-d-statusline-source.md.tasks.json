@@ -4,7 +4,7 @@
     {
       "id": 7,
       "subject": "Task 1: claude_statusline crate — parse the statusLine payload",
-      "status": "pending",
+      "status": "completed",
       "description": "New pure crate: claude_statusline::parse(&str)->Result<StatuslineSnapshot,StatuslineError>. rate_limits Some/None (None not error), session_cost_micro_usd from total_cost_usd dollars×1e6 round-half-away saturating, schema-drift discipline. Files: crates/claude_statusline/{Cargo.toml,src/lib.rs,errors.rs,types.rs,parse.rs}. Verify: cargo test/clippy/fmt -p claude_statusline. Full code: plan Task 1.\n\n```json:metadata\n{\"files\":[\"crates/claude_statusline/Cargo.toml\",\"crates/claude_statusline/src/lib.rs\",\"crates/claude_statusline/src/errors.rs\",\"crates/claude_statusline/src/types.rs\",\"crates/claude_statusline/src/parse.rs\"],\"verifyCommand\":\"cargo test -p claude_statusline && cargo clippy -p claude_statusline --all-targets -- -D warnings && cargo fmt -p claude_statusline -- --check\",\"acceptanceCriteria\":[\"parse() pure\",\"full→rate_limits+cost; missing→None not error\",\"invalid JSON→InvalidJson; wrong-type→SchemaDrift; unknown tolerated\",\"gates green\"]}\n```"
     },
     {
@@ -50,5 +50,5 @@
       "description": "Verification only. fmt --all --check + clippy --workspace --all-targets -D warnings + test --workspace + bun run check all exit 0; integration_4quadrant.rs UNCHANGED+green (no Snapshot drift); git diff --name-only origin/main..HEAD has no snapshot_composer/state_coordinator/Snapshot; manual statusline happy+fallback smoke exit 0. No commit; failing gate returns to owning task (§7). Full detail: plan Task 7.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"all 4 gates green\",\"integration_4quadrant.rs unchanged+passes\",\"no snapshot_composer/state_coordinator/Snapshot change in diff\",\"manual statusline happy+fallback exit 0\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-20T00:00:00Z"
+  "lastUpdated": "2026-05-20T01:00:00Z"
 }
