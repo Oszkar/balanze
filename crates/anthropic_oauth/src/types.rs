@@ -89,9 +89,11 @@ pub struct CadenceBar {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtraUsage {
     pub is_enabled: bool,
-    /// Raw `monthly_limit` is in cents (assumed). We store as micro-USD (× 10_000).
+    /// Raw `monthly_limit` is in cents (resolved — see struct doc); stored
+    /// as i64 micro-USD (× 10_000).
     pub monthly_limit_micro_usd: i64,
-    /// Raw `used_credits` is in cents (assumed). Semantic unclear — see struct doc.
+    /// Raw `used_credits` is in cents (resolved — see struct doc); stored
+    /// as i64 micro-USD (× 10_000).
     pub used_credits_micro_usd: i64,
     pub utilization_percent: f32,
     pub currency: String,
