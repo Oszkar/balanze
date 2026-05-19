@@ -10,7 +10,7 @@
     {
       "id": 8,
       "subject": "Task 2: Real captured payload fixture + version confirmation",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [7],
       "description": "USER-ORDERED GATE — NON-SKIPPABLE. Commit a REAL maintainer-captured statusLine payload (paths redacted, rate_limits+cost intact) + tests/real_payload.rs asserting rate_limits Some, five_hour Some, session_cost Some; record confirmed Claude Code version. Needs maintainer artifact (recipe already given) — do NOT fabricate; report NEEDS_CONTEXT if absent. Verify: cargo test -p claude_statusline --test real_payload. Full detail: plan Task 2.\n\n```json:metadata\n{\"files\":[\"crates/claude_statusline/tests/fixtures/real-payload.json\",\"crates/claude_statusline/tests/real_payload.rs\"],\"verifyCommand\":\"cargo test -p claude_statusline --test real_payload -- --nocapture\",\"acceptanceCriteria\":[\"real captured payload committed (redacted, rate_limits+cost intact)\",\"parse()→rate_limits Some, five_hour Some, session_cost Some\",\"confirmed version recorded\"],\"userGate\":true,\"tags\":[\"user-gate\"]}\n```"
     },
@@ -50,5 +50,5 @@
       "description": "Verification only. fmt --all --check + clippy --workspace --all-targets -D warnings + test --workspace + bun run check all exit 0; integration_4quadrant.rs UNCHANGED+green (no Snapshot drift); git diff --name-only origin/main..HEAD has no snapshot_composer/state_coordinator/Snapshot; manual statusline happy+fallback smoke exit 0. No commit; failing gate returns to owning task (§7). Full detail: plan Task 7.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"all 4 gates green\",\"integration_4quadrant.rs unchanged+passes\",\"no snapshot_composer/state_coordinator/Snapshot change in diff\",\"manual statusline happy+fallback exit 0\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-20T04:00:00Z"
+  "lastUpdated": "2026-05-20T05:00:00Z"
 }
