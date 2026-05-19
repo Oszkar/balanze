@@ -4,7 +4,7 @@
     {
       "id": 1,
       "subject": "Task 1: Resolve extra_usage semantic in anthropic_oauth",
-      "status": "pending",
+      "status": "completed",
       "description": "Pin the resolved cents/overage semantic with a regression test; replace the 'semantic UNKNOWN' ExtraUsage doc + client.rs provenance comment. Files: crates/anthropic_oauth/src/types.rs:68-93, crates/anthropic_oauth/src/client.rs:189-191 + tests. Verify: cargo test -p anthropic_oauth && cargo clippy -p anthropic_oauth --all-targets -- -D warnings && cargo fmt -p anthropic_oauth -- --check. Full code in the plan .md Task 1.\n\n```json:metadata\n{\"files\":[\"crates/anthropic_oauth/src/types.rs\",\"crates/anthropic_oauth/src/client.rs\"],\"verifyCommand\":\"cargo test -p anthropic_oauth && cargo clippy -p anthropic_oauth --all-targets -- -D warnings && cargo fmt -p anthropic_oauth -- --check\",\"acceptanceCriteria\":[\"extra_usage_reconciled_cents_semantic test passes (2500->25_000_000, 2092->20_920_000)\",\"ExtraUsage doc states resolved cents/overage semantic\",\"client.rs comment cites the spike\",\"no struct field changes, x10_000 unchanged\"]}\n```"
     },
     {
@@ -42,5 +42,5 @@
       "description": "Verification only. cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check, all green; integration_4quadrant.rs passes unchanged (proves no Snapshot/serde drift); manual --sections + compact eyeball recorded (OAuth 429 non-blocking, rely on unit/regression coverage). No commit. Full detail in the plan .md Task 6.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"fmt+clippy+test --workspace + bun run check all green\",\"integration_4quadrant.rs passes unchanged (no Snapshot/serde drift)\",\"manual --sections + compact eyeball recorded\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-19T00:00:00Z"
+  "lastUpdated": "2026-05-19T01:00:00Z"
 }
