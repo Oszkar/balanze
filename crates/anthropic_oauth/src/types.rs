@@ -78,13 +78,15 @@ pub struct CadenceBar {
 /// 3/3 against a Max-5x screenshot (`monthly_limit 2500 = $25.00`,
 /// `used_credits 2092 = $20.92`, `utilization 83.7 ≈ "84% used"`). It is
 /// NOT total spend and NOT the JSONL-derived subscription-leverage
-/// estimate; `balanze_cli` renders it as a distinct REAL line, only when
-/// `is_enabled`.
+/// estimate; `balanze_cli` will render it as a distinct REAL line only
+/// when `is_enabled` (Track C Task 2 — not yet landed at the time of
+/// this doc).
 ///
 /// `resets_at` and the prepaid "current balance" are visible in the
-/// claude.ai UI but are NOT in the OAuth wire response (see
-/// `client.rs::RawExtraUsage`); only the five fields below exist on the
-/// wire. Values are stored as i64 micro-USD (cents × 10_000) per
+/// claude.ai UI but are NOT in the OAuth wire response (see the
+/// `RawExtraUsage` deserializer in `client.rs`); only the five fields
+/// below exist on the wire. Values are stored as i64 micro-USD
+/// (cents × 10_000) per
 /// AGENTS.md §2.1.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtraUsage {
