@@ -30,7 +30,7 @@
     {
       "id": 5,
       "subject": "Task 5: Doc sync — correct false PRD premise, reframe Track C, README/CHANGELOG/design/spike",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [1, 2, 3, 4],
       "description": "Reframe docs/prd.md:271-275 + :323 (premise disproven across 790 files; real cost = statusline/Track D; Track C = relabel + overage; Open-Q RESOLVED), replace README extra_usage Known-issues bullet, add CHANGELOG [Unreleased] Track C entry, correct the spike artifact (5 wire fields only + premise note) and sync the design doc. Verify: git grep -n 'per-event cost' docs/prd.md (no false claim) ; cargo test --workspace. Full prose in the plan .md Task 5.\n\n```json:metadata\n{\"files\":[\"docs/prd.md\",\"README.md\",\"CHANGELOG.md\"],\"verifyCommand\":\"git grep -n \\\"per-event cost\\\" docs/prd.md ; cargo test --workspace\",\"acceptanceCriteria\":[\"prd.md Track C reframed, false premise removed, Open-Q RESOLVED\",\"README extra_usage bullet replaced\",\"CHANGELOG [Unreleased] Track C entry\",\"spike artifact corrected to 5 wire fields + premise note\",\"design doc Track C synced\"]}\n```"
     },
@@ -42,5 +42,5 @@
       "description": "Verification only. cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check, all green; integration_4quadrant.rs passes unchanged (proves no Snapshot/serde drift); manual --sections + compact eyeball recorded (OAuth 429 non-blocking, rely on unit/regression coverage). No commit. Full detail in the plan .md Task 6.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"fmt+clippy+test --workspace + bun run check all green\",\"integration_4quadrant.rs passes unchanged (no Snapshot/serde drift)\",\"manual --sections + compact eyeball recorded\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-19T04:00:00Z"
+  "lastUpdated": "2026-05-19T05:00:00Z"
 }
