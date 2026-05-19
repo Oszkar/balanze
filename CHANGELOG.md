@@ -9,6 +9,12 @@ bumps are bug fixes only.
 
 ## [Unreleased]
 
+_Nothing yet. Next: v0.2 Track C — the Anthropic API $ honesty redesign
+(Claude Code's own per-event cost becomes the primary figure; preceded by a
+bounded `extra_usage` reconciliation spike). See `docs/prd.md` Phase 2._
+
+## [0.1.1] - 2026-05-19
+
 **v0.1.1 base** — Track A of the v0.2 roadmap (Liveness foundations). The
 JSONL→estimate honesty redesign, statusline source, and the watcher/predictor
 are later v0.2 tracks; see `docs/prd.md` Phase 2.
@@ -119,11 +125,12 @@ binaries or GitHub Release artifacts (that's the v0.4 phase).
 Theme per phase: **Data → Liveness → UI → Distribution**.
 
 - **v0.1 — Data** (this milestone): the four-quadrant CLI above.
-- **v0.1.1** — OAuth refresh-token flow; anchor the cap window to OAuth's `resets_at` (instead of `now - 5h`); small CLI polish.
-- **v0.2 — Liveness** — `watcher` crate (notify + debounce + `IncrementalParser` + safety poll); `predictor` crate (EWMA + warm-up state machine on `window::WindowSummary`); `--watch`; `statusline`.
+- **v0.1.1 — released 2026-05-19** — proactive OAuth refresh-token flow; cap window anchored to OAuth's `resets_at` (was `now - 5h`); plus v0.2 Track B de-risk (`snapshot_composer` + `backoff`) shipped in the same tag.
+- **v0.2 — Liveness** — next is Track C (Anthropic API $ honesty redesign), then Track D (statusline source); then the `watcher` crate (notify + debounce + `IncrementalParser` + safety poll) and `predictor` crate (EWMA + warm-up state machine on `window::WindowSummary`); `--watch`; `statusline`.
 - **v0.3 — UI** — Tauri tray + popover; settings UI; `keyring` → `keyring-core` v4 migration (fixes the Windows keychain bug); degraded-state events; dashboard window; alerts; Anthropic Console cookie-paste source.
 - **v0.4 — Distribution** — signed binaries (Windows cert, macOS notarization), Homebrew tap, WinGet manifest, Tauri auto-update.
 - **v1+** — Ubuntu GNOME, cross-device sync, Android companion, hosted wallboard.
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Oszkar/balanze/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Oszkar/balanze/releases/tag/v0.1.0
