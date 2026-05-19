@@ -835,8 +835,28 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
                 pretty_duration(resets_in)
             );
         }
-        // extra_usage block intentionally suppressed; see commit e14365f.
-        let _ = &oauth.extra_usage;
+        // Extra-usage = pay-as-you-go overage. Resolved 2026-05-19 spike:
+        // raw ints are cents; this is the claude.ai "Extra usage" meter —
+        // REAL billed money, distinct from the estimated API-rate figure
+        // below. Only meaningful when the user enabled it.
+        if let Some(eu) = &oauth.extra_usage {
+            if eu.is_enabled {
+                println!();
+                println!(
+                    "EXTRA USAGE (pay-as-you-go overage — REAL billed spend, from Anthropic OAuth):"
+                );
+                println!(
+                    "  Spent this cycle:  {} of {} ({:.1}%)",
+                    micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                    micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
+                    eu.utilization_percent
+                );
+                println!("  Real money billed beyond your subscription — NOT the estimate below.");
+            } else {
+                println!();
+                println!("EXTRA USAGE: disabled (no pay-as-you-go overage configured)");
+            }
+        }
     } else if let Some(err) = &snapshot.claude_oauth_error {
         println!("CADENCE BARS: unavailable — {err}");
     }
@@ -917,13 +937,16 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
     println!();
     if let Some(cost) = &snapshot.anthropic_api_cost {
         println!(
-            "ANTHROPIC API COST (estimated, JSONL × LiteLLM prices @ {} / {}):",
+            "ANTHROPIC API COST — ESTIMATE ONLY (JSONL × LiteLLM list-price @ {} / {}):",
             claude_cost::PRICE_TABLE_COMMIT,
             claude_cost::PRICE_TABLE_DATE,
         );
         println!(
-            "  Total:             {} (subscription leverage — not actual spend on Pro/Max)",
+            "  Est. list-price:   {} — subscription leverage, NOT money billed",
             micro_usd_to_display_dollars(cost.total_micro_usd)
+        );
+        println!(
+            "  (Real out-of-pocket spend is in the EXTRA USAGE block, shown when extra usage is enabled.)"
         );
         println!("  Events processed:  {}", cost.total_event_count);
         if cost.unparsed_event_count > 0 {
@@ -1036,7 +1059,8 @@ fn print_compact(snapshot: &Snapshot) {
     // a ~$4,000 estimate is never mistaken for ~$4,000 of real spend.
     println!("Quota % = live server-reported utilization. API $: Anthropic =");
     println!("estimated list-price for local Claude Code tokens (subscription");
-    println!("leverage — NOT money you were billed); OpenAI = real billed spend.");
+    println!("leverage — NOT billed). 'overage billed' = REAL pay-as-you-go");
+    println!("spend from Anthropic. OpenAI = real billed spend.");
     println!();
     println!("Run `balanze-cli --sections` for per-source detail, or `balanze-cli --json` for machine-readable output.");
 }
@@ -1067,19 +1091,34 @@ fn compact_anthropic_quota(s: &Snapshot) -> String {
 }
 
 fn compact_anthropic_cost(s: &Snapshot) -> String {
-    match (&s.anthropic_api_cost, &s.anthropic_api_cost_error) {
-        // JSONL loaded fine but zero billable events (fresh install, no
-        // Claude Code sessions yet). Rendering "~$0.00 (estimated)"
-        // would imply a real computation against data; it's actually
-        // "nothing to compute". Treat it like the no-data case.
+    // Real billed overage (only when the user enabled pay-as-you-go) leads;
+    // the JSONL figure is ALWAYS tagged leverage-not-billed so a ~$4,000
+    // estimate is never read as ~$4,000 of real spend.
+    let overage = s
+        .claude_oauth
+        .as_ref()
+        .and_then(|o| o.extra_usage.as_ref())
+        .filter(|eu| eu.is_enabled)
+        .map(|eu| {
+            format!(
+                "{}/{} overage billed",
+                micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                micro_usd_to_display_dollars(eu.monthly_limit_micro_usd)
+            )
+        });
+    let est = match (&s.anthropic_api_cost, &s.anthropic_api_cost_error) {
         (Some(cost), _) if cost.total_event_count == 0 => "○ no jsonl data yet".to_string(),
         (Some(cost), _) => format!(
-            "~{} (est. list-price, not billed)",
+            "~{} est-leverage (not billed)",
             micro_usd_to_display_dollars(cost.total_micro_usd)
         ),
         (None, Some(_)) => "✗ cost synthesis failed".to_string(),
         (None, None) if s.claude_jsonl_error.is_some() => "✗ jsonl load failed".to_string(),
         (None, None) => "○ no jsonl data".to_string(),
+    };
+    match overage {
+        Some(o) => format!("{o} · {est}"),
+        None => est,
     }
 }
 

@@ -9,9 +9,25 @@ bumps are bug fixes only.
 
 ## [Unreleased]
 
-_Nothing yet. Next: v0.2 Track C — the Anthropic API $ honesty redesign
-(Claude Code's own per-event cost becomes the primary figure; preceded by a
-bounded `extra_usage` reconciliation spike). See `docs/prd.md` Phase 2._
+### Added
+- **Real pay-as-you-go overage surfaced.** If you enabled Anthropic
+  "Extra usage", `balanze-cli` now shows your real billed overage
+  (spent / limit / %) in both the compact grid and `--sections` — the
+  exact figure claude.ai shows. Previously suppressed because its units
+  were unverified; a reconciliation spike resolved it (cents; the
+  claude.ai overage meter).
+
+### Changed
+- **The Anthropic API-$ estimate is now hard-labeled.** The JSONL ×
+  list-price number is explicitly tagged "estimate — subscription
+  leverage, NOT billed" and visually separated from the real overage, so
+  a large estimate can't be misread as real spend.
+
+### Fixed
+- `anthropic_oauth` `ExtraUsage` docs no longer say the semantic is
+  "unknown" (resolved: cents / overage meter); `claude_cost` no longer
+  references a non-existent `Confidence::Estimated` type. Corrected the
+  PRD's false "Claude Code records a per-event cost in the JSONL" premise.
 
 ## [0.1.1] - 2026-05-19
 

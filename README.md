@@ -159,12 +159,6 @@ error. Test discipline and the per-crate validation matrix live in
   Manager. Workaround: set `BALANZE_OPENAI_KEY`. Fix scheduled for v0.3
   (`keyring` → `keyring-core` v4, riding with the settings UI that exercises
   the key-input box on both platforms). Detail: `AGENTS.md` §10a.
-- **`extra_usage` block from OAuth suppressed.** Anthropic's OAuth response
-  returns a `monthly_limit / used_credits` block whose semantics don't
-  reconcile with the claude.ai usage UI. Suppressed in pretty CLI output;
-  raw values are still in `--json` for diagnostics. v0.2's Track C runs a
-  bounded reconciliation spike to decide whether it can be promoted to a
-  real "spend this month" figure or stays diagnostic-only.
 
 ## Layout
 

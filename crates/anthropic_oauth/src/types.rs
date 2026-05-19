@@ -65,38 +65,36 @@ pub struct CadenceBar {
     pub resets_at: DateTime<Utc>,
 }
 
-/// The `extra_usage` block — separate from cadence bars because it has different
-/// shape (a numeric counter with a cap and a percentage).
+/// The `extra_usage` block — Anthropic's opt-in **pay-as-you-go overage**
+/// meter (the claude.ai/settings/usage "Extra usage" section). Separate
+/// from cadence bars because it is a billed-money counter, not a
+/// utilization %.
 ///
-/// **The semantic of this block is currently UNKNOWN and the values should not
-/// be trusted as dollar amounts.** Investigation as of May 2026:
+/// **Semantic RESOLVED 2026-05-19** (spike:
+/// `~/.gstack/projects/balanze/spike-extra-usage-reconciliation-20260519.md`).
+/// Raw `monthly_limit` / `used_credits` are integer **cents**; this block
+/// is the claude.ai "Extra usage" pay-as-you-go overage meter — **real
+/// money billed** beyond the subscription, exact, first-party. Reconciled
+/// 3/3 against a Max-5x screenshot (`monthly_limit 2500 = $25.00`,
+/// `used_credits 2092 = $20.92`, `utilization 83.7 ≈ "84% used"`). It is
+/// NOT total spend and NOT the JSONL-derived subscription-leverage
+/// estimate; `balanze_cli` renders it as a distinct REAL line only when
+/// `is_enabled` (shipped in Track C).
 ///
-/// - The visible claude.ai/settings/usage UI shows "$4.67 spent this month / $20
-///   monthly spend limit / 23% used" for the user's account.
-/// - OAuth `/api/oauth/usage` returns `{monthly_limit: 2000, used_credits: 1763,
-///   utilization: 88.15, currency: "USD"}` for the same account at the same time.
-/// - hamed-elfayome's Claude Usage Tracker (Electron, macOS) renders the OAuth
-///   numbers as `$17.63 / $20.00` — i.e. it treats the raw values as cents.
-/// - Treating as cents reconciles `monthly_limit = 2000 → $20.00` with the UI's
-///   `$20 monthly spend limit`, but `used_credits = 1763 → $17.63` does NOT match
-///   the UI's `$4.67 spent`. Interpreting `used_credits` as "remaining" also
-///   doesn't reconcile cleanly ($20 - $17.63 = $2.37, still $2.30 off from $4.67).
-///
-/// Possibilities (none verified):
-/// - `used_credits` is a lifetime spend tally rather than current-month spend.
-/// - `used_credits` is a different metric (committed balance, reserved credits).
-/// - The visible UI's "$4.67 spent" comes from a different endpoint we haven't
-///   found; a claude.ai/settings/usage HAR capture would identify it.
-///
-/// Until the semantic is resolved, the CLI's pretty output suppresses the
-/// extra_usage block. The data is still parsed and exposed in --json output for
-/// diagnostic purposes. Units are stored as micro-USD assuming cents-input.
+/// `resets_at` and the prepaid "current balance" are visible in the
+/// claude.ai UI but are NOT in the OAuth wire response (see the
+/// `RawExtraUsage` deserializer in `client.rs`); only the five fields
+/// below exist on the wire. Values are stored as i64 micro-USD
+/// (cents × 10_000) per
+/// AGENTS.md §2.1.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtraUsage {
     pub is_enabled: bool,
-    /// Raw `monthly_limit` is in cents (assumed). We store as micro-USD (× 10_000).
+    /// Raw `monthly_limit` is in cents (resolved — see struct doc); stored
+    /// as i64 micro-USD (× 10_000).
     pub monthly_limit_micro_usd: i64,
-    /// Raw `used_credits` is in cents (assumed). Semantic unclear — see struct doc.
+    /// Raw `used_credits` is in cents (resolved — see struct doc); stored
+    /// as i64 micro-USD (× 10_000).
     pub used_credits_micro_usd: i64,
     pub utilization_percent: f32,
     pub currency: String,

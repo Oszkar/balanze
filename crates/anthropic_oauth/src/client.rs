@@ -185,10 +185,11 @@ fn parse_response(
         if key == "extra_usage" {
             match serde_json::from_value::<RawExtraUsage>(value.clone()) {
                 Ok(raw) => {
-                    // Anthropic returns these in CENTS, not dollars. Confirmed by
-                    // cross-checking against hamed-elfayome's Claude Usage Tracker
-                    // (which shows the same numbers as $17.63 / $20.00). Convert
-                    // cents → micro-USD via × 10_000 (1 cent = 10_000 micro-USD).
+                    // Raw values are integer CENTS. Resolved first-hand by
+                    // the 2026-05-19 reconciliation spike (Max-5x: OAuth
+                    // 2500/2092 ↔ claude.ai "Extra usage" $25.00/$20.92/84%);
+                    // see anthropic_oauth/src/types.rs ExtraUsage doc.
+                    // Convert cents → micro-USD via × 10_000.
                     extra_usage = Some(ExtraUsage {
                         is_enabled: raw.is_enabled,
                         monthly_limit_micro_usd: (raw.monthly_limit * 10_000.0).round() as i64,
@@ -344,6 +345,29 @@ mod tests {
 
         assert_eq!(snapshot.subscription_type.as_deref(), Some("max"));
         assert_eq!(snapshot.org_uuid.as_deref(), Some("317afabc-aaaa"));
+    }
+
+    #[test]
+    fn extra_usage_reconciled_cents_semantic() {
+        // Regression pin for the 2026-05-19 reconciliation spike
+        // (~/.gstack/projects/balanze/spike-extra-usage-reconciliation-20260519.md).
+        // claude.ai/settings/usage "Extra usage" showed $20.92 / $25.00 / 84%
+        // for a Max-5x account; OAuth returned monthly_limit=2500,
+        // used_credits=2092, utilization=83.7. Raw ints are CENTS. This test
+        // fails if anyone reverts the cents (× 10_000) interpretation.
+        let body = r#"{
+            "five_hour": {"utilization": 10.0, "resets_at": "2026-05-19T18:00:00Z"},
+            "extra_usage": {"is_enabled": true, "monthly_limit": 2500, "used_credits": 2092, "utilization": 83.7, "currency": "USD"}
+        }"#;
+        let snap = parse_response(body, None, Some("max".into()), None, fixed_ts()).unwrap();
+        let eu = snap.extra_usage.expect("extra_usage present");
+        assert!(eu.is_enabled);
+        // 2500 cents = $25.00 = 25_000_000 micro-USD
+        assert_eq!(eu.monthly_limit_micro_usd, 25_000_000);
+        // 2092 cents = $20.92 = 20_920_000 micro-USD
+        assert_eq!(eu.used_credits_micro_usd, 20_920_000);
+        assert!((eu.utilization_percent - 83.7).abs() < 1e-3);
+        assert_eq!(eu.currency, "USD");
     }
 
     #[test]
