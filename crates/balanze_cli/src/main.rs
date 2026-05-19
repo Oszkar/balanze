@@ -62,6 +62,7 @@ fn main() -> ExitCode {
         "set-openai-key" => cmd_set_openai_key(),
         "clear-openai-key" => cmd_clear_openai_key(),
         "settings" => cmd_settings(),
+        "statusline" => cmd_statusline(),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -510,6 +511,73 @@ fn cmd_settings() -> Result<()> {
     Ok(())
 }
 
+fn cmd_statusline() -> Result<()> {
+    use std::io::Read as _;
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_err() {
+        println!("bal (statusline: stdin unreadable)");
+        return Ok(());
+    }
+    println!("{}", format_statusline(&buf));
+    Ok(())
+}
+
+/// Pure: payload string → one status-line string. Track D = a minimal
+/// honest line. Rich/configurable formatting + feeding the live Snapshot
+/// is Track E (the redefined watcher).
+fn format_statusline(payload: &str) -> String {
+    let snap = match claude_statusline::parse(payload) {
+        Ok(s) => s,
+        Err(_) => return "bal (statusline parse error)".to_string(),
+    };
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(rl) = &snap.rate_limits {
+        if let Some(w) = &rl.five_hour {
+            parts.push(format!("5h {:.0}%", w.used_percent));
+        }
+        if let Some(w) = &rl.seven_day {
+            parts.push(format!("7d {:.0}%", w.used_percent));
+        }
+    }
+    if let Some(c) = snap.session_cost_micro_usd {
+        parts.push(format!("sess {}", micro_usd_to_display_dollars(c)));
+    }
+    if parts.is_empty() {
+        "bal (no rate-limit data yet)".to_string()
+    } else {
+        format!("bal {}", parts.join(" · "))
+    }
+}
+
+#[cfg(test)]
+mod statusline_tests {
+    use super::format_statusline;
+
+    #[test]
+    fn formats_full_payload() {
+        let p = r#"{"rate_limits":{"five_hour":{"used_percentage":13.0,"resets_at":1747650600},"seven_day":{"used_percentage":44.0,"resets_at":1747915200}},"cost":{"total_cost_usd":12.5}}"#;
+        assert_eq!(format_statusline(p), "bal 5h 13% · 7d 44% · sess $12.50");
+    }
+    #[test]
+    fn formats_no_rate_limits() {
+        assert_eq!(
+            format_statusline(r#"{"cost":{"total_cost_usd":2.0}}"#),
+            "bal sess $2.00"
+        );
+    }
+    #[test]
+    fn formats_empty_payload() {
+        assert_eq!(format_statusline("{}"), "bal (no rate-limit data yet)");
+    }
+    #[test]
+    fn parse_error_is_nonempty_fallback_not_panic() {
+        assert_eq!(
+            format_statusline("not json"),
+            "bal (statusline parse error)"
+        );
+    }
+}
+
 fn print_help() {
     eprintln!("Balanze — local-first AI usage tracker.");
     eprintln!();
@@ -539,6 +607,9 @@ fn print_help() {
     eprintln!("                                Reads from stdin if KEY is omitted.");
     eprintln!("  balanze-cli clear-openai-key      Remove the OpenAI key from the keychain");
     eprintln!("  balanze-cli settings              Print current settings.json contents");
+    eprintln!("  balanze-cli statusline            Read Claude Code's statusLine JSON on stdin,");
+    eprintln!("                                print a one-line status (used as Claude Code's");
+    eprintln!("                                statusLine command — see `balanze-cli setup`).");
     eprintln!("  balanze-cli help                  This help");
     eprintln!();
     eprintln!("Environment overrides:");

@@ -269,6 +269,7 @@ dependencies = [
  "chrono",
  "claude_cost",
  "claude_parser",
+ "claude_statusline",
  "codex_local",
  "keychain",
  "openai_client",
