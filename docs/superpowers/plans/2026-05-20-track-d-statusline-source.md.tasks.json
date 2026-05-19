@@ -38,7 +38,7 @@
     {
       "id": 12,
       "subject": "Task 6: Docs sync — Repo Map, boundary, README, CHANGELOG, prd/design",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [8, 9, 10, 11],
       "description": "AGENTS.md Repo Map line + new Architectural-Boundaries entry (claude_statusline owns statusLine wire format + settings.json stanza, analogous to #1/#11); README Layout + usage sentence; CHANGELOG [Unreleased] Added; prd.md Phase-2 Track D delivered note (Track E owns live integration); external design/spike one-liner (not staged). Confirm NO snapshot_composer/state_coordinator/Snapshot change. Verify: boundary grep empty + cargo test --workspace. Full detail: plan Task 6.\n\n```json:metadata\n{\"files\":[\"AGENTS.md\",\"README.md\",\"CHANGELOG.md\",\"docs/prd.md\"],\"verifyCommand\":\"git diff --stat origin/main..HEAD -- crates/snapshot_composer crates/state_coordinator ; cargo test --workspace\",\"acceptanceCriteria\":[\"AGENTS.md Repo Map + boundary entry\",\"README + CHANGELOG + prd.md updated\",\"no snapshot_composer/state_coordinator/Snapshot change\"]}\n```"
     },
@@ -50,5 +50,5 @@
       "description": "Verification only. fmt --all --check + clippy --workspace --all-targets -D warnings + test --workspace + bun run check all exit 0; integration_4quadrant.rs UNCHANGED+green (no Snapshot drift); git diff --name-only origin/main..HEAD has no snapshot_composer/state_coordinator/Snapshot; manual statusline happy+fallback smoke exit 0. No commit; failing gate returns to owning task (§7). Full detail: plan Task 7.\n\n```json:metadata\n{\"files\":[],\"verifyCommand\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run check\",\"acceptanceCriteria\":[\"all 4 gates green\",\"integration_4quadrant.rs unchanged+passes\",\"no snapshot_composer/state_coordinator/Snapshot change in diff\",\"manual statusline happy+fallback exit 0\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-05-20T05:00:00Z"
+  "lastUpdated": "2026-05-20T06:00:00Z"
 }
