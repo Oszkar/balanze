@@ -99,12 +99,12 @@ fn cmd_status(args: &[String]) -> Result<()> {
     } else if sections {
         // Per-source detailed view — useful for debugging, dev work, and
         // anyone who wants the full window math + cadence bars in one go.
-        print_sections(&snapshot, verbose);
+        print_sections(&snapshot, verbose)?;
     } else {
         // Default: glanceable 4-quadrant matrix mirroring the readiness
         // summary from `balanze-cli setup`. Run `balanze-cli --sections` for the
         // extended per-source breakdown.
-        print_compact(&snapshot);
+        print_compact(&snapshot)?;
     }
     Ok(())
 }
@@ -945,43 +945,59 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
     }
 }
 
-fn print_sections(snapshot: &Snapshot, verbose: bool) {
-    let _ = io::stdout().flush();
-    println!("=== Balanze Status ===");
-    println!(
+fn print_sections(snapshot: &Snapshot, verbose: bool) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut lock = stdout.lock();
+    write_sections(snapshot, verbose, &mut lock).or_else(|e| {
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })
+}
+
+/// Writer-driven sibling of [`print_sections`]. Same content, parameterized
+/// over the sink for golden-string tests of the per-source detail view.
+fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io::Result<()> {
+    writeln!(w, "=== Balanze Status ===")?;
+    writeln!(
+        w,
         "fetched: {}",
         snapshot.fetched_at.format("%Y-%m-%d %H:%M:%S UTC")
-    );
-    println!();
+    )?;
+    writeln!(w)?;
 
     // Claude OAuth (cadence bars)
     if let Some(oauth) = &snapshot.claude_oauth {
-        println!(
+        writeln!(
+            w,
             "subscription: {} ({})",
             oauth.subscription_type.as_deref().unwrap_or("?"),
             oauth.rate_limit_tier.as_deref().unwrap_or("?"),
-        );
+        )?;
         // org_uuid identifies the user's Anthropic consumer org. Useful for
         // bug reports but doxes the account when pasted publicly, so it's
         // gated behind --verbose / -v.
         if verbose {
             if let Some(uuid) = &oauth.org_uuid {
-                println!("org uuid:     {uuid}");
+                writeln!(w, "org uuid:     {uuid}")?;
             }
         }
-        println!();
-        println!("CADENCE BARS (from Anthropic OAuth):");
+        writeln!(w)?;
+        writeln!(w, "CADENCE BARS (from Anthropic OAuth):")?;
         if oauth.cadences.is_empty() {
-            println!("  (none reported)");
+            writeln!(w, "  (none reported)")?;
         }
         for cad in &oauth.cadences {
             let resets_in = cad.resets_at.signed_duration_since(snapshot.fetched_at);
-            println!(
+            writeln!(
+                w,
                 "  {:32}  {:>6.2}%   resets in {}",
                 cad.display_label,
                 cad.utilization_percent,
                 pretty_duration(resets_in)
-            );
+            )?;
         }
         // Extra-usage = pay-as-you-go overage. Resolved 2026-05-19 spike:
         // raw ints are cents; this is the claude.ai "Extra usage" meter —
@@ -989,192 +1005,241 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
         // below. Only meaningful when the user enabled it.
         if let Some(eu) = &oauth.extra_usage {
             if eu.is_enabled {
-                println!();
-                println!(
+                writeln!(w)?;
+                writeln!(
+                    w,
                     "EXTRA USAGE (pay-as-you-go overage — REAL billed spend, from Anthropic OAuth):"
-                );
-                println!(
+                )?;
+                writeln!(
+                    w,
                     "  Spent this cycle:  {} of {} ({:.1}%)",
                     micro_usd_to_display_dollars(eu.used_credits_micro_usd),
                     micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
                     eu.utilization_percent
-                );
-                println!("  Real money billed beyond your subscription — NOT the estimate below.");
+                )?;
+                writeln!(
+                    w,
+                    "  Real money billed beyond your subscription — NOT the estimate below."
+                )?;
             } else {
-                println!();
-                println!("EXTRA USAGE: disabled (no pay-as-you-go overage configured)");
+                writeln!(w)?;
+                writeln!(
+                    w,
+                    "EXTRA USAGE: disabled (no pay-as-you-go overage configured)"
+                )?;
             }
         }
     } else if let Some(err) = &snapshot.claude_oauth_error {
-        println!("CADENCE BARS: unavailable — {err}");
+        writeln!(w, "CADENCE BARS: unavailable — {err}")?;
     }
 
     // OpenAI monthly costs (from Admin API)
-    println!();
+    writeln!(w)?;
     if let Some(costs) = &snapshot.openai {
-        println!(
+        writeln!(
+            w,
             "OPENAI SPEND ({} – {}):",
             costs.start_time.format("%Y-%m-%d"),
             costs.end_time.format("%Y-%m-%d"),
-        );
+        )?;
         let suffix = if costs.truncated {
             "  (partial; more pages available)"
         } else {
             ""
         };
-        println!("  Total: ${:.2}{suffix}", costs.total_usd);
+        writeln!(w, "  Total: ${:.2}{suffix}", costs.total_usd)?;
         if !costs.by_line_item.is_empty() {
-            println!();
-            println!("  By line item:");
+            writeln!(w)?;
+            writeln!(w, "  By line item:")?;
             for item in costs.by_line_item.iter().take(10) {
-                println!("    {:36}  ${:>10.4}", item.line_item, item.amount_usd);
+                writeln!(w, "    {:36}  ${:>10.4}", item.line_item, item.amount_usd)?;
             }
             if costs.by_line_item.len() > 10 {
-                println!("    … ({} more)", costs.by_line_item.len() - 10);
+                writeln!(w, "    … ({} more)", costs.by_line_item.len() - 10)?;
             }
         }
     } else if let Some(err) = &snapshot.openai_error {
-        println!("OPENAI SPEND: unavailable — {err}");
+        writeln!(w, "OPENAI SPEND: unavailable — {err}")?;
     } else {
-        println!("OPENAI SPEND: not configured");
-        println!("  Set the BALANZE_OPENAI_KEY env var to a `sk-admin-…` admin key, or run");
-        println!("  `balanze-cli set-openai-key` (note: keychain backend currently unreliable on");
-        println!("  Windows; env var is the recommended path until v0.3).");
-        println!(
+        writeln!(w, "OPENAI SPEND: not configured")?;
+        writeln!(
+            w,
+            "  Set the BALANZE_OPENAI_KEY env var to a `sk-admin-…` admin key, or run"
+        )?;
+        writeln!(
+            w,
+            "  `balanze-cli set-openai-key` (note: keychain backend currently unreliable on"
+        )?;
+        writeln!(w, "  Windows; env var is the recommended path until v0.3).")?;
+        writeln!(
+            w,
             "  Create an admin key at https://platform.openai.com/settings/organization/admin-keys"
-        );
+        )?;
     }
 
     // Claude Code JSONL activity
-    println!();
+    writeln!(w)?;
     if let Some(jsonl) = &snapshot.claude_jsonl {
-        println!("CLAUDE CODE ACTIVITY (last 5h, from local JSONL):");
-        println!("  files scanned:     {}", jsonl.files_scanned);
-        println!(
+        writeln!(w, "CLAUDE CODE ACTIVITY (last 5h, from local JSONL):")?;
+        writeln!(w, "  files scanned:     {}", jsonl.files_scanned)?;
+        writeln!(
+            w,
             "  events in window:  {}",
             jsonl.window.total_events_in_window
-        );
-        println!(
+        )?;
+        writeln!(
+            w,
             "  tokens in window:  {}",
             fmt_int(jsonl.window.total_tokens_in_window)
-        );
+        )?;
         match jsonl.window.recent_burn_tokens_per_min {
-            Some(rate) => println!(
+            Some(rate) => writeln!(
+                w,
                 "  recent burn:       ~{} tokens/min (last 30 min)",
                 fmt_int(rate as u64)
-            ),
-            None => println!("  recent burn:       (too few events in last 30 min)"),
+            )?,
+            None => writeln!(w, "  recent burn:       (too few events in last 30 min)")?,
         }
         if !jsonl.window.by_model.is_empty() {
-            println!();
-            println!("  By model:");
+            writeln!(w)?;
+            writeln!(w, "  By model:")?;
             for m in &jsonl.window.by_model {
-                println!(
+                writeln!(
+                    w,
                     "    {:36}  events: {:>4}  tokens: {:>14}",
                     m.model,
                     m.events,
                     fmt_int(m.total_tokens)
-                );
+                )?;
             }
         }
     } else if let Some(err) = &snapshot.claude_jsonl_error {
-        println!("CLAUDE CODE ACTIVITY: unavailable — {err}");
+        writeln!(w, "CLAUDE CODE ACTIVITY: unavailable — {err}")?;
     }
 
     // Anthropic API cost (estimated, JSONL-derived via claude_cost).
-    println!();
+    writeln!(w)?;
     if let Some(cost) = &snapshot.anthropic_api_cost {
-        println!(
+        writeln!(
+            w,
             "ANTHROPIC API COST — ESTIMATE ONLY (JSONL × LiteLLM list-price @ {} / {}):",
             claude_cost::PRICE_TABLE_COMMIT,
             claude_cost::PRICE_TABLE_DATE,
-        );
-        println!(
+        )?;
+        writeln!(
+            w,
             "  Est. list-price:   {} — subscription leverage, NOT money billed",
             micro_usd_to_display_dollars(cost.total_micro_usd)
-        );
-        println!(
+        )?;
+        writeln!(
+            w,
             "  (Real out-of-pocket spend is in the EXTRA USAGE block, shown when extra usage is enabled.)"
-        );
-        println!("  Events processed:  {}", cost.total_event_count);
+        )?;
+        writeln!(w, "  Events processed:  {}", cost.total_event_count)?;
         if cost.unparsed_event_count > 0 {
-            println!(
+            writeln!(
+                w,
                 "  Unparsed events:   {} (JSONL line lacked model field)",
                 cost.unparsed_event_count
-            );
+            )?;
         }
         if !cost.per_model.is_empty() {
-            println!();
-            println!("  By model (top 10 by spend):");
+            writeln!(w)?;
+            writeln!(w, "  By model (top 10 by spend):")?;
             for m in cost.per_model.iter().take(10) {
-                println!(
+                writeln!(
+                    w,
                     "    {:36}  events: {:>4}  {}",
                     m.model,
                     m.event_count,
                     micro_usd_to_display_dollars(m.total_micro_usd)
-                );
+                )?;
             }
             if cost.per_model.len() > 10 {
-                println!("    … ({} more)", cost.per_model.len() - 10);
+                writeln!(w, "    … ({} more)", cost.per_model.len() - 10)?;
             }
         }
         if !cost.skipped_models.is_empty() {
-            println!();
-            println!("  Skipped models (in JSONL but absent from price table):");
+            writeln!(w)?;
+            writeln!(
+                w,
+                "  Skipped models (in JSONL but absent from price table):"
+            )?;
             for name in &cost.skipped_models {
-                println!("    {name}");
+                writeln!(w, "    {name}")?;
             }
         }
     } else if let Some(err) = &snapshot.anthropic_api_cost_error {
-        println!("ANTHROPIC API COST: unavailable — {err}");
+        writeln!(w, "ANTHROPIC API COST: unavailable — {err}")?;
     } else if snapshot.claude_jsonl_error.is_some() {
         // No separate cost error; the underlying JSONL load failed
         // (already reported above).
-        println!("ANTHROPIC API COST: unavailable — JSONL load failed (see above).");
+        writeln!(
+            w,
+            "ANTHROPIC API COST: unavailable — JSONL load failed (see above)."
+        )?;
     }
 
     // OpenAI Codex CLI rate-limit snapshot (from codex_local).
-    println!();
+    writeln!(w)?;
     if let Some(q) = &snapshot.codex_quota {
-        println!(
-            "OPENAI CODEX QUOTA (plan: {}, observed {}):",
+        // observed_at is the Codex CLI's own timestamp on the rate-limit
+        // event. The "age" here is `fetched_at - observed_at` — how stale
+        // the snapshot is relative to right-now. `codex_local::walker`
+        // always returns the newest-mtime file regardless of how old it
+        // is (see its docs), so a user who hasn't run Codex in a week
+        // still sees data — surfacing the age lets them judge for
+        // themselves whether to trust it.
+        let age_tag = format_codex_age(q.observed_at, snapshot.fetched_at)
+            .map(|s| format!(", {s} old"))
+            .unwrap_or_default();
+        writeln!(
+            w,
+            "OPENAI CODEX QUOTA (plan: {}, observed {}{age_tag}):",
             q.plan_type,
             q.observed_at.format("%Y-%m-%d %H:%M:%S UTC"),
-        );
+        )?;
         let resets_in = q
             .primary
             .resets_at
             .signed_duration_since(snapshot.fetched_at);
-        println!(
+        writeln!(
+            w,
             "  Primary window:    {:.2}% of {} minutes  (resets in {})",
             q.primary.used_percent,
             q.primary.window_duration_minutes,
             pretty_duration(resets_in),
-        );
+        )?;
         if let Some(secondary) = &q.secondary {
             let s_resets = secondary
                 .resets_at
                 .signed_duration_since(snapshot.fetched_at);
-            println!(
+            writeln!(
+                w,
                 "  Secondary window:  {:.2}% of {} minutes  (resets in {})",
                 secondary.used_percent,
                 secondary.window_duration_minutes,
                 pretty_duration(s_resets),
-            );
+            )?;
         }
         if q.rate_limit_reached {
-            println!("  ⚠  Rate-limit reached — Codex CLI is currently throttling requests.");
+            writeln!(
+                w,
+                "  ⚠  Rate-limit reached — Codex CLI is currently throttling requests."
+            )?;
         }
         if verbose {
-            println!("  Session ID:        {}", q.session_id);
+            writeln!(w, "  Session ID:        {}", q.session_id)?;
         }
     } else if let Some(err) = &snapshot.codex_quota_error {
-        println!("OPENAI CODEX QUOTA: unavailable — {err}");
+        writeln!(w, "OPENAI CODEX QUOTA: unavailable — {err}")?;
     } else {
-        println!(
+        writeln!(
+            w,
             "OPENAI CODEX QUOTA: not configured (Codex CLI not installed, or no sessions yet)."
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// Compact 4-quadrant matrix renderer — the default `balanze-cli` output.
@@ -1183,34 +1248,62 @@ fn print_sections(snapshot: &Snapshot, verbose: bool) {
 /// doc's 4-quadrant matrix: rows are providers (Anthropic, OpenAI),
 /// columns are cells (Quota %, API $). Cell content shows ✓ / ○ / ✗
 /// plus a one-line summary. See `print_sections` for per-source depth.
-fn print_compact(snapshot: &Snapshot) {
-    let _ = io::stdout().flush();
-    println!(
+fn print_compact(snapshot: &Snapshot) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut lock = stdout.lock();
+    write_compact(snapshot, &mut lock).or_else(|e| {
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })
+}
+
+/// Writer-driven sibling of [`print_compact`]. Same content, parameterized
+/// over the sink so tests can capture the rendered bytes against the
+/// four-tier label discipline (estimate / real overage / Claude session
+/// estimate / server quota %) without piping stdout.
+fn write_compact<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Result<()> {
+    writeln!(
+        w,
         "=== Balanze status ({}) ===",
         snapshot.fetched_at.format("%Y-%m-%d %H:%M:%S UTC")
-    );
-    println!();
+    )?;
+    writeln!(w)?;
 
     let anth_quota = compact_anthropic_quota(snapshot);
     let anth_cost = compact_anthropic_cost(snapshot);
     let openai_quota = compact_codex_quota(snapshot);
     let openai_cost = compact_openai_cost(snapshot);
 
-    println!("                    {:38}  API $", "Quota %");
-    println!("Anthropic           {anth_quota:38}  {anth_cost}");
-    println!("OpenAI              {openai_quota:38}  {openai_cost}");
-    println!();
+    writeln!(w, "                    {:38}  API $", "Quota %")?;
+    writeln!(w, "Anthropic           {anth_quota:38}  {anth_cost}")?;
+    writeln!(w, "OpenAI              {openai_quota:38}  {openai_cost}")?;
+    writeln!(w)?;
     // The four cells are NOT the same kind of number. Two are live
     // server-reported utilization, one is a local estimate, one is a
     // real bill. Flattening them into a grid makes them look uniformly
     // authoritative; this legend re-establishes the confidence split so
     // a ~$4,000 estimate is never mistaken for ~$4,000 of real spend.
-    println!("Quota % = live server-reported utilization. API $: Anthropic =");
-    println!("estimated list-price for local Claude Code tokens (subscription");
-    println!("leverage — NOT billed). 'overage billed' = REAL pay-as-you-go");
-    println!("spend from Anthropic. OpenAI = real billed spend.");
-    println!();
-    println!("Run `balanze-cli --sections` for per-source detail, or `balanze-cli --json` for machine-readable output.");
+    writeln!(
+        w,
+        "Quota % = live server-reported utilization. API $: Anthropic ="
+    )?;
+    writeln!(
+        w,
+        "estimated list-price for local Claude Code tokens (subscription"
+    )?;
+    writeln!(
+        w,
+        "leverage — NOT billed). 'overage billed' = REAL pay-as-you-go"
+    )?;
+    writeln!(w, "spend from Anthropic. OpenAI = real billed spend.")?;
+    writeln!(w)?;
+    writeln!(
+        w,
+        "Run `balanze-cli --sections` for per-source detail, or `balanze-cli --json` for machine-readable output."
+    )
 }
 
 fn compact_anthropic_quota(s: &Snapshot) -> String {
@@ -1274,10 +1367,17 @@ fn compact_codex_quota(s: &Snapshot) -> String {
     match (&s.codex_quota, &s.codex_quota_error) {
         (Some(q), _) => {
             let days = q.primary.window_duration_minutes as f64 / 1440.0;
+            // Append snapshot age when meaningfully stale (≥1 min). The
+            // walker returns the newest-mtime rollout file regardless of
+            // age, so a 7-day-old session and a 2-min-old session look
+            // identical without this tag — see `format_codex_age` doc.
+            let age_tag = format_codex_age(q.observed_at, s.fetched_at)
+                .map(|s| format!(", {s} old"))
+                .unwrap_or_default();
             // {:.1} for the same reason as the anthropic quota cell — a
             // genuine 0.4% must not collapse to "0%".
             format!(
-                "✓ {:.1}% {}d (codex {})",
+                "✓ {:.1}% {}d (codex {}{age_tag})",
                 q.primary.used_percent,
                 days.round() as i64,
                 q.plan_type
@@ -1286,6 +1386,27 @@ fn compact_codex_quota(s: &Snapshot) -> String {
         (None, Some(_)) => "✗ codex_local error".to_string(),
         (None, None) => "○ not configured (codex)".to_string(),
     }
+}
+
+/// Format the age of a Codex snapshot for the rendered output. Returns
+/// `None` for "fresh" snapshots (< 1 min old) so the common case stays
+/// noise-free; otherwise returns a tight "Nm" / "Nh" / "Nd" tag.
+///
+/// Negative durations (observed_at in the future, e.g. clock skew) clamp
+/// to `None` — we don't want to show "−2m old" or panic on subtraction.
+fn format_codex_age(observed_at: DateTime<Utc>, fetched_at: DateTime<Utc>) -> Option<String> {
+    let age = fetched_at.signed_duration_since(observed_at);
+    let total_secs = age.num_seconds();
+    if total_secs < 60 {
+        return None;
+    }
+    if total_secs < 3600 {
+        return Some(format!("{}m", total_secs / 60));
+    }
+    if total_secs < 86_400 {
+        return Some(format!("{}h", total_secs / 3600));
+    }
+    Some(format!("{}d", total_secs / 86_400))
 }
 
 fn compact_openai_cost(s: &Snapshot) -> String {
@@ -1352,9 +1473,17 @@ fn fmt_int(n: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot, ExtraUsage};
+    use chrono::TimeZone;
+    use claude_cost::{Cost, ModelCost};
+    use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
+    use openai_client::{LineItemCost, OpenAiCosts};
+    use state_coordinator::JsonlSnapshot;
+    use window::{ByModel, WindowSummary};
+
     #[test]
     fn token_needs_refresh_logic() {
-        use chrono::TimeZone;
         let now = chrono::Utc.with_ymd_and_hms(2026, 5, 15, 12, 0, 0).unwrap();
         let margin = chrono::Duration::seconds(300);
         let now_ms = now.timestamp_millis();
@@ -1370,5 +1499,343 @@ mod tests {
         // Fix 5: pathological/hostile expires_at near i64::MIN must not panic
         // and must return true (absurdly-past expiry → needs refresh).
         assert!(super::token_needs_refresh(i64::MIN, now, margin));
+    }
+
+    // -----------------------------------------------------------------------
+    // format_codex_age — the freshness tag wired into compact + sections
+    // views. The walker returns the newest-mtime rollout file regardless of
+    // age (intentional, see crate doc); the renderer surfaces age so a 7d
+    // stale snapshot can be distinguished from a 2-min-old one.
+    // -----------------------------------------------------------------------
+
+    fn t(year: i32, month: u32, day: u32, h: u32, m: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(year, month, day, h, m, 0).unwrap()
+    }
+
+    #[test]
+    fn format_codex_age_under_one_minute_is_silent() {
+        let fetched = t(2026, 5, 20, 12, 0);
+        let observed = fetched - Duration::seconds(30);
+        assert_eq!(format_codex_age(observed, fetched), None);
+    }
+
+    #[test]
+    fn format_codex_age_minutes_hours_days() {
+        let fetched = t(2026, 5, 20, 12, 0);
+        assert_eq!(
+            format_codex_age(fetched - Duration::minutes(5), fetched).as_deref(),
+            Some("5m")
+        );
+        assert_eq!(
+            format_codex_age(fetched - Duration::hours(3), fetched).as_deref(),
+            Some("3h")
+        );
+        assert_eq!(
+            format_codex_age(fetched - Duration::days(8), fetched).as_deref(),
+            Some("8d")
+        );
+    }
+
+    #[test]
+    fn format_codex_age_clamps_negative_to_none() {
+        // observed_at AHEAD of fetched_at (clock skew / future-dated event).
+        // Must not panic on subtraction and must not render "−5m old".
+        let fetched = t(2026, 5, 20, 12, 0);
+        let observed = fetched + Duration::minutes(5);
+        assert_eq!(format_codex_age(observed, fetched), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Label-discipline goldens for the compact + sections views. These pin
+    // the four-tier confidence vocabulary the product depends on:
+    //   1. ESTIMATE (JSONL × LiteLLM list price — subscription leverage)
+    //   2. REAL pay-as-you-go overage (Anthropic extra_usage block)
+    //   3. Server quota % (OAuth cadences + Codex rate-limit)
+    //   4. Real billed spend (OpenAI Admin Costs)
+    // A future refactor that drops "estimate" / "NOT billed" / "REAL" /
+    // "overage" qualifiers, or renames a quadrant label, fails these.
+    // -----------------------------------------------------------------------
+
+    fn fixture_fetched_at() -> DateTime<Utc> {
+        t(2026, 5, 20, 12, 0)
+    }
+
+    /// Construct a Snapshot with every quadrant populated. Numbers chosen so
+    /// the estimate ($4.20) and the real overage ($20.92) are distinct — i.e.
+    /// the kind of layout where a careless reader could confuse the two.
+    fn fully_populated_snapshot() -> Snapshot {
+        let now = fixture_fetched_at();
+        let mut snap = Snapshot::empty(now);
+
+        snap.claude_oauth = Some(ClaudeOAuthSnapshot {
+            cadences: vec![
+                CadenceBar {
+                    key: "five_hour".to_string(),
+                    display_label: "Current 5-hour session".to_string(),
+                    utilization_percent: 42.5,
+                    resets_at: now + Duration::hours(2),
+                },
+                CadenceBar {
+                    key: "seven_day".to_string(),
+                    display_label: "Weekly".to_string(),
+                    utilization_percent: 18.3,
+                    resets_at: now + Duration::days(3),
+                },
+            ],
+            extra_usage: Some(ExtraUsage {
+                is_enabled: true,
+                monthly_limit_micro_usd: 25_000_000, // $25.00
+                used_credits_micro_usd: 20_920_000,  // $20.92
+                utilization_percent: 83.7,
+                currency: "USD".to_string(),
+            }),
+            subscription_type: Some("max_5x".to_string()),
+            rate_limit_tier: Some("default".to_string()),
+            org_uuid: None,
+            fetched_at: now,
+        });
+
+        snap.claude_jsonl = Some(JsonlSnapshot {
+            files_scanned: 3,
+            window: WindowSummary {
+                window_start: now - Duration::hours(5),
+                total_events_in_window: 12,
+                total_tokens_in_window: 45_000,
+                recent_burn_tokens_per_min: Some(1234.0),
+                by_model: vec![ByModel {
+                    model: "claude-sonnet-4-6".to_string(),
+                    events: 12,
+                    total_tokens: 45_000,
+                }],
+            },
+        });
+
+        // Estimate dollar ($4.20) is intentionally distinct from the real
+        // overage ($20.92) so any conflation in the label discipline is visible.
+        snap.anthropic_api_cost = Some(Cost {
+            per_model: vec![ModelCost {
+                model: "claude-sonnet-4-6".to_string(),
+                event_count: 12,
+                input_micro_usd: 1_000_000,
+                output_micro_usd: 3_000_000,
+                cache_creation_micro_usd: 0,
+                cache_read_micro_usd: 200_000,
+                total_micro_usd: 4_200_000, // $4.20
+            }],
+            total_micro_usd: 4_200_000,
+            skipped_models: vec![],
+            total_event_count: 12,
+            unparsed_event_count: 0,
+        });
+
+        snap.codex_quota = Some(CodexQuotaSnapshot {
+            observed_at: now - Duration::minutes(5),
+            session_id: "00000000-0000-7000-8000-000000000001".to_string(),
+            primary: RateLimitWindow {
+                used_percent: 17.5,
+                window_duration_minutes: 10_080,
+                resets_at: now + Duration::days(5),
+            },
+            secondary: None,
+            plan_type: "go".to_string(),
+            rate_limit_reached: false,
+        });
+
+        snap.openai = Some(OpenAiCosts {
+            start_time: t(2026, 5, 1, 0, 0),
+            end_time: now,
+            total_usd: 123.45,
+            by_line_item: vec![LineItemCost {
+                line_item: "gpt-5".to_string(),
+                amount_usd: 123.45,
+            }],
+            truncated: false,
+            fetched_at: now,
+        });
+
+        snap
+    }
+
+    fn render_compact(snap: &Snapshot) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        write_compact(snap, &mut buf).expect("write_compact ok");
+        String::from_utf8(buf).expect("compact output is UTF-8")
+    }
+
+    fn render_sections(snap: &Snapshot, verbose: bool) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        write_sections(snap, verbose, &mut buf).expect("write_sections ok");
+        String::from_utf8(buf).expect("sections output is UTF-8")
+    }
+
+    #[test]
+    fn compact_view_keeps_four_tiers_visibly_distinct() {
+        let snap = fully_populated_snapshot();
+        let out = render_compact(&snap);
+
+        // Tier 1 — JSONL × list-price estimate. MUST be tagged "leverage"
+        // and "not billed". Renaming to anything subtler is a regression.
+        assert!(
+            out.contains("est-leverage (not billed)"),
+            "compact must label the JSONL × list-price figure as a leverage estimate, NOT billed\n{out}"
+        );
+
+        // Tier 2 — Real pay-as-you-go overage. MUST keep "overage billed" or
+        // equivalent. Without it the user can't tell this from the estimate.
+        assert!(
+            out.contains("overage billed"),
+            "compact must label the extra_usage block as real overage billing\n{out}"
+        );
+
+        // Tier 3a — Anthropic server quota. The "(oauth)" suffix is the
+        // wire-source tag.
+        assert!(
+            out.contains("(oauth)"),
+            "compact Anthropic-quota cell must carry the (oauth) source tag\n{out}"
+        );
+
+        // Tier 3b — Codex server quota. "(codex …" carries the source.
+        assert!(
+            out.contains("(codex go"),
+            "compact OpenAI-quota cell must carry the (codex …) source tag\n{out}"
+        );
+
+        // Tier 4 — OpenAI real billed spend, from the Admin Costs endpoint.
+        assert!(
+            out.contains("(admin costs)"),
+            "compact OpenAI-cost cell must carry the (admin costs) source tag\n{out}"
+        );
+
+        // Legend re-establishes the confidence split. All three phrases are
+        // load-bearing — removing any of them silently downgrades the safety
+        // net the legend exists to provide.
+        assert!(
+            out.contains("subscription"),
+            "legend must mention subscription leverage:\n{out}"
+        );
+        assert!(
+            out.contains("NOT billed"),
+            "legend must include 'NOT billed' qualifier:\n{out}"
+        );
+        assert!(
+            out.contains("REAL pay-as-you-go"),
+            "legend must call out REAL pay-as-you-go spend:\n{out}"
+        );
+        assert!(
+            out.contains("real billed spend"),
+            "legend must label OpenAI as real billed spend:\n{out}"
+        );
+
+        // Codex age tag — observed_at is 5min behind fetched_at, so the
+        // ", 5m old" suffix must appear. Pins the new freshness signal.
+        assert!(
+            out.contains(", 5m old"),
+            "compact codex cell must surface the snapshot age:\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_view_does_not_conflate_estimate_and_real_spend() {
+        let snap = fully_populated_snapshot();
+        let out = render_compact(&snap);
+
+        // Negative guards: phrases that, if they ever appear on the
+        // estimate line, would obliterate the confidence split.
+        assert!(
+            !out.contains("est-leverage (billed)"),
+            "the estimate line must never claim it is billed:\n{out}"
+        );
+        // The estimate $ value must not appear unqualified — every
+        // appearance must sit next to the leverage tag on the same line.
+        for line in out.lines() {
+            if line.contains("$4.20") {
+                assert!(
+                    line.contains("est-leverage")
+                        || line.contains("est."),
+                    "every line carrying the estimate $ must carry a qualifier; offending line: {line:?}\nfull output:\n{out}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sections_view_keeps_estimate_and_overage_blocks_apart() {
+        let snap = fully_populated_snapshot();
+        let out = render_sections(&snap, false);
+
+        // The EXTRA USAGE block header MUST carry the "REAL billed spend"
+        // qualifier. This is the single most important label in the file.
+        assert!(
+            out.contains("EXTRA USAGE (pay-as-you-go overage — REAL billed spend"),
+            "EXTRA USAGE section must carry the REAL billed spend qualifier:\n{out}"
+        );
+
+        // The estimate block MUST carry "ESTIMATE ONLY" and the leverage
+        // disclaimer on the value line.
+        assert!(
+            out.contains("ANTHROPIC API COST — ESTIMATE ONLY"),
+            "ANTHROPIC API COST section header must carry the ESTIMATE ONLY tag:\n{out}"
+        );
+        assert!(
+            out.contains("subscription leverage, NOT money billed"),
+            "estimate value line must carry the leverage-not-billed qualifier:\n{out}"
+        );
+
+        // Cross-link from estimate block back to extra-usage block — keeps
+        // a reader who lands on the estimate first oriented to where the
+        // real money is.
+        assert!(
+            out.contains("Real out-of-pocket spend is in the EXTRA USAGE block"),
+            "estimate block must point at the EXTRA USAGE block for real spend:\n{out}"
+        );
+
+        // OpenAI spend block is a real bill (admin costs). Must not be
+        // labelled as anything that could be misread as an estimate.
+        assert!(
+            out.contains("OPENAI SPEND"),
+            "OPENAI SPEND section must be present:\n{out}"
+        );
+        assert!(
+            !out.contains("OPENAI SPEND: estimate"),
+            "OpenAI spend must never be tagged as an estimate:\n{out}"
+        );
+
+        // Codex header — plan + age. The plan_type "go" + observed_at 5min
+        // behind fetched_at means the age suffix must render.
+        assert!(
+            out.contains("OPENAI CODEX QUOTA (plan: go,"),
+            "codex header must declare plan:\n{out}"
+        );
+        assert!(
+            out.contains(", 5m old)"),
+            "codex sections header must carry the freshness tag:\n{out}"
+        );
+    }
+
+    #[test]
+    fn sections_handles_disabled_extra_usage_without_dropping_estimate_qualifier() {
+        // When extra_usage is None / disabled, the EXTRA USAGE block goes
+        // away — but the estimate block MUST still carry its qualifier
+        // (otherwise a Pro user sees a bare "$4.20" and might assume real
+        // spend). This is the regression the labeling discipline exists to
+        // prevent.
+        let mut snap = fully_populated_snapshot();
+        if let Some(oauth) = snap.claude_oauth.as_mut() {
+            oauth.extra_usage = None;
+        }
+
+        let out = render_sections(&snap, false);
+        assert!(
+            !out.contains("EXTRA USAGE (pay-as-you-go"),
+            "EXTRA USAGE block must be hidden when extra_usage is None:\n{out}"
+        );
+        assert!(
+            out.contains("ANTHROPIC API COST — ESTIMATE ONLY"),
+            "estimate block qualifier must survive extra_usage going away:\n{out}"
+        );
+        assert!(
+            out.contains("subscription leverage, NOT money billed"),
+            "leverage qualifier must survive extra_usage going away:\n{out}"
+        );
     }
 }

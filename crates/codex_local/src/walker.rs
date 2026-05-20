@@ -61,6 +61,25 @@ pub fn find_codex_sessions_dir() -> Result<PathBuf, ParseError> {
 /// path with the latest mtime, or `Ok(None)` if no session files exist
 /// (e.g. Codex installed but never run).
 ///
+/// # Freshness semantics (intentional)
+///
+/// This function is **age-agnostic**: it returns the newest-mtime
+/// rollout file regardless of how old it is. A user who hasn't run
+/// Codex in a week still gets back their last session file, and a user
+/// who opens Balanze at 00:00:30 local (before today's
+/// `YYYY/MM/DD/` directory has been created) gets back yesterday's
+/// last session — which IS the latest data Codex has produced.
+///
+/// Callers that need a freshness gate should compare
+/// [`CodexQuotaSnapshot::observed_at`](crate::CodexQuotaSnapshot::observed_at)
+/// (the Codex CLI's own timestamp on the rate-limit event) to wall-clock
+/// time. The walker deliberately does not filter, because:
+/// - Codex's `primary` rate-limit window is 7 days, so a 6-day-old
+///   snapshot is still semantically valid.
+/// - Hiding stale data is a renderer-policy concern, not a parser one
+///   — the snapshot crate (`codex_local`) sits below the renderer in
+///   the dependency graph and should expose the signal, not gate it.
+///
 /// # Error policy
 ///
 /// - **Root failure is loud.** If `root` doesn't exist returns
