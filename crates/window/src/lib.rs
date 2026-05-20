@@ -107,8 +107,8 @@ pub fn summarize_window(
 
     for ev in events {
         let within_upper = match window_end {
-            Some(end) => ev.ts < end, // anchored: half-open at reset
-            None => ev.ts <= now,     // unanchored: closed at now (skew guard)
+            Some(end) => ev.ts < end && ev.ts <= now, // anchored: half-open at reset, capped at now
+            None => ev.ts <= now,                    // unanchored: closed at now (skew guard)
         };
         let in_main_window = ev.ts >= window_start && within_upper;
         if in_main_window {
