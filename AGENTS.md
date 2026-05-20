@@ -58,6 +58,7 @@ Correctness > Cleverness · Security > Convenience · Simplicity > Flexibility �
 | Frontend bundler | Vite 8; TypeScript strict via `tsconfig.json` |
 | Frontend env | `import.meta.env.VITE_*`; never read raw `process.env` |
 | IPC contract | Frontend ↔ Backend: only via the commands + events enumerated in the design doc (`get_snapshot`, `get_history`, `refresh_now`, `set_api_key`, `get_settings`, `set_settings`; events `usage_updated`, `degraded_state`). Adding to this surface needs a doc update first |
+| CLI `--json` schema | `balanze-cli status --json` renders a presentation DTO defined in `crates/balanze_cli/src/json_output.rs` — distinct from the in-memory `Snapshot` serde shape. Every money cell normalizes to `{ value_micro_usd: i64, source, confidence, details }` so consumers read `.value_micro_usd` uniformly. Sources: `jsonl_list_price`/`estimate` (anthropic_api_cost), `openai_admin_costs`/`real` (openai), `extra_usage_billed`/`real` (claude_oauth.extra_usage). Identifiers (`org_uuid`, `codex_quota.session_id`) are redacted unless `--json -v`. Schema changes require updating that module's tests + this row + `README.md` |
 | Filesystem paths | All persistent locations go through the `directories` crate (`ProjectDirs::from("me", "oszkar", "Balanze")`) — never hardcode `~/Library/...` or `%APPDATA%\...` inline |
 | Code style | `cargo fmt` defaults own Rust line width (`max_width` 100, enforced by CI + the pre-commit hook) — don't hand-wrap code/comments to fight rustfmt. Markdown has **no** column cap (Repo Map / matrix rows are intentionally long; never reflow a doc to hit a width). `prettier` not configured (small frontend surface — match surrounding style) |
 | Lint floor | `cargo clippy --workspace --all-targets -- -D warnings` passes; `bun run check` (svelte-check + tsc) passes |
@@ -70,7 +71,7 @@ Correctness > Cleverness · Security > Convenience · Simplicity > Flexibility �
 There is no internal rate-limit gate — the only thing being rate-limited is *us* against Anthropic and OpenAI. Rules:
 
 - OpenAI billing endpoints: poll at most every 5 minutes. Billing data updates infrequently; aggressive polling burns the user's rate quota for no gain.
-- Anthropic Console (the v0.3 cookie-paste integration, if/when it lands): poll at most every 5 minutes. Respect any rate-limit headers; back off on 429 with exponential backoff (start 30s, cap 10 min).
+- Anthropic Console cookie-paste integration (demoted 2026-05-19 from a committed v0.3 item to opt-in — implement only if a concrete user need surfaces, per `docs/prd.md`): if/when it lands, poll at most every 5 minutes. Respect any rate-limit headers; back off on 429 with exponential backoff (start 30s, cap 10 min).
 - Claude JSONL: local file I/O, no rate limit, but read **incrementally** via per-file byte cursor (`HashMap<PathBuf, FileCursor { byte_pos, mtime, size }>`). Full reparse only on launch or `refresh_now()`. Detect atomic rewrites (size unchanged but mtime changed) and truncations (size < cursor).
 - Tray icon repaint: 30s cadence, **deduped** by `(ColorBucket, title_text)`. Never call `tray.set_icon` if the bucket and title haven't changed since the last paint.
 - HTTP retry/backoff: implemented in `anthropic_oauth` + `openai_client` via the `backoff` crate (policy-parameterized). Idempotent GETs (`fetch_usage`, OpenAI costs) retry on 429 + 5xx + transport errors; the token-rotating `refresh_access_token` POST retries 429-only — a replayed consumed refresh token strands the user. CLI passes `BackoffPolicy::fail_fast()` (0 retries); the v0.2 watcher passes `BackoffPolicy::standard()` (the 30s-start / 10-min-cap schedule above).
@@ -102,7 +103,7 @@ Default level: `INFO` for app modules, `WARN` for the parser (DEBUG-per-file JSO
 Balanze reads:
 - The user's own local Claude JSONL files at `~/.claude/projects/**/*.jsonl` (created by their own Claude Code installation — no scraping, no remote calls).
 - OpenAI's documented billing API (`/v1/usage`, `/v1/dashboard/billing/*` — these are official surfaces; we use the same auth the user already configured for their account).
-- Anthropic Console (the v0.3 cookie-paste integration) — if this requires scraping rather than a documented API, the data must be marked `DataSource::AnthropicConsoleScrape` with `Confidence::Estimated` per the PRD's transparency principle, and the user must be informed it may break.
+- Anthropic Console cookie-paste integration (demoted 2026-05-19, opt-in only — see §3.1 and `docs/prd.md`): if and when it lands, scraped data must be marked `DataSource::AnthropicConsoleScrape` with `Confidence::Estimated` per the PRD's transparency principle, and the user must be informed it may break.
 
 This is for personal use only. Not affiliated with Anthropic or OpenAI. If a provider revokes access or their UI changes break a scrape, the right answer is to degrade gracefully (mark data stale) and never to circumvent their controls.
 
@@ -145,7 +146,7 @@ balanze/
 │   ├── app.html
 │   ├── routes/
 │   │   ├── +layout.ts
-│   │   └── +page.svelte        currently: scaffold greet form (placeholder)
+│   │   └── +page.svelte        scaffold landing page; the real UI is v0.3
 │   └── lib/                    (planned: stores, components)
 ├── src-tauri/                  Tauri 2 app crate
 │   ├── Cargo.toml              uses workspace dependencies
@@ -240,7 +241,7 @@ Avoid drive-by refactors.
 
 - `docs/prd.md` — product spec and phasing.
 - The design doc at `~/.gstack/projects/balanze/oszka-*-design-*.md` — architecture, IPC contract, state coordination diagram, predictor state machine, test strategy, build sequence. This is the load-bearing document; if a section in this AGENTS.md is missing detail, check there.
-- The backend data layer is shipped — see the Repo Map for the crate set. The Tauri frontend is still scaffold only (greet form + tray menu). As the planned crates land (`predictor`, `watcher`) this AGENTS.md grows with them — each adds a Repo Map line and may add a Validation Matrix row.
+- The backend data layer is shipped — see the Repo Map for the crate set. The Tauri frontend is still scaffold only (static landing page + tray menu; no IPC commands wired yet). As the planned crates land (`predictor`, `watcher`) this AGENTS.md grows with them — each adds a Repo Map line and may add a Validation Matrix row.
 
 ### Local dev (for agents that can run commands)
 

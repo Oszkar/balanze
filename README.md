@@ -57,7 +57,8 @@ balanze-cli status [--json] [--sections] [-v]
                                   -v          account-identifying fields
                                               (org uuid, codex session_id)
 balanze-cli setup                 Interactive wizard — run this first
-balanze-cli set-openai-key [KEY]  Store an sk-admin-… key in the OS keychain
+balanze-cli set-openai-key        Store an sk-admin-… key in the OS keychain
+                                  (masked TTY prompt, or piped stdin)
 balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
 balanze-cli settings              Print current settings.json
 balanze-cli statusline            Claude Code statusLine command: reads the
@@ -77,21 +78,27 @@ keeps the *estimated* Anthropic cell from being mistaken for the *real*
 OpenAI bill:
 
 ```text
-=== Balanze status (2026-05-15 04:27:42 UTC) ===
+=== Balanze status (2026-05-20 04:27:42 UTC) ===
 
                     Quota %                                 API $
-Anthropic           ✓ 82.0% 5h, 88.0% 7d (oauth)            ~$2197.11 (est. list-price, not billed)
-OpenAI              ✓ 6.0% 7d (codex go)                    ○ not configured (run `balanze-cli setup`)
+Anthropic           ✓ 82.0% 5h, 88.0% 7d (oauth)            $20.92/$25.00 overage billed · ~$2197.11 est-leverage (not billed)
+OpenAI              ✓ 6.0% 7d (codex go)                    ✓ $4.20 this month (real)
 
 Quota % = live server-reported utilization. API $: Anthropic =
 estimated list-price for local Claude Code tokens (subscription
-leverage — NOT money you were billed); OpenAI = real billed spend.
+leverage — NOT billed). 'overage billed' = REAL pay-as-you-go
+spend from Anthropic. OpenAI = real billed spend.
 ```
 
 `--sections` expands each source (cadence bars + reset clocks, the per-model
 JSONL breakdown + burn rate, the estimated-cost detail with LiteLLM
-provenance, the Codex window, OpenAI spend by line item). `--json` emits the
-full `Snapshot` for scripting.
+provenance, the Codex window, OpenAI spend by line item). `--json` emits a
+machine-readable document where every money cell is `{ value_micro_usd,
+source, confidence, details }`, so a script can read
+`.anthropic_api_cost.value_micro_usd` and `.openai.value_micro_usd` uniformly
+and tell `jsonl_list_price`/`estimate` apart from `openai_admin_costs`/`real`
+without parsing labels. `--json -v` adds account identifiers
+(`org_uuid`, Codex `session_id`); without `-v` they're redacted.
 
 ## Install
 

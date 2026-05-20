@@ -4,11 +4,6 @@ use tauri::{
     App, Manager,
 };
 
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -68,7 +63,10 @@ pub fn run() {
             setup_tray(app)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        // No commands registered: the documented IPC contract (AGENTS.md §4 #9)
+        // — get_snapshot, get_history, refresh_now, set_api_key, get_settings,
+        // set_settings — is v0.3 work. Until then the Tauri surface is the tray
+        // menu only; no command is exposed to the webview.
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -10,6 +10,11 @@ on:
   #   push:
   #     tags: ['v*.*.*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (must match v*.*.*, e.g. v0.2.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -28,8 +33,24 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
+      - name: Validate tag input
+        # Reject anything that isn't v*.*.* — a manual dispatch from a feature
+        # branch or `main` would otherwise draft a release named
+        # "Balanze main" with `github.ref_name`. Forcing the tag to be supplied
+        # AND well-formed is the only sane gate for a manual-only workflow.
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag input '$TAG' must match v*.*.* (e.g. v0.2.0)"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -56,8 +77,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Balanze ${{ github.ref_name }}'
+          tagName: ${{ inputs.tag }}
+          releaseName: 'Balanze ${{ inputs.tag }}'
           releaseBody: |
             Auto-generated release. Unsigned binaries.
             - Windows users: SmartScreen will warn on first run; click "More info" → "Run anyway".

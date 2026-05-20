@@ -21,12 +21,39 @@ bumps are bug fixes only.
   exact figure claude.ai shows. Previously suppressed because its units
   were unverified; a reconciliation spike resolved it (cents; the
   claude.ai overage meter).
+- **Tagged-DTO `--json` schema.** `balanze-cli status --json` now renders a
+  presentation DTO (in `crates/balanze_cli/src/json_output.rs`) where every
+  money cell normalizes to `{ value_micro_usd, source, confidence, details }`.
+  Consumers can read `.value_micro_usd` uniformly across providers and tell
+  `jsonl_list_price`/`estimate` apart from `openai_admin_costs`/`real` and
+  `extra_usage_billed`/`real` from the wire shape alone. Schema documented in
+  `AGENTS.md` §2.1.
+- **HTTP-date `Retry-After` support.** Both `anthropic_oauth` and `openai_client`
+  now accept the IMF-fixdate form of `Retry-After` (`Sun, 06 Nov 1994 08:49:37
+  GMT`) in addition to delta-seconds, per RFC 7231 §7.1.3. Past dates clamp to
+  zero so a stale server clock can't park retries indefinitely.
 
 ### Changed
 - **The Anthropic API-$ estimate is now hard-labeled.** The JSONL ×
   list-price number is explicitly tagged "estimate — subscription
   leverage, NOT billed" and visually separated from the real overage, so
   a large estimate can't be misread as real spend.
+- **`set-openai-key` is no longer positional.** Passing `sk-...` as an argv
+  could leak through shell history and `ps`; the subcommand now uses a masked
+  TTY prompt (via `rpassword`, same pattern as `balanze-cli setup`) and accepts
+  piped stdin (`echo $KEY | balanze-cli set-openai-key`) for automation.
+- **`--json -v` guard for account identifiers.** `balanze-cli status --json`
+  now redacts `claude_oauth.org_uuid` and `codex_quota.session_id` by default;
+  pass `-v`/`--verbose` to include them. Matches the existing `-v` guard on
+  the human `--sections` view.
+- **`release.yml` requires an explicit tag input.** The manual-only workflow
+  now demands a `tag` input matching `v*.*.*`; a dispatch from `main` no longer
+  drafts a release named "Balanze main".
+
+### Removed
+- **Scaffold `greet` Tauri command** dropped along with its frontend caller —
+  outside the documented IPC contract (AGENTS.md §4 #9), real production
+  commands land with the v0.3 UI.
 
 ### Fixed
 - `anthropic_oauth` `ExtraUsage` docs no longer say the semantic is
@@ -147,8 +174,8 @@ Theme per phase: **Data → Liveness → UI → Distribution**.
 
 - **v0.1 — Data** (this milestone): the four-quadrant CLI above.
 - **v0.1.1 — released 2026-05-19** — proactive OAuth refresh-token flow; cap window anchored to OAuth's `resets_at` (was `now - 5h`); plus v0.2 Track B de-risk (`snapshot_composer` + `backoff`) shipped in the same tag.
-- **v0.2 — Liveness** — next is Track C (Anthropic API $ honesty redesign), then Track D (statusline source); then the `watcher` crate (notify + debounce + `IncrementalParser` + safety poll) and `predictor` crate (EWMA + warm-up state machine on `window::WindowSummary`); `--watch`; `statusline`.
-- **v0.3 — UI** — Tauri tray + popover; settings UI; `keyring` → `keyring-core` v4 migration (fixes the Windows keychain bug); degraded-state events; dashboard window; alerts; Anthropic Console cookie-paste source.
+- **v0.2 — Liveness** — Track C (Anthropic API $ honesty redesign) and Track D (Claude Code statusline source) both shipped on `main`; next up is Track E — the `watcher` crate (notify + debounce + `IncrementalParser` + safety poll), the `predictor` crate (EWMA + warm-up state machine on `window::WindowSummary`), `--watch`, and the `statusline` output mode.
+- **v0.3 — UI** — Tauri tray + popover; settings UI; `keyring` → `keyring-core` v4 migration (fixes the Windows keychain bug); degraded-state events; dashboard window; alerts. (Anthropic Console cookie-paste demoted from a committed v0.3 item to opt-in — implement only if a concrete user need surfaces; see `docs/prd.md`.)
 - **v0.4 — Distribution** — signed binaries (Windows cert, macOS notarization), Homebrew tap, WinGet manifest, Tauri auto-update.
 - **v1+** — Ubuntu GNOME, cross-device sync, Android companion, hosted wallboard.
 
