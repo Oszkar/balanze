@@ -7,12 +7,33 @@ use tracing::debug;
 
 use crate::types::{LineItemCost, OpenAiCosts, OpenAiError};
 
-fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
-    headers
+/// Parse a `Retry-After` header into a `Duration`, supporting both forms
+/// allowed by RFC 7231 §7.1.3: delta-seconds (`"30"`) and HTTP-date
+/// (`"Sun, 06 Nov 1994 08:49:37 GMT"`). HTTP-date values in the past
+/// clamp to zero (treated as "retry immediately") so a stale server clock
+/// can't park the retry indefinitely.
+fn parse_retry_after_at(
+    headers: &reqwest::header::HeaderMap,
+    now: DateTime<Utc>,
+) -> Option<std::time::Duration> {
+    let raw = headers
         .get(reqwest::header::RETRY_AFTER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .map(std::time::Duration::from_secs)
+        .and_then(|v| v.to_str().ok())?
+        .trim();
+    if let Ok(secs) = raw.parse::<u64>() {
+        return Some(std::time::Duration::from_secs(secs));
+    }
+    DateTime::parse_from_rfc2822(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+        .map(|target| {
+            let delta = target.signed_duration_since(now);
+            std::time::Duration::from_secs(delta.num_seconds().max(0) as u64)
+        })
+}
+
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
+    parse_retry_after_at(headers, Utc::now())
 }
 
 #[derive(Debug, Deserialize)]
@@ -543,6 +564,73 @@ mod tests {
         let body = "see sk-foo bar";
         let out = redact_for_display(body);
         assert_eq!(out, "see sk-foo bar");
+    }
+
+    fn retry_after_fixed_now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn parse_retry_after_delta_seconds_form() {
+        use reqwest::header::{HeaderMap, HeaderValue};
+        let mut h = HeaderMap::new();
+        h.insert(reqwest::header::RETRY_AFTER, HeaderValue::from_static("45"));
+        assert_eq!(
+            parse_retry_after_at(&h, retry_after_fixed_now()),
+            Some(std::time::Duration::from_secs(45))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_http_date_form() {
+        // RFC 7231 §7.1.3 allows IMF-fixdate; chrono's RFC 2822 parser accepts
+        // both `+0000` and `GMT` zone tokens.
+        use reqwest::header::{HeaderMap, HeaderValue};
+        let mut h = HeaderMap::new();
+        h.insert(
+            reqwest::header::RETRY_AFTER,
+            HeaderValue::from_static("Wed, 20 May 2026 12:00:30 GMT"),
+        );
+        assert_eq!(
+            parse_retry_after_at(&h, retry_after_fixed_now()),
+            Some(std::time::Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_past_http_date_clamps_to_zero() {
+        // Stale server clock → past date. Don't return a huge Duration via
+        // negative-to-u64 wrap.
+        use reqwest::header::{HeaderMap, HeaderValue};
+        let mut h = HeaderMap::new();
+        h.insert(
+            reqwest::header::RETRY_AFTER,
+            HeaderValue::from_static("Wed, 20 May 2026 11:00:00 GMT"),
+        );
+        assert_eq!(
+            parse_retry_after_at(&h, retry_after_fixed_now()),
+            Some(std::time::Duration::from_secs(0))
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_missing_header_is_none() {
+        use reqwest::header::HeaderMap;
+        let h = HeaderMap::new();
+        assert!(parse_retry_after_at(&h, retry_after_fixed_now()).is_none());
+    }
+
+    #[test]
+    fn parse_retry_after_garbage_value_is_none() {
+        use reqwest::header::{HeaderMap, HeaderValue};
+        let mut h = HeaderMap::new();
+        h.insert(
+            reqwest::header::RETRY_AFTER,
+            HeaderValue::from_static("not a value"),
+        );
+        assert!(parse_retry_after_at(&h, retry_after_fixed_now()).is_none());
     }
 
     #[test]

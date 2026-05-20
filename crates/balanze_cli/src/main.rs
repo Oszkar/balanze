@@ -4,7 +4,7 @@
 //!   balanze-cli                      Print pretty status (default)
 //!   balanze-cli status [--json]       Same as above; --json is machine-readable
 //!   balanze-cli setup                 Interactive wizard: check Anthropic OAuth + Codex + OpenAI key
-//!   balanze-cli set-openai-key        Read sk-... from stdin, store in OS keychain (non-interactive)
+//!   balanze-cli set-openai-key        Masked-TTY prompt for sk-... (also accepts piped stdin); stores in OS keychain
 //!   balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
 //!   balanze-cli settings              Print current settings.json contents
 //!   balanze-cli help                  This help
@@ -17,6 +17,8 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::process::ExitCode;
+
+mod json_output;
 
 use anthropic_oauth::{
     fetch_usage, load_from as load_credentials_from, locate_credentials, refresh_access_token,
@@ -95,7 +97,11 @@ fn cmd_status(args: &[String]) -> Result<()> {
     // --sections. Not an error — silently ignoring --sections here is
     // the least-surprising behavior for `balanze-cli status --json --sections`.
     if json_mode {
-        println!("{}", serde_json::to_string_pretty(&snapshot)?);
+        // `--json` goes through json_output::render, not raw Snapshot serde:
+        // money cells get a `{value_micro_usd, source, confidence, details}`
+        // tagged DTO, and identifiers (org_uuid, codex session_id) are
+        // redacted unless `-v`/`--verbose` is also set.
+        println!("{}", json_output::render(&snapshot, verbose)?);
     } else if sections {
         // Per-source detailed view — useful for debugging, dev work, and
         // anyone who wants the full window math + cadence bars in one go.
@@ -110,23 +116,24 @@ fn cmd_status(args: &[String]) -> Result<()> {
 }
 
 fn cmd_set_openai_key() -> Result<()> {
-    // Accept the key as a positional argument (`balanze-cli set-openai-key sk-…`)
-    // or, if no argv is provided, read one line from stdin. We always use
-    // `read_line` regardless of TTY status — `read_to_string` waited for EOF
-    // and made the command look hung under `cargo run` on Windows.
-    let args: Vec<String> = env::args().collect();
-    let argv_key = args.iter().skip(2).find(|s| !s.is_empty()).cloned();
+    // Two input paths, by TTY status — never argv. A positional `sk-…` would
+    // land in shell history / `ps`, which is the exact thing this command
+    // exists to avoid:
+    //   - Interactive TTY → masked input via rpassword (same pattern as
+    //     `cmd_setup`'s prompt_for_openai_key).
+    //   - Non-TTY (`echo $KEY | balanze-cli set-openai-key`) → read whole
+    //     stdin to EOF. The pipe closes; no hang.
+    use std::io::{IsTerminal, Read};
 
-    let raw = if let Some(k) = argv_key {
-        k
+    let raw = if io::stdin().is_terminal() {
+        rpassword::prompt_password("Paste your OpenAI API key (sk-...) and press Enter (hidden): ")
+            .map_err(|e| anyhow!("failed to read key from stdin: {e}"))?
     } else {
-        eprint!("Paste your OpenAI API key (sk-...) and press Enter: ");
-        let _ = io::stderr().flush();
         let mut input = String::new();
-        let n = io::stdin().read_line(&mut input)?;
+        let n = io::stdin().read_to_string(&mut input)?;
         if n == 0 {
             return Err(anyhow!(
-                "stdin closed without input. Tip: pass the key as an argument instead — `balanze-cli set-openai-key sk-...`"
+                "stdin closed without input. Run interactively with a TTY, or pipe the key on stdin: `echo $KEY | balanze-cli set-openai-key`"
             ));
         }
         input
@@ -672,12 +679,16 @@ fn print_help() {
     eprintln!("                                  --sections   per-source detailed view");
     eprintln!("                                               (cadence bars, model breakdown,");
     eprintln!("                                               codex window, etc.)");
-    eprintln!("                                  --json       machine-readable Snapshot JSON.");
-    eprintln!("                                               Takes precedence over --sections");
-    eprintln!("                                               if both are given.");
+    eprintln!("                                  --json       machine-readable JSON. Each money");
+    eprintln!("                                               cell is {{value_micro_usd, source,");
+    eprintln!("                                               confidence, details}}. Wins over");
+    eprintln!("                                               --sections if both are given.");
     eprintln!("                                  -v/--verbose adds account-identifying fields");
-    eprintln!("                                               (org uuid, codex session_id)");
-    eprintln!("                                               — safe at home, dox-y in public.");
+    eprintln!(
+        "                                               (org_uuid, codex session_id) to both"
+    );
+    eprintln!("                                               --sections and --json output —");
+    eprintln!("                                               safe at home, dox-y in public.");
     eprintln!("  balanze-cli setup                 Interactive wizard. Checks Anthropic OAuth,");
     eprintln!(
         "                                Codex sessions, prompts for OpenAI admin key (masked"
@@ -686,10 +697,13 @@ fn print_help() {
         "                                input), validates it live, stores it. Also offers to"
     );
     eprintln!("                                wire Claude Code's statusLine. Run this first.");
+    eprintln!("  balanze-cli set-openai-key        Store an OpenAI admin key in the OS keychain.");
     eprintln!(
-        "  balanze-cli set-openai-key [KEY]  Non-interactive: stores KEY in the OS keychain."
+        "                                Interactive: masked TTY prompt (no echo, no history)."
     );
-    eprintln!("                                Reads from stdin if KEY is omitted.");
+    eprintln!(
+        "                                Automation: `echo $KEY | balanze-cli set-openai-key`."
+    );
     eprintln!("  balanze-cli clear-openai-key      Remove the OpenAI key from the keychain");
     eprintln!("  balanze-cli settings              Print current settings.json contents");
     eprintln!("  balanze-cli statusline            Read Claude Code's statusLine JSON on stdin,");

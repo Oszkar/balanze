@@ -184,14 +184,13 @@ fn full_pipeline_populates_codex_quota_in_snapshot() {
 
 #[test]
 fn snapshot_serializes_with_new_cost_and_codex_fields() {
-    // The `--json` output mode round-trips through serde. This test
-    // specifically exercises the TWO fields this PR adds
-    // (`anthropic_api_cost`, `codex_quota`) — the other two cells
-    // (`claude_oauth`, `openai`) serialize via code that predates this
-    // PR and is covered elsewhere. The point here is that adding the
-    // new fields didn't break serialization (e.g., a missing Serialize
-    // derive on a transitive type like claude_cost::Cost or
-    // codex_local::CodexQuotaSnapshot).
+    // Pins the in-memory `Snapshot` serde shape (used by the future Tauri
+    // IPC `get_snapshot` command — AGENTS.md §4 #9). The CLI's `--json`
+    // output goes through `balanze_cli::json_output` instead of raw Snapshot
+    // serde and has its own dedicated tests; this test guards the underlying
+    // type so a missing Serialize derive on a transitive type like
+    // claude_cost::Cost or codex_local::CodexQuotaSnapshot would still fail
+    // here.
     let events = load_fixture_events();
     let prices = load_bundled_prices().unwrap();
     let cost = compute_cost(&events, &prices);

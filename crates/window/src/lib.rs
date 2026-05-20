@@ -108,7 +108,7 @@ pub fn summarize_window(
     for ev in events {
         let within_upper = match window_end {
             Some(end) => ev.ts < end && ev.ts <= now, // anchored: half-open at reset, capped at now
-            None => ev.ts <= now,                    // unanchored: closed at now (skew guard)
+            None => ev.ts <= now,                     // unanchored: closed at now (skew guard)
         };
         let in_main_window = ev.ts >= window_start && within_upper;
         if in_main_window {
@@ -554,12 +554,18 @@ mod tests {
 
     #[test]
     fn anchored_window_excludes_events_at_or_after_reset() {
+        // The anchored upper bound is `min(reset, now)` (half-open at reset
+        // AND capped at `now` per the skew guard). For the half-open-at-reset
+        // half to be meaningful here, the "in-window" event must already be
+        // in the past relative to `now` — otherwise the skew guard alone
+        // would exclude it. The post-reset events are still excluded by both
+        // rules.
         let n = now(); // 2026-05-14 12:00:00
-        let reset = n + Duration::hours(2); // anchored window [n-3h, n+2h)
+        let reset = n + Duration::hours(2); // anchored window [n-3h, reset) ∩ [..now]
         let evs = [
-            ev(reset - Duration::minutes(1), "sonnet", 10, 5), // inside [.., reset)
-            ev(reset, "sonnet", 10, 5),                        // AT reset -> excluded
-            ev(reset + Duration::hours(1), "sonnet", 10, 5),   // after reset -> excluded
+            ev(n - Duration::minutes(10), "sonnet", 10, 5), // past, in-window
+            ev(reset, "sonnet", 10, 5),                     // AT reset -> excluded
+            ev(reset + Duration::hours(1), "sonnet", 10, 5), // after reset -> excluded
         ];
         let s = summarize_window(
             &evs,
@@ -572,7 +578,7 @@ mod tests {
         assert_eq!(s.window_start, reset - DEFAULT_WINDOW);
         assert_eq!(
             s.total_events_in_window, 1,
-            "only the pre-reset event is in the half-open [reset-window, reset)"
+            "only the past-dated event survives [reset-window, reset) ∩ [..now]"
         );
     }
 }
