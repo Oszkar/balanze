@@ -1,5 +1,10 @@
 # Balanze
 
+[![CI](https://img.shields.io/github/actions/workflow/status/Oszkar/balanze/ci.yml?branch=main&label=ci&logo=github)](https://github.com/Oszkar/balanze/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/tag/Oszkar/balanze?label=version&color=blue)](https://github.com/Oszkar/balanze/tags)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.77%2B-orange?logo=rust&logoColor=white)](Cargo.toml)
+
 A local-first utility that consolidates personal AI usage into one normalized
 view — Claude subscription quota, an estimate of Claude Code's API-rate value,
 OpenAI Codex quota, and real OpenAI API spend, in one glance. Rust + Tauri 2 +
@@ -9,12 +14,11 @@ Svelte 5. Side project; Windows 11 and macOS 15+ (CLI also runs on Linux).
 > only endpoints and files you already have access to with your own
 > credentials. MIT licensed.
 
-## Status — v0.1 "Data"
+## What it does
 
-v0.1's bar is a **complete, honest data layer** exposed as a CLI
-(`balanze-cli`); the tray UI is deliberately a later phase (v0.3). The CLI
-prints the same normalized snapshot the eventual popover will show. The
-four-quadrant matrix is fully lit:
+A **complete, honest data layer** exposed as a CLI (`balanze-cli`); a tray UI
+is on the roadmap. The CLI prints the same normalized snapshot the eventual
+popover will show. The four-quadrant matrix:
 
 |               | Quota %                              | API $                                            |
 |---------------|--------------------------------------|--------------------------------------------------|
@@ -27,24 +31,23 @@ four-quadrant matrix is fully lit:
   equivalent from local JSONL × a vendored LiteLLM price table. For Pro/Max
   users this is **subscription leverage, not money billed** — the CLI labels
   it that way (Anthropic's real cost API is enterprise-gated; see Known
-  issues).
+  issues). If you enabled "Extra usage" pay-as-you-go on claude.ai, the
+  OAuth feed's `extra_usage` block (real billed cents — the same number
+  claude.ai's overage meter shows) is surfaced on a separate line so it
+  can't be confused with the estimate.
 - **OpenAI Codex quota** — reads the local Codex CLI rollout files
   (`~/.codex/sessions/`) for the server-computed `rate_limits.primary` %.
 - **OpenAI API $** — `/v1/organization/costs` with an `sk-admin-…` key:
   this-month spend + per-line-item breakdown. Real billing data.
 
-Already on `main` past the v0.1.0 tag: proactive OAuth token refresh (the
-bearer no longer hard-fails every ~8 h) and a server-anchored cap window
-(**v0.1.1 base**), plus a shared source-orchestration policy and an HTTP
-backoff layer (**v0.2 de-risk** — no user-facing behavior change).
-
-Roadmap themes: **Data → Liveness → UI → Distribution**. Full history in
-[`CHANGELOG.md`](CHANGELOG.md); phase detail in [`docs/prd.md`](docs/prd.md);
-architecture and code discipline in [`AGENTS.md`](AGENTS.md).
+Planning and history live elsewhere: roadmap and phase detail in
+[`docs/prd.md`](docs/prd.md); release history in
+[`CHANGELOG.md`](CHANGELOG.md); architecture and code discipline in
+[`AGENTS.md`](AGENTS.md).
 
 ## CLI
 
-`balanze-cli` is the v0.1 surface and the reference composition for the
+`balanze-cli` is the current surface and the reference composition for the
 eventual tray popover.
 
 ```text
@@ -102,9 +105,10 @@ without parsing labels. `--json -v` adds account identifiers
 
 ## Install
 
-v0.1 ships **from source only** — no binaries, installers, or GitHub
-Releases, and it is **not on crates.io** (signed binaries / Homebrew /
-WinGet are the v0.4 Distribution phase). Requires Rust 1.77+.
+Balanze currently ships **from source only** — no binaries, installers, or
+GitHub Releases, and it is **not on crates.io** (signed binaries, Homebrew,
+and WinGet are on the roadmap; see [`docs/prd.md`](docs/prd.md)). Requires
+Rust 1.77+.
 
 ```bash
 # `--git` is required (not on crates.io). The repo root is a virtual
@@ -139,7 +143,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 bun run check                                  # svelte-check + tsc
 
-# Desktop app (scaffold only — tray icon, no data yet; the real UI is v0.3):
+# Desktop app (scaffold only — tray icon, no data yet; real UI is on the roadmap):
 bun install                                    # also installs git hooks (see below)
 bun run tauri dev
 ```
@@ -159,7 +163,7 @@ pulls in the platform GUI stack:
 - **macOS:** Xcode Command Line Tools.
 - **Debian/Ubuntu:** `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev build-essential libssl-dev libglib2.0-dev pkg-config`
 
-This is **not needed for v0.1** — if you only want the CLI on Linux, never
+**Not needed for the CLI** — if you only want the CLI on Linux, never
 run a `--workspace` build and you'll never see a `gdk-3.0`/`pango`/`cairo`
 error. Test discipline and the per-crate validation matrix live in
 `AGENTS.md` §6–§7.
@@ -168,9 +172,9 @@ error. Test discipline and the per-crate validation matrix live in
 
 - **Keychain backend broken on Windows.** `keyring 3.6.3` silently no-ops:
   `set_password` returns `Ok` but the credential never lands in Credential
-  Manager. Workaround: set `BALANZE_OPENAI_KEY`. Fix scheduled for v0.3
-  (`keyring` → `keyring-core` v4, riding with the settings UI that exercises
-  the key-input box on both platforms). Detail: `AGENTS.md` §10a.
+  Manager. Workaround: set `BALANZE_OPENAI_KEY`. Fix is scheduled to ride
+  with the settings UI (`keyring` → `keyring-core` v4 migration). Detail:
+  `AGENTS.md` §10a.
 
 ## Layout
 
