@@ -129,6 +129,13 @@ pub fn atomic_write_snapshot(
         source: e,
     })?;
 
+    // NOTE: serde_json serialization of StatuslineFilePayload is infallible for
+    // all current fields (u8, DateTime<Utc>, Option<i64>, Option<String>,
+    // Option<RateLimits>). This arm is unreachable in practice. If a non-
+    // serializable type is ever added to the envelope, introduce a distinct
+    // `WriteSerializeError` variant on `FileIoError` rather than reusing
+    // `ParseError` (which is a read-path concept) — naming the variant for the
+    // failure mode matters when the branch ever becomes reachable.
     let bytes = serde_json::to_vec_pretty(payload).map_err(|_| FileIoError::ParseError {
         path: path.to_path_buf(),
     })?;
@@ -244,6 +251,25 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("bad.json");
         std::fs::write(&path, b"{not valid json").unwrap();
+        let err = read_snapshot(&path).unwrap_err();
+        assert!(
+            matches!(err, FileIoError::ParseError { .. }),
+            "expected ParseError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn valid_json_with_missing_required_field_returns_parse_error() {
+        // Passes the VersionProbe (has `schema_version`), passes the version
+        // check, then fails the full StatuslineFilePayload deserialize because
+        // `payload` is missing. Exercises the second-pass parse path.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("missing_field.json");
+        std::fs::write(
+            &path,
+            r#"{"schema_version":1,"captured_at":"2026-05-21T00:00:00Z"}"#,
+        )
+        .unwrap();
         let err = read_snapshot(&path).unwrap_err();
         assert!(
             matches!(err, FileIoError::ParseError { .. }),
