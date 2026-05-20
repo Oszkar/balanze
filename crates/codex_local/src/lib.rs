@@ -58,20 +58,35 @@ pub mod walker;
 pub use errors::ParseError;
 pub use parser::read_latest_quota_snapshot;
 pub use types::{CodexQuotaSnapshot, RateLimitWindow};
-pub use walker::{find_codex_sessions_dir, find_latest_session, CODEX_CONFIG_DIR_ENV};
+pub use walker::{
+    collect_sessions_newest_first, find_codex_sessions_dir, find_latest_session,
+    CODEX_CONFIG_DIR_ENV,
+};
 
-/// One-stop convenience: resolve the Codex sessions directory, find
-/// the latest session file, parse the most recent `token_count` event,
-/// return the snapshot.
+/// One-stop convenience: resolve the Codex sessions directory, walk rollout
+/// files newest-first, parse each until one yields a `token_count` snapshot,
+/// return it.
 ///
-/// Returns `Ok(None)` if Codex is installed but has produced no
-/// session files yet, OR if the latest session file has no parseable
-/// `token_count` event. Returns `Err(FileMissing)` if Codex isn't
-/// installed at all.
+/// Returns `Ok(None)` if Codex is installed but every rollout file lacks a
+/// parseable `token_count` event (or no rollout files exist at all).
+/// Returns `Err(FileMissing)` if Codex isn't installed at all. Surfaces the
+/// first `SchemaDrift` / `IoError` from the newest file that hit it, instead
+/// of silently masking a drift signal behind older data.
+///
+/// Walking older sessions matters at day-rollover and after fresh `codex`
+/// invocations: a brand-new session file exists but hasn't logged a
+/// `token_count` yet, while yesterday's session still carries valid 7-day
+/// quota state.
 pub fn read_codex_quota() -> Result<Option<CodexQuotaSnapshot>, ParseError> {
     let dir = find_codex_sessions_dir()?;
-    let Some(path) = find_latest_session(&dir)? else {
-        return Ok(None);
-    };
-    read_latest_quota_snapshot(&path)
+    let sessions = collect_sessions_newest_first(&dir)?;
+    for path in sessions {
+        // ? propagates SchemaDrift / IoError immediately so a Codex schema
+        // change isn't hidden behind older sessions. Ok(None) ("session has
+        // no token_count yet") falls through to the next-older candidate.
+        if let Some(snap) = read_latest_quota_snapshot(&path)? {
+            return Ok(Some(snap));
+        }
+    }
+    Ok(None)
 }

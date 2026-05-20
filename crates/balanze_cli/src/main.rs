@@ -611,7 +611,12 @@ fn format_statusline(payload: &str) -> String {
         }
     }
     if let Some(c) = snap.session_cost_micro_usd {
-        parts.push(format!("sess {}", micro_usd_to_display_dollars(c)));
+        // `sess-est`, not `sess`: this is a Claude-side session estimate
+        // (claude_statusline/types.rs:22) — a distinct cost tier from the
+        // JSONL list-price estimate and the real `extra_usage` overage.
+        // The qualifier mirrors compact_anthropic_quota's `est-leverage`
+        // discipline so a statusline glance can't be mistaken for billed $.
+        parts.push(format!("sess-est {}", micro_usd_to_display_dollars(c)));
     }
     if parts.is_empty() {
         "bal (no rate-limit data yet)".to_string()
@@ -627,13 +632,16 @@ mod statusline_tests {
     #[test]
     fn formats_full_payload() {
         let p = r#"{"rate_limits":{"five_hour":{"used_percentage":13.0,"resets_at":1747650600},"seven_day":{"used_percentage":44.0,"resets_at":1747915200}},"cost":{"total_cost_usd":12.5}}"#;
-        assert_eq!(format_statusline(p), "bal 5h 13% · 7d 44% · sess $12.50");
+        assert_eq!(
+            format_statusline(p),
+            "bal 5h 13% · 7d 44% · sess-est $12.50"
+        );
     }
     #[test]
     fn formats_no_rate_limits() {
         assert_eq!(
             format_statusline(r#"{"cost":{"total_cost_usd":2.0}}"#),
-            "bal sess $2.00"
+            "bal sess-est $2.00"
         );
     }
     #[test]

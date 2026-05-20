@@ -150,6 +150,62 @@ fn walk(dir: &Path, best: &mut Option<(SystemTime, PathBuf)>) -> Result<(), Pars
     Ok(())
 }
 
+/// Collect every `rollout-*.jsonl` under `root`, sorted by mtime descending
+/// (newest first). Same error policy as [`find_latest_session`]: root-level
+/// or subtree `read_dir` failures propagate as `IoError`; per-entry stat
+/// failures are best-effort-skipped.
+///
+/// Used by [`crate::read_codex_quota`] to walk older sessions when a fresh
+/// rollout file has no `token_count` event yet (e.g. just-created session
+/// at a day-rollover). The pure-walker shape keeps the boundary that
+/// `codex_local` is the only reader of `~/.codex/` (AGENTS.md §4 #11).
+pub fn collect_sessions_newest_first(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
+    if !root.exists() {
+        return Err(ParseError::FileMissing(root.to_path_buf()));
+    }
+    let mut all: Vec<(SystemTime, PathBuf)> = Vec::new();
+    walk_all(root, &mut all)?;
+    // Descending by mtime; PathBuf tiebreaker keeps the order deterministic
+    // when two files share an mtime (filesystem mtime resolution varies).
+    all.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    Ok(all.into_iter().map(|(_, p)| p).collect())
+}
+
+fn walk_all(dir: &Path, out: &mut Vec<(SystemTime, PathBuf)>) -> Result<(), ParseError> {
+    let entries = std::fs::read_dir(dir).map_err(|source| ParseError::IoError {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if metadata.is_dir() {
+            walk_all(&path, out)?;
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+            continue;
+        }
+        let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        out.push((mtime, path));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +314,113 @@ mod tests {
             Err(ParseError::FileMissing(p)) => assert_eq!(p, nonexistent),
             other => panic!("expected FileMissing, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn collect_sessions_newest_first_orders_by_mtime_descending() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        touch_jsonl(&root.join("a/rollout-old.jsonl"), "{}", -3600); // 1h ago
+        touch_jsonl(&root.join("b/rollout-new.jsonl"), "{}", -60); // 1min ago
+        touch_jsonl(&root.join("c/rollout-mid.jsonl"), "{}", -1800); // 30min ago
+                                                                     // Non-matching files must be ignored.
+        touch_jsonl(&root.join("c/random.jsonl"), "{}", -10);
+        touch_jsonl(&root.join("c/rollout-foo.txt"), "{}", -10);
+
+        let sessions = collect_sessions_newest_first(root).unwrap();
+        assert_eq!(sessions.len(), 3);
+        assert!(
+            sessions[0].ends_with("rollout-new.jsonl"),
+            "newest first: {}",
+            sessions[0].display()
+        );
+        assert!(sessions[1].ends_with("rollout-mid.jsonl"));
+        assert!(sessions[2].ends_with("rollout-old.jsonl"));
+    }
+
+    #[test]
+    fn collect_sessions_newest_first_empty_dir_returns_empty_vec() {
+        let tmp = TempDir::new().unwrap();
+        let sessions = collect_sessions_newest_first(tmp.path()).unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn collect_sessions_newest_first_missing_dir_errors() {
+        let tmp = TempDir::new().unwrap();
+        let nonexistent = tmp.path().join("nope");
+        match collect_sessions_newest_first(&nonexistent) {
+            Err(ParseError::FileMissing(p)) => assert_eq!(p, nonexistent),
+            other => panic!("expected FileMissing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_codex_quota_falls_back_to_older_session_when_newest_has_no_token_count() {
+        // Regression: read_codex_quota previously parsed only the newest
+        // rollout file. A fresh day-rollover / freshly-spawned session that
+        // hasn't logged a `token_count` yet would return Ok(None) and hide
+        // a still-valid older snapshot whose 7-day window is unexpired.
+        let _guard = ENV_MUTEX.lock().unwrap();
+
+        const SESSION_META: &str = r#"{"timestamp":"2026-05-14T06:23:20.076Z","type":"session_meta","payload":{"id":"00000000-0000-7000-8000-000000000001","timestamp":"2026-05-14T06:23:10.584Z","cwd":"E:\\test","originator":"codex_exec","cli_version":"0.130.0"}}"#;
+        const TOKEN_COUNT_3PCT: &str = r#"{"timestamp":"2026-05-14T06:23:25.393Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":29331}},"rate_limits":{"limit_id":"codex","limit_name":null,"primary":{"used_percent":3.0,"window_minutes":10080,"resets_at":1779344602},"secondary":null,"credits":null,"plan_type":"go","rate_limit_reached_type":null}}}"#;
+
+        let tmp = TempDir::new().unwrap();
+        let sessions = tmp.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+
+        // Older session: has a valid token_count → semantic Ok(Some).
+        let older = sessions.join("2026/05/14/rollout-older.jsonl");
+        let older_content = format!("{SESSION_META}\n{TOKEN_COUNT_3PCT}\n");
+        touch_jsonl(&older, &older_content, -3600); // 1h ago
+
+        // Newer session: session_meta only (no token_count yet) → Ok(None).
+        let newer = sessions.join("2026/05/15/rollout-empty.jsonl");
+        let newer_content = format!("{SESSION_META}\n");
+        touch_jsonl(&newer, &newer_content, -60); // 1min ago
+
+        std::env::set_var(CODEX_CONFIG_DIR_ENV, tmp.path());
+        let result = crate::read_codex_quota();
+        std::env::remove_var(CODEX_CONFIG_DIR_ENV);
+
+        let snap = result
+            .unwrap()
+            .expect("expected the older session's snapshot");
+        assert!(
+            (snap.primary.used_percent - 3.0).abs() < 1e-9,
+            "got used_percent {}",
+            snap.primary.used_percent
+        );
+    }
+
+    #[test]
+    fn read_codex_quota_returns_none_when_all_sessions_lack_token_count() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+
+        const SESSION_META: &str = r#"{"timestamp":"2026-05-14T06:23:20.076Z","type":"session_meta","payload":{"id":"00000000-0000-7000-8000-000000000001","timestamp":"2026-05-14T06:23:10.584Z","cwd":"E:\\test","originator":"codex_exec","cli_version":"0.130.0"}}"#;
+
+        let tmp = TempDir::new().unwrap();
+        let sessions = tmp.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        touch_jsonl(
+            &sessions.join("2026/05/15/rollout-a.jsonl"),
+            &format!("{SESSION_META}\n"),
+            -60,
+        );
+        touch_jsonl(
+            &sessions.join("2026/05/14/rollout-b.jsonl"),
+            &format!("{SESSION_META}\n"),
+            -3600,
+        );
+
+        std::env::set_var(CODEX_CONFIG_DIR_ENV, tmp.path());
+        let result = crate::read_codex_quota();
+        std::env::remove_var(CODEX_CONFIG_DIR_ENV);
+
+        assert!(
+            result.unwrap().is_none(),
+            "all sessions empty → Ok(None) (not an error)"
+        );
     }
 }
