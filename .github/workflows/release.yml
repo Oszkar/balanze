@@ -49,6 +49,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
