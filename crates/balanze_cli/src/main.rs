@@ -99,12 +99,12 @@ fn cmd_status(args: &[String]) -> Result<()> {
     } else if sections {
         // Per-source detailed view — useful for debugging, dev work, and
         // anyone who wants the full window math + cadence bars in one go.
-        print_sections(&snapshot, verbose);
+        print_sections(&snapshot, verbose)?;
     } else {
         // Default: glanceable 4-quadrant matrix mirroring the readiness
         // summary from `balanze-cli setup`. Run `balanze-cli --sections` for the
         // extended per-source breakdown.
-        print_compact(&snapshot);
+        print_compact(&snapshot)?;
     }
     Ok(())
 }
@@ -945,10 +945,16 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
     }
 }
 
-fn print_sections(snapshot: &Snapshot, verbose: bool) {
+fn print_sections(snapshot: &Snapshot, verbose: bool) -> io::Result<()> {
     let stdout = io::stdout();
     let mut lock = stdout.lock();
-    let _ = write_sections(snapshot, verbose, &mut lock);
+    write_sections(snapshot, verbose, &mut lock).or_else(|e| {
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })
 }
 
 /// Writer-driven sibling of [`print_sections`]. Same content, parameterized
@@ -1242,10 +1248,16 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
 /// doc's 4-quadrant matrix: rows are providers (Anthropic, OpenAI),
 /// columns are cells (Quota %, API $). Cell content shows ✓ / ○ / ✗
 /// plus a one-line summary. See `print_sections` for per-source depth.
-fn print_compact(snapshot: &Snapshot) {
+fn print_compact(snapshot: &Snapshot) -> io::Result<()> {
     let stdout = io::stdout();
     let mut lock = stdout.lock();
-    let _ = write_compact(snapshot, &mut lock);
+    write_compact(snapshot, &mut lock).or_else(|e| {
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })
 }
 
 /// Writer-driven sibling of [`print_compact`]. Same content, parameterized
@@ -1549,7 +1561,7 @@ mod tests {
     }
 
     /// Construct a Snapshot with every quadrant populated. Numbers chosen so
-    /// the estimate ($4.20) is BIGGER than the real overage ($20.92) — i.e.
+    /// the estimate ($4.20) and the real overage ($20.92) are distinct — i.e.
     /// the kind of layout where a careless reader could confuse the two.
     fn fully_populated_snapshot() -> Snapshot {
         let now = fixture_fetched_at();
@@ -1598,8 +1610,8 @@ mod tests {
             },
         });
 
-        // Estimate dollar is intentionally LARGER than the real overage so
-        // any conflation in the label discipline would be visually loud.
+        // Estimate dollar ($4.20) is intentionally distinct from the real
+        // overage ($20.92) so any conflation in the label discipline is visible.
         snap.anthropic_api_cost = Some(Cost {
             per_model: vec![ModelCost {
                 model: "claude-sonnet-4-6".to_string(),
@@ -1608,7 +1620,7 @@ mod tests {
                 output_micro_usd: 3_000_000,
                 cache_creation_micro_usd: 0,
                 cache_read_micro_usd: 200_000,
-                total_micro_usd: 4_200_000, // $4.20 — bigger than overage
+                total_micro_usd: 4_200_000, // $4.20
             }],
             total_micro_usd: 4_200_000,
             skipped_models: vec![],
