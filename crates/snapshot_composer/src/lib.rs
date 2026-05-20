@@ -263,6 +263,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn codex_error_sets_only_its_own_error_slot() {
+        // A codex_local failure must populate codex_quota_error and leave
+        // codex_quota None, WITHOUT touching any other cell — the
+        // Anthropic cells still come from a successful JSONL load, and
+        // OpenAI stays at its "not configured" Ok(None) baseline.
+        let f = Fake {
+            events: Some(Ok((vec![one_event(now())], 1))),
+            codex: Some(Err(anyhow::anyhow!("permission denied on ~/.codex"))),
+            ..Default::default()
+        };
+        let snap = compose(&f, now()).await;
+
+        assert!(snap.codex_quota.is_none());
+        assert_eq!(
+            snap.codex_quota_error.as_deref(),
+            Some("permission denied on ~/.codex")
+        );
+
+        // No cross-contamination into the other three sources.
+        assert!(snap.claude_jsonl.is_some());
+        assert_eq!(snap.claude_jsonl_error, None);
+        assert!(snap.anthropic_api_cost.is_some());
+        assert_eq!(snap.anthropic_api_cost_error, None);
+        assert!(snap.openai.is_none());
+        assert_eq!(
+            snap.openai_error, None,
+            "openai Ok(None) baseline must NOT acquire an error from a codex failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_error_sets_only_its_own_error_slot() {
+        // Symmetric to the codex case: an OpenAI Admin Costs failure
+        // populates openai_error only, leaves openai None, and never
+        // bleeds into any other cell.
+        let f = Fake {
+            events: Some(Ok((vec![one_event(now())], 1))),
+            openai: Some(Err(anyhow::anyhow!("HTTP 403 — admin scope required"))),
+            ..Default::default()
+        };
+        let snap = compose(&f, now()).await;
+
+        assert!(snap.openai.is_none());
+        assert_eq!(
+            snap.openai_error.as_deref(),
+            Some("HTTP 403 — admin scope required")
+        );
+
+        // No cross-contamination.
+        assert!(snap.claude_jsonl.is_some());
+        assert_eq!(snap.claude_jsonl_error, None);
+        assert!(snap.anthropic_api_cost.is_some());
+        assert_eq!(snap.anthropic_api_cost_error, None);
+        assert!(snap.codex_quota.is_none());
+        assert_eq!(
+            snap.codex_quota_error, None,
+            "codex Ok(None) baseline must NOT acquire an error from an openai failure"
+        );
+    }
+
+    #[tokio::test]
     async fn oauth_present_anchors_window_to_five_hour_reset() {
         use anthropic_oauth::CadenceBar;
         let n = now();
