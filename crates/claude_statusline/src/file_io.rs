@@ -1,0 +1,322 @@
+//! Balanze-side IPC file IO for statusline snapshots.
+//!
+//! This module is the sole owner of the data file at
+//! `<data_dir>/balanze/statusline.snapshot.json`.  It does NOT touch
+//! Claude Code's `settings.json` (that is `wiring.rs`) nor the statusLine
+//! wire format (that is `parse.rs`).
+//!
+//! Both functions follow the atomic tmp+fsync+rename discipline mirrored from
+//! `anthropic_oauth::credentials::write_back` (AGENTS.md §3.4).  Error
+//! messages include the file path only — never file contents (defense in
+//! depth).
+
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::payload::{StatuslineFilePayload, SCHEMA_VERSION};
+
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// Errors returned by [`read_snapshot`] and [`atomic_write_snapshot`].
+///
+/// Every variant carries the file path; none carry file contents.
+#[derive(Debug, thiserror::Error)]
+pub enum FileIoError {
+    /// The snapshot file does not exist at `path`.
+    #[error("statusline snapshot file missing: {path}")]
+    FileMissing { path: PathBuf },
+
+    /// An OS-level I/O error occurred while reading or writing `path`.
+    #[error("io error on {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The file exists but its JSON is invalid or does not match the expected
+    /// shape.  File contents are NOT included in the message.
+    #[error("statusline snapshot parse error in {path}")]
+    ParseError { path: PathBuf },
+
+    /// The file's `schema_version` field differs from [`SCHEMA_VERSION`].
+    /// Consumers should discard the file and wait for a fresh write.
+    #[error(
+        "statusline snapshot schema drift in {path}: found version {found_version}, expected {expected}"
+    )]
+    SchemaDrift {
+        path: PathBuf,
+        found_version: u8,
+        expected: u8,
+    },
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Read and validate a [`StatuslineFilePayload`] from `path`.
+///
+/// Error mapping:
+/// - File absent            → [`FileIoError::FileMissing`]
+/// - Other OS error         → [`FileIoError::Io`]
+/// - Invalid JSON / shape   → [`FileIoError::ParseError`]
+/// - Wrong `schema_version` → [`FileIoError::SchemaDrift`]
+pub fn read_snapshot(path: &Path) -> Result<StatuslineFilePayload, FileIoError> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(FileIoError::FileMissing {
+                path: path.to_path_buf(),
+            });
+        }
+        Err(e) => {
+            return Err(FileIoError::Io {
+                path: path.to_path_buf(),
+                source: e,
+            });
+        }
+    };
+
+    // Pre-check schema_version with a lightweight probe so a future-versioned
+    // file yields a precise SchemaDrift error rather than a generic ParseError
+    // on the full payload shape.
+    #[derive(serde::Deserialize)]
+    struct VersionProbe {
+        schema_version: u8,
+    }
+    let probe: VersionProbe =
+        serde_json::from_slice(&bytes).map_err(|_| FileIoError::ParseError {
+            path: path.to_path_buf(),
+        })?;
+
+    if probe.schema_version != SCHEMA_VERSION {
+        return Err(FileIoError::SchemaDrift {
+            path: path.to_path_buf(),
+            found_version: probe.schema_version,
+            expected: SCHEMA_VERSION,
+        });
+    }
+
+    serde_json::from_slice(&bytes).map_err(|_| FileIoError::ParseError {
+        path: path.to_path_buf(),
+    })
+}
+
+/// Atomically write `payload` to `path` via tmp+fsync+rename.
+///
+/// - Creates parent directories if they do not exist.
+/// - If `path` already exists, copies its permissions onto the replacement
+///   file before renaming (Unix only; on Windows, ACL inheritance from the
+///   parent directory applies naturally and `set_permissions` is a no-op for
+///   simple mode bits).
+/// - No tmp file is left on disk after a successful call.
+/// - On failure the original file (if any) is left untouched.
+pub fn atomic_write_snapshot(
+    path: &Path,
+    payload: &StatuslineFilePayload,
+) -> Result<(), FileIoError> {
+    let parent = path.parent().ok_or_else(|| FileIoError::Io {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path has no parent directory",
+        ),
+    })?;
+
+    std::fs::create_dir_all(parent).map_err(|e| FileIoError::Io {
+        path: parent.to_path_buf(),
+        source: e,
+    })?;
+
+    let bytes = serde_json::to_vec_pretty(payload).map_err(|_| FileIoError::ParseError {
+        path: path.to_path_buf(),
+    })?;
+
+    // Unique tmp name: pid + nanosecond timestamp + monotonic counter.
+    // Avoids collisions on concurrent calls or PID reuse (mirrors wiring.rs).
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let tmp = parent.join(format!(
+        "statusline.snapshot.{}-{}-{}.json.tmp",
+        std::process::id(),
+        nanos,
+        seq,
+    ));
+
+    // Write to tmp, fsync, then atomically rename over the final path.
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create_new(&tmp)?;
+        f.write_all(&bytes)?;
+        // fsync before rename: crash between write and rename cannot lose data.
+        f.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(FileIoError::Io {
+            path: tmp,
+            source: e,
+        });
+    }
+
+    // Unix: copy the original file's permissions onto the tmp BEFORE rename,
+    // so the final file inherits the caller's chosen mode (e.g. 0o600).
+    // On Windows this block is compiled out; the ACL of the parent directory
+    // governs new files naturally.
+    #[cfg(unix)]
+    {
+        if let Ok(meta) = std::fs::metadata(path) {
+            let _ = std::fs::set_permissions(&tmp, meta.permissions());
+        }
+    }
+
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        FileIoError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }
+    })?;
+
+    // Unix: fsync the parent directory so the rename itself is durable.
+    // Best-effort — dir-fsync failure must not fail the write since data is
+    // already renamed into place.  Windows does not support opening a
+    // directory as a File for sync; the file fsync + rename is the portable
+    // guarantee.
+    #[cfg(unix)]
+    {
+        let _ = std::fs::File::open(parent).and_then(|f| f.sync_all());
+    }
+
+    Ok(())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone as _;
+    use tempfile::tempdir;
+
+    fn sample_payload() -> StatuslineFilePayload {
+        use crate::types::StatuslineSnapshot;
+        let snap = StatuslineSnapshot {
+            rate_limits: None,
+            session_cost_micro_usd: Some(3_420_000), // $3.42 in micro-USD
+            claude_code_version: Some("v2.1.144".to_string()),
+        };
+        StatuslineFilePayload::new(
+            snap,
+            chrono::Utc.with_ymd_and_hms(2026, 5, 21, 12, 0, 0).unwrap(),
+        )
+    }
+
+    #[test]
+    fn write_then_read_roundtrips() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("statusline.snapshot.json");
+        atomic_write_snapshot(&path, &sample_payload()).unwrap();
+        let back = read_snapshot(&path).unwrap();
+        assert_eq!(back.schema_version, SCHEMA_VERSION);
+        assert_eq!(back, sample_payload());
+    }
+
+    #[test]
+    fn missing_file_returns_file_missing_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.json");
+        let err = read_snapshot(&path).unwrap_err();
+        assert!(
+            matches!(err, FileIoError::FileMissing { .. }),
+            "expected FileMissing, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_json_returns_parse_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bad.json");
+        std::fs::write(&path, b"{not valid json").unwrap();
+        let err = read_snapshot(&path).unwrap_err();
+        assert!(
+            matches!(err, FileIoError::ParseError { .. }),
+            "expected ParseError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn schema_version_mismatch_returns_schema_drift() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("future.json");
+        std::fs::write(
+            &path,
+            br#"{"schema_version":99,"captured_at":"2026-05-21T00:00:00Z","payload":{"rate_limits":null,"session_cost_micro_usd":null,"claude_code_version":null}}"#,
+        )
+        .unwrap();
+        let err = read_snapshot(&path).unwrap_err();
+        match err {
+            FileIoError::SchemaDrift { found_version, .. } => {
+                assert_eq!(found_version, 99);
+            }
+            other => panic!("expected SchemaDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn atomic_write_leaves_no_tmp_file_after_success() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("statusline.snapshot.json");
+        atomic_write_snapshot(&path, &sample_payload()).unwrap();
+        // Assert no `*.tmp` files remain in the dir after a successful write.
+        let leftover_tmps: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftover_tmps.is_empty(),
+            "tmp file should be renamed away: {leftover_tmps:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_preserves_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("statusline.snapshot.json");
+        // Create the file first, then lock down permissions to 0o600.
+        std::fs::write(&path, b"{}").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&path, perms).unwrap();
+
+        atomic_write_snapshot(&path, &sample_payload()).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "permissions must be preserved across atomic write"
+        );
+    }
+
+    #[test]
+    fn write_creates_parent_dirs() {
+        let base = tempdir().unwrap();
+        let path = base
+            .path()
+            .join("subdir")
+            .join("nested")
+            .join("status.json");
+        atomic_write_snapshot(&path, &sample_payload()).unwrap();
+        assert!(path.exists(), "file must be created with parent dirs");
+        read_snapshot(&path).unwrap();
+    }
+}
