@@ -40,11 +40,17 @@ pub enum PredictionState {
 }
 
 /// Output of [`predict`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Prediction {
     pub state: PredictionState,
-    /// `None` when state is `Insufficient`. Otherwise the EWMA-projected
-    /// duration until the rolling-window cap (100 %) is reached.
+    /// `None` when:
+    /// - state is `Insufficient` (warm-up gates not passed), or
+    /// - the EWMA rate is zero or negative (usage not growing), or
+    /// - `current_pct >= 100` (already at cap), or
+    /// - the projected ETA would overflow `Duration::seconds(i64)` (degenerate
+    ///   near-zero positive rate).
+    ///
+    /// Otherwise the EWMA-projected duration until 100% utilisation.
     #[serde(with = "duration_seconds_opt")]
     pub eta_to_cap: Option<Duration>,
     /// Always present. Deterministic from `window_reset - now`, clamped to
@@ -54,10 +60,13 @@ pub struct Prediction {
     pub computed_at: DateTime<Utc>,
 }
 
-/// A timestamped observation of `used_pct` (0–100) in the rolling window.
+/// A single observation `(timestamp, used_pct)` from the rolling window.
+/// Callers pass slices of these to `predict`; the slice MUST be sorted
+/// oldest-first (`predict` debug-asserts this).
+///
 /// The coordinator appends one of these after each successful JSONL + OAuth
 /// merge; the predictor reads the history slice without owning it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowSnapshot {
     pub ts: DateTime<Utc>,
     /// Rolling-window utilisation as a percentage in [0, 100].
@@ -121,7 +130,14 @@ pub fn predict(
     let eta_to_cap = if ewma_rate > 0.0 && current_pct < 100.0 {
         let pct_remaining = 100.0 - current_pct;
         let minutes_to_cap = pct_remaining / ewma_rate;
-        Some(Duration::seconds((minutes_to_cap * 60.0) as i64))
+        let cap_seconds = minutes_to_cap * 60.0;
+        // Guard against near-zero rates producing an absurd ETA: if the
+        // projection would saturate i64, the cap is effectively unreachable.
+        if cap_seconds > i64::MAX as f64 {
+            None
+        } else {
+            Some(Duration::seconds(cap_seconds as i64))
+        }
     } else {
         // Rate is zero or negative (usage not growing), or already at cap.
         None
@@ -138,6 +154,10 @@ pub fn predict(
 /// Compute the EWMA of per-interval growth rates (% per minute) over the
 /// history slice. Returns 0.0 when there are fewer than two data points.
 fn compute_ewma_rate(history: &[WindowSnapshot]) -> f64 {
+    debug_assert!(
+        history.windows(2).all(|w| w[0].ts <= w[1].ts),
+        "WindowSnapshot history must be sorted oldest-first"
+    );
     let mut ewma: Option<f64> = None;
     for pair in history.windows(2) {
         let dt_min = (pair[1].ts - pair[0].ts).num_seconds() as f64 / 60.0;
@@ -153,9 +173,17 @@ fn compute_ewma_rate(history: &[WindowSnapshot]) -> f64 {
     ewma.unwrap_or(0.0)
 }
 
-/// Compute the mean squared deviation of per-interval growth rates from
-/// `mean_rate`. Returns 0.0 when there are fewer than two intervals.
-fn compute_variance(history: &[WindowSnapshot], mean_rate: f64) -> f64 {
+/// Mean squared deviation of per-interval growth rates from the EWMA-weighted
+/// rate (passed as `ewma_rate`). Note: using the EWMA as the centering value
+/// rather than the arithmetic mean is intentionally conservative — for
+/// trending signals this inflates variance, biasing the classifier toward
+/// `Uncertain` rather than risking a false `Confident`.
+/// Returns 0.0 when there are fewer than two intervals.
+fn compute_variance(history: &[WindowSnapshot], ewma_rate: f64) -> f64 {
+    debug_assert!(
+        history.windows(2).all(|w| w[0].ts <= w[1].ts),
+        "WindowSnapshot history must be sorted oldest-first"
+    );
     let mut sum_sq = 0.0;
     let mut n = 0usize;
     for pair in history.windows(2) {
@@ -164,7 +192,7 @@ fn compute_variance(history: &[WindowSnapshot], mean_rate: f64) -> f64 {
             continue;
         }
         let rate = (pair[1].used_pct - pair[0].used_pct) / dt_min;
-        let d = rate - mean_rate;
+        let d = rate - ewma_rate;
         sum_sq += d * d;
         n += 1;
     }
@@ -346,6 +374,15 @@ mod tests {
             p.state
         );
         assert!(p.eta_to_cap.is_some(), "Confident must carry an ETA");
+        // Stable rate is 0.5 %/min (each step adds 0.5 %). With current_pct = 6.0,
+        // 94 % remains → 94 / 0.5 = 188 min = 11280 s. EWMA of a constant rate
+        // equals the constant, so this is exact.
+        let eta = p.eta_to_cap.unwrap();
+        assert_eq!(
+            eta.num_seconds(),
+            11280,
+            "ETA = (100 - 6) / 0.5 * 60 = 11280 s"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -357,7 +394,9 @@ mod tests {
         let reset = t(300);
         let window_start = reset - Duration::hours(5);
         let now = window_start + Duration::minutes(30);
-        let history = noisy_history(12); // alternates 5 / 80 %
+        let history = noisy_history(12);
+        // 12 points (even): final EWMA is ~+15 %/min (positive), so eta_to_cap = Some.
+        // An odd count would terminate on the low 5.0 value → negative EWMA → None.
         let p = predict(now, 50.0, &history, reset);
         assert!(
             matches!(p.state, PredictionState::Uncertain),
@@ -423,6 +462,49 @@ mod tests {
         assert_eq!(
             p.eta_to_cap, None,
             "already at cap → eta_to_cap must be None"
+        );
+    }
+
+    #[test]
+    fn eta_to_cap_none_when_rate_is_effectively_zero() {
+        // history with extremely slow growth → ewma_rate ~1e-300
+        let reset = t(300);
+        let now = t(20);
+        let history: Vec<WindowSnapshot> = (0..12)
+            .map(|i| WindowSnapshot {
+                ts: t(i as i64),
+                used_pct: 50.0 + (i as f64) * 1e-300,
+            })
+            .collect();
+        let p = predict(now, /* current_pct */ 50.0, &history, reset);
+        // The rate may technically be > 0 but eta_to_cap should still be None
+        // because the projected seconds saturate i64.
+        assert!(
+            p.eta_to_cap.is_none() || p.eta_to_cap.unwrap().num_seconds() < 10_000_000_000_000,
+            "near-zero rate should not produce a billion-year ETA"
+        );
+    }
+
+    #[test]
+    fn eta_to_cap_none_when_usage_is_declining() {
+        let reset = t(300);
+        let now = t(20);
+        // Declining: 80% → 25% over the window.
+        let history: Vec<WindowSnapshot> = (0..12)
+            .map(|i| WindowSnapshot {
+                ts: t(i as i64),
+                used_pct: 80.0 - (i as f64) * 5.0, // 80, 75, 70, ..., 25
+            })
+            .collect();
+        let p = predict(now, /* current_pct */ 25.0, &history, reset);
+        // Declining rate → ewma_rate < 0 → eta_to_cap None.
+        assert!(matches!(
+            p.state,
+            PredictionState::Confident | PredictionState::Uncertain
+        ));
+        assert!(
+            p.eta_to_cap.is_none(),
+            "declining usage should produce None ETA"
         );
     }
 
