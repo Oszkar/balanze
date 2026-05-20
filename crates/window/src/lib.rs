@@ -62,9 +62,12 @@ pub struct WindowSummary {
 /// reset (clock skew near the 5h boundary, or the server briefly echoing the
 /// just-passed reset right after rollover) is ignored and the function
 /// transparently falls back to the now-relative window, so fresh new-window
-/// events are never silently under-counted. `None` likewise keeps the legacy
-/// `now - window` window for callers without an OAuth reset (degraded path).
-/// Burn math is always `now`-relative regardless of the anchor.
+/// events are never silently under-counted. `None` likewise uses
+/// `[now - window, now]` for callers without an OAuth reset (degraded path).
+/// Future-dated events (clock rollback, skewed JSONL timestamps) are excluded
+/// from both the main and burn windows so a single bad-clocked event can't
+/// inflate utilization or burn rate. Burn math is always `now`-relative
+/// regardless of the anchor.
 ///
 /// The function is pure: same input, same output. Defaults are exposed via
 /// the `DEFAULT_*` consts for callers that want the canonical 5h / 30m / 3.
@@ -89,9 +92,10 @@ pub fn summarize_window(
     };
     // When anchored, the cap window is the half-open interval
     // [reset - window, reset): events at or after the server reset belong to
-    // the NEXT window, not this one. Unanchored (`None`) keeps the legacy
-    // open-ended `[now - window, ..)` behavior so existing callers are
-    // byte-identical.
+    // the NEXT window, not this one. Unanchored (`None`) uses the closed
+    // upper bound `[now - window, now]` — future-dated events (clock
+    // rollback, JSONL timestamps from a skewed writer) would otherwise
+    // inflate utilization and burn rate.
     let window_end = effective_anchor; // Some(reset) => exclusive upper bound
     let burn_window_start = now - burn_window;
 
@@ -102,7 +106,11 @@ pub fn summarize_window(
     let mut burn_events: usize = 0;
 
     for ev in events {
-        let in_main_window = ev.ts >= window_start && window_end.map_or(true, |end| ev.ts < end);
+        let within_upper = match window_end {
+            Some(end) => ev.ts < end && ev.ts <= now, // anchored: half-open at reset, capped at now
+            None => ev.ts <= now,                    // unanchored: closed at now (skew guard)
+        };
+        let in_main_window = ev.ts >= window_start && within_upper;
         if in_main_window {
             total_events_in_window += 1;
             let tokens = ev.total_tokens();
@@ -111,7 +119,7 @@ pub fn summarize_window(
             entry.0 += 1;
             entry.1 = entry.1.saturating_add(tokens);
         }
-        if ev.ts >= burn_window_start {
+        if ev.ts >= burn_window_start && ev.ts <= now {
             burn_events += 1;
             burn_tokens = burn_tokens.saturating_add(ev.total_tokens());
         }
@@ -474,6 +482,74 @@ mod tests {
         );
         assert_eq!(s.window_start, n - DEFAULT_WINDOW);
         assert_eq!(s.total_events_in_window, 1);
+    }
+
+    #[test]
+    fn unanchored_window_excludes_future_dated_events() {
+        // Clock rollback or a skewed JSONL writer can produce events with
+        // ts > now. The unanchored window must NOT count them — otherwise
+        // a single misdated event inflates utilization and burn rate.
+        let n = now();
+        let evs = [
+            ev(n - Duration::minutes(10), "sonnet", 100, 50), // legit
+            ev(n + Duration::minutes(5), "sonnet", 999, 999), // future-dated
+            ev(n + Duration::hours(2), "sonnet", 777, 777),   // very future
+        ];
+        let s = summarize_window(
+            &evs,
+            n,
+            DEFAULT_WINDOW,
+            DEFAULT_BURN_WINDOW,
+            DEFAULT_MIN_BURN_EVENTS,
+            None,
+        );
+        assert_eq!(s.total_events_in_window, 1, "future events excluded");
+        assert_eq!(s.total_tokens_in_window, 150);
+    }
+
+    #[test]
+    fn unanchored_burn_window_excludes_future_dated_events() {
+        // Even if 3 events fall in the [now-30m, ..) half-line, the burn
+        // window must be bounded above by `now`. Otherwise two real events +
+        // one future-dated event trip the min_burn_events gate and produce
+        // a noise burn-rate from misdated data.
+        let n = now();
+        let evs = [
+            ev(n - Duration::minutes(5), "sonnet", 1000, 500),
+            ev(n - Duration::minutes(10), "sonnet", 1000, 500),
+            ev(n + Duration::minutes(5), "sonnet", 1000, 500), // future
+        ];
+        let s = summarize_window(
+            &evs,
+            n,
+            DEFAULT_WINDOW,
+            DEFAULT_BURN_WINDOW,
+            DEFAULT_MIN_BURN_EVENTS,
+            None,
+        );
+        assert_eq!(
+            s.recent_burn_tokens_per_min, None,
+            "future-dated burn event must not satisfy min_burn_events"
+        );
+    }
+
+    #[test]
+    fn unanchored_event_exactly_at_now_is_included() {
+        // The unanchored upper bound is closed at `now` — an event with
+        // ts == now is the most recent observable, and excluding it would
+        // create a one-instant gap at every call.
+        let n = now();
+        let e = ev(n, "sonnet", 10, 5);
+        let s = summarize_window(
+            &[e],
+            n,
+            DEFAULT_WINDOW,
+            DEFAULT_BURN_WINDOW,
+            DEFAULT_MIN_BURN_EVENTS,
+            None,
+        );
+        assert_eq!(s.total_events_in_window, 1);
+        assert_eq!(s.total_tokens_in_window, 15);
     }
 
     #[test]

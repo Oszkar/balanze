@@ -140,7 +140,13 @@ fn io_to_parse_err(path: &Path, e: std::io::Error) -> ParseError {
 ///
 /// Cases:
 /// - `None` cursor → read from 0 (first time we've seen this file).
-/// - Cursor exists and `current_size < cursor.byte_pos` → truncation; read from 0.
+/// - Cursor exists and `current_size < cursor.size` → the file shrank since
+///   the last call. Covers both strong truncation (`< byte_pos`) and the
+///   subtler partial-trailing-line case where the cursor was parked at
+///   `byte_pos` and the file then shrank to a value between `byte_pos` and
+///   the previous `size` (the bytes between were rewritten in a same-or-
+///   smaller atomic write — resuming at `byte_pos` would read stale
+///   overlap). Read from 0.
 /// - Cursor exists, `current_size == cursor.size`, and `mtime != cursor.mtime`
 ///   → same-size atomic rewrite; read from 0.
 /// - Otherwise → resume from `cursor.byte_pos`. If `current_size == cursor.byte_pos`,
@@ -151,7 +157,7 @@ fn next_start_offset(
     current_mtime: SystemTime,
 ) -> u64 {
     let Some(c) = cursor else { return 0 };
-    if current_size < c.byte_pos {
+    if current_size < c.size {
         return 0;
     }
     if current_size == c.size && current_mtime != c.mtime {
@@ -216,6 +222,17 @@ mod tests {
         let c = cursor(500, 500, 100);
         // Size unchanged, mtime advanced → file was rewritten with the same length.
         assert_eq!(next_start_offset(Some(&c), 500, mtime_at(200)), 0);
+    }
+
+    #[test]
+    fn shrink_between_byte_pos_and_size_resets_to_zero() {
+        // Cursor parked before a partial trailing line: byte_pos=100 (end of
+        // last complete line), size=120 (the 20-byte partial line). If the
+        // file shrinks to 110 — still >= byte_pos but < size — the bytes
+        // between 100 and 120 may have been rewritten. Resuming at 100 would
+        // re-read overlap that the writer no longer intends; must reset.
+        let c = cursor(100, 120, 100);
+        assert_eq!(next_start_offset(Some(&c), 110, mtime_at(150)), 0);
     }
 
     #[test]
@@ -372,6 +389,55 @@ mod tests {
         let second = p.read_incremental(&path).unwrap();
         assert_eq!(second.len(), 1, "truncation should restart from byte 0");
         assert_eq!(second[0].message_id.as_deref(), Some("msg_x"));
+    }
+
+    #[test]
+    fn partial_trailing_line_then_shrink_rewrite_re_reads_from_zero() {
+        // The integration version of `shrink_between_byte_pos_and_size_resets_to_zero`.
+        // 1. Write one complete line plus a partial trailing line. After the
+        //    first read, the cursor parks at byte_pos = end-of-complete-line,
+        //    size = full file (including the partial bytes).
+        // 2. Rewrite the file to a size strictly between byte_pos and the
+        //    previous size — emulating a same-process recovery where the
+        //    writer truncated and re-appended a *different* partial+complete
+        //    line. The new bytes overlap the cursor's recorded byte_pos.
+        // 3. The next read MUST start at byte 0; resuming at byte_pos would
+        //    consume rewritten bytes as if they were fresh appends.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut content = String::new();
+        write_assistant_line(&mut content, "msg_a", "req_1", 100);
+        let partial_prefix = r#"{"type":"assistant","timestamp":"2026-05-06T14:29:00"#;
+        content.push_str(partial_prefix);
+        std::fs::write(&path, &content).unwrap();
+
+        let mut p = IncrementalParser::new();
+        let first = p.read_incremental(&path).unwrap();
+        assert_eq!(first.len(), 1);
+        let cursor_after_first = p.cursor_for(&path).unwrap().clone();
+        assert!(
+            cursor_after_first.byte_pos < cursor_after_first.size,
+            "precondition: cursor parked before the partial trailing line"
+        );
+
+        // Rewrite to a size between byte_pos and the original size — the
+        // shrink the pre-fix code would have missed (current_size >= byte_pos).
+        let mut rewritten = String::new();
+        write_assistant_line(&mut rewritten, "msg_b", "req_2", 222);
+        assert!(
+            (rewritten.len() as u64) >= cursor_after_first.byte_pos
+                && (rewritten.len() as u64) < cursor_after_first.size,
+            "test fixture invariant: rewritten size must land in (byte_pos, size)"
+        );
+        std::fs::write(&path, &rewritten).unwrap();
+
+        let second = p.read_incremental(&path).unwrap();
+        assert_eq!(
+            second.len(),
+            1,
+            "shrink-into-byte_pos must restart from zero"
+        );
+        assert_eq!(second[0].message_id.as_deref(), Some("msg_b"));
     }
 
     #[test]
