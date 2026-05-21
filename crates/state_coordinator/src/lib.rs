@@ -33,5 +33,6 @@ mod test_support;
 
 pub use coordinator::{spawn, StateCoordinatorHandle};
 pub use messages::{Source, SourcePartial, SourceUpdate, StateMsg};
+pub use predictor::{Prediction, PredictionState, WindowSnapshot};
 pub use sink::{LogSink, NullSink, Sink};
 pub use snapshot::{merge_partial, record_error, JsonlSnapshot, Snapshot};

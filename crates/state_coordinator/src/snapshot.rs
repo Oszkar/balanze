@@ -8,8 +8,10 @@
 use anthropic_oauth::ClaudeOAuthSnapshot;
 use chrono::{DateTime, Utc};
 use claude_cost::Cost;
+use claude_statusline::StatuslineFilePayload;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
+use predictor::Prediction;
 use serde::{Deserialize, Serialize};
 use window::WindowSummary;
 
@@ -29,7 +31,8 @@ use crate::messages::{Source, SourcePartial};
 /// - OpenAI API $           ← `openai`
 ///
 /// Plus `claude_jsonl` which holds the raw JSONL window math that feeds
-/// both Anthropic cells.
+/// both Anthropic cells, `claude_statusline` from the statusLine file
+/// payload, and `prediction` from the EWMA predictor.
 // PartialEq is intentionally NOT derived: `ClaudeOAuthSnapshot` doesn't
 // implement it, and the upstream change to add it would force a float-equality
 // debate that doesn't pay off. Tests compare individual fields.
@@ -70,6 +73,18 @@ pub struct Snapshot {
     /// `None` means: OpenAI not configured (no key). Some(err) means
     /// configured but the fetch failed.
     pub openai_error: Option<String>,
+    /// Most recent successful Claude Code statusLine file payload. `None`
+    /// until the first successful read (Track E, v0.2 live wiring).
+    pub claude_statusline: Option<StatuslineFilePayload>,
+    /// Most recent failure from the statusline reader (file missing, schema
+    /// drift). Coexists with `claude_statusline` when a previously-good read
+    /// is now stale.
+    pub claude_statusline_error: Option<String>,
+    /// Most recent EWMA-based prediction computed from OAuth cadence history.
+    /// Recomputed by the coordinator after each successful `ClaudeOAuth` or
+    /// `ClaudeJsonl` merge. `None` until the first OAuth merge with a
+    /// `five_hour` cadence.
+    pub prediction: Option<Prediction>,
 }
 
 impl Snapshot {
@@ -88,6 +103,9 @@ impl Snapshot {
             codex_quota_error: None,
             openai: None,
             openai_error: None,
+            claude_statusline: None,
+            claude_statusline_error: None,
+            prediction: None,
         }
     }
 }
@@ -134,6 +152,10 @@ pub fn merge_partial(snapshot: &mut Snapshot, partial: SourcePartial) {
             snapshot.openai = Some(c);
             snapshot.openai_error = None;
         }
+        SourcePartial::ClaudeStatusline(p) => {
+            snapshot.claude_statusline = Some(p);
+            snapshot.claude_statusline_error = None;
+        }
     }
 }
 
@@ -147,6 +169,7 @@ pub fn record_error(snapshot: &mut Snapshot, source: Source, error: &str) {
         Source::AnthropicApiCost => &mut snapshot.anthropic_api_cost_error,
         Source::CodexQuota => &mut snapshot.codex_quota_error,
         Source::OpenAiCosts => &mut snapshot.openai_error,
+        Source::ClaudeStatusline => &mut snapshot.claude_statusline_error,
     };
     *slot = Some(error.to_string());
 }
@@ -156,6 +179,7 @@ mod tests {
     use super::*;
     use crate::test_support::{
         anthropic_api_cost, codex_quota, fixture_now, jsonl_snapshot, oauth_snapshot, openai_costs,
+        statusline_payload,
     };
 
     #[test]
@@ -232,6 +256,29 @@ mod tests {
             s.claude_oauth_error.is_none(),
             "untouched source stays clean"
         );
+    }
+
+    #[test]
+    fn merge_claude_statusline_overwrites_data_and_clears_error() {
+        let mut s = Snapshot::empty(fixture_now());
+        s.claude_statusline_error = Some("file missing".to_string());
+        merge_partial(
+            &mut s,
+            SourcePartial::ClaudeStatusline(statusline_payload()),
+        );
+        assert!(s.claude_statusline.is_some());
+        assert!(s.claude_statusline_error.is_none());
+    }
+
+    #[test]
+    fn record_error_routes_claude_statusline() {
+        let mut s = Snapshot::empty(fixture_now());
+        record_error(&mut s, Source::ClaudeStatusline, "schema drift v2");
+        assert_eq!(
+            s.claude_statusline_error.as_deref(),
+            Some("schema drift v2")
+        );
+        assert!(s.claude_statusline.is_none());
     }
 
     #[test]

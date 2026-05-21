@@ -2,14 +2,33 @@
 //! `StateMsg`s on a bounded mpsc channel; owns the in-memory `Snapshot`;
 //! notifies a `Sink` for side effects.
 
+use std::collections::VecDeque;
+
 use chrono::Utc;
+use predictor::{predict, WindowSnapshot};
 use settings::Settings;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::messages::{SourceUpdate, StateMsg};
+use crate::messages::{Source, SourceUpdate, StateMsg};
 use crate::sink::Sink;
 use crate::snapshot::{merge_partial, record_error, Snapshot};
+
+/// History ring capacity for the predictor's `WindowSnapshot` series.
+/// 128 samples ≈ 10+ hours at the planned 5-min OAuth poll cadence —
+/// more than the 5-hour rolling window needs while bounded enough to
+/// cap memory.
+const HISTORY_CAPACITY: usize = 128;
+
+/// Mutable state owned by the coordinator's single tokio task. Grouped
+/// into one struct so `handle_msg` takes one `&mut` instead of threading
+/// three. Never crosses a thread boundary — only `StateCoordinatorHandle`
+/// (a clone of the mpsc `Sender`) is shared.
+struct CoordinatorState {
+    snapshot: Snapshot,
+    history: VecDeque<WindowSnapshot>,
+    last_settings: Option<Settings>,
+}
 
 /// Default mpsc capacity. AGENTS.md §3.2 mentions a "dropped state-coordinator
 /// mpsc message" warning case for senders that use `try_send`; for normal
@@ -84,20 +103,18 @@ pub fn spawn_with_capacity<S: Sink>(
 }
 
 async fn run_loop<S: Sink>(mut rx: mpsc::Receiver<StateMsg>, mut sink: S) {
-    let mut snapshot = Snapshot::empty(Utc::now());
-    let mut _last_settings: Option<Settings> = None;
+    let mut state = CoordinatorState {
+        snapshot: Snapshot::empty(Utc::now()),
+        history: VecDeque::with_capacity(HISTORY_CAPACITY),
+        last_settings: None,
+    };
     while let Some(msg) = rx.recv().await {
-        handle_msg(&mut snapshot, &mut sink, &mut _last_settings, msg);
+        handle_msg(&mut state, &mut sink, msg);
     }
     tracing::debug!("state_coordinator: channel closed, shutting down");
 }
 
-fn handle_msg<S: Sink>(
-    snapshot: &mut Snapshot,
-    sink: &mut S,
-    last_settings: &mut Option<Settings>,
-    msg: StateMsg,
-) {
+fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg) {
     match msg {
         StateMsg::Update(SourceUpdate { source, result }) => match result {
             Ok(partial) => {
@@ -110,30 +127,75 @@ fn handle_msg<S: Sink>(
                         partial.source()
                     );
                 }
-                merge_partial(snapshot, partial);
-                snapshot.fetched_at = Utc::now();
-                sink.on_snapshot(snapshot);
+                let merged_source = partial.source();
+                merge_partial(&mut state.snapshot, partial);
+                state.snapshot.fetched_at = Utc::now();
+                maybe_recompute_prediction(state, merged_source);
+                sink.on_snapshot(&state.snapshot);
             }
             Err(err) => {
-                record_error(snapshot, source, &err);
+                record_error(&mut state.snapshot, source, &err);
                 sink.on_degraded(source, &err);
             }
         },
         StateMsg::Query(reply) => {
             // Receiver dropped → caller gave up; nothing to do.
-            let _ = reply.send(snapshot.clone());
+            let _ = reply.send(state.snapshot.clone());
         }
         StateMsg::Refresh => {
             // Re-notify with current state. Sinks that need to repaint will
             // do so; sinks that dedup against `last_painted` will no-op.
-            sink.on_snapshot(snapshot);
+            sink.on_snapshot(&state.snapshot);
         }
         StateMsg::SettingsChanged(s) => {
             // Scaffold: just remember it. Future work wires this to pollers
             // via a settings-change broadcast.
-            *last_settings = Some(s);
+            state.last_settings = Some(s);
         }
     }
+}
+
+/// Update `snapshot.prediction` after a successful JSONL or OAuth merge.
+/// OAuth merges also push a new `WindowSnapshot` into the history ring
+/// (with the server-authoritative `five_hour` utilization). JSONL merges
+/// only recompute against the existing history — JSONL events don't
+/// carry a fresh server-side pct. Skips when prerequisites are absent
+/// (no OAuth snapshot, no `five_hour` reset, no `five_hour` utilization).
+fn maybe_recompute_prediction(state: &mut CoordinatorState, merged_source: Source) {
+    if !matches!(merged_source, Source::ClaudeJsonl | Source::ClaudeOAuth) {
+        return;
+    }
+    let Some(oauth) = state.snapshot.claude_oauth.as_ref() else {
+        return;
+    };
+    let Some(reset) = oauth.five_hour_reset() else {
+        return;
+    };
+    let Some(util_pct) = oauth.five_hour_utilization() else {
+        return;
+    };
+    let now = Utc::now();
+
+    if merged_source == Source::ClaudeOAuth {
+        if state.history.len() == HISTORY_CAPACITY {
+            state.history.pop_front();
+        }
+        state.history.push_back(WindowSnapshot {
+            ts: now,
+            used_pct: util_pct as f64,
+        });
+    }
+    // ClaudeJsonl recomputes against the existing history but does NOT add a
+    // new sample — JSONL has no fresh server-side pct (the OAuth `five_hour`
+    // utilization stays whatever the last OAuth merge wrote).
+
+    // `make_contiguous` rotates the deque's internal buffer into a single
+    // slice (in place; no allocation, no per-entry clone) and returns it.
+    // Cheaper than `iter().cloned().collect()` for the recompute hot path
+    // — predict() takes &[WindowSnapshot] and this hands it the same data
+    // without copying.
+    let history_slice = state.history.make_contiguous();
+    state.snapshot.prediction = Some(predict(now, util_pct as f64, history_slice, reset));
 }
 
 #[cfg(test)]
@@ -143,6 +205,7 @@ mod tests {
     use crate::sink::{NullSink, Sink};
     use crate::snapshot::Snapshot;
     use crate::test_support::{jsonl_snapshot, oauth_snapshot, openai_costs};
+    use predictor::PredictionState;
     use std::sync::{Arc, Mutex};
 
     /// Test sink: records every event so the test can assert on them.
@@ -289,6 +352,35 @@ mod tests {
             "last update wins; no message was dropped"
         );
         assert_eq!(sink.snapshot_count(), N, "every update reached the sink");
+    }
+
+    #[tokio::test]
+    async fn oauth_merge_recomputes_prediction() {
+        let sink = NullSink;
+        let (handle, _join) = spawn(sink);
+
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+            }))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        assert!(
+            snap.prediction.is_some(),
+            "prediction set after OAuth merge"
+        );
+        // Only 1 history sample → Insufficient.
+        assert!(
+            matches!(
+                snap.prediction.as_ref().unwrap().state,
+                PredictionState::Insufficient,
+            ),
+            "expected Insufficient with only 1 history point, got {:?}",
+            snap.prediction.as_ref().unwrap().state
+        );
     }
 
     #[tokio::test]

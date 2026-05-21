@@ -1,8 +1,9 @@
 //! Shared test fixtures. Visible to any module's `#[cfg(test)] mod tests`.
 
-use anthropic_oauth::ClaudeOAuthSnapshot;
-use chrono::{DateTime, TimeZone, Utc};
+use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use claude_cost::Cost;
+use claude_statusline::{StatuslineFilePayload, StatuslineSnapshot};
 use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
 use openai_client::OpenAiCosts;
 use window::WindowSummary;
@@ -18,10 +19,24 @@ pub(crate) fn oauth_snapshot() -> ClaudeOAuthSnapshot {
         subscription_type: Some("max".to_string()),
         rate_limit_tier: Some("pro".to_string()),
         org_uuid: Some("uuid-1".to_string()),
-        cadences: vec![],
+        cadences: vec![CadenceBar {
+            key: "five_hour".to_string(),
+            display_label: "Current 5-hour session".to_string(),
+            utilization_percent: 25.0,
+            resets_at: fixture_now() + Duration::hours(5),
+        }],
         extra_usage: None,
         fetched_at: fixture_now(),
     }
+}
+
+pub(crate) fn statusline_payload() -> StatuslineFilePayload {
+    let snap = StatuslineSnapshot {
+        rate_limits: None,
+        session_cost_micro_usd: Some(3_420_000),
+        claude_code_version: Some("v2.1.144".to_string()),
+    };
+    StatuslineFilePayload::new(snap, fixture_now())
 }
 
 pub(crate) fn jsonl_snapshot() -> JsonlSnapshot {

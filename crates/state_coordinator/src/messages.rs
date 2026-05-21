@@ -2,6 +2,7 @@
 
 use anthropic_oauth::ClaudeOAuthSnapshot;
 use claude_cost::Cost;
+use claude_statusline::StatuslineFilePayload;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
 use settings::Settings;
@@ -11,8 +12,7 @@ use crate::snapshot::{JsonlSnapshot, Snapshot};
 
 /// Which source produced an update or failure.
 ///
-/// The five sources map 1-to-1 onto the cells / inputs of Balanze's
-/// 4-quadrant matrix:
+/// The six sources map onto the cells / inputs of Balanze's display matrix:
 ///
 /// ```text
 ///           | Subscription / Quota (%)        | API / Pay-as-you-go ($)
@@ -25,6 +25,9 @@ use crate::snapshot::{JsonlSnapshot, Snapshot};
 /// (window math for the quota display, token counts for AnthropicApiCost).
 /// It's a separate Source because its update cadence and failure modes
 /// differ from the API-rate cost derived from it.
+///
+/// `ClaudeStatusline` carries the parsed statusLine payload written by
+/// `balanze-cli statusline` and read by the Track E watcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     /// `anthropic_oauth::fetch_usage` — the 5h / 7d / per-model cadence bars.
@@ -37,6 +40,8 @@ pub enum Source {
     CodexQuota,
     /// `openai_client::costs_this_month` — month-to-date OpenAI spend.
     OpenAiCosts,
+    /// `claude_statusline` — parsed statusLine payload from the Track E file.
+    ClaudeStatusline,
 }
 
 /// Successful data payload from one source. The variant identifies the source;
@@ -48,6 +53,7 @@ pub enum SourcePartial {
     AnthropicApiCost(Cost),
     CodexQuota(CodexQuotaSnapshot),
     OpenAiCosts(OpenAiCosts),
+    ClaudeStatusline(StatuslineFilePayload),
 }
 
 impl SourcePartial {
@@ -60,6 +66,7 @@ impl SourcePartial {
             SourcePartial::AnthropicApiCost(_) => Source::AnthropicApiCost,
             SourcePartial::CodexQuota(_) => Source::CodexQuota,
             SourcePartial::OpenAiCosts(_) => Source::OpenAiCosts,
+            SourcePartial::ClaudeStatusline(_) => Source::ClaudeStatusline,
         }
     }
 }
