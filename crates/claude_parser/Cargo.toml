@@ -27,3 +27,8 @@ thiserror = { workspace = true }
 tempfile = "3"
 anyhow = { workspace = true }
 directories = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "incremental_parser"
+harness = false
