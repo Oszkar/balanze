@@ -130,13 +130,20 @@ pub fn predict(
     let eta_to_cap = if ewma_rate > 0.0 && current_pct < 100.0 {
         let pct_remaining = 100.0 - current_pct;
         let minutes_to_cap = pct_remaining / ewma_rate;
-        let cap_seconds = minutes_to_cap * 60.0;
+        // Retain sub-second precision via milliseconds rather than truncating
+        // to whole seconds: an ETA of 0.7s should not collapse to 0s. The
+        // `.num_seconds()` accessor used by tests + render still rounds toward
+        // zero for whole-second comparisons, but the underlying Duration now
+        // carries the finer-grained value.
+        let cap_millis = minutes_to_cap * 60_000.0;
         // Guard against near-zero rates producing an absurd ETA: if the
-        // projection would saturate i64, the cap is effectively unreachable.
-        if cap_seconds > i64::MAX as f64 {
+        // projection would saturate i64 milliseconds, the cap is effectively
+        // unreachable (i64::MAX ms ≈ 292 million years — still vastly larger
+        // than any real session).
+        if cap_millis > i64::MAX as f64 {
             None
         } else {
-            Some(Duration::seconds(cap_seconds as i64))
+            Some(Duration::milliseconds(cap_millis as i64))
         }
     } else {
         // Rate is zero or negative (usage not growing), or already at cap.
@@ -160,7 +167,12 @@ fn compute_ewma_rate(history: &[WindowSnapshot]) -> f64 {
     );
     let mut ewma: Option<f64> = None;
     for pair in history.windows(2) {
-        let dt_min = (pair[1].ts - pair[0].ts).num_seconds() as f64 / 60.0;
+        // Millisecond precision: pairs closer than 1 second apart would
+        // otherwise collapse to dt_min = 0.0 and be silently skipped,
+        // biasing the EWMA toward staleness when the coordinator produces
+        // rapid bursts (e.g. JSONL notify + OAuth merge within the same
+        // second).
+        let dt_min = (pair[1].ts - pair[0].ts).num_milliseconds() as f64 / 60_000.0;
         if dt_min <= 0.0 {
             continue;
         }
@@ -187,7 +199,10 @@ fn compute_variance(history: &[WindowSnapshot], ewma_rate: f64) -> f64 {
     let mut sum_sq = 0.0;
     let mut n = 0usize;
     for pair in history.windows(2) {
-        let dt_min = (pair[1].ts - pair[0].ts).num_seconds() as f64 / 60.0;
+        // Millisecond precision — matches `compute_ewma_rate` so the two
+        // helpers walk the same set of pairs (sub-second intervals are
+        // counted, not silently dropped).
+        let dt_min = (pair[1].ts - pair[0].ts).num_milliseconds() as f64 / 60_000.0;
         if dt_min <= 0.0 {
             continue;
         }
@@ -505,6 +520,35 @@ mod tests {
         assert!(
             p.eta_to_cap.is_none(),
             "declining usage should produce None ETA"
+        );
+    }
+
+    #[test]
+    fn ewma_uses_subsecond_intervals_not_silently_dropped() {
+        // Regression test for the bug where `(t1 - t0).num_seconds()` truncated
+        // sub-second intervals to 0, causing all pairs to be skipped
+        // (`dt_min <= 0.0`) and `ewma_rate` to fall back to 0.0 → `eta_to_cap`
+        // would be `None` even though usage was clearly growing.
+        let reset = t(300); // 5h ahead — past the warm-up gate
+        let now = t(20); // 20 min into the window — past warm-up
+        let base = now - Duration::milliseconds(330);
+        // 12 entries, each 30 ms after the previous, with monotonically
+        // growing used_pct. Total span: 11 × 30 ms = 330 ms — all sub-second
+        // pairs that the old `num_seconds()`-based dt would have dropped.
+        let history: Vec<WindowSnapshot> = (0..12)
+            .map(|i| WindowSnapshot {
+                ts: base + Duration::milliseconds(i as i64 * 30),
+                used_pct: 50.0 + i as f64 * 0.1,
+            })
+            .collect();
+        let p = predict(now, /* current_pct */ 51.2, &history, reset);
+        // With ms-resolution dt, the EWMA observes real positive growth →
+        // eta_to_cap is Some. With the old s-resolution code, every pair
+        // would be dropped → ewma_rate = 0.0 → eta_to_cap = None. This
+        // assertion would fail under the old implementation.
+        assert!(
+            p.eta_to_cap.is_some(),
+            "sub-second pairs should be counted; got None (regression — pairs silently dropped by num_seconds() truncation)"
         );
     }
 
