@@ -6,7 +6,7 @@ use tauri::{
 
 // Sink-seam checkpoint — see `tauri_sink` module docs. Skeleton only; v0.3
 // wires it into the state_coordinator actor.
-pub mod tauri_sink;
+mod tauri_sink;
 
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {

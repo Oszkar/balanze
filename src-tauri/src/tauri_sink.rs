@@ -34,7 +34,7 @@ use tauri::AppHandle;
 /// they may live in their own module — this enum is the placeholder, not
 /// the final home.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorBucket {
+pub(crate) enum ColorBucket {
     Green,
     Yellow,
     Orange,
@@ -48,13 +48,13 @@ pub enum ColorBucket {
 /// `(ColorBucket, title_text)` tuple so a `Refresh` tick that doesn't
 /// change the visible state can short-circuit without calling
 /// `tray.set_icon` — see AGENTS.md §3.1.
-pub struct TauriSink {
+pub(crate) struct TauriSink {
     app: AppHandle,
     last_painted: Option<(ColorBucket, String)>,
 }
 
 impl TauriSink {
-    pub fn new(app: AppHandle) -> Self {
+    pub(crate) fn new(app: AppHandle) -> Self {
         Self {
             app,
             last_painted: None,
