@@ -124,6 +124,15 @@ impl ClaudeOAuthSnapshot {
             .find(|c| c.key == "five_hour")
             .map(|c| c.resets_at)
     }
+
+    /// Returns the 5-hour cadence's utilization percentage (0.0 to 100.0), if
+    /// present. Symmetric to [`five_hour_reset`](Self::five_hour_reset).
+    pub fn five_hour_utilization(&self) -> Option<f32> {
+        self.cadences
+            .iter()
+            .find(|c| c.key == "five_hour")
+            .map(|c| c.utilization_percent)
+    }
 }
 
 /// Result of a successful refresh-token grant. Hand-written `Debug` (NOT
@@ -246,5 +255,58 @@ mod tests {
             fetched_at: ts,
         };
         assert_eq!(snap.five_hour_reset(), None);
+    }
+
+    #[test]
+    fn five_hour_utilization_returns_the_five_hour_cadence_percent() {
+        let ts = chrono::DateTime::parse_from_rfc3339("2026-05-15T18:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let other = chrono::DateTime::parse_from_rfc3339("2026-05-20T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let snap = ClaudeOAuthSnapshot {
+            cadences: vec![
+                CadenceBar {
+                    key: "seven_day".to_string(),
+                    display_label: "All models (7 days)".to_string(),
+                    utilization_percent: 10.0,
+                    resets_at: other,
+                },
+                CadenceBar {
+                    key: "five_hour".to_string(),
+                    display_label: "Current 5-hour session".to_string(),
+                    utilization_percent: 42.0,
+                    resets_at: ts,
+                },
+            ],
+            extra_usage: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            org_uuid: None,
+            fetched_at: ts,
+        };
+        assert_eq!(snap.five_hour_utilization(), Some(42.0));
+    }
+
+    #[test]
+    fn five_hour_utilization_is_none_when_absent() {
+        let ts = chrono::DateTime::parse_from_rfc3339("2026-05-15T18:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let snap = ClaudeOAuthSnapshot {
+            cadences: vec![CadenceBar {
+                key: "seven_day".to_string(),
+                display_label: "All models (7 days)".to_string(),
+                utilization_percent: 10.0,
+                resets_at: ts,
+            }],
+            extra_usage: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            org_uuid: None,
+            fetched_at: ts,
+        };
+        assert_eq!(snap.five_hour_utilization(), None);
     }
 }
