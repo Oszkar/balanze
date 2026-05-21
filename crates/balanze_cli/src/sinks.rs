@@ -14,6 +14,39 @@
 //! * [`JsonlSink`] — activated by `--watch --json`. Emits one JSON object per
 //!   line with no debounce (every event is a discrete data point for the
 //!   consumer).
+//!
+//! # Platform / terminal assumptions
+//!
+//! `StdoutSink`'s TTY path emits `\x1b[2J\x1b[H` (ANSI clear-screen + cursor-
+//! home) and relies on the terminal to interpret it. This works on:
+//!
+//! * macOS Terminal / iTerm2
+//! * Linux on any modern terminal emulator
+//! * Windows 11 in **Windows Terminal** and **PowerShell 7+** (both enable
+//!   Virtual Terminal Processing by default — see `ENABLE_VIRTUAL_TERMINAL_PROCESSING`)
+//!
+//! It does NOT work in legacy Windows `cmd.exe` without `EnableVirtualTerminalProcessing`
+//! turned on first; in that case the user will see literal `␛[2J␛[H` characters
+//! and the redraw effect breaks. Since the v0.1 / v0.2 distribution story is
+//! source-only (the audience is power users on Win 11 / Windows Terminal) we
+//! accept that limitation rather than pull in `crossterm` for a v0.3-UI-only
+//! concern. If a future user hits this, the fix is a one-time
+//! `windows-sys`-backed `SetConsoleMode` call in `StdoutSink::new`.
+//!
+//! # Broken-pipe handling
+//!
+//! `StdoutSink` tracks a `broken_pipe` flag: once a write to stdout returns
+//! `ErrorKind::BrokenPipe` (e.g., `balanze-cli --watch | head -n 5` closes
+//! the pipe after 5 frames), the sink stops attempting further writes — but
+//! the coordinator's loop keeps running. This is a deliberate trade-off:
+//! returning an error from the sync `Sink::on_snapshot` boundary would require
+//! a trait extension, while the broken-pipe condition itself isn't fatal —
+//! the coordinator stays alive and `Ctrl-C` still exits cleanly. The leftover
+//! tokio runtime (CPU-idle, just spinning on intervals) is bounded; if you
+//! want strict broken-pipe-exits-process behavior, run `--watch --json | head`
+//! → SIGPIPE → the process exits on the next write attempt (matches the
+//! standard Unix pattern). `JsonlSink` inherits the same `println!` panic-
+//! on-broken-pipe behavior the rest of the project relies on.
 
 use std::io::{stderr, Stderr, Write};
 use std::time::{Duration, Instant};
@@ -31,6 +64,11 @@ use crate::write_compact;
 /// ensure another event will come soon) and avoids the complexity of a
 /// separate trailing-edge timer task.
 const DEBOUNCE: Duration = Duration::from_millis(200);
+
+/// ANSI escape: clear entire screen (`\x1b[2J`) + move cursor to top-left
+/// (`\x1b[H`). Together they produce the in-place-redraw effect the TTY
+/// path relies on. See module doc for terminal-compat caveats.
+const ANSI_CLEAR_HOME: &[u8] = b"\x1b[2J\x1b[H";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // StdoutSink
@@ -50,6 +88,9 @@ pub struct StdoutSink {
     err: Stderr,
     is_tty: bool,
     last_render: Option<Instant>,
+    /// Set to true on the first write that returns `ErrorKind::BrokenPipe`.
+    /// Subsequent `on_snapshot` calls become no-ops — see module doc.
+    broken_pipe: bool,
 }
 
 impl StdoutSink {
@@ -63,6 +104,7 @@ impl StdoutSink {
             err: stderr(),
             is_tty,
             last_render: None,
+            broken_pipe: false,
         }
     }
 
@@ -76,12 +118,31 @@ impl StdoutSink {
             err: stderr(),
             is_tty,
             last_render: None,
+            broken_pipe: false,
+        }
+    }
+
+    /// Write helper that records broken-pipe state. Returns true if the
+    /// write succeeded, false if a broken-pipe error was observed (in
+    /// which case `self.broken_pipe` is set and no further writes are
+    /// attempted by `on_snapshot` for this sink's lifetime).
+    fn write_or_record_broken_pipe(&mut self, buf: &[u8]) -> bool {
+        match self.out.write_all(buf) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                self.broken_pipe = true;
+                false
+            }
+            Err(_) => false, // other errors: silent, but don't latch
         }
     }
 }
 
 impl Sink for StdoutSink {
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
+        if self.broken_pipe {
+            return;
+        }
         let now = Instant::now();
         if let Some(prev) = self.last_render {
             if now.duration_since(prev) < DEBOUNCE {
@@ -91,12 +152,19 @@ impl Sink for StdoutSink {
         self.last_render = Some(now);
 
         if self.is_tty {
-            // ANSI: clear screen (2J) then move cursor to top-left (H).
-            let _ = self.out.write_all(b"\x1b[2J\x1b[H");
-        } else {
-            let _ = writeln!(self.out, "---");
+            if !self.write_or_record_broken_pipe(ANSI_CLEAR_HOME) {
+                return;
+            }
+        } else if !self.write_or_record_broken_pipe(b"---\n") {
+            return;
         }
-        let _ = write_compact(snapshot, &mut self.out);
+        // `write_compact` returns io::Result; capture broken-pipe via match.
+        if let Err(e) = write_compact(snapshot, &mut self.out) {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                self.broken_pipe = true;
+            }
+            return;
+        }
         let _ = self.out.flush();
     }
 
@@ -202,13 +270,58 @@ mod tests {
         let output = buf.lock().unwrap().clone();
         // TTY path: must start with the ANSI clear sequence.
         assert!(
-            output.starts_with(b"\x1b[2J\x1b[H"),
+            output.starts_with(ANSI_CLEAR_HOME),
             "expected ANSI clear prefix"
         );
         let text = String::from_utf8(output).unwrap();
         assert!(
             text.contains("=== Balanze status"),
             "compact header missing"
+        );
+    }
+
+    /// `Write` impl that returns `BrokenPipe` on every `write` call — used
+    /// to verify `StdoutSink` latches into broken-pipe state and stops
+    /// trying to write.
+    struct BrokenPipeWriter {
+        write_calls: Arc<Mutex<u32>>,
+    }
+    impl Write for BrokenPipeWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            *self.write_calls.lock().unwrap() += 1;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "test: pipe closed",
+            ))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stdout_sink_latches_broken_pipe_and_stops_writing() {
+        let write_calls = Arc::new(Mutex::new(0u32));
+        let writer = BrokenPipeWriter {
+            write_calls: Arc::clone(&write_calls),
+        };
+        let mut sink = StdoutSink::new_with(Box::new(writer), false);
+
+        sink.on_snapshot(&fixture_snapshot());
+        let calls_after_first = *write_calls.lock().unwrap();
+        assert!(
+            calls_after_first >= 1,
+            "first frame should attempt at least one write"
+        );
+
+        // Bypass the debounce so we hit the broken_pipe gate, not the
+        // last_render gate.
+        sink.last_render = None;
+        sink.on_snapshot(&fixture_snapshot());
+        let calls_after_second = *write_calls.lock().unwrap();
+        assert_eq!(
+            calls_after_first, calls_after_second,
+            "after broken-pipe latch, no further writes should be attempted"
         );
     }
 

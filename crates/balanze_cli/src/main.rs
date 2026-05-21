@@ -106,8 +106,20 @@ fn cmd_status(args: &[String]) -> Result<()> {
                  (the watch TUI uses the compact view)"
             );
         }
-        // verbose is not yet threaded into watch mode; --json -v would need
-        // JsonlSink to accept a verbose flag. Left as a TODO for later.
+        // verbose is not yet threaded into watch mode; --watch --json -v would
+        // need JsonlSink to accept a verbose flag so the JSONL stream surfaces
+        // org_uuid / session_id. Warn if the user explicitly asks for verbose
+        // alongside --json so they don't quietly get redacted output and
+        // wonder why their jq filters don't see the identifiers.
+        // TODO(v0.2-followup): pass verbose to JsonlSink so --watch --json -v
+        //                      surfaces org_uuid / codex session_id.
+        if verbose && json_mode {
+            eprintln!(
+                "warning: -v / --verbose is not yet threaded into --watch --json; \
+                 org_uuid and codex.session_id will be redacted as if -v were absent. \
+                 Use `balanze-cli --json -v` (one-shot) if you need identifiers."
+            );
+        }
         let _ = verbose;
         return watch_cmd::run_watch_mode(json_mode);
     }
