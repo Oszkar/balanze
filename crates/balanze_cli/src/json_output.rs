@@ -647,20 +647,47 @@ mod tests {
         s.prediction = Some(sample_prediction());
         let v = render_to_value(&s, false);
         let cell = &v["prediction"];
-        assert!(
-            matches!(
-                cell["state"].as_str().unwrap(),
-                "Insufficient" | "Uncertain" | "Confident"
-            ),
-            "state = {}",
-            cell["state"]
-        );
+        // sample_prediction() constructs PredictionState::Confident — assert the
+        // exact string so a state swap (e.g. Confident → Insufficient) is caught.
+        assert_eq!(cell["state"].as_str().unwrap(), "Confident");
         assert_eq!(cell["source"], "predictor_ewma");
         assert_eq!(cell["confidence"], "estimate");
-        assert!(cell["eta_to_reset_seconds"].is_i64());
-        // eta_to_cap_seconds may be null (Insufficient) or an i64
-        assert!(cell["eta_to_cap_seconds"].is_null() || cell["eta_to_cap_seconds"].is_i64());
+        // eta_to_reset: 16 200 s from sample_prediction()
+        assert_eq!(cell["eta_to_reset_seconds"].as_i64().unwrap(), 16_200);
+        // eta_to_cap: 11 280 s from sample_prediction() (Some → not null)
+        assert_eq!(cell["eta_to_cap_seconds"].as_i64().unwrap(), 11_280);
+        // computed_at serialises to an ISO-8601 string
         assert!(cell["computed_at"].is_string());
+    }
+
+    #[test]
+    fn prediction_cell_insufficient_state_serializes_eta_as_null() {
+        // Build an Insufficient prediction (warm-up / too few history points).
+        // eta_to_cap must be None → serialises as JSON null.
+        // eta_to_reset is always present.
+        let insufficient = state_coordinator::Prediction {
+            state: state_coordinator::PredictionState::Insufficient,
+            eta_to_cap: None,
+            eta_to_reset: chrono::Duration::seconds(16_200),
+            computed_at: fixed_now(),
+        };
+        let mut s = Snapshot::empty(fixed_now());
+        s.prediction = Some(insufficient);
+        let v = render_to_value(&s, false);
+        let cell = &v["prediction"];
+        assert_eq!(cell["state"].as_str().unwrap(), "Insufficient");
+        // Option<Duration> with None must serialise as JSON null.
+        assert!(
+            cell["eta_to_cap_seconds"].is_null(),
+            "eta_to_cap_seconds should be null for Insufficient, got {}",
+            cell["eta_to_cap_seconds"]
+        );
+        // eta_to_reset is always present regardless of state.
+        assert_eq!(
+            cell["eta_to_reset_seconds"].as_i64().unwrap(),
+            16_200,
+            "eta_to_reset_seconds must always be an i64"
+        );
     }
 
     #[test]

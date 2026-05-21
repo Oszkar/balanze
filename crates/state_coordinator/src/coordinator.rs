@@ -14,8 +14,16 @@ use crate::messages::{Source, SourceUpdate, StateMsg};
 use crate::sink::Sink;
 use crate::snapshot::{merge_partial, record_error, Snapshot};
 
+/// History ring capacity for the predictor's `WindowSnapshot` series.
+/// 128 samples ≈ 10+ hours at the planned 5-min OAuth poll cadence —
+/// more than the 5-hour rolling window needs while bounded enough to
+/// cap memory.
 const HISTORY_CAPACITY: usize = 128;
 
+/// Mutable state owned by the coordinator's single tokio task. Grouped
+/// into one struct so `handle_msg` takes one `&mut` instead of threading
+/// three. Never crosses a thread boundary — only `StateCoordinatorHandle`
+/// (a clone of the mpsc `Sender`) is shared.
 struct CoordinatorState {
     snapshot: Snapshot,
     history: VecDeque<WindowSnapshot>,
@@ -147,6 +155,12 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
     }
 }
 
+/// Update `snapshot.prediction` after a successful JSONL or OAuth merge.
+/// OAuth merges also push a new `WindowSnapshot` into the history ring
+/// (with the server-authoritative `five_hour` utilization). JSONL merges
+/// only recompute against the existing history — JSONL events don't
+/// carry a fresh server-side pct. Skips when prerequisites are absent
+/// (no OAuth snapshot, no `five_hour` reset, no `five_hour` utilization).
 fn maybe_recompute_prediction(state: &mut CoordinatorState, merged_source: Source) {
     if !matches!(merged_source, Source::ClaudeJsonl | Source::ClaudeOAuth) {
         return;
@@ -171,6 +185,9 @@ fn maybe_recompute_prediction(state: &mut CoordinatorState, merged_source: Sourc
             used_pct: util_pct as f64,
         });
     }
+    // ClaudeJsonl recomputes against the existing history but does NOT add a
+    // new sample — JSONL has no fresh server-side pct (the OAuth `five_hour`
+    // utilization stays whatever the last OAuth merge wrote).
 
     let history_slice: Vec<WindowSnapshot> = state.history.iter().cloned().collect();
     state.snapshot.prediction = Some(predict(now, util_pct as f64, &history_slice, reset));
