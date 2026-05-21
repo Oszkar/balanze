@@ -253,6 +253,7 @@ version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
+ "state_coordinator",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
