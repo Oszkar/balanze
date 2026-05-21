@@ -16,7 +16,9 @@ pub const SCHEMA_VERSION: u8 = 1;
 /// The envelope is independent of the Claude Code `statusLine` wire format
 /// (owned by `parse.rs`) and of the `statusLine` stanza in Claude's
 /// `settings.json` (owned by `wiring.rs`). It is Balanze's own IPC data
-/// file sitting at `<data_dir>/balanze/statusline.snapshot.json`.
+/// file, sitting at `<data_dir>/statusline.snapshot.json` where
+/// `<data_dir>` is `directories::ProjectDirs::from("me", "oszkar", "Balanze").data_dir()`
+/// (already includes the per-OS Balanze subpath; see `file_io` module doc).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatuslineFilePayload {
     pub schema_version: u8,
