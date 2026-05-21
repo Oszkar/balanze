@@ -54,10 +54,14 @@ bumps are bug fixes only.
 - **Criterion baselines** for the cost/parse hot paths:
   `compute_cost` (10k events), `summarize_window` (10k events / 5 h slice),
   `incremental_parser` (100 newly-appended lines). Each crate ships a
-  committed `benches/baseline.json` (Criterion `estimates.json` from a
-  `--save-baseline track_e_initial` run); future runs detect regressions
-  via `--baseline track_e_initial`. CI workflows are unchanged — benches
-  are local-only and slow.
+  committed `benches/baseline.json` — a **manual reference snapshot**
+  (copy of Criterion's `target/criterion/<bench>/track_e_initial/estimates.json`
+  from a `--save-baseline track_e_initial` run on the dev box at Track E
+  ship time). Criterion does NOT auto-consume the committed file; to use
+  `cargo bench -- --baseline track_e_initial` on a fresh checkout, copy
+  the committed JSON back into the `target/criterion/...` path first
+  (the bench module docstrings document the exact path). CI workflows are
+  unchanged — benches are local-only and slow.
 - **Claude Code statusLine integration.** New `claude_statusline` crate +
   `balanze-cli statusline` subcommand: reads Claude Code's statusLine JSON and
   prints live 5h/7d subscription quota + session cost in your shell — zero-auth,

@@ -74,9 +74,9 @@ balanze-cli settings              Print current settings.json
 balanze-cli statusline            Claude Code statusLine command: reads the
                                   statusLine JSON on stdin, prints a one-line
                                   status (live 5h/7d quota + session cost).
-                                  Also writes <ProjectDirs.data>/statusline.
-                                  snapshot.json atomically — the IPC bridge
-                                  the v0.2 watcher's statusline task reads.
+                                  Also atomically writes the snapshot file
+                                  <ProjectDirs.data>/statusline.snapshot.json
+                                  — the IPC bridge the v0.2 watcher reads.
 balanze-cli help                  This help
 
 Env override: BALANZE_OPENAI_KEY=sk-admin-…  (takes precedence over the

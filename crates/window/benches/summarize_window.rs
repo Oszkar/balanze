@@ -6,8 +6,18 @@
 //! safety poll); a slow summary stalls the coordinator and the
 //! `(ColorBucket, title_text)` dedup (AGENTS.md §3.1) that follows.
 //!
-//! Baseline captured in `crates/window/benches/baseline.json` via
-//! `cargo bench -p window -- --save-baseline track_e_initial`.
+//! Baseline workflow. `cargo bench -p window -- --save-baseline
+//! track_e_initial` writes Criterion's output to
+//! `target/criterion/summarize_window_10k_5h/track_e_initial/estimates.json`.
+//! The committed `crates/window/benches/baseline.json` is a **manual copy**
+//! of that file — a reference snapshot at Track E ship time. Criterion
+//! does NOT auto-consume the committed file; on a fresh checkout,
+//! `cargo bench -- --baseline track_e_initial` finds nothing because
+//! `target/criterion/` is empty. To compare against the committed
+//! snapshot, copy `crates/window/benches/baseline.json` into
+//! `target/criterion/summarize_window_10k_5h/track_e_initial/estimates.json`
+//! first. To refresh: run `--save-baseline track_e_initial` and copy the
+//! new `estimates.json` back over `benches/baseline.json`.
 
 use chrono::{Duration, TimeZone, Utc};
 use claude_parser::{AccountType, DataSource, Provider, UsageEvent};
