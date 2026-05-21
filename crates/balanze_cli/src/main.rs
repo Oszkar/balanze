@@ -19,6 +19,8 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 mod json_output;
+mod sinks;
+mod watch_cmd;
 
 use anthropic_oauth::{
     fetch_usage, load_from as load_credentials_from, locate_credentials, refresh_access_token,
@@ -59,7 +61,10 @@ fn main() -> ExitCode {
         // applies the documented --json-wins precedence) regardless of
         // which token routed here. `-v` is intentionally NOT an alias —
         // it's a modifier on a mode, never advertised standalone.
-        "status" | "--json" | "--sections" => cmd_status(&args),
+        // `--watch` is a top-level alias for `status --watch`, mirroring the
+        // `--json` and `--sections` aliases. Both `balanze-cli --watch` and
+        // `balanze-cli status --watch` route here.
+        "status" | "--json" | "--sections" | "--watch" => cmd_status(&args),
         "setup" => cmd_setup(),
         "set-openai-key" => cmd_set_openai_key(),
         "clear-openai-key" => cmd_clear_openai_key(),
@@ -89,6 +94,36 @@ fn cmd_status(args: &[String]) -> Result<()> {
     let json_mode = args.iter().any(|a| a == "--json");
     let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
     let sections = args.iter().any(|a| a == "--sections");
+    let watch_mode = args.iter().any(|a| a == "--watch");
+
+    if watch_mode {
+        // --sections describes the per-source breakdown, which isn't a TUI
+        // concept; the watch mode always uses the compact view. Warn but don't
+        // error — the --watch behavior is well-defined regardless.
+        if sections {
+            eprintln!(
+                "warning: --sections has no effect with --watch \
+                 (the watch TUI uses the compact view)"
+            );
+        }
+        // verbose is not yet threaded into watch mode; --watch --json -v would
+        // need JsonlSink to accept a verbose flag so the JSONL stream surfaces
+        // org_uuid / session_id. Warn if the user explicitly asks for verbose
+        // alongside --json so they don't quietly get redacted output and
+        // wonder why their jq filters don't see the identifiers.
+        // TODO(v0.2-followup): pass verbose to JsonlSink so --watch --json -v
+        //                      surfaces org_uuid / codex session_id.
+        if verbose && json_mode {
+            eprintln!(
+                "warning: -v / --verbose is not yet threaded into --watch --json; \
+                 org_uuid and codex.session_id will be redacted as if -v were absent. \
+                 Use `balanze-cli --json -v` (one-shot) if you need identifiers."
+            );
+        }
+        let _ = verbose;
+        return watch_cmd::run_watch_mode(json_mode);
+    }
+
     let snapshot = tokio::runtime::Runtime::new()?.block_on(build_snapshot());
 
     // Precedence (documented in `balanze-cli help`): --json wins over
@@ -1415,7 +1450,7 @@ fn print_compact(snapshot: &Snapshot) -> io::Result<()> {
 /// over the sink so tests can capture the rendered bytes against the
 /// four-tier label discipline (estimate / real overage / Claude session
 /// estimate / server quota %) without piping stdout.
-fn write_compact<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Result<()> {
+pub(crate) fn write_compact<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Result<()> {
     writeln!(
         w,
         "=== Balanze status ({}) ===",

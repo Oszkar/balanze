@@ -48,6 +48,16 @@ pub fn render(snap: &Snapshot, verbose: bool) -> Result<String, serde_json::Erro
     serde_json::to_string_pretty(&doc)
 }
 
+/// Serialize `snap` as a single-line JSON document suitable for JSONL
+/// streams (e.g. `balanze-cli --watch --json | jq`). Same data shape +
+/// redaction rules as [`render`], but no embedded newlines so each
+/// snapshot is exactly one line — preserving the "one JSON object per
+/// line" invariant that line-oriented consumers depend on.
+pub fn render_jsonl(snap: &Snapshot, verbose: bool) -> Result<String, serde_json::Error> {
+    let doc = JsonDoc::from_snapshot(snap, verbose);
+    serde_json::to_string(&doc)
+}
+
 // ----------------------------------------------------------------------------
 // Top-level document.
 // ----------------------------------------------------------------------------
@@ -565,6 +575,25 @@ mod tests {
             v["codex_quota"]["session_id"],
             "11111111-2222-3333-4444-555555555555"
         );
+    }
+
+    #[test]
+    fn render_jsonl_emits_exactly_one_line() {
+        // The JSONL contract: each Snapshot serialized via render_jsonl must
+        // contain no embedded newlines so that line-oriented consumers
+        // (`jq`, log-aggregators, `--watch --json | head`) see exactly one
+        // JSON object per line. `render` uses to_string_pretty (multi-line)
+        // and is for the one-shot `--json` view; the JSONL variant must
+        // not.
+        let snap = populated_snapshot();
+        let line = render_jsonl(&snap, false).expect("render_jsonl ok");
+        assert!(
+            !line.contains('\n'),
+            "render_jsonl output must not contain embedded newlines (would break JSONL streams); got:\n{line}"
+        );
+        // Still parseable as the same shape.
+        let v: Value = serde_json::from_str(&line).expect("compact JSON parses");
+        assert!(v["anthropic_api_cost"]["value_micro_usd"].is_i64());
     }
 
     #[test]

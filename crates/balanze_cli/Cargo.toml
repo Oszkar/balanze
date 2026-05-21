@@ -28,6 +28,7 @@ openai_client = { path = "../openai_client" }
 settings = { path = "../settings" }
 snapshot_composer = { path = "../snapshot_composer" }
 state_coordinator = { path = "../state_coordinator" }
+watcher = { path = "../watcher" }
 
 # Setup-wizard masked input. Tiny, widely-used crate (cross-platform tty
 # detection + termios/console manipulation). Used only by `balanze-cli setup`.
