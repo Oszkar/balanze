@@ -689,6 +689,30 @@ fn statusline_snapshot_path() -> Option<std::path::PathBuf> {
 mod statusline_tests {
     use super::format_statusline;
 
+    /// RAII guard: restores `BALANZE_DATA_DIR_OVERRIDE` even if an assertion
+    /// inside the test panics. Without this, a panic in one env-var test
+    /// would leak the override into other tests running concurrently in
+    /// the same binary (cargo test parallelizes per-crate by default).
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let prev = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, prev }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
     #[test]
     fn formats_full_payload() {
         let p = r#"{"rate_limits":{"five_hour":{"used_percentage":13.0,"resets_at":1747650600},"seven_day":{"used_percentage":44.0,"resets_at":1747915200}},"cost":{"total_cost_usd":12.5}}"#;
@@ -723,17 +747,12 @@ mod statusline_tests {
 
     #[test]
     fn statusline_snapshot_path_honors_env_override() {
-        let prev = std::env::var("BALANZE_DATA_DIR_OVERRIDE").ok();
-        std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", "/tmp/balanze-test");
+        let _guard = EnvGuard::set("BALANZE_DATA_DIR_OVERRIDE", "/tmp/balanze-test");
         let p = super::statusline_snapshot_path().unwrap();
         assert_eq!(
             p,
             std::path::PathBuf::from("/tmp/balanze-test/statusline.snapshot.json")
         );
-        match prev {
-            Some(v) => std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", v),
-            None => std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE"),
-        }
     }
 
     #[test]
@@ -741,9 +760,7 @@ mod statusline_tests {
         use claude_statusline::{read_snapshot, StatuslineSnapshot, SCHEMA_VERSION};
 
         let dir = tempfile::tempdir().unwrap();
-        // Save + restore the env var so concurrent tests don't pollute each other.
-        let prev = std::env::var("BALANZE_DATA_DIR_OVERRIDE").ok();
-        std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", dir.path());
+        let _guard = EnvGuard::set("BALANZE_DATA_DIR_OVERRIDE", dir.path());
 
         let snap = StatuslineSnapshot {
             rate_limits: None,
@@ -755,11 +772,6 @@ mod statusline_tests {
         let written = read_snapshot(&dir.path().join("statusline.snapshot.json")).unwrap();
         assert_eq!(written.schema_version, SCHEMA_VERSION);
         assert_eq!(written.payload.session_cost_micro_usd, Some(3_420_000));
-
-        match prev {
-            Some(v) => std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", v),
-            None => std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE"),
-        }
     }
 }
 
