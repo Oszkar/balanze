@@ -137,7 +137,7 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
 /// Result of the blocking scan + compute step. Carries everything the
 /// async caller needs to send to the coordinator; constructed off the
 /// tokio runtime by `scan_and_compute`.
-enum ScanResult {
+pub(crate) enum ScanResult {
     /// Successful walk + parse. Includes both cells (cost may be `Err`
     /// if no prices were available at task start).
     Ok {
@@ -234,7 +234,10 @@ async fn emit_jsonl_snapshot(
 /// `spawn_blocking`; does NOT touch the tokio runtime. Errors from
 /// individual JSONL files are logged at `warn!` and skipped (mirrors
 /// `live_load_claude_events` in `balanze_cli`).
-fn scan_and_compute(projects_dir: &Path, prices: Option<&PriceTable>) -> ScanResult {
+///
+/// `pub(crate)` so the safety-poll task can reuse it without duplicating
+/// the walk-parse-summarize-cost pipeline.
+pub(crate) fn scan_and_compute(projects_dir: &Path, prices: Option<&PriceTable>) -> ScanResult {
     let files = match find_jsonl_files(projects_dir) {
         Ok(f) => f,
         Err(e) => {
