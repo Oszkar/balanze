@@ -59,6 +59,13 @@ balanze-cli status [--json] [--sections] [-v]
                                               (wins over --sections if both)
                                   -v          account-identifying fields
                                               (org uuid, codex session_id)
+balanze-cli --watch [--json]      Long-running refresh loop. Without --json,
+                                  redraws the compact status in place on TTY
+                                  (separator-prefixed append on non-TTY).
+                                  With --json, emits one compact JSON
+                                  document per snapshot per line — jq-pipeable.
+                                  Ctrl-C to exit. (Also: balanze-cli status
+                                  --watch.)
 balanze-cli setup                 Interactive wizard — run this first
 balanze-cli set-openai-key        Store an sk-admin-… key in the OS keychain
                                   (masked TTY prompt, or piped stdin)
@@ -67,6 +74,9 @@ balanze-cli settings              Print current settings.json
 balanze-cli statusline            Claude Code statusLine command: reads the
                                   statusLine JSON on stdin, prints a one-line
                                   status (live 5h/7d quota + session cost).
+                                  Also writes <ProjectDirs.data>/statusline.
+                                  snapshot.json atomically — the IPC bridge
+                                  the v0.2 watcher's statusline task reads.
 balanze-cli help                  This help
 
 Env override: BALANZE_OPENAI_KEY=sk-admin-…  (takes precedence over the
@@ -100,8 +110,14 @@ machine-readable document where every money cell is `{ value_micro_usd,
 source, confidence, details }`, so a script can read
 `.anthropic_api_cost.value_micro_usd` and `.openai.value_micro_usd` uniformly
 and tell `jsonl_list_price`/`estimate` apart from `openai_admin_costs`/`real`
-without parsing labels. `--json -v` adds account identifiers
-(`org_uuid`, Codex `session_id`); without `-v` they're redacted.
+without parsing labels. Two extra cells (v0.2): `.claude_statusline` carries
+the live `StatuslineFilePayload` envelope (`captured_at` + `payload.rate_limits`
++ `payload.cost.total_cost_usd` — Claude Code's *session* estimate, an
+explicitly distinct cost tier), and `.prediction` carries the predictor's
+`Insufficient` / `Uncertain` / `Confident` warm-up state (`Confident` adds
+`predicted_reset_at` + confidence bounds). `--json -v` adds account identifiers
+(`org_uuid`, Codex `session_id`); without `-v` they're redacted. `--watch
+--json` reuses this same DTO, emitted one JSON object per line.
 
 ## Install
 

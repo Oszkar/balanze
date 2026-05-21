@@ -10,6 +10,54 @@ bumps are bug fixes only.
 ## [Unreleased]
 
 ### Added
+- **`balanze-cli --watch` mode.** Long-running refresh loop with two sinks:
+  the human `StdoutSink` (ANSI clear-and-redraw on TTY, separator-prefixed
+  append on non-TTY, broken-pipe latched, debounced) and `JsonlSink` (one
+  compact JSON document per snapshot per line — `jq`-pipeable). The mode is
+  supervised: `tokio::select!` across `ctrl_c()`, the coordinator
+  `JoinHandle`, and a per-watcher-task exit channel; only `Ok(Err(_))` or
+  panic from a watcher task is fatal, so a clean exit (e.g. `openai_poll`
+  with no key configured) doesn't tear down `--watch` for the modal user.
+  Reachable as `balanze-cli status --watch [--json]` or the top-level
+  `balanze-cli --watch` shortcut.
+- **`watcher` crate** — the only crate that imports `notify` (§4 #4
+  boundary). `Watcher::spawn(handle, &Settings)` returns labeled
+  `JoinHandle`s for `jsonl` (notify-debounced on
+  `~/.claude/projects/**/*.jsonl`), `statusline` (notify on
+  `<ProjectDirs.data>/statusline.snapshot.json`), `openai_poll` (Admin
+  Costs API at `settings.oauth_poll_interval_secs`, floor 300 s per §3.1),
+  `safety` (60 s re-scan of JSONL + statusline + Codex), and conditionally
+  `oauth_poll` (Anthropic `/api/oauth/usage`, only when
+  `providers.anthropic_enabled`). Tasks feed the `state_coordinator`
+  directly via `StateCoordinatorHandle::send(StateMsg::Update(...))`.
+- **`predictor` crate** — pure-function EWMA over `window::WindowSummary`
+  history with an explicit `Insufficient → Uncertain → Confident` warm-up
+  state machine. The predictor is forbidden from returning a number for
+  the first 15 minutes after a window reset OR while `events_since_reset
+  < 10`, so it can never lie immediately after rollover. Output rides on
+  `Snapshot.prediction` (recomputed in the coordinator after each
+  successful `ClaudeOAuth` or `ClaudeJsonl` merge).
+- **Statusline file IPC bridge.** `balanze-cli statusline` now also writes
+  an atomic (tmp+rename) `<ProjectDirs.data>/statusline.snapshot.json`
+  envelope (`StatuslineFilePayload` = `captured_at` + `payload`); the v0.2
+  watcher's `statusline` task notify-reads it. This is the spec-decided
+  glue between two processes the user already has running (Claude Code →
+  `balanze-cli statusline` → the watcher in `--watch` / the v0.3 Tauri host).
+  `claude_statusline` is the only crate that reads or writes this file.
+- **TauriSink compile-only skeleton** (`src-tauri/src/tauri_sink.rs`) —
+  proves the `state_coordinator::Sink` trait shape compiles inside
+  `src-tauri` against a realistic `TauriSink { app: AppHandle,
+  last_painted: Option<(ColorBucket, String)> }` today, so the v0.3 UI
+  wiring doesn't discover late that the bounds need to change. Bodies
+  are explicit `TODO(v0.3-ui):` markers; a `#[cfg(test)] _seam_check()`
+  locks in `Sink`'s `Send + 'static` bounds against `TauriSink`.
+- **Criterion baselines** for the cost/parse hot paths:
+  `compute_cost` (10k events), `summarize_window` (10k events / 5 h slice),
+  `incremental_parser` (100 newly-appended lines). Each crate ships a
+  committed `benches/baseline.json` (Criterion `estimates.json` from a
+  `--save-baseline track_e_initial` run); future runs detect regressions
+  via `--baseline track_e_initial`. CI workflows are unchanged — benches
+  are local-only and slow.
 - **Claude Code statusLine integration.** New `claude_statusline` crate +
   `balanze-cli statusline` subcommand: reads Claude Code's statusLine JSON and
   prints live 5h/7d subscription quota + session cost in your shell — zero-auth,
@@ -34,6 +82,19 @@ bumps are bug fixes only.
   zero so a stale server clock can't park retries indefinitely.
 
 ### Changed
+- **`Snapshot` gained two cells for Track E.** `claude_statusline` carries
+  the live `StatuslineFilePayload` envelope (`captured_at` + `payload`,
+  i.e. `rate_limits.{five_hour,seven_day}` + `cost.total_cost_usd` —
+  Claude Code's session estimate, a third explicitly-labeled cost tier
+  per Track C's honesty discipline). `prediction` carries the predictor's
+  warm-up-aware output (`Insufficient` / `Uncertain` / `Confident`); the
+  coordinator recomputes it after each successful `ClaudeOAuth` or
+  `ClaudeJsonl` merge.
+- **`Settings::oauth_poll_interval_secs` (new, default 300).** Drives
+  both `oauth_poll` and `openai_poll` cadences in the v0.2 watcher.
+  serde-default 300 on absent key — older schema-version-1 `settings.json`
+  files load unchanged. Each poller clamps to `max(300, value)` so the
+  §3.1 API-politeness floor cannot be lowered by a hand-edit.
 - **The Anthropic API-$ estimate is now hard-labeled.** The JSONL ×
   list-price number is explicitly tagged "estimate — subscription
   leverage, NOT billed" and visually separated from the real overage, so
@@ -174,7 +235,7 @@ Theme per phase: **Data → Liveness → UI → Distribution**.
 
 - **v0.1 — Data** (this milestone): the four-quadrant CLI above.
 - **v0.1.1 — released 2026-05-19** — proactive OAuth refresh-token flow; cap window anchored to OAuth's `resets_at` (was `now - 5h`); plus v0.2 Track B de-risk (`snapshot_composer` + `backoff`) shipped in the same tag.
-- **v0.2 — Liveness** — Track C (Anthropic API $ honesty redesign) and Track D (Claude Code statusline source) both shipped on `main`; next up is Track E — the `watcher` crate (notify + debounce + `IncrementalParser` + safety poll), the `predictor` crate (EWMA + warm-up state machine on `window::WindowSummary`), `--watch`, and the `statusline` output mode.
+- **v0.2 — Liveness** — Track C (Anthropic API $ honesty redesign), Track D (Claude Code statusline source), and Track E (the `watcher` + `predictor` crates, `balanze-cli --watch`, the statusline-file IPC bridge, the v0.2→v0.3 `TauriSink` seam-check, and Criterion baselines for the cost/parse hot paths) all shipped on `main`; v0.2 release tag to follow.
 - **v0.3 — UI** — Tauri tray + popover; settings UI; `keyring` → `keyring-core` v4 migration (fixes the Windows keychain bug); degraded-state events; dashboard window; alerts. (Anthropic Console cookie-paste demoted from a committed v0.3 item to opt-in — implement only if a concrete user need surfaces; see `docs/prd.md`.)
 - **v0.4 — Distribution** — signed binaries (Windows cert, macOS notarization), Homebrew tap, WinGet manifest, Tauri auto-update.
 - **v1+** — Ubuntu GNOME, cross-device sync, Android companion, hosted wallboard.
