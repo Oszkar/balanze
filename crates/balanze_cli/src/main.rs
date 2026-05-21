@@ -591,18 +591,27 @@ fn cmd_statusline() -> Result<()> {
         let _ = writeln!(stdout, "bal (statusline: stdin unreadable)");
         return Ok(());
     }
-    let _ = writeln!(stdout, "{}", format_statusline(&buf));
+    // Parse once — both the human formatter and the snapshot writer need the
+    // result. Parse error → print the error line and skip the write (no good
+    // payload to persist for the watcher).
+    let snap = match claude_statusline::parse(&buf) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = writeln!(stdout, "bal (statusline parse error)");
+            return Ok(());
+        }
+    };
+    let _ = writeln!(stdout, "{}", format_statusline_from_snapshot(&snap));
+    // Write happens AFTER stdout so a stdout hiccup never blocks the write,
+    // and a write failure never suppresses the human line.
+    write_statusline_snapshot(&snap);
     Ok(())
 }
 
-/// Pure: payload string → one status-line string. Track D = a minimal
-/// honest line. Rich/configurable formatting + feeding the live Snapshot
-/// is Track E (the redefined watcher).
-fn format_statusline(payload: &str) -> String {
-    let snap = match claude_statusline::parse(payload) {
-        Ok(s) => s,
-        Err(_) => return "bal (statusline parse error)".to_string(),
-    };
+/// Formats a parsed [`claude_statusline::StatuslineSnapshot`] into a terse
+/// one-liner for Claude Code's statusLine display. Track D = a minimal honest
+/// line. Rich/configurable formatting + feeding the live Snapshot is Track E.
+fn format_statusline_from_snapshot(snap: &claude_statusline::StatuslineSnapshot) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(rl) = &snap.rate_limits {
         // {:.0}: a statusline is a glance — sub-1% truncation is acceptable
@@ -630,6 +639,50 @@ fn format_statusline(payload: &str) -> String {
     } else {
         format!("bal {}", parts.join(" · "))
     }
+}
+
+/// Pure: payload string → one status-line string. Thin wrapper around
+/// [`format_statusline_from_snapshot`] retained for the existing test suite
+/// which supplies a raw JSON string. New callers should parse first and call
+/// the typed helper directly.
+#[cfg(test)]
+fn format_statusline(payload: &str) -> String {
+    let snap = match claude_statusline::parse(payload) {
+        Ok(s) => s,
+        Err(_) => return "bal (statusline parse error)".to_string(),
+    };
+    format_statusline_from_snapshot(&snap)
+}
+
+/// Writes the parsed statusline snapshot to `<data_dir>/balanze/statusline.snapshot.json`
+/// for the Track E watcher to notify-watch.
+///
+/// Write failures log at `warn!` and are swallowed — Claude Code's statusLine
+/// call must not fail because Balanze's IPC file failed (which would cause the
+/// user's statusLine to disappear from their terminal).
+fn write_statusline_snapshot(snap: &claude_statusline::StatuslineSnapshot) {
+    let Some(path) = statusline_snapshot_path() else {
+        tracing::warn!("statusline: could not resolve data dir; skipping snapshot write");
+        return;
+    };
+    let envelope = claude_statusline::StatuslineFilePayload::new(snap.clone(), chrono::Utc::now());
+    if let Err(e) = claude_statusline::atomic_write_snapshot(&path, &envelope) {
+        tracing::warn!("statusline: snapshot write failed: {e}");
+    }
+}
+
+/// Resolves the path to the watcher IPC file.
+///
+/// When `BALANZE_DATA_DIR_OVERRIDE` is set, the snapshot file lands at
+/// `<override>/statusline.snapshot.json` — intended for tests only.
+/// In normal operation, the path follows `directories::ProjectDirs` so all
+/// persistent locations go through the same crate (AGENTS.md §2.1 convention).
+fn statusline_snapshot_path() -> Option<std::path::PathBuf> {
+    if let Ok(env_path) = std::env::var("BALANZE_DATA_DIR_OVERRIDE") {
+        return Some(std::path::PathBuf::from(env_path).join("statusline.snapshot.json"));
+    }
+    directories::ProjectDirs::from("me", "oszkar", "Balanze")
+        .map(|d| d.data_dir().join("statusline.snapshot.json"))
 }
 
 #[cfg(test)]
@@ -666,6 +719,47 @@ mod statusline_tests {
     fn formats_only_seven_day() {
         let p = r#"{"rate_limits":{"seven_day":{"used_percentage":72.0,"resets_at":1747915200}}}"#;
         assert_eq!(format_statusline(p), "bal 7d 72%");
+    }
+
+    #[test]
+    fn statusline_snapshot_path_honors_env_override() {
+        let prev = std::env::var("BALANZE_DATA_DIR_OVERRIDE").ok();
+        std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", "/tmp/balanze-test");
+        let p = super::statusline_snapshot_path().unwrap();
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/balanze-test/statusline.snapshot.json")
+        );
+        match prev {
+            Some(v) => std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", v),
+            None => std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE"),
+        }
+    }
+
+    #[test]
+    fn write_statusline_snapshot_lands_at_data_dir_override() {
+        use claude_statusline::{read_snapshot, StatuslineSnapshot, SCHEMA_VERSION};
+
+        let dir = tempfile::tempdir().unwrap();
+        // Save + restore the env var so concurrent tests don't pollute each other.
+        let prev = std::env::var("BALANZE_DATA_DIR_OVERRIDE").ok();
+        std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", dir.path());
+
+        let snap = StatuslineSnapshot {
+            rate_limits: None,
+            session_cost_micro_usd: Some(3_420_000),
+            claude_code_version: Some("v2.1.144".to_string()),
+        };
+        super::write_statusline_snapshot(&snap);
+
+        let written = read_snapshot(&dir.path().join("statusline.snapshot.json")).unwrap();
+        assert_eq!(written.schema_version, SCHEMA_VERSION);
+        assert_eq!(written.payload.session_cost_micro_usd, Some(3_420_000));
+
+        match prev {
+            Some(v) => std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", v),
+            None => std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE"),
+        }
     }
 }
 
