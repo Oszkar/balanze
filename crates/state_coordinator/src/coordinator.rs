@@ -189,8 +189,13 @@ fn maybe_recompute_prediction(state: &mut CoordinatorState, merged_source: Sourc
     // new sample — JSONL has no fresh server-side pct (the OAuth `five_hour`
     // utilization stays whatever the last OAuth merge wrote).
 
-    let history_slice: Vec<WindowSnapshot> = state.history.iter().cloned().collect();
-    state.snapshot.prediction = Some(predict(now, util_pct as f64, &history_slice, reset));
+    // `make_contiguous` rotates the deque's internal buffer into a single
+    // slice (in place; no allocation, no per-entry clone) and returns it.
+    // Cheaper than `iter().cloned().collect()` for the recompute hot path
+    // — predict() takes &[WindowSnapshot] and this hands it the same data
+    // without copying.
+    let history_slice = state.history.make_contiguous();
+    state.snapshot.prediction = Some(predict(now, util_pct as f64, history_slice, reset));
 }
 
 #[cfg(test)]

@@ -64,8 +64,11 @@ pub struct Prediction {
 /// Callers pass slices of these to `predict`; the slice MUST be sorted
 /// oldest-first (`predict` debug-asserts this).
 ///
-/// The coordinator appends one of these after each successful JSONL + OAuth
-/// merge; the predictor reads the history slice without owning it.
+/// The coordinator appends one of these after a successful **OAuth** merge
+/// (OAuth carries the server-authoritative `five_hour` utilization).
+/// JSONL merges trigger a recompute against the existing history but do
+/// NOT push a new sample — JSONL has no fresh server-side pct of its own.
+/// The predictor reads the history slice without owning it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowSnapshot {
     pub ts: DateTime<Utc>,

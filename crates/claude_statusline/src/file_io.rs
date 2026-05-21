@@ -37,9 +37,24 @@ pub enum FileIoError {
     },
 
     /// The file exists but its JSON is invalid or does not match the expected
-    /// shape.  File contents are NOT included in the message.
+    /// shape.  File contents are NOT included in the `#[error]` message, but
+    /// the underlying `serde_json::Error` is preserved as the `#[source]`
+    /// so callers walking the error chain (`anyhow`, `tracing` with
+    /// `display_chain`, etc.) can see line / column / "missing field X" /
+    /// "invalid type" diagnostics without us having to re-derive them.
+    ///
+    /// Defense-in-depth note: `serde_json::Error::Display` on a `data`-class
+    /// failure can echo the offending VALUE (e.g. `invalid type: string
+    /// "abc" at line 1 column 18`). The statusline snapshot file is
+    /// non-secret (no tokens, no keys — see crate-level doc), so the modest
+    /// leak surface is acceptable here. The same trade-off would NOT apply
+    /// to the OAuth credentials file; see `anthropic_oauth::credentials`.
     #[error("statusline snapshot parse error in {path}")]
-    ParseError { path: PathBuf },
+    ParseError {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
 
     /// The file's `schema_version` field differs from [`SCHEMA_VERSION`].
     /// Consumers should discard the file and wait for a fresh write.
@@ -86,8 +101,9 @@ pub fn read_snapshot(path: &Path) -> Result<StatuslineFilePayload, FileIoError> 
         schema_version: u8,
     }
     let probe: VersionProbe =
-        serde_json::from_slice(&bytes).map_err(|_| FileIoError::ParseError {
+        serde_json::from_slice(&bytes).map_err(|e| FileIoError::ParseError {
             path: path.to_path_buf(),
+            source: e,
         })?;
 
     if probe.schema_version != SCHEMA_VERSION {
@@ -98,8 +114,9 @@ pub fn read_snapshot(path: &Path) -> Result<StatuslineFilePayload, FileIoError> 
         });
     }
 
-    serde_json::from_slice(&bytes).map_err(|_| FileIoError::ParseError {
+    serde_json::from_slice(&bytes).map_err(|e| FileIoError::ParseError {
         path: path.to_path_buf(),
+        source: e,
     })
 }
 
@@ -137,8 +154,9 @@ pub fn atomic_write_snapshot(
     // `WriteSerializeError` variant on `FileIoError` rather than reusing
     // `ParseError` (which is a read-path concept) — naming the variant for the
     // failure mode matters when the branch ever becomes reachable.
-    let bytes = serde_json::to_vec_pretty(payload).map_err(|_| FileIoError::ParseError {
+    let bytes = serde_json::to_vec_pretty(payload).map_err(|e| FileIoError::ParseError {
         path: path.to_path_buf(),
+        source: e,
     })?;
 
     // Unique tmp name: pid + nanosecond timestamp + monotonic counter.
@@ -275,15 +293,31 @@ mod tests {
     }
 
     #[test]
-    fn malformed_json_returns_parse_error() {
+    fn malformed_json_returns_parse_error_with_source() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("bad.json");
         std::fs::write(&path, b"{not valid json").unwrap();
         let err = read_snapshot(&path).unwrap_err();
-        assert!(
-            matches!(err, FileIoError::ParseError { .. }),
-            "expected ParseError, got {err:?}"
-        );
+        match &err {
+            FileIoError::ParseError { source, .. } => {
+                // The serde_json::Error must be preserved (#[source]) so
+                // callers walking the error chain see the line/column
+                // diagnostic. Top-level Display message stays content-free.
+                let display = err.to_string();
+                assert!(
+                    display.starts_with("statusline snapshot parse error in"),
+                    "outer Display must not include the JSON snippet: {display}"
+                );
+                assert!(!display.contains("not valid json"));
+                // Source carries the actual diagnostic.
+                let src_display = source.to_string();
+                assert!(
+                    src_display.contains("line") || src_display.contains("column"),
+                    "serde_json source error should carry line/column: {src_display}"
+                );
+            }
+            other => panic!("expected ParseError, got {other:?}"),
+        }
     }
 
     #[test]
