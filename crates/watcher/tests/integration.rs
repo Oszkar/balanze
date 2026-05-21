@@ -2,12 +2,19 @@
 //! assert the coordinator snapshot reflects the data within 2 seconds.
 //!
 //! **Constraint:** this test mutates `HOME` / `USERPROFILE` environment
-//! variables so that `find_claude_projects_dir()` discovers the tempdir tree.
-//! Running multiple such tests in the same process in parallel would cause
-//! a race. Since this is the only test file in the `watcher` crate, Cargo
-//! runs all tests in this binary sequentially by default — no extra
-//! `serial_test` dependency is needed.  If additional env-mutating tests are
-//! added later, reach for `serial_test` or a `Mutex<()>` guard.
+//! variables so that `find_claude_projects_dir()` discovers the tempdir
+//! tree. `libtest` runs tests within a single binary in parallel by
+//! default; today this file contains exactly one test, so no env-var
+//! race is possible. If a second env-mutating test is added later, both
+//! must serialize on a `Mutex<()>` guard (or pull in `serial_test`) —
+//! adding one without the other is a flake waiting to happen.
+//!
+//! The test uses `#[tokio::test(flavor = "current_thread")]` so that
+//! `set_var`/`remove_var` runs on a process where no tokio worker
+//! threads have been spawned yet (the current_thread runtime drives
+//! the future on the calling thread without spawning workers). The
+//! notify-callback thread is created later, inside `Watcher::spawn`,
+//! after the env vars are already in their final state.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -35,7 +42,14 @@ fn setup_claude_jsonl_tree() -> (TempDir, PathBuf) {
     // Override the home-dir env vars so the claude_parser walker resolves
     // to our tempdir. USERPROFILE is checked first on Windows; HOME on POSIX.
     // Both are set so the test is correct regardless of platform.
-    // SAFETY: single-threaded test binary — see module-level constraint note.
+    //
+    // SAFETY (per Rust 1.84+ env-mutation rules): this test runs under
+    // `#[tokio::test(flavor = "current_thread")]` (see module doc), which
+    // does NOT spawn worker threads. The notify-callback thread, the
+    // only other thread that could read env, is created later inside
+    // `Watcher::spawn`. So at the moment of these `set_var` / `remove_var`
+    // calls, the test process is single-threaded and no concurrent
+    // env read can race with the write.
     unsafe {
         std::env::set_var("USERPROFILE", dir.path());
         std::env::set_var("HOME", dir.path());
@@ -67,7 +81,7 @@ fn setup_claude_jsonl_tree() -> (TempDir, PathBuf) {
     (dir, jsonl_path)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
 async fn jsonl_write_propagates_to_coordinator_snapshot() {
     let (_dir, jsonl_path) = setup_claude_jsonl_tree();
 

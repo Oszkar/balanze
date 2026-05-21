@@ -6,10 +6,11 @@
 //! rescan with `IncrementalParser` byte-cursor reads to reduce I/O on
 //! large `~/.claude/` trees during active Claude Code sessions).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use claude_cost::{compute_cost, load_bundled_prices};
+use claude_cost::{compute_cost, load_bundled_prices, Cost, PriceTable};
 use claude_parser::{
     dedup_events, find_claude_projects_dir, find_jsonl_files, parse_str, UsageEvent,
 };
@@ -17,7 +18,7 @@ use notify::{RecursiveMode, Watcher as _};
 use state_coordinator::{
     JsonlSnapshot, Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg,
 };
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
 
@@ -53,22 +54,53 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             }
         };
 
-        // notify callbacks fire on a background thread; bridge to our
-        // tokio task via an unbounded channel (channel closed = task exit).
-        let (tx, mut rx) = mpsc::unbounded_channel::<notify::Result<notify::Event>>();
-        let mut watcher = match notify::recommended_watcher(move |res| {
-            let _ = tx.send(res);
-        }) {
-            Ok(w) => w,
+        // Load the bundled LiteLLM price table ONCE for the task lifetime.
+        // It's embedded JSON of fixed-known shape (no I/O on rescan, no
+        // network) and never changes between scans, so reparsing it per
+        // burst is pure waste. If the bundled file itself is corrupt we
+        // log + still emit JSONL snapshots (cost emits become per-burst
+        // errors, which the coordinator records as `anthropic_api_cost_error`).
+        let prices: Option<Arc<PriceTable>> = match load_bundled_prices() {
+            Ok(p) => Some(Arc::new(p)),
             Err(e) => {
                 tracing::error!(
-                    "watcher/jsonl: notify init failed ({e}); reporting NotifyExhausted"
+                    "watcher/jsonl: bundled price table load failed once at task \
+                     start ({e}); will emit AnthropicApiCost errors per rescan"
                 );
-                return Err(WatcherError::NotifyExhausted {
-                    affected: Source::ClaudeJsonl,
-                });
+                None
             }
         };
+
+        // `Notify` coalesces "something changed" signals without queuing —
+        // multiple notify_one() calls before notified().await fires
+        // collapse into a single wake-up. Earlier design used an unbounded
+        // mpsc which could grow without bound under bursty filesystem
+        // activity; this version uses no queue at all and relies on the
+        // 300ms DEBOUNCE for batching. Notify errors are logged inside
+        // the callback itself (no longer carried through the channel) so
+        // we keep visibility without retaining the event payload.
+        let signal = Arc::new(Notify::new());
+        let signal_cb = signal.clone();
+        let mut watcher =
+            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if let Err(e) = &res {
+                    tracing::warn!("watcher/jsonl: notify error: {e}");
+                }
+                // Wake the task regardless of Ok/Err — on errors we re-scan
+                // to verify state; DEBOUNCE in the loop gates retry frequency
+                // so a stream of errors can't burn CPU.
+                signal_cb.notify_one();
+            }) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!(
+                        "watcher/jsonl: notify init failed ({e}); reporting NotifyExhausted"
+                    );
+                    return Err(WatcherError::NotifyExhausted {
+                        affected: Source::ClaudeJsonl,
+                    });
+                }
+            };
 
         if let Err(e) = watcher.watch(&projects_dir, RecursiveMode::Recursive) {
             tracing::error!(
@@ -85,54 +117,130 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
         // that `watcher.watch(...)` above registers atomically with the OS;
         // any writes after that call returns are buffered by the OS (inotify
         // on Linux / ReadDirectoryChangesW on Windows / FSEvents on macOS)
-        // and drained by `rx.recv()` below. So the only events the OS does
-        // NOT deliver are those that landed before `watch()` returned — and
-        // this scan covers exactly that window.
-        emit_jsonl_snapshot(&coord, &projects_dir).await;
+        // and drained by the notify callback below. So the only events the
+        // OS does NOT deliver are those that landed before `watch()`
+        // returned — this scan covers exactly that window.
+        emit_jsonl_snapshot(&coord, &projects_dir, prices.as_deref()).await;
 
-        let mut pending = false;
         loop {
-            tokio::select! {
-                _ = tokio::time::sleep(DEBOUNCE), if pending => {
-                    pending = false;
-                    emit_jsonl_snapshot(&coord, &projects_dir).await;
-                }
-                ev = rx.recv() => match ev {
-                    Some(Ok(_)) => { pending = true; }
-                    Some(Err(e)) => {
-                        // Set pending=true on errors too so the DEBOUNCE
-                        // sleep gates retry frequency. Without this, a
-                        // pathological filesystem (permissions flipping,
-                        // inotify queue pressure) could deliver a stream
-                        // of per-event errors that the select! loop
-                        // would otherwise spin on at 100% CPU. The
-                        // rescan after debounce will find nothing new
-                        // if the error was transient — cheap insurance.
-                        tracing::warn!("watcher/jsonl: notify error: {e}");
-                        pending = true;
-                    }
-                    None => return Ok(()), // tx dropped → watcher destroyed → exit cleanly
-                },
-            }
+            // Wait for at least one notify event.
+            signal.notified().await;
+            // Debounce the burst — any further notify_one() calls during
+            // this sleep coalesce into the next iteration's notified()
+            // (Notify accumulates at most one pending permit).
+            tokio::time::sleep(DEBOUNCE).await;
+            emit_jsonl_snapshot(&coord, &projects_dir, prices.as_deref()).await;
         }
     })
 }
 
+/// Result of the blocking scan + compute step. Carries everything the
+/// async caller needs to send to the coordinator; constructed off the
+/// tokio runtime by `scan_and_compute`.
+enum ScanResult {
+    /// Successful walk + parse. Includes both cells (cost may be `Err`
+    /// if no prices were available at task start).
+    Ok {
+        jsonl: JsonlSnapshot,
+        cost: Result<Cost, String>,
+    },
+    /// `find_jsonl_files` itself failed — the rescan never even started.
+    Fatal { error: String },
+}
+
 /// Re-scan the projects directory, synthesize a `JsonlSnapshot` and
-/// (if price table loads) an `AnthropicApiCost`, and send both to the
-/// coordinator. Errors from individual JSONL files are logged at `warn!`
-/// and skipped (mirrors `live_load_claude_events` in `balanze_cli`).
-async fn emit_jsonl_snapshot(coord: &StateCoordinatorHandle, projects_dir: &Path) {
-    let files = match find_jsonl_files(projects_dir) {
-        Ok(f) => f,
-        Err(e) => {
+/// (if a price table was loaded at task start) an `AnthropicApiCost`,
+/// and send both to the coordinator.
+///
+/// The sync I/O (`find_jsonl_files` + per-file `read_to_string` + parse +
+/// dedup) is wrapped in `tokio::task::spawn_blocking` so it does not
+/// block a tokio worker. The coordinator sends stay on the async side.
+async fn emit_jsonl_snapshot(
+    coord: &StateCoordinatorHandle,
+    projects_dir: &Path,
+    prices: Option<&PriceTable>,
+) {
+    let projects_dir_owned: PathBuf = projects_dir.to_path_buf();
+    // `compute_cost` takes `&PriceTable`; the blocking task moves owned
+    // data only, so clone the table into a fresh Arc-owned copy for
+    // moving. Cloning is cheap (the table is a small embedded JSON
+    // structure) and bounded by the bundled file size.
+    let prices_owned: Option<PriceTable> = prices.cloned();
+
+    let result = tokio::task::spawn_blocking(move || {
+        scan_and_compute(&projects_dir_owned, prices_owned.as_ref())
+    })
+    .await;
+
+    let scan = match result {
+        Ok(r) => r,
+        Err(join_err) => {
+            // `spawn_blocking` task panicked. Treat as a transient parse
+            // error; the next notify event will trigger another scan.
+            tracing::error!("watcher/jsonl: scan task panicked: {join_err}");
             let _ = coord
                 .send(StateMsg::Update(SourceUpdate {
                     source: Source::ClaudeJsonl,
-                    result: Err(format!("find_jsonl_files: {e}")),
+                    result: Err(format!("scan task panicked: {join_err}")),
                 }))
                 .await;
             return;
+        }
+    };
+
+    match scan {
+        ScanResult::Ok { jsonl, cost } => {
+            let _ = coord
+                .send(StateMsg::Update(SourceUpdate {
+                    source: Source::ClaudeJsonl,
+                    result: Ok(SourcePartial::ClaudeJsonl(jsonl)),
+                }))
+                .await;
+
+            // Cost emit is separate so a price-load failure doesn't suppress
+            // the JSONL window snapshot (the two cells are independent in
+            // the UI).
+            match cost {
+                Ok(c) => {
+                    let _ = coord
+                        .send(StateMsg::Update(SourceUpdate {
+                            source: Source::AnthropicApiCost,
+                            result: Ok(SourcePartial::AnthropicApiCost(c)),
+                        }))
+                        .await;
+                }
+                Err(msg) => {
+                    let _ = coord
+                        .send(StateMsg::Update(SourceUpdate {
+                            source: Source::AnthropicApiCost,
+                            result: Err(msg),
+                        }))
+                        .await;
+                }
+            }
+        }
+        ScanResult::Fatal { error } => {
+            let _ = coord
+                .send(StateMsg::Update(SourceUpdate {
+                    source: Source::ClaudeJsonl,
+                    result: Err(error),
+                }))
+                .await;
+        }
+    }
+}
+
+/// Synchronous scan + parse + compute. Runs on a blocking worker via
+/// `spawn_blocking`; does NOT touch the tokio runtime. Errors from
+/// individual JSONL files are logged at `warn!` and skipped (mirrors
+/// `live_load_claude_events` in `balanze_cli`).
+fn scan_and_compute(projects_dir: &Path, prices: Option<&PriceTable>) -> ScanResult {
+    let files = match find_jsonl_files(projects_dir) {
+        Ok(f) => f,
+        Err(e) => {
+            return ScanResult::Fatal {
+                error: format!("find_jsonl_files: {e}"),
+            };
         }
     };
 
@@ -169,33 +277,10 @@ async fn emit_jsonl_snapshot(coord: &StateCoordinatorHandle, projects_dir: &Path
         files_scanned,
         window: summary,
     };
-    let _ = coord
-        .send(StateMsg::Update(SourceUpdate {
-            source: Source::ClaudeJsonl,
-            result: Ok(SourcePartial::ClaudeJsonl(jsonl)),
-        }))
-        .await;
+    let cost = match prices {
+        Some(p) => Ok(compute_cost(&all_events, p)),
+        None => Err("price table unavailable (load failed at task start)".to_string()),
+    };
 
-    // Cost emit is separate so a price-load failure doesn't suppress the
-    // JSONL window snapshot (the two cells are independent in the UI).
-    match load_bundled_prices() {
-        Ok(prices) => {
-            let cost = compute_cost(&all_events, &prices);
-            let _ = coord
-                .send(StateMsg::Update(SourceUpdate {
-                    source: Source::AnthropicApiCost,
-                    result: Ok(SourcePartial::AnthropicApiCost(cost)),
-                }))
-                .await;
-        }
-        Err(e) => {
-            tracing::warn!("watcher/jsonl: price table load failed: {e}; emitting cost error");
-            let _ = coord
-                .send(StateMsg::Update(SourceUpdate {
-                    source: Source::AnthropicApiCost,
-                    result: Err(format!("price table: {e}")),
-                }))
-                .await;
-        }
-    }
+    ScanResult::Ok { jsonl, cost }
 }
