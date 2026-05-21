@@ -43,6 +43,7 @@ notify = "6"
 notify-debouncer-full = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
+predictor = { path = "crates/predictor" }
 
 [workspace.dependencies.wiremock]
 version = "0.6"
