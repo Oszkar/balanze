@@ -602,8 +602,13 @@ fn cmd_statusline() -> Result<()> {
         }
     };
     let _ = writeln!(stdout, "{}", format_statusline_from_snapshot(&snap));
-    // Write happens AFTER stdout so a stdout hiccup never blocks the write,
-    // and a write failure never suppresses the human line.
+    // Independent error handling, not independent timing: the stdout write
+    // is synchronous so backpressure DOES delay the snapshot write, but
+    // any `writeln!` error is discarded via `let _ =` so we still attempt
+    // the snapshot write afterwards. Conversely the human line is already
+    // flushed before write_statusline_snapshot runs, so a snapshot-write
+    // failure can't suppress it. Together: each side's failures are
+    // isolated from the other side's output.
     write_statusline_snapshot(&snap);
     Ok(())
 }
@@ -654,8 +659,10 @@ fn format_statusline(payload: &str) -> String {
     format_statusline_from_snapshot(&snap)
 }
 
-/// Writes the parsed statusline snapshot to `<data_dir>/balanze/statusline.snapshot.json`
-/// for the Track E watcher to notify-watch.
+/// Writes the parsed statusline snapshot to `<data_dir>/statusline.snapshot.json`
+/// — where `<data_dir>` is `directories::ProjectDirs.data_dir()`, which
+/// already includes the per-OS Balanze subpath — for the Track E watcher
+/// to notify-watch.
 ///
 /// Write failures log at `warn!` and are swallowed — Claude Code's statusLine
 /// call must not fail because Balanze's IPC file failed (which would cause the
@@ -689,19 +696,35 @@ fn statusline_snapshot_path() -> Option<std::path::PathBuf> {
 mod statusline_tests {
     use super::format_statusline;
 
-    /// RAII guard: restores `BALANZE_DATA_DIR_OVERRIDE` even if an assertion
-    /// inside the test panics. Without this, a panic in one env-var test
-    /// would leak the override into other tests running concurrently in
-    /// the same binary (cargo test parallelizes per-crate by default).
+    /// Process-wide lock for tests that mutate a shared environment variable.
+    /// Cargo test parallelizes per-crate by default; two tests that both
+    /// `set_var(BALANZE_DATA_DIR_OVERRIDE, …)` with different values would
+    /// otherwise race and read each other's values. The lock serializes them.
+    /// (We avoid adding `serial_test` as a dev-dep just for this one
+    /// crate-internal need.)
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII guard: acquires the process-wide [`ENV_LOCK`], sets the env var
+    /// to `value`, and on `Drop` (including panic unwind) restores the prior
+    /// value before releasing the lock. The lock is held for the test's full
+    /// duration so no concurrent test can observe a half-set state.
+    ///
+    /// Field-drop order is declaration order, and `Drop::drop` runs before
+    /// any field drops — so the restore happens first, then `_lock` releases
+    /// last. A poisoned lock (from a panicked predecessor) is recovered via
+    /// `into_inner()`: we still want a consistent env-var state for this
+    /// test, and the predecessor's `Drop` has already restored its part.
     struct EnvGuard {
         key: &'static str,
         prev: Option<String>,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
     impl EnvGuard {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let prev = std::env::var(key).ok();
             std::env::set_var(key, value);
-            Self { key, prev }
+            Self { key, prev, _lock }
         }
     }
     impl Drop for EnvGuard {

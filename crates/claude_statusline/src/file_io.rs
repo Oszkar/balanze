@@ -1,9 +1,16 @@
 //! Balanze-side IPC file IO for statusline snapshots.
 //!
-//! This module is the sole owner of the data file at
-//! `<data_dir>/balanze/statusline.snapshot.json`.  It does NOT touch
-//! Claude Code's `settings.json` (that is `wiring.rs`) nor the statusLine
-//! wire format (that is `parse.rs`).
+//! This module reads/writes the data file at
+//! `<data_dir>/statusline.snapshot.json`, where `<data_dir>` is what
+//! `directories::ProjectDirs::from("me", "oszkar", "Balanze").data_dir()`
+//! returns on the host platform — that path already includes the per-OS
+//! Balanze subpath (e.g. `~/.local/share/balanze/` on Linux,
+//! `~/Library/Application Support/me.oszkar.Balanze/` on macOS,
+//! `%LOCALAPPDATA%\oszkar\Balanze\data\` on Windows). The caller
+//! (`balanze_cli`) resolves the path; this module is path-agnostic and
+//! just operates on whatever `&Path` it's handed. It does NOT touch
+//! Claude Code's `settings.json` (that is `wiring.rs`) nor the
+//! statusLine wire format (that is `parse.rs`).
 //!
 //! Both functions follow the atomic tmp+fsync+rename discipline mirrored from
 //! `anthropic_oauth::credentials::write_back` (AGENTS.md §3.4).  Error
