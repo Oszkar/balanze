@@ -44,6 +44,11 @@ notify-debouncer-full = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
 predictor = { path = "crates/predictor" }
+# Criterion benches (Track E Task 8). Dev-only; not pulled into release
+# artifacts. Pinned to 0.5 — the 0.6 line dropped `BatchSize::SmallInput`'s
+# stable rendering and we depend on the JSON estimates layout for our
+# committed baselines.
+criterion = "0.5"
 
 [workspace.dependencies.wiremock]
 version = "0.6"

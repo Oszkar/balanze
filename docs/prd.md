@@ -285,7 +285,7 @@ Make the data update itself, make the Anthropic API $ figure honest, and project
 - **Pre-v0.3 Sink-seam checkpoint.** Before Phase 3, exercise the `state_coordinator` `Sink` / future `TauriSink` boundary with a real consumer (the watcher feeding the coordinator). The Tauri side is still scaffold-only; this seam is the v0.2→v0.3 cliff and the #1 remaining roadmap risk — validate it here, not in v0.3.
 - Integration robustness improvements informed by the first weeks of real v0.1 use. The watcher spawns `compose()` with a concrete `SnapshotSources` impl (Send inferred via static dispatch); a generic spawn-helper over `S: SnapshotSources` would need `trait_variant`/boxing to prove the future `Send`.
 
-Sequencing: Track A → Track B → Track C → **Track D** → Track E. (Track D promoted ahead of E — verified 2026-05-19 as the live backbone the watcher is built around, not a parallel corroborator.)
+Sequencing: Track A → Track B → Track C → **Track D** → Track E. (Track D promoted ahead of E — verified 2026-05-19 as the live backbone the watcher is built around, not a parallel corroborator.) **Track E Delivered 2026-05-21** — the `predictor` + `watcher` crates, the `balanze-cli --watch` long-running mode (Stdout + JSONL sinks under a `tokio::select!` supervisor), the statusline-file IPC bridge between `balanze-cli statusline` and `watcher::tasks::statusline`, the compile-only `TauriSink` skeleton (the v0.2→v0.3 Sink-seam checkpoint), and committed Criterion baselines for the cost/parse hot paths.
 
 ### Phase 3 — v0.3: UI
 

@@ -18,3 +18,8 @@ thiserror = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 directories = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "compute_cost"
+harness = false
