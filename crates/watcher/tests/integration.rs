@@ -73,7 +73,11 @@ async fn jsonl_write_propagates_to_coordinator_snapshot() {
 
     let settings = settings::Settings::default();
     let (handle, _join) = spawn_coord(LogSink);
-    let _tasks = Watcher::spawn(handle.clone(), &settings);
+    // Keep alive for the test duration: dropping the `Vec<JoinHandle>` would
+    // not cancel the spawned tasks (tokio task lifetime is independent of
+    // JoinHandle), but holding it makes the intent explicit and gives a
+    // hook to await individual handles if a future test wants to.
+    let _tasks: Vec<_> = Watcher::spawn(handle.clone(), &settings);
 
     // Give the watcher a moment to start and register the watch before
     // re-writing the file.  The initial scan (in `spawn`) will already pick

@@ -70,12 +70,9 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             }
         };
 
-        if watcher
-            .watch(&projects_dir, RecursiveMode::Recursive)
-            .is_err()
-        {
+        if let Err(e) = watcher.watch(&projects_dir, RecursiveMode::Recursive) {
             tracing::error!(
-                "watcher/jsonl: failed to watch {}; reporting NotifyExhausted",
+                "watcher/jsonl: failed to watch {} ({e}); reporting NotifyExhausted",
                 projects_dir.display()
             );
             return Err(WatcherError::NotifyExhausted {
@@ -83,8 +80,14 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             });
         }
 
-        // Initial scan — there may already be JSONL files on disk when the
-        // watcher starts (e.g. on app launch, the user already has sessions).
+        // Initial scan — picks up files that already exist when the watcher
+        // starts (e.g. existing Claude Code sessions on app launch). Note
+        // that `watcher.watch(...)` above registers atomically with the OS;
+        // any writes after that call returns are buffered by the OS (inotify
+        // on Linux / ReadDirectoryChangesW on Windows / FSEvents on macOS)
+        // and drained by `rx.recv()` below. So the only events the OS does
+        // NOT deliver are those that landed before `watch()` returned — and
+        // this scan covers exactly that window.
         emit_jsonl_snapshot(&coord, &projects_dir).await;
 
         let mut pending = false;
@@ -96,7 +99,18 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
                 }
                 ev = rx.recv() => match ev {
                     Some(Ok(_)) => { pending = true; }
-                    Some(Err(e)) => tracing::warn!("watcher/jsonl: notify error: {e}"),
+                    Some(Err(e)) => {
+                        // Set pending=true on errors too so the DEBOUNCE
+                        // sleep gates retry frequency. Without this, a
+                        // pathological filesystem (permissions flipping,
+                        // inotify queue pressure) could deliver a stream
+                        // of per-event errors that the select! loop
+                        // would otherwise spin on at 100% CPU. The
+                        // rescan after debounce will find nothing new
+                        // if the error was transient — cheap insurance.
+                        tracing::warn!("watcher/jsonl: notify error: {e}");
+                        pending = true;
+                    }
                     None => return Ok(()), // tx dropped → watcher destroyed → exit cleanly
                 },
             }
