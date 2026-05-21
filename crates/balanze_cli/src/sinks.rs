@@ -149,7 +149,12 @@ impl Sink for StdoutSink {
                 return;
             }
         }
-        self.last_render = Some(now);
+        // NB: `last_render` is set AFTER a successful write below, not
+        // here. If the write fails with a non-broken-pipe I/O error
+        // (rare — e.g., transient stdout EAGAIN), the next snapshot
+        // arriving within DEBOUNCE should still attempt a paint rather
+        // than being dropped on top of the missed one. Broken-pipe
+        // failures latch via `self.broken_pipe` and become permanent.
 
         if self.is_tty {
             if !self.write_or_record_broken_pipe(ANSI_CLEAR_HOME) {
@@ -166,6 +171,9 @@ impl Sink for StdoutSink {
             return;
         }
         let _ = self.out.flush();
+        // Successful paint — record the timestamp so subsequent calls
+        // within DEBOUNCE are dropped.
+        self.last_render = Some(now);
     }
 
     fn on_degraded(&mut self, source: Source, error: &str) {
@@ -192,10 +200,14 @@ pub struct JsonlSink;
 
 impl Sink for JsonlSink {
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
-        // verbose=false: machine consumers don't need org_uuid / session_id.
-        // A future `--watch --json -v` flag can construct JsonlSink differently
-        // and pass verbose=true if identifiers are needed.
-        match json_output::render(snapshot, /* verbose */ false) {
+        // Use `render_jsonl` (single-line `to_string`), NOT `render`
+        // (`to_string_pretty` — multi-line with embedded newlines).
+        // `--watch --json` must produce exactly one JSON object per
+        // line so `jq` and other line-oriented consumers work.
+        // verbose=false: machine consumers don't need org_uuid /
+        // session_id; a future `--watch --json -v` flag can construct
+        // JsonlSink differently and pass verbose=true.
+        match json_output::render_jsonl(snapshot, /* verbose */ false) {
             Ok(line) => println!("{line}"),
             Err(e) => eprintln!("[json render error] {e}"),
         }

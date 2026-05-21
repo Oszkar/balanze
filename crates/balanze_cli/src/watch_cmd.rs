@@ -52,32 +52,58 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
     let watcher_handles = Watcher::spawn(handle.clone(), &settings);
 
     // Per-task watchdog: each watcher handle gets a wrapper that signals
-    // completion (success OR panic OR Err) through a single mpsc, so the
-    // top-level `select!` learns about any task exit without needing
-    // `futures::select_all` or `JoinSet` (neither is a workspace dep
-    // today). The wrapper tasks are short-lived stubs — they don't add
-    // meaningful overhead vs. holding the bare Vec<JoinHandle>.
+    // *unexpected* completion (Err return OR panic) through a single mpsc,
+    // so the top-level `select!` learns about any task failure without
+    // needing `futures::select_all` or `JoinSet` (neither is a workspace
+    // dep today). Clean `Ok(Ok(()))` exits — e.g. `openai_poll` when no
+    // key is configured, `jsonl` when no Claude projects dir exists,
+    // `oauth_poll` when credentials are absent at startup — are NOT
+    // signalled. Each of those tasks is designed to exit clean when its
+    // upstream isn't present; treating that as fatal would break
+    // `--watch` for any user missing one of the providers (which is the
+    // common case for the modal user).
+    //
+    // The labels come from `Watcher::spawn`'s return tuple rather than a
+    // hard-coded array here, so they can't drift out of sync with the
+    // spawn order if the watcher crate's task list changes.
     let (exit_tx, mut exit_rx) = mpsc::unbounded_channel::<&'static str>();
-    let task_labels = ["jsonl", "statusline", "openai_poll", "safety", "oauth_poll"];
-    for (i, h) in watcher_handles.into_iter().enumerate() {
-        let label = task_labels.get(i).copied().unwrap_or("watcher-task");
+    for (label, h) in watcher_handles {
         let tx = exit_tx.clone();
         tokio::spawn(async move {
             match h.await {
-                Ok(Ok(())) => tracing::debug!("watcher/{label}: exited Ok(())"),
-                Ok(Err(e)) => tracing::error!("watcher/{label}: returned error: {e}"),
+                Ok(Ok(())) => {
+                    // Clean exit (e.g. no OpenAI key configured). Logged
+                    // at debug; do NOT signal the supervisor.
+                    tracing::debug!("watcher/{label}: exited Ok(())");
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("watcher/{label}: returned error: {e}");
+                    let _ = tx.send(label);
+                }
                 Err(join_err) => {
                     tracing::error!("watcher/{label}: panicked or aborted: {join_err}");
+                    let _ = tx.send(label);
                 }
             }
-            let _ = tx.send(label);
         });
     }
     drop(exit_tx); // only the wrapper tasks hold senders now
 
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            eprintln!("\nshutting down...");
+        res = tokio::signal::ctrl_c() => {
+            // `ctrl_c()` returns io::Result<()> — installing the OS signal
+            // handler can theoretically fail (process signal mask trouble
+            // on exotic platforms). Surface that as an explicit error
+            // rather than silently treating it like a real Ctrl-C.
+            match res {
+                Ok(()) => eprintln!("\nshutting down..."),
+                Err(e) => {
+                    tracing::error!("ctrl_c handler install failed: {e}");
+                    return Err(anyhow::anyhow!(
+                        "failed to install SIGINT handler: {e}"
+                    ));
+                }
+            }
         }
         res = coord_join => {
             tracing::error!("coordinator task exited unexpectedly: {res:?}");

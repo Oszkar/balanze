@@ -42,20 +42,31 @@ impl Watcher {
     /// handles come back under `tokio::select!`. A panic surfaces as
     /// `JoinError::is_panic() == true`; the supervisor's job is to log and
     /// (optionally) restart.
+    ///
+    /// Each handle is paired with a static label (`"jsonl"`, `"statusline"`,
+    /// `"openai_poll"`, `"safety"`, `"oauth_poll"`) so the supervisor's
+    /// logs don't drift out of sync with the spawn order if a future
+    /// refactor reshuffles which task is spawned first. The label is the
+    /// canonical name a maintainer would use to grep for the task — keep
+    /// the strings in lockstep with the module names under
+    /// `crates/watcher/src/tasks/`.
     pub fn spawn(
         handle: StateCoordinatorHandle,
         settings: &Settings,
-    ) -> Vec<JoinHandle<Result<(), WatcherError>>> {
-        let mut tasks = vec![
-            tasks::jsonl::spawn(handle.clone()),
-            tasks::statusline::spawn(handle.clone()),
-            tasks::openai_poll::spawn(handle.clone(), settings.oauth_poll_interval_secs),
-            tasks::safety::spawn(handle.clone()),
+    ) -> Vec<(&'static str, JoinHandle<Result<(), WatcherError>>)> {
+        let mut tasks: Vec<(&'static str, JoinHandle<Result<(), WatcherError>>)> = vec![
+            ("jsonl", tasks::jsonl::spawn(handle.clone())),
+            ("statusline", tasks::statusline::spawn(handle.clone())),
+            (
+                "openai_poll",
+                tasks::openai_poll::spawn(handle.clone(), settings.oauth_poll_interval_secs),
+            ),
+            ("safety", tasks::safety::spawn(handle.clone())),
         ];
         if settings.providers.anthropic_enabled {
-            tasks.push(tasks::oauth_poll::spawn(
-                handle.clone(),
-                settings.oauth_poll_interval_secs,
+            tasks.push((
+                "oauth_poll",
+                tasks::oauth_poll::spawn(handle.clone(), settings.oauth_poll_interval_secs),
             ));
         }
         tasks
