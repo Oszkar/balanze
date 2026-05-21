@@ -177,9 +177,19 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
                             .await;
                     }
                     Err(join_err) => {
+                        // Mirror the JSONL path: surface the panic to the
+                        // coordinator as an Err Update so the UI can show
+                        // the degraded state. Otherwise the snapshot keeps
+                        // stale statusline data with no warning indicator.
                         tracing::error!(
                             "watcher/safety: statusline read task panicked: {join_err}"
                         );
+                        let _ = coord
+                            .send(StateMsg::Update(SourceUpdate {
+                                source: Source::ClaudeStatusline,
+                                result: Err(format!("statusline read task panicked: {join_err}")),
+                            }))
+                            .await;
                     }
                 }
             }

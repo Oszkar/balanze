@@ -31,9 +31,12 @@ pub struct Settings {
     #[serde(default)]
     pub providers: ProviderSettings,
     /// Cadence (seconds) for the v0.2 watcher's OAuth + OpenAI pollers.
-    /// Default 300 — the §3.1 5-min API-politeness floor. The pollers
-    /// enforce a 60s minimum at the call site so a corrupt or malicious
-    /// settings.json can't drive below the floor.
+    /// Default 300 — the §3.1 5-min API-politeness floor for provider
+    /// usage/billing endpoints. Each poller (`watcher::tasks::oauth_poll`
+    /// and `watcher::tasks::openai_poll`) clamps to a 300s minimum inside
+    /// its own `spawn`, so a corrupt or malicious `settings.json` cannot
+    /// drive the cadence below the floor regardless of what value lands
+    /// here. Higher values are honored as-is.
     #[serde(default = "default_poll_interval")]
     pub oauth_poll_interval_secs: u32,
 }

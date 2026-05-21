@@ -35,17 +35,39 @@ const REFRESH_MARGIN: Duration = Duration::seconds(300);
 /// passes into each `fetch_usage` call (the policy is per-call, not shared
 /// across ticks — each tick gets a fresh retry budget).
 ///
-/// `interval_secs` is clamped to a minimum of 60 inside this function so a
+/// `interval_secs` is clamped to a minimum of 300 inside this function so a
 /// corrupt or hostile `settings.json` can't drive below the API-politeness
-/// floor (AGENTS.md §3.1).
+/// floor (AGENTS.md §3.1 — 5 minutes for provider usage/billing endpoints).
 pub(crate) fn spawn(
     coord: StateCoordinatorHandle,
     interval_secs: u32,
 ) -> JoinHandle<Result<(), WatcherError>> {
-    // Enforce the 60s API-politeness floor (AGENTS.md §3.1).
-    let interval = std::time::Duration::from_secs(interval_secs.max(60) as u64);
+    // Enforce the 5-minute (300s) API-politeness floor per AGENTS.md §3.1.
+    // The setting default is also 300s, so this clamp only kicks in if a
+    // user (or a corrupt settings.json) tries to set a smaller value.
+    let interval = std::time::Duration::from_secs(interval_secs.max(300) as u64);
 
     tokio::spawn(async move {
+        // Startup gate: if Claude Code isn't installed (no credentials file),
+        // exit cleanly with an info log rather than emit an OAuth error
+        // every 5 minutes for the lifetime of the process. The user can
+        // install Claude Code + restart the watcher to pick it up — same
+        // pattern as the JSONL task, which exits clean at startup if
+        // `~/.claude/projects/` doesn't exist. Once we've seen credentials
+        // here, transient `CredentialsMissing` errors during the loop
+        // (e.g. user deletes the file mid-session) DO get reported as
+        // Update errors — the watcher noticed and surfacing them is
+        // helpful.
+        if let Err(OAuthError::CredentialsMissing { .. }) =
+            locate_credentials().and_then(|p| load_credentials_from(&p))
+        {
+            tracing::info!(
+                "watcher/oauth_poll: no Claude credentials at startup; task exits clean. \
+                 Install Claude Code and restart `--watch` to enable OAuth polling."
+            );
+            return Ok(());
+        }
+
         let client = match reqwest::Client::builder()
             .user_agent("balanze-watcher/0.1.0")
             .build()

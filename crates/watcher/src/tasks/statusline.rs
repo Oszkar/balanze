@@ -73,18 +73,24 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
         // `balanze-cli statusline` even once). Create it up front so the
         // notify watch registers cleanly; it's Balanze's own data dir, so
         // creating it ahead of the first producer write has no side-effects
-        // beyond an empty directory on disk. Without this, the previous
-        // approach left the task idling on a never-firing notify subscription
-        // — the safety poll backstopped the data path, but the leaked
-        // JoinHandle confused the supervisor.
-        if let Err(e) = std::fs::create_dir_all(&watch_dir) {
+        // beyond an empty directory on disk.
+        //
+        // Use `tokio::fs::create_dir_all` (async) rather than `std::fs::*`
+        // so this startup I/O doesn't block a tokio worker — consistent
+        // with the `spawn_blocking` discipline used elsewhere in the
+        // watcher for sync FS work. On a slow / remote filesystem this
+        // can actually take a measurable moment.
+        if let Err(e) = tokio::fs::create_dir_all(&watch_dir).await {
+            // `Io(e)` is the right variant — this is a plain filesystem
+            // failure (permissions, read-only FS, parent missing on a
+            // weird mount), NOT kernel notify resource exhaustion.
+            // `NotifyExhausted` would mislead the supervisor's fallback
+            // policy into the wrong direction.
             tracing::error!(
-                "watcher/statusline: failed to create data dir {} ({e}); reporting NotifyExhausted",
+                "watcher/statusline: failed to create data dir {} ({e})",
                 watch_dir.display()
             );
-            return Err(WatcherError::NotifyExhausted {
-                affected: Source::ClaudeStatusline,
-            });
+            return Err(WatcherError::Io(e));
         }
 
         let signal = Arc::new(Notify::new());

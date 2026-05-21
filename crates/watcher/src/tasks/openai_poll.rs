@@ -25,13 +25,15 @@ use crate::errors::WatcherError;
 /// because the task has exited; the OpenAI cell only populates if the user adds
 /// a key and restarts the watcher (or the Tauri app).
 ///
-/// `interval_secs` is clamped to a minimum of 60 (API-politeness floor,
-/// AGENTS.md §3.1).
+/// `interval_secs` is clamped to a minimum of 300 (the 5-minute
+/// API-politeness floor per AGENTS.md §3.1 — OpenAI billing data updates
+/// infrequently and aggressive polling burns the user's rate quota for
+/// no gain).
 pub(crate) fn spawn(
     coord: StateCoordinatorHandle,
     interval_secs: u32,
 ) -> JoinHandle<Result<(), WatcherError>> {
-    let interval = std::time::Duration::from_secs(interval_secs.max(60) as u64);
+    let interval = std::time::Duration::from_secs(interval_secs.max(300) as u64);
 
     tokio::spawn(async move {
         // Resolve the key once at task startup. The key rarely changes during
