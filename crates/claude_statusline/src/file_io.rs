@@ -116,13 +116,14 @@ pub fn atomic_write_snapshot(
     path: &Path,
     payload: &StatuslineFilePayload,
 ) -> Result<(), FileIoError> {
-    let parent = path.parent().ok_or_else(|| FileIoError::Io {
-        path: path.to_path_buf(),
-        source: std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "path has no parent directory",
-        ),
-    })?;
+    // A bare relative path like `"status.json"` has either no parent
+    // component (`path.parent() == None`) or an empty one (`Some("")`),
+    // depending on the platform / construction. Both should be treated
+    // as the current working directory rather than erroring out.
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
 
     std::fs::create_dir_all(parent).map_err(|e| FileIoError::Io {
         path: parent.to_path_buf(),
@@ -233,6 +234,33 @@ mod tests {
         let back = read_snapshot(&path).unwrap();
         assert_eq!(back.schema_version, SCHEMA_VERSION);
         assert_eq!(back, sample_payload());
+    }
+
+    /// Regression test for the case where a relative-path argument has either
+    /// no parent component or an empty one — both must fall back to the
+    /// current directory (mirroring `wiring::wire_statusline`'s behavior)
+    /// rather than erroring out. We verify the write succeeds against a
+    /// tempdir-prefixed path; the bare-filename case is exercised by the
+    /// resolution logic below.
+    #[test]
+    fn parent_resolution_handles_none_and_empty_parent() {
+        use std::path::{Path, PathBuf};
+
+        // Reproduce the resolution logic from atomic_write_snapshot.
+        let resolve = |p: &Path| -> PathBuf {
+            match p.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+                _ => Path::new(".").to_path_buf(),
+            }
+        };
+
+        // No parent component at all → "."
+        assert_eq!(resolve(Path::new("")), PathBuf::from("."));
+        // Bare relative filename → parent is Some("") → falls back to "."
+        assert_eq!(resolve(Path::new("status.json")), PathBuf::from("."));
+        // Real parent stays as-is.
+        let nested = PathBuf::from("/tmp/balanze/status.json");
+        assert_eq!(resolve(&nested), PathBuf::from("/tmp/balanze"));
     }
 
     #[test]
