@@ -30,6 +30,12 @@ pub struct Settings {
     pub version: u32,
     #[serde(default)]
     pub providers: ProviderSettings,
+    /// Cadence (seconds) for the v0.2 watcher's OAuth + OpenAI pollers.
+    /// Default 300 — the §3.1 5-min API-politeness floor. The pollers
+    /// enforce a 60s minimum at the call site so a corrupt or malicious
+    /// settings.json can't drive below the floor.
+    #[serde(default = "default_poll_interval")]
+    pub oauth_poll_interval_secs: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,12 +65,17 @@ impl Default for Settings {
         Self {
             version: SCHEMA_VERSION,
             providers: ProviderSettings::default(),
+            oauth_poll_interval_secs: default_poll_interval(),
         }
     }
 }
 
 fn default_version() -> u32 {
     SCHEMA_VERSION
+}
+
+fn default_poll_interval() -> u32 {
+    300
 }
 
 fn default_true() -> bool {
@@ -319,5 +330,36 @@ mod tests {
         let s = load_from(&path).expect("load");
         assert_eq!(s.version, SCHEMA_VERSION);
         assert!(s.providers.openai_enabled);
+    }
+
+    #[test]
+    fn oauth_poll_interval_defaults_to_300_when_absent() {
+        // Old settings.json without the field must deserialize with the 300s default.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // File only has version + providers — no oauth_poll_interval_secs.
+        fs::write(
+            &path,
+            br#"{"version":1,"providers":{"openai_enabled":false}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.oauth_poll_interval_secs, 300,
+            "missing oauth_poll_interval_secs must default to 300"
+        );
+    }
+
+    #[test]
+    fn oauth_poll_interval_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let s = Settings {
+            oauth_poll_interval_secs: 600,
+            ..Default::default()
+        };
+        save_to(&s, &path).expect("save");
+        let loaded = load_from(&path).expect("load");
+        assert_eq!(loaded.oauth_poll_interval_secs, 600);
     }
 }
