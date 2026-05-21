@@ -29,12 +29,15 @@ const REFRESH_MARGIN: Duration = Duration::seconds(300);
 /// Spawn the OAuth poll task and return its `JoinHandle`.
 ///
 /// The task runs until the coordinator handle drops (coordinator shuts down).
-/// Credential errors on a given tick emit an `Update(ClaudeOAuth, Err(...))` and
-/// the task continues — transient failures (network hiccup, 429) are handled by
-/// the `BackoffPolicy::standard()` inside `fetch_usage`.
+/// Credential errors on a given tick emit an `Update(ClaudeOAuth, Err(...))`
+/// and the task continues — transient failures (network hiccup, 429) are
+/// handled by a `BackoffPolicy::standard()` that this task constructs and
+/// passes into each `fetch_usage` call (the policy is per-call, not shared
+/// across ticks — each tick gets a fresh retry budget).
 ///
-/// `interval_secs` is clamped to a minimum of 60 at the call site so a corrupt
-/// settings.json can't drive below the API-politeness floor (AGENTS.md §3.1).
+/// `interval_secs` is clamped to a minimum of 60 inside this function so a
+/// corrupt or hostile `settings.json` can't drive below the API-politeness
+/// floor (AGENTS.md §3.1).
 pub(crate) fn spawn(
     coord: StateCoordinatorHandle,
     interval_secs: u32,
@@ -61,7 +64,13 @@ pub(crate) fn spawn(
         };
 
         // First tick fires immediately (interval fires on first `.tick()` call).
+        // `Delay` (not the default `Burst`) so a slow tick — `fetch_usage`
+        // backing off for up to 10 minutes under `BackoffPolicy::standard()` —
+        // can't queue up multiple missed 5-min ticks and fire them
+        // back-to-back when the network recovers. That would violate the
+        // §3.1 API-politeness floor in exactly the worst conditions.
         let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             ticker.tick().await;

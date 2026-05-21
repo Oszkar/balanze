@@ -69,6 +69,24 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             }
         };
 
+        // The data directory may not yet exist (user hasn't run
+        // `balanze-cli statusline` even once). Create it up front so the
+        // notify watch registers cleanly; it's Balanze's own data dir, so
+        // creating it ahead of the first producer write has no side-effects
+        // beyond an empty directory on disk. Without this, the previous
+        // approach left the task idling on a never-firing notify subscription
+        // — the safety poll backstopped the data path, but the leaked
+        // JoinHandle confused the supervisor.
+        if let Err(e) = std::fs::create_dir_all(&watch_dir) {
+            tracing::error!(
+                "watcher/statusline: failed to create data dir {} ({e}); reporting NotifyExhausted",
+                watch_dir.display()
+            );
+            return Err(WatcherError::NotifyExhausted {
+                affected: Source::ClaudeStatusline,
+            });
+        }
+
         let signal = Arc::new(Notify::new());
         let signal_cb = signal.clone();
         let mut watcher =
@@ -90,23 +108,17 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             };
 
         // Non-recursive: we only care about the data dir's direct children.
-        // The directory may not exist yet (user hasn't run `balanze-cli statusline`).
-        // In that case we still want to emit the initial read (which will be
-        // FileMissing → no emit) and leave the watch attempt to log a warning.
+        // `create_dir_all` above guarantees the dir exists, so a watch
+        // failure here is a real error (permissions, exhaustion) — treat
+        // it the same way as the JSONL task (consistency).
         if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
-            // Non-fatal: the data dir may simply not exist yet. Log at warn
-            // and fall through — the initial read below will also find nothing,
-            // and the task will idle (no notify events will fire from a missing
-            // dir, so the loop blocks indefinitely on `signal.notified()`).
-            // This is acceptable: when the user first runs `balanze-cli statusline`
-            // the OS creates the dir, which won't wake an un-registered watcher.
-            // TODO(v0.2-followup): add a retry-watch path that re-registers once
-            // the data dir is created (low priority — `balanze-cli statusline`
-            // runs before the watcher in typical setup flows).
-            tracing::warn!(
-                "watcher/statusline: failed to watch {} ({e}); will not receive notify events",
+            tracing::error!(
+                "watcher/statusline: failed to watch {} ({e}); reporting NotifyExhausted",
                 watch_dir.display()
             );
+            return Err(WatcherError::NotifyExhausted {
+                affected: Source::ClaudeStatusline,
+            });
         }
 
         // Initial read on task startup — covers the file already existing.

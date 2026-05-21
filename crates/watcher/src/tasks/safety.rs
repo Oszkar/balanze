@@ -73,7 +73,11 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
 
         let statusline_path = statusline_snapshot_path();
 
+        // `Delay` (not default `Burst`) so a long-running scan (deep
+        // `~/.claude/projects/` tree) can't queue multiple missed 60s
+        // ticks and fire blocking scans back-to-back on recovery.
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         // Skip the first immediate tick — the JSONL task's startup scan
         // already covers this window. Without this skip the safety poll
@@ -87,9 +91,12 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             // ── JSONL + AnthropicApiCost ──────────────────────────────────────
             if let Some(ref dir) = projects_dir {
                 let dir_owned = dir.clone();
-                let prices_owned = prices.as_deref().cloned();
+                // Clone the Arc (cheap pointer copy), NOT the underlying
+                // PriceTable. The earlier code did `as_deref().cloned()`
+                // which performed a full struct clone every 60s.
+                let prices_owned: Option<Arc<PriceTable>> = prices.clone();
                 let scan = tokio::task::spawn_blocking(move || {
-                    scan_and_compute(&dir_owned, prices_owned.as_ref())
+                    scan_and_compute(&dir_owned, prices_owned.as_deref())
                 })
                 .await;
 

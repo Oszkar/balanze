@@ -63,8 +63,11 @@ pub(crate) fn spawn(
             }
         };
 
-        // First tick fires immediately.
+        // First tick fires immediately. `Delay` (not default `Burst`) so a
+        // slow `costs_this_month` under `BackoffPolicy::standard()` backoff
+        // can't queue up multiple missed ticks and fire a burst on recovery.
         let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             ticker.tick().await;
