@@ -16,13 +16,9 @@ If requirements are ambiguous, incomplete, or conflicting: stop, ask targeted qu
 
 ## 1. System Context
 
-Balanze = a local-first desktop tray utility that consolidates personal AI usage tracking (Claude subscription + Claude API + OpenAI API) into one normalized view. Tauri 2 + Rust + Svelte 5. Currently building **v0.1** for Windows 11 and macOS 15+; later phases add Ubuntu GNOME, cross-device sync, Android, and a hosted wallboard.
+Balanze = a local-first desktop tray utility that consolidates personal AI usage tracking (Claude subscription + Claude API + Codex subscription + OpenAI API) into one normalized view. Tauri 2 + Rust + Svelte 5. Currently targeting Windows 11 and macOS 15+; later phases might add Ubuntu GNOME, Android, and a hosted wallboard.
 
-The product is explicitly a **side project**. Optimize for usefulness, low maintenance, and tight scope. Don't over-engineer for hypothetical scale.
-
-Out of scope: full enterprise cost allocation, multi-seat observability, browser automation as a headline feature, monetization, cloud sync (v0.1 is local-only; sync arrives in Phase 3).
-
-Authoritative product spec: `docs/prd.md`. Architecture: `ARCHITECTURE.md`. Step-by-step build sequence lives in the design doc at `~/.gstack/projects/balanze/oszka-*-design-*.md` (single-user, not in repo).
+Out of scope: full enterprise cost allocation, multi-seat observability, browser automation, monetization, cloud sync.
 
 ## 2. Engineering Principles
 
@@ -33,7 +29,7 @@ Apply at all times:
 - **YAGNI** — No speculative abstractions. The crate set is fixed (see `ARCHITECTURE.md`); don't add a new crate because it "might be useful."
 - **KISS** — Simplest viable implementation.
 - **PoLP** — Least privilege always.
-- **MVP Bias** — Solo developer; ship fast, document tech debt, don't gold-plate, don't architect for imaginary scale.
+- **MVP Bias** — Ship fast, document tech debt, don't gold-plate, don't architect for imaginary scale.
 
 Correctness > Cleverness · Security > Convenience · Simplicity > Flexibility · Precision > Agreeability
 
@@ -88,7 +84,7 @@ Default level: `INFO` for app modules, `WARN` for the parser (DEBUG-per-file JSO
 
 ### 3.3 Legal context
 
-Balanze reads (1) the user's own local Claude JSONL at `~/.claude/projects/**/*.jsonl`, (2) OpenAI's documented billing API (`/v1/usage`, `/v1/dashboard/billing/*`), and (3) optionally the Anthropic Console cookie-paste (demoted 2026-05-19, opt-in only — if and when it lands, scraped data is `DataSource::AnthropicConsoleScrape` with `Confidence::Estimated` and the user is informed it may break).
+Balanze reads (1) the user's own local Claude JSONL at `~/.claude/projects/**/*.jsonl`, (2) OpenAI's documented billing API (`/v1/usage`, `/v1/dashboard/billing/*`), and (3) optionally the Anthropic Console cookie-paste (opt-in only — if and when it lands, scraped data is `DataSource::AnthropicConsoleScrape` with `Confidence::Estimated` and the user is informed it may break).
 
 Personal use only. Not affiliated with Anthropic or OpenAI. If a provider revokes access or breaks a scrape, degrade gracefully (mark data stale); never circumvent their controls.
 
