@@ -4,8 +4,7 @@ Pure-function Rust crate that computes the **estimated API-rate cost** of
 Claude Code usage from `claude_parser::UsageEvent` slices and a vendored
 Anthropic price table.
 
-Sits in the same architectural slot as the `window` crate per AGENTS.md §4
-boundary #2: no I/O on the hot path, no async, no logging above debug.
+Sits in the same architectural slot as the `window` crate per ARCHITECTURE.md boundary #2: no I/O on the hot path, no async, no logging above debug.
 
 ## What "cost" means in this crate
 
