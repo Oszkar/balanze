@@ -2,7 +2,7 @@
 
 Repo: `Oszkar/balanze` | Branch: `main` | Agents: Claude Code, Copilot, Gemini, Windsurf
 
-This file is the source of truth for code-discipline rules. Architecture (state diagram, crate map, the twelve boundaries, IPC contract) lives in [`ARCHITECTURE.md`](ARCHITECTURE.md). Product scope and phasing live in [`docs/prd.md`](docs/prd.md).
+This file is the source of truth for code-discipline rules. Architecture (state diagram, crate map, the twelve boundaries, IPC contract) lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Product scope and phasing live in [`docs/PRD.md`](docs/PRD.md).
 
 ## 0. Prime Rule: Clarify Before Acting
 
@@ -26,7 +26,7 @@ Apply at all times:
 
 - **12-Factor App** — Config in env, stateless where possible, strict dev/prod parity.
 - **DRY** — No duplication of domain logic. JSONL parsing happens in one crate; rolling-window math in one crate; etc.
-- **YAGNI** — No speculative abstractions. The crate set is fixed (see `ARCHITECTURE.md`); don't add a new crate because it "might be useful."
+- **YAGNI** — No speculative abstractions. The crate set is fixed (see `docs/ARCHITECTURE.md`); don't add a new crate because it "might be useful."
 - **KISS** — Simplest viable implementation.
 - **PoLP** — Least privilege always.
 - **MVP Bias** — Ship fast, document tech debt, don't gold-plate, don't architect for imaginary scale.
@@ -46,8 +46,8 @@ Correctness > Cleverness · Security > Convenience · Simplicity > Flexibility �
 | Currency | `i64` micro-USD (1e-6 USD) internally; convert to `f64` only at the display boundary. Never use `f64` for sums or threshold comparisons |
 | Cap unit | Tokens for the Claude subscription rolling-window cap; micro-USD for the OpenAI API cap. No synthetic-dollar pricing on the cap math path |
 | Frontend | Svelte **5 runes** (`$state`, `$derived`, `$props`). SvelteKit with `adapter-static` in SPA mode. Vite 8. TypeScript strict. Env via `import.meta.env.VITE_*` |
-| IPC contract | Frontend ↔ backend: only via the commands + events in `ARCHITECTURE.md`. Adding to this surface needs a doc update first |
-| CLI `--json` schema | Presentation DTO (`crates/balanze_cli/src/json_output.rs`) — see `ARCHITECTURE.md` "IPC contract". Schema changes require updating that module's tests + `README.md` + `ARCHITECTURE.md` |
+| IPC contract | Frontend ↔ backend: only via the commands + events in `docs/ARCHITECTURE.md`. Adding to this surface needs a doc update first |
+| CLI `--json` schema | Presentation DTO (`crates/balanze_cli/src/json_output.rs`) — see `docs/ARCHITECTURE.md` "IPC contract". Schema changes require updating that module's tests + `README.md` + `docs/ARCHITECTURE.md` |
 | Watcher cadence | `Settings::oauth_poll_interval_secs` (default 300; serde-default 300 on absent key). Each poller clamps to `max(300, value)` to honor §3.1 regardless of `settings.json` |
 | Filesystem paths | All persistent locations go through the `directories` crate (`ProjectDirs::from("me", "oszkar", "Balanze")`) — never hardcode `~/Library/...` or `%APPDATA%\...` |
 | Code style | `cargo fmt` defaults own Rust (line width 100). Markdown has **no** column cap — never reflow a doc to hit a width. `prettier` not configured |
@@ -99,15 +99,15 @@ Secrets in scope: user-supplied OpenAI API keys, plus read access to Claude Code
 
 ## 4. Architecture
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) — data-flow diagram, crate map, the twelve numbered boundaries, IPC contract, error/degraded-state discipline.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — data-flow diagram, crate map, the twelve numbered boundaries, IPC contract, error/degraded-state discipline.
 
-When the architecture changes, update both files in lockstep along with `README.md` and `docs/prd.md`. They share the boundary list and the IPC contract; drift between them is the most common doc bug.
+When the architecture changes, update both files in lockstep along with `README.md` and `docs/PRD.md`. They share the boundary list and the IPC contract; drift between them is the most common doc bug.
 
 ## 5. Quick Start for Agents
 
 ### Every task
 
-1. Identify the correct crate / layer (see `ARCHITECTURE.md`).
+1. Identify the correct crate / layer (see `docs/ARCHITECTURE.md`).
 2. List invariants affected by your change (which boundary, which conventions in §2.1).
 3. Implement the smallest safe diff that fixes the root cause.
 4. Validate (see §6).
@@ -155,7 +155,7 @@ Before claiming work is done:
 | `src/**/*.{svelte,ts}` | `bun run check`; visually verify in `bun run tauri dev` |
 | Workspace `Cargo.toml` | `cargo check --workspace`; `cargo tree --workspace --duplicates` if you added a dep |
 | `.github/workflows/*.yml` | YAML lints clean; for `release.yml`, trigger via `workflow_dispatch` after merge before tagging |
-| `docs/prd.md`, `README.md`, `AGENTS.md`, `ARCHITECTURE.md` | Cross-reference internal links; check snippets still match current crate/command names; verify phasing matches reality |
+| `docs/PRD.md`, `README.md`, `AGENTS.md`, `docs/ARCHITECTURE.md` | Cross-reference internal links; check snippets still match current crate/command names; verify phasing matches reality |
 
 `cargo clippy -D warnings` is **strict**. CI enforces it. Don't add `#[allow]` to silence lints unless there's a documented technical reason in a comment immediately above.
 
@@ -193,7 +193,7 @@ Before claiming work is done:
 - **Never use `--no-verify`** to skip git hooks or `--no-gpg-sign` to skip signing. If a hook fails, fix the issue.
 - PRs go through review (human or `code-reviewer` agent) before merge. Squash-merge by default.
 
-**If you change architecture, update all four:** `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `docs/prd.md` — plus the design doc at `~/.gstack/projects/balanze/`. The design doc is the source of truth for architecture decisions; the PRD is the source of truth for product scope; this AGENTS.md is the source of truth for operational and code-discipline rules; `ARCHITECTURE.md` is the source of truth for the boundaries and IPC contract.
+**If you change architecture, update all four:** `README.md`, `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/PRD.md` — plus the design doc at `~/.gstack/projects/balanze/`. The design doc is the source of truth for architecture decisions; the PRD is the source of truth for product scope; this AGENTS.md is the source of truth for operational and code-discipline rules; `docs/ARCHITECTURE.md` is the source of truth for the boundaries and IPC contract.
 
 ## 9. Communication
 

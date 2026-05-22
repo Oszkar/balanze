@@ -23,7 +23,7 @@ A **complete, honest data layer** exposed as a CLI (`balanze-cli`); a tray UI is
 - **OpenAI Codex quota** — reads the local Codex CLI rollout files (`~/.codex/sessions/`) for the server-computed `rate_limits.primary` %.
 - **OpenAI API $** — `/v1/organization/costs` with an `sk-admin-…` key: this-month spend + per-line-item breakdown. Real billing data.
 
-Planning and history live elsewhere: roadmap and phase detail in [`docs/prd.md`](docs/prd.md); architecture and boundaries in [`ARCHITECTURE.md`](ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md).
+Planning and history live elsewhere: roadmap and phase detail in [`docs/PRD.md`](docs/PRD.md); architecture and boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md).
 
 ## CLI
 
@@ -84,7 +84,7 @@ spend from Anthropic. OpenAI = real billed spend.
 
 ## Install
 
-Balanze currently ships **from source only** — no binaries, installers, or GitHub Releases, and it is **not on crates.io** (signed binaries, Homebrew, and WinGet are on the roadmap; see [`docs/prd.md`](docs/prd.md)). Requires Rust 1.77+.
+Balanze currently ships **from source only** — no binaries, installers, or GitHub Releases, and it is **not on crates.io** (signed binaries, Homebrew, and WinGet are on the roadmap; see [`docs/PRD.md`](docs/PRD.md)). Requires Rust 1.77+.
 
 ```bash
 # `--git` is required (not on crates.io). The repo root is a virtual
@@ -125,7 +125,7 @@ bun run tauri dev
 - **macOS:** Xcode Command Line Tools.
 - **Debian/Ubuntu:** `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev build-essential libssl-dev libglib2.0-dev pkg-config`
 
-**Not needed for the CLI** — if you only want the CLI on Linux, never run a `--workspace` build and you'll never see a `gdk-3.0`/`pango`/`cairo` error. Test discipline and the per-crate validation matrix live in `AGENTS.md` §6–§7; the crate map and boundaries live in `ARCHITECTURE.md`.
+**Not needed for the CLI** — if you only want the CLI on Linux, never run a `--workspace` build and you'll never see a `gdk-3.0`/`pango`/`cairo` error. Test discipline and the per-crate validation matrix live in `AGENTS.md` §6–§7; the crate map and boundaries live in `docs/ARCHITECTURE.md`.
 
 ## Known issues
 
@@ -133,7 +133,7 @@ bun run tauri dev
 
 ## Contributing
 
-Not actively soliciting contributions yet — this is a personal tool first. Found a bug or want to discuss design? Open an issue. Sending a PR anyway? Read `AGENTS.md` and `ARCHITECTURE.md` first; they codify the architectural boundaries and code-discipline rules.
+Not actively soliciting contributions yet — this is a personal tool first. Found a bug or want to discuss design? Open an issue. Sending a PR anyway? Read `AGENTS.md` and `docs/ARCHITECTURE.md` first; they codify the architectural boundaries and code-discipline rules.
 
 ## License
 

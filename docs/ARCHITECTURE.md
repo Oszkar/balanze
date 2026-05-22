@@ -2,7 +2,7 @@
 
 Balanze is an actor-model Tauri app. One thread owns canonical state; pollers feed it; the frontend reads it. Currency is `i64` micro-USD; HTTP is concentrated in two clients; secrets route through one keychain wrapper; the JSONL wire format is owned by one crate. The frontend ↔ backend surface is a fixed set of commands and events.
 
-This doc is the architecture reference. Product scope lives in [`docs/prd.md`](docs/prd.md); operational discipline (validation gates, change control, test rules) lives in [`AGENTS.md`](AGENTS.md).
+This doc is the architecture reference. Product scope lives in [`PRD.md`](PRD.md); operational discipline (validation gates, change control, test rules) lives in [`../AGENTS.md`](../AGENTS.md).
 
 ## Data flow
 
@@ -35,7 +35,7 @@ The statusLine push is the v0.2 live backbone for Anthropic quota when the user 
 ```
 balanze/
 ├── Cargo.toml, package.json, svelte.config.js, vite.config.js, tsconfig.json
-├── docs/prd.md                 product spec
+├── docs/PRD.md                 product spec
 ├── src/                        Svelte 5 frontend (scaffold today; real UI is v0.3)
 ├── src-tauri/                  Tauri 2 app crate (scaffold tray + single-instance + compile-only TauriSink)
 ├── crates/

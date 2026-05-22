@@ -11,7 +11,7 @@ Each item:
 - **Depends on / blocked by**: prerequisites.
 - **Captured**: when + by which review.
 
-> **Promoted to the roadmap:** TODO-002 (criterion benchmarks for `claude_cost` + `codex_local`) is no longer a loose deferred item — it is now scheduled in `docs/prd.md` Phase 2 (v0.2 Track E), riding with the watcher so the live refresh cadence has a measured performance budget. Removed here on 2026-05-15 (reference-review roadmap consolidation) to avoid two sources of truth.
+> **Promoted to the roadmap:** TODO-002 (criterion benchmarks for `claude_cost` + `codex_local`) is no longer a loose deferred item — it is now scheduled in `docs/PRD.md` Phase 2 (v0.2 Track E), riding with the watcher so the live refresh cadence has a measured performance budget. Removed here on 2026-05-15 (reference-review roadmap consolidation) to avoid two sources of truth.
 
 ---
 

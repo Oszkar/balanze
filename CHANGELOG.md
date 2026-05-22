@@ -34,7 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 
 ## [0.1.1] - 2026-05-19
 
-**v0.1.1 base** — Track A of the v0.2 roadmap (Liveness foundations). The JSONL→estimate honesty redesign, statusline source, and the watcher/predictor are later v0.2 tracks; see `docs/prd.md` Phase 2.
+**v0.1.1 base** — Track A of the v0.2 roadmap (Liveness foundations). The JSONL→estimate honesty redesign, statusline source, and the watcher/predictor are later v0.2 tracks; see `docs/PRD.md` Phase 2.
 
 ### Added
 - **Proactive Anthropic OAuth refresh.** `anthropic_oauth` gained a refresh-token grant (`refresh_access_token`) and an atomic, anti-clobber credential write-back (`write_back`: tmp+rename, preserves permissions, reuses Anthropic's file, never regresses a concurrently-newer on-disk token). `balanze-cli` now refreshes the bearer pre-flight when it is expired or within a 5-minute margin, and recovers from a hard 401 with one refresh + retry — the bearer no longer hard-fails every ~7–8 h. Refresh failure still surfaces as `AuthExpired` (re-run `claude login`); no new `DegradedState`. Tokens are never logged; the refresh endpoint/client-id constants are gated by an `#[ignore]`'d real-endpoint smoke run pre-tag.
@@ -44,9 +44,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 - The secret surface expanded: `anthropic_oauth` is now a *writer* of `~/.claude/.credentials.json` (was read-only). The write obeys AGENTS.md §3.4 (atomic, perms-preserving, Anthropic's own file, OAuth fields only).
 
 ### Fixed
-- `extra_usage` Known-issue note retargeted: the OAuth `extra_usage` reconciliation is now a scheduled v0.2 Track C spike (was a vague v0.3 HAR item) — see README / `docs/prd.md`.
+- `extra_usage` Known-issue note retargeted: the OAuth `extra_usage` reconciliation is now a scheduled v0.2 Track C spike (was a vague v0.3 HAR item) — see README / `docs/PRD.md`.
 
-**v0.2 Track B (de-risk)** — foundations for a poller, no user-facing behavior change (the CLI is byte-identical; the new retry layer is inert under the CLI's fail-fast policy). See `docs/prd.md` Phase 2.
+**v0.2 Track B (de-risk)** — foundations for a poller, no user-facing behavior change (the CLI is byte-identical; the new retry layer is inert under the CLI's fail-fast policy). See `docs/PRD.md` Phase 2.
 
 ### Added
 - **`snapshot_composer` crate.** The source-orchestration policy (`build_snapshot`) is extracted behind a `SnapshotSources` trait into one `compose()` function. `balanze-cli` runs it via `LiveSources`; the future v0.2 watcher will run the *same* `compose()` via its own `SnapshotSources` — so the two composition paths cannot silently diverge (AGENTS.md §4 #8). A fixture-driven `compose_parity_against_fixtures` integration test guards it.
@@ -96,7 +96,7 @@ Theme per phase: **Data → Liveness → UI → Distribution**.
 - **v0.1 — Data** (this milestone): the four-quadrant CLI above.
 - **v0.1.1 — released 2026-05-19** — proactive OAuth refresh-token flow; cap window anchored to OAuth's `resets_at` (was `now - 5h`); plus v0.2 Track B de-risk (`snapshot_composer` + `backoff`) shipped in the same tag.
 - **v0.2 — Liveness** — Track C (Anthropic API $ honesty redesign), Track D (Claude Code statusline source), and Track E (the `watcher` + `predictor` crates, `balanze-cli --watch`, the statusline-file IPC bridge, the v0.2→v0.3 `TauriSink` seam-check, and Criterion baselines for the cost/parse hot paths) all shipped on `main`; v0.2 release tag to follow.
-- **v0.3 — UI** — Tauri tray + popover; settings UI; `keyring` → `keyring-core` v4 migration (fixes the Windows keychain bug); degraded-state events; dashboard window; alerts. (Anthropic Console cookie-paste demoted from a committed v0.3 item to opt-in — implement only if a concrete user need surfaces; see `docs/prd.md`.)
+- **v0.3 — UI** — Tauri tray + popover; settings UI; `keyring` → `keyring-core` v4 migration (fixes the Windows keychain bug); degraded-state events; dashboard window; alerts. (Anthropic Console cookie-paste demoted from a committed v0.3 item to opt-in — implement only if a concrete user need surfaces; see `docs/PRD.md`.)
 - **v0.4 — Distribution** — signed binaries (Windows cert, macOS notarization), Homebrew tap, WinGet manifest, Tauri auto-update.
 - **v1+** — Ubuntu GNOME, cross-device sync, Android companion, hosted wallboard.
 
