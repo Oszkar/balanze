@@ -13,7 +13,7 @@
 //! TODO(v0.2-followup): extract live_fetch crate so CLI and watcher share
 //! one implementation.
 
-use openai_client::{costs_this_month, DEFAULT_API_BASE as OPENAI_API_BASE};
+use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, costs_this_month};
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
 use tokio::task::JoinHandle;
 

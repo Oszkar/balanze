@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use claude_parser::{
-    dedup_events, find_all_claude_projects_dirs, find_jsonl_files, parse_str, UsageEvent,
+    UsageEvent, dedup_events, find_all_claude_projects_dirs, find_jsonl_files, parse_str,
 };
 use notify::{RecursiveMode, Watcher as _};
 use state_coordinator::{

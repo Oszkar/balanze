@@ -23,18 +23,18 @@ mod sinks;
 mod watch_cmd;
 
 use anthropic_oauth::{
-    fetch_usage, load_from as load_credentials_from, locate_credentials, refresh_access_token,
-    write_back, ClaudeOAuthSnapshot, CredentialsClaudeAiOauth, OAuthError, WriteBack,
-    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, DEFAULT_API_BASE as ANTHROPIC_API_BASE,
+    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, ClaudeOAuthSnapshot, CredentialsClaudeAiOauth,
+    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage,
+    load_from as load_credentials_from, locate_credentials, refresh_access_token, write_back,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Duration, Utc};
 use claude_parser::{
-    dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir, find_jsonl_files,
-    parse_str, UsageEvent,
+    UsageEvent, dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir,
+    find_jsonl_files, parse_str,
 };
 use openai_client::{
-    costs_this_month, OpenAiCosts, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE,
+    DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiCosts, OpenAiError, costs_this_month,
 };
 use state_coordinator::Snapshot;
 use tracing::{info, warn};
@@ -482,7 +482,7 @@ fn prompt_for_openai_key() -> Result<String> {
 
 fn setup_statusline() {
     use claude_statusline::{
-        default_settings_path, locate_settings_path, read_wire_status, wire_statusline, WireStatus,
+        WireStatus, default_settings_path, locate_settings_path, read_wire_status, wire_statusline,
     };
     // Bare `balanze-cli` assumes it is on PATH (true after `cargo install`).
     let invocation = "balanze-cli statusline";
@@ -759,15 +759,23 @@ mod statusline_tests {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let prev = std::env::var(key).ok();
-            std::env::set_var(key, value);
+            // SAFETY: ENV_LOCK (held for this guard's whole lifetime) serializes
+            // every env-touching statusline test, so no concurrent reader races
+            // this write. set_var is unsafe as of edition 2024.
+            unsafe { std::env::set_var(key, value) };
             Self { key, prev, _lock }
         }
     }
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
+            // SAFETY: see `EnvGuard::set` — ENV_LOCK is still held here, so the
+            // restore is serialized against all other env-touching tests.
+            // set_var/remove_var are unsafe as of edition 2024.
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var(self.key, v),
+                    None => std::env::remove_var(self.key),
+                }
             }
         }
     }
@@ -816,7 +824,7 @@ mod statusline_tests {
 
     #[test]
     fn write_statusline_snapshot_lands_at_data_dir_override() {
-        use claude_statusline::{read_snapshot, StatuslineSnapshot, SCHEMA_VERSION};
+        use claude_statusline::{SCHEMA_VERSION, StatuslineSnapshot, read_snapshot};
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = EnvGuard::set("BALANZE_DATA_DIR_OVERRIDE", dir.path());
@@ -1143,8 +1151,13 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
         .user_agent("balanze-cli/0.1.0")
         .build()?;
     // One-shot CLI must not block on provider backoff; watcher passes standard().
-    match costs_this_month(&client, OPENAI_API_BASE, &key, &backoff::BackoffPolicy::fail_fast())
-        .await
+    match costs_this_month(
+        &client,
+        OPENAI_API_BASE,
+        &key,
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
     {
         Ok(costs) => {
             info!(
@@ -1970,8 +1983,7 @@ mod tests {
         for line in out.lines() {
             if line.contains("$4.20") {
                 assert!(
-                    line.contains("est-leverage")
-                        || line.contains("est."),
+                    line.contains("est-leverage") || line.contains("est."),
                     "every line carrying the estimate $ must carry a qualifier; offending line: {line:?}\nfull output:\n{out}"
                 );
             }

@@ -1,7 +1,7 @@
 use tauri::{
+    App, Manager,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::TrayIconEvent,
-    App, Manager,
 };
 
 // Sink-seam checkpoint — see `tauri_sink` module docs. Skeleton only; v0.3

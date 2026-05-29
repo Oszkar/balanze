@@ -21,10 +21,10 @@ pub mod types;
 pub mod wiring;
 
 pub use errors::StatuslineError;
-pub use file_io::{atomic_write_snapshot, read_snapshot, FileIoError};
+pub use file_io::{FileIoError, atomic_write_snapshot, read_snapshot};
 pub use parse::parse;
-pub use payload::{StatuslineFilePayload, SCHEMA_VERSION};
+pub use payload::{SCHEMA_VERSION, StatuslineFilePayload};
 pub use types::{RateLimits, RateWindow, StatuslineSnapshot};
 pub use wiring::{
-    default_settings_path, locate_settings_path, read_wire_status, wire_statusline, WireStatus,
+    WireStatus, default_settings_path, locate_settings_path, read_wire_status, wire_statusline,
 };

@@ -96,7 +96,7 @@ pub fn read_wire_status(path: &Path) -> Result<WireStatus, StatuslineError> {
             return Err(StatuslineError::SettingsIo {
                 path: path.to_path_buf(),
                 source: e,
-            })
+            });
         }
     };
 
@@ -174,7 +174,7 @@ pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineEr
             return Err(StatuslineError::SettingsIo {
                 path: path.to_path_buf(),
                 source: e,
-            })
+            });
         }
     };
 

@@ -3,7 +3,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Oszkar/balanze/ci.yml?branch=main&label=ci&logo=github)](https://github.com/Oszkar/balanze/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/tag/Oszkar/balanze?label=version&color=blue)](https://github.com/Oszkar/balanze/tags)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.77%2B-orange?logo=rust&logoColor=white)](Cargo.toml)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust&logoColor=white)](Cargo.toml)
 
 A local-first utility that consolidates personal AI usage into one normalized view — Claude subscription quota, an estimate of Claude Code's API-rate value, OpenAI Codex quota, and real OpenAI API spend, in one glance. Rust + Tauri 2 + Svelte 5. Side project; Windows 11 and macOS 15+ (CLI also runs on Linux).
 
@@ -84,7 +84,7 @@ spend from Anthropic. OpenAI = real billed spend.
 
 ## Install
 
-Balanze currently ships **from source only** — no binaries, installers, or GitHub Releases, and it is **not on crates.io** (signed binaries, Homebrew, and WinGet are on the roadmap; see [`docs/PRD.md`](docs/PRD.md)). Requires Rust 1.77+.
+Balanze currently ships **from source only** — no binaries, installers, or GitHub Releases, and it is **not on crates.io** (signed binaries, Homebrew, and WinGet are on the roadmap; see [`docs/PRD.md`](docs/PRD.md)). Requires Rust 1.85+.
 
 ```bash
 # `--git` is required (not on crates.io). The repo root is a virtual
@@ -101,7 +101,7 @@ The Claude side reads `~/.claude/.credentials.json` directly — no setup needed
 
 ## Develop
 
-Prerequisites: Rust 1.77+ (all you need for the CLI); Bun 1.3+ (only for the Svelte frontend scaffold / `tauri dev`).
+Prerequisites: Rust 1.85+ (all you need for the CLI); Bun 1.3+ (only for the Svelte frontend scaffold / `tauri dev`).
 
 ```bash
 # CLI from the workspace:

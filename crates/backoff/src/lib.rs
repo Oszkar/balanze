@@ -155,13 +155,7 @@ mod tests {
             |_| RetryDecision::RetryAfter(None),
             || {
                 let n = calls.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if n < 3 {
-                        Err("transient")
-                    } else {
-                        Ok(n)
-                    }
-                }
+                async move { if n < 3 { Err("transient") } else { Ok(n) } }
             },
         )
         .await;
@@ -194,13 +188,7 @@ mod tests {
             |_| RetryDecision::RetryAfter(Some(Duration::from_secs(5))),
             || {
                 let n = calls.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if n == 0 {
-                        Err("rate limited")
-                    } else {
-                        Ok(())
-                    }
-                }
+                async move { if n == 0 { Err("rate limited") } else { Ok(()) } }
             },
         )
         .await;
@@ -235,13 +223,7 @@ mod tests {
             |_| RetryDecision::RetryAfter(Some(Duration::from_secs(86_400))),
             || {
                 let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                async move {
-                    if n == 0 {
-                        Err("rate limited")
-                    } else {
-                        Ok(())
-                    }
-                }
+                async move { if n == 0 { Err("rate limited") } else { Ok(()) } }
             },
         )
         .await;

@@ -48,7 +48,7 @@
 //! standard Unix pattern). `JsonlSink` inherits the same `println!` panic-
 //! on-broken-pipe behavior the rest of the project relies on.
 
-use std::io::{stderr, Stderr, Write};
+use std::io::{Stderr, Write, stderr};
 use std::time::{Duration, Instant};
 
 use state_coordinator::{Sink, Snapshot, Source};
