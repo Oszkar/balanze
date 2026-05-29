@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 - **Scaffold `greet` Tauri command** dropped along with its frontend caller — outside the documented IPC contract (AGENTS.md §4 #9), real production commands land with the v0.3 UI.
 
 ### Fixed
+- **`--watch` now anchors the JSONL rolling window to the OAuth reset (CLI ≡ watcher).** The live watcher computed the window now-relative (`now − 5h`) while one-shot `status` anchored it to the OAuth-reported 5-hour `resets_at`, so the two shipped surfaces could disagree on the JSONL window / burn rate. The JSONL → window+cost synthesis is now a single `state_coordinator::summarize_jsonl` helper that both `snapshot_composer::compose` (one-shot) and the coordinator merge (watcher) call; the coordinator caches the deduped events and re-anchors them when an OAuth update arrives. Internal-only message change (the `ClaudeJsonl` partial now carries raw events and the redundant `AnthropicApiCost` partial is gone — cost is derived from the same events); the public `Snapshot` / `--json` schema is unchanged. The `compose_parity_against_fixtures` test now actually asserts parity against the shared helper instead of only checking that cells populate.
 - `anthropic_oauth` `ExtraUsage` docs no longer say the semantic is "unknown" (resolved: cents / overage meter); `claude_cost` no longer references a non-existent `Confidence::Estimated` type. Corrected the PRD's false "Claude Code records a per-event cost in the JSONL" premise.
 
 ## [0.1.1] - 2026-05-19

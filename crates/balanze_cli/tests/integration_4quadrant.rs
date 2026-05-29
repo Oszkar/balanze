@@ -25,7 +25,7 @@ use claude_cost::{compute_cost, load_bundled_prices};
 use claude_parser::{dedup_events, find_jsonl_files, parse_str, UsageEvent};
 use codex_local::{find_latest_session, read_latest_quota_snapshot};
 use snapshot_composer::{compose, SnapshotSources};
-use state_coordinator::{merge_partial, JsonlSnapshot, Snapshot, SourcePartial};
+use state_coordinator::{summarize_jsonl, JsonlSnapshot, Snapshot};
 use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
 
 fn fixture_root() -> PathBuf {
@@ -59,12 +59,12 @@ fn full_pipeline_populates_anthropic_api_cost_in_snapshot() {
     let prices = load_bundled_prices().expect("bundled prices load");
     let cost = compute_cost(&events, &prices);
 
-    // Step 3: populate a Snapshot via merge_partial — the same path the
-    // coordinator will use (and that balanze_cli currently writes
-    // directly).
+    // Step 3: populate a Snapshot's cost cell directly (the coordinator now
+    // derives this cell from raw events via `summarize_jsonl`; here we set the
+    // already-computed value to assert the downstream contract).
     let now = chrono::Utc::now();
     let mut snapshot = Snapshot::empty(now);
-    merge_partial(&mut snapshot, SourcePartial::AnthropicApiCost(cost.clone()));
+    snapshot.anthropic_api_cost = Some(cost.clone());
 
     // Step 4: assert the contract the eng-review test plan specified.
     let saved = snapshot
@@ -81,7 +81,7 @@ fn full_pipeline_populates_anthropic_api_cost_in_snapshot() {
     );
     assert_eq!(
         snapshot.anthropic_api_cost_error, None,
-        "successful merge_partial must clear the error slot"
+        "a fresh snapshot has no error slot set"
     );
 
     // Spot-check structure: the fixture has 4 raw JSONL lines — 3 distinct
@@ -137,7 +137,7 @@ fn full_pipeline_populates_claude_jsonl_in_snapshot() {
     };
 
     let mut snapshot = Snapshot::empty(now);
-    merge_partial(&mut snapshot, SourcePartial::ClaudeJsonl(jsonl));
+    snapshot.claude_jsonl = Some(jsonl);
 
     let saved = snapshot
         .claude_jsonl
@@ -166,7 +166,7 @@ fn full_pipeline_populates_codex_quota_in_snapshot() {
 
     let now = chrono::Utc::now();
     let mut snapshot = Snapshot::empty(now);
-    merge_partial(&mut snapshot, SourcePartial::CodexQuota(snap));
+    snapshot.codex_quota = Some(snap);
 
     let saved = snapshot
         .codex_quota
@@ -201,8 +201,8 @@ fn snapshot_serializes_with_new_cost_and_codex_fields() {
 
     let now = chrono::Utc::now();
     let mut snapshot = Snapshot::empty(now);
-    merge_partial(&mut snapshot, SourcePartial::AnthropicApiCost(cost));
-    merge_partial(&mut snapshot, SourcePartial::CodexQuota(codex_quota));
+    snapshot.anthropic_api_cost = Some(cost);
+    snapshot.codex_quota = Some(codex_quota);
 
     let json = serde_json::to_string_pretty(&snapshot).expect("snapshot serializes");
 
@@ -323,6 +323,31 @@ async fn compose_parity_against_fixtures() {
     assert!(cost.total_micro_usd > 0);
     assert_eq!(cost.total_event_count, 3, "dedup collapses 4 raw → 3");
     assert_eq!(snap.anthropic_api_cost_error, None);
+
+    // PARITY GUARD (AGENTS.md §4 #8): `compose()` must produce exactly what the
+    // shared `state_coordinator::summarize_jsonl` helper produces for the same
+    // events/now/anchor — and that is the SAME helper the live coordinator runs
+    // on the watcher path. This is what actually prevents the CLI and watcher
+    // composition paths from drifting (the earlier version of this test only
+    // checked that compose populated cells, which is why a `window_anchor: None`
+    // divergence in the watcher went uncaught). OAuth errored here ⇒ anchor None.
+    let events = load_fixture_events();
+    let prices = load_bundled_prices().expect("bundled prices load");
+    let expected = summarize_jsonl(&events, now, 1, None, Some(&prices));
+    assert_eq!(
+        snap.claude_jsonl.as_ref().unwrap().window,
+        expected.jsonl.window,
+        "compose() window must equal the shared summarize_jsonl helper's window"
+    );
+    assert_eq!(
+        cost.total_micro_usd,
+        expected
+            .cost
+            .as_ref()
+            .expect("cost computed")
+            .total_micro_usd,
+        "compose() cost must equal the shared summarize_jsonl helper's cost"
+    );
 
     let codex = snap.codex_quota.as_ref().expect("codex populated");
     assert!((codex.primary.used_percent - 17.5).abs() < 0.001);

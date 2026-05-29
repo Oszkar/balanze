@@ -2,13 +2,8 @@
 
 use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot};
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use claude_cost::Cost;
-use claude_statusline::{StatuslineFilePayload, StatuslineSnapshot};
-use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
+use claude_parser::{AccountType, DataSource, Provider, UsageEvent};
 use openai_client::OpenAiCosts;
-use window::WindowSummary;
-
-use crate::snapshot::JsonlSnapshot;
 
 pub(crate) fn fixture_now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 5, 14, 12, 0, 0).unwrap()
@@ -30,25 +25,18 @@ pub(crate) fn oauth_snapshot() -> ClaudeOAuthSnapshot {
     }
 }
 
-pub(crate) fn statusline_payload() -> StatuslineFilePayload {
-    let snap = StatuslineSnapshot {
-        rate_limits: None,
-        session_cost_micro_usd: Some(3_420_000),
-        claude_code_version: Some("v2.1.144".to_string()),
-    };
-    StatuslineFilePayload::new(snap, fixture_now())
-}
-
-pub(crate) fn jsonl_snapshot() -> JsonlSnapshot {
-    JsonlSnapshot {
-        files_scanned: 5,
-        window: WindowSummary {
-            window_start: fixture_now(),
-            total_events_in_window: 0,
-            total_tokens_in_window: 0,
-            recent_burn_tokens_per_min: None,
-            by_model: vec![],
-        },
+/// An OAuth snapshot whose `five_hour` cadence resets at `reset`. Lets a test
+/// drive the coordinator's window anchor to a controlled value (e.g. a
+/// strictly-future reset that `summarize_window` will actually honor).
+pub(crate) fn oauth_snapshot_with_reset(reset: DateTime<Utc>) -> ClaudeOAuthSnapshot {
+    ClaudeOAuthSnapshot {
+        cadences: vec![CadenceBar {
+            key: "five_hour".to_string(),
+            display_label: "Current 5-hour session".to_string(),
+            utilization_percent: 10.0,
+            resets_at: reset,
+        }],
+        ..oauth_snapshot()
     }
 }
 
@@ -63,27 +51,38 @@ pub(crate) fn openai_costs() -> OpenAiCosts {
     }
 }
 
-pub(crate) fn anthropic_api_cost() -> Cost {
-    Cost {
-        per_model: vec![],
-        total_micro_usd: 12_345_678,
-        skipped_models: vec![],
-        total_event_count: 0,
-        unparsed_event_count: 0,
-    }
-}
-
-pub(crate) fn codex_quota() -> CodexQuotaSnapshot {
-    CodexQuotaSnapshot {
-        observed_at: fixture_now(),
-        session_id: "00000000-0000-7000-8000-000000000001".to_string(),
-        primary: RateLimitWindow {
-            used_percent: 3.0,
-            window_duration_minutes: 10_080,
-            resets_at: fixture_now(),
+/// A small synthetic deduped event slice for coordinator tests. Two Claude
+/// events at known timestamps with models that exist in the bundled price
+/// table, so cost derivation produces a non-zero total.
+pub(crate) fn sample_events() -> Vec<UsageEvent> {
+    vec![
+        UsageEvent {
+            ts: fixture_now(),
+            provider: Provider::Claude,
+            account_type: AccountType::Subscription,
+            model: "claude-sonnet-4-6".to_string(),
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            cost_micro_usd: None,
+            source: DataSource::Jsonl,
+            message_id: Some("msg_sample_1".to_string()),
+            request_id: Some("req_sample_1".to_string()),
         },
-        secondary: None,
-        plan_type: "go".to_string(),
-        rate_limit_reached: false,
-    }
+        UsageEvent {
+            ts: fixture_now() + Duration::minutes(5),
+            provider: Provider::Claude,
+            account_type: AccountType::Subscription,
+            model: "claude-haiku-4-5".to_string(),
+            input_tokens: 20,
+            output_tokens: 10,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            cost_micro_usd: None,
+            source: DataSource::Jsonl,
+            message_id: Some("msg_sample_2".to_string()),
+            request_id: Some("req_sample_2".to_string()),
+        },
+    ]
 }

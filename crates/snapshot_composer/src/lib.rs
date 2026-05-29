@@ -11,9 +11,8 @@ use chrono::{DateTime, Utc};
 use claude_parser::UsageEvent;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
-use state_coordinator::{JsonlSnapshot, Snapshot};
+use state_coordinator::{summarize_jsonl, JsonlSnapshot, Snapshot};
 use tracing::{info, warn};
-use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
 
 /// The four I/O-bound source fetches `compose` needs. CLI (`LiveSources`),
 /// the future watcher, and tests (`FixtureSources`) provide impls. The trait
@@ -74,19 +73,21 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
     let mut anthropic_api_cost_error: Option<String> = None;
     match sources.load_claude_events().await {
         Ok((events, files_scanned)) => {
-            let window = summarize_window(
-                &events,
-                now,
-                DEFAULT_WINDOW,
-                DEFAULT_BURN_WINDOW,
-                DEFAULT_MIN_BURN_EVENTS,
-                window_anchor,
-            );
-            claude_jsonl = Some(JsonlSnapshot {
-                files_scanned,
-                window,
-            });
-            match compute_anthropic_api_cost(&events) {
+            // Load the bundled LiteLLM price table; a load failure degrades only
+            // the cost cell (the window is still produced). `summarize_jsonl` is
+            // the SAME pipeline the live coordinator runs, so the one-shot CLI
+            // and the watcher cannot diverge (AGENTS.md §4 #8).
+            let prices = match claude_cost::load_bundled_prices() {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    warn!("claude_cost: bundled price table failed to load: {e}");
+                    None
+                }
+            };
+            let cells =
+                summarize_jsonl(&events, now, files_scanned, window_anchor, prices.as_ref());
+            claude_jsonl = Some(cells.jsonl);
+            match cells.cost {
                 Ok(cost) => {
                     info!(
                         "claude_cost: total_micro_usd={} per_model_rows={} skipped={}",
@@ -98,7 +99,7 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
                 }
                 Err(e) => {
                     warn!("anthropic_api_cost source failed: {e}");
-                    anthropic_api_cost_error = Some(e.to_string());
+                    anthropic_api_cost_error = Some(e);
                 }
             }
         }
@@ -143,14 +144,6 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
         claude_statusline_error: None,
         prediction: None,
     }
-}
-
-/// Synthesize the API-rate cost from the JSONL events. Pure (no I/O);
-/// moved verbatim from `balanze_cli::compute_anthropic_api_cost`.
-fn compute_anthropic_api_cost(events: &[UsageEvent]) -> anyhow::Result<claude_cost::Cost> {
-    let prices = claude_cost::load_bundled_prices()
-        .map_err(|e| anyhow::anyhow!("claude_cost: bundled price table failed to load: {e}"))?;
-    Ok(claude_cost::compute_cost(events, &prices))
 }
 
 #[cfg(test)]
