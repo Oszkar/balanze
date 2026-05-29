@@ -946,9 +946,13 @@ fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
             }
         }
     }
-    // Every existing root failed to walk (e.g. permission denied) ⇒ surface it
-    // rather than reporting an empty window. A partial failure (some roots
-    // walked) keeps what we got.
+    // No files collected from ANY root AND at least one root failed to walk
+    // (e.g. permission denied) ⇒ surface that error rather than reporting an
+    // empty window that may be wrong — the unreadable root could hold events.
+    // (This also fires when another root walked successfully but was empty:
+    // an unreadable root must not masquerade as an empty-but-fine result.)
+    // A partial success — ≥1 file found on any root — keeps what walked and
+    // only warns about the failed roots, above.
     if files.is_empty() {
         if let Some(e) = walk_err {
             return Err(e.into());

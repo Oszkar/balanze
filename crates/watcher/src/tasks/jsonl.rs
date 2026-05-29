@@ -190,11 +190,13 @@ async fn emit_jsonl_snapshot(coord: &StateCoordinatorHandle, roots: &[PathBuf]) 
 /// (mirrors `live_load_claude_events` in `balanze_cli`).
 ///
 /// Per-root walk failures are logged + skipped so one bad root doesn't lose the
-/// others; a `Fatal` is returned only when EVERY root failed to walk (so the
-/// degraded signal isn't silently dropped). `pub(crate)` so the safety-poll
-/// task can reuse it. The window + cost synthesis lives in the coordinator
-/// (`state_coordinator::summarize_jsonl`), shared with the CLI, so the
-/// OAuth-anchored window is computed identically on both paths.
+/// others. `Fatal` is returned only when NO files were collected from any root
+/// AND at least one root failed — so an unreadable root can't masquerade as an
+/// empty-but-fine window (the degraded signal isn't silently dropped). A
+/// partial success (≥1 file found on any root) keeps what walked. `pub(crate)`
+/// so the safety-poll task can reuse it. The window + cost synthesis lives in
+/// the coordinator (`state_coordinator::summarize_jsonl`), shared with the CLI,
+/// so the OAuth-anchored window is computed identically on both paths.
 pub(crate) fn scan_events(roots: &[PathBuf]) -> ScanResult {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut walk_err: Option<String> = None;
