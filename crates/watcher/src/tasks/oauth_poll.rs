@@ -1,5 +1,5 @@
 //! OAuth poll task. Polls `GET /api/oauth/usage` at a configurable interval
-//! (default 300s; minimum 60s enforced at call site). Each tick:
+//! (default 300s; clamped to a 300s floor at the call site per §3.1). Each tick:
 //! 1. Re-locates and re-loads credentials from disk (handles atomic rewrite by
 //!    Claude Code between polls).
 //! 2. Pre-flight refreshes the bearer if expired or near-expiry (within 5min).

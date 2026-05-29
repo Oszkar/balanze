@@ -1,5 +1,6 @@
 //! OpenAI cost poll task. Polls `GET /v1/organization/costs` at a configurable
-//! interval (shared with `oauth_poll`; default 300s; minimum 60s enforced here).
+//! interval (shared with `oauth_poll`; default 300s; clamped to a 300s floor
+//! here per AGENTS.md §3.1).
 //! Each tick: resolve the OpenAI admin key → fetch month-to-date costs →
 //! emit `Update(OpenAiCosts, ...)`.
 //!

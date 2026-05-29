@@ -72,7 +72,7 @@ Default compact view — the four quadrants on one screen, with a legend that ke
 
                     Quota %                                 API $
 Anthropic           ✓ 82.0% 5h, 88.0% 7d (oauth)            $20.92/$25.00 overage billed · ~$2197.11 est-leverage (not billed)
-OpenAI              ✓ 6.0% 7d (codex go)                    ✓ $4.20 this month (real)
+OpenAI              ✓ 6.0% 7d (codex go)                    $4.20 (admin costs)
 
 Quota % = live server-reported utilization. API $: Anthropic =
 estimated list-price for local Claude Code tokens (subscription
