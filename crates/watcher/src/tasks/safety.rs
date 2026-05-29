@@ -9,20 +9,21 @@
 //! 5-minute pollers and re-hitting their endpoints on every 60s safety tick
 //! would burn API quota (AGENTS.md §3.1).
 //!
-//! All sync I/O (`scan_and_compute`, `read_snapshot`, `read_codex_quota`) runs
+//! All sync I/O (`scan_events`, `read_snapshot`, `read_codex_quota`) runs
 //! under `tokio::task::spawn_blocking` so it doesn't block tokio worker threads.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use claude_cost::PriceTable;
 use claude_parser::find_claude_projects_dir;
 use claude_statusline::{read_snapshot, FileIoError};
 use codex_local::read_codex_quota;
-use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
+use state_coordinator::{
+    ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg,
+};
 use tokio::task::JoinHandle;
 
-use super::jsonl::{scan_and_compute, ScanResult};
+use super::jsonl::{scan_events, ScanResult};
 use crate::errors::WatcherError;
 
 // Re-export of the statusline snapshot-path helper — mirrored here so the
@@ -59,18 +60,6 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             }
         };
 
-        // Load the bundled price table once for the task lifetime (same as jsonl.rs).
-        let prices: Option<Arc<PriceTable>> = match claude_cost::load_bundled_prices() {
-            Ok(p) => Some(Arc::new(p)),
-            Err(e) => {
-                tracing::error!(
-                    "watcher/safety: bundled price table load failed ({e}); \
-                         AnthropicApiCost cells will error on each safety tick"
-                );
-                None
-            }
-        };
-
         let statusline_path = statusline_snapshot_path();
 
         // `Delay` (not default `Burst`) so a long-running scan (deep
@@ -88,44 +77,25 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             ticker.tick().await;
             tracing::debug!("watcher/safety: tick");
 
-            // ── JSONL + AnthropicApiCost ──────────────────────────────────────
+            // ── JSONL (window + cost are derived in the coordinator) ──────────
             if let Some(ref dir) = projects_dir {
                 let dir_owned = dir.clone();
-                // Clone the Arc (cheap pointer copy), NOT the underlying
-                // PriceTable. The earlier code did `as_deref().cloned()`
-                // which performed a full struct clone every 60s.
-                let prices_owned: Option<Arc<PriceTable>> = prices.clone();
-                let scan = tokio::task::spawn_blocking(move || {
-                    scan_and_compute(&dir_owned, prices_owned.as_deref())
-                })
-                .await;
+                let scan = tokio::task::spawn_blocking(move || scan_events(&dir_owned)).await;
 
                 match scan {
-                    Ok(ScanResult::Ok { jsonl, cost }) => {
+                    Ok(ScanResult::Ok {
+                        events,
+                        files_scanned,
+                    }) => {
                         let _ = coord
                             .send(StateMsg::Update(SourceUpdate {
                                 source: Source::ClaudeJsonl,
-                                result: Ok(SourcePartial::ClaudeJsonl(jsonl)),
+                                result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                                    events: Arc::new(events),
+                                    files_scanned,
+                                })),
                             }))
                             .await;
-                        match cost {
-                            Ok(c) => {
-                                let _ = coord
-                                    .send(StateMsg::Update(SourceUpdate {
-                                        source: Source::AnthropicApiCost,
-                                        result: Ok(SourcePartial::AnthropicApiCost(c)),
-                                    }))
-                                    .await;
-                            }
-                            Err(msg) => {
-                                let _ = coord
-                                    .send(StateMsg::Update(SourceUpdate {
-                                        source: Source::AnthropicApiCost,
-                                        result: Err(msg),
-                                    }))
-                                    .await;
-                            }
-                        }
                     }
                     Ok(ScanResult::Fatal { error }) => {
                         tracing::warn!("watcher/safety: JSONL scan fatal: {error}");

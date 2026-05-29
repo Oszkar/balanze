@@ -12,7 +12,6 @@ anyhow = { workspace = true }
 anthropic_oauth = { path = "../anthropic_oauth" }
 backoff = { path = "../backoff" }
 chrono = { workspace = true }
-claude_cost = { path = "../claude_cost" }
 claude_parser = { path = "../claude_parser" }
 claude_statusline = { path = "../claude_statusline" }
 codex_local = { path = "../codex_local" }
@@ -26,7 +25,6 @@ state_coordinator = { path = "../state_coordinator" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = { workspace = true }
-window = { path = "../window" }
 
 [dev-dependencies]
 tempfile = "3"

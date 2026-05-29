@@ -1,14 +1,16 @@
 //! Message types for the coordinator actor's mpsc channel.
 
+use std::sync::Arc;
+
 use anthropic_oauth::ClaudeOAuthSnapshot;
-use claude_cost::Cost;
+use claude_parser::UsageEvent;
 use claude_statusline::StatuslineFilePayload;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
 use settings::Settings;
 use tokio::sync::oneshot;
 
-use crate::snapshot::{JsonlSnapshot, Snapshot};
+use crate::snapshot::Snapshot;
 
 /// Which source produced an update or failure.
 ///
@@ -44,13 +46,33 @@ pub enum Source {
     ClaudeStatusline,
 }
 
+/// Raw input for the JSONL cell: the deduped event slice + the count of files
+/// scanned. The coordinator (and the one-shot `compose` path) derive BOTH the
+/// window summary and the API-rate cost from these events via
+/// [`crate::summarize_jsonl`], anchoring the window to the OAuth 5-hour reset.
+///
+/// Carrying raw events (rather than a pre-summarized `JsonlSnapshot`) is what
+/// lets the coordinator re-anchor the window when a later OAuth update arrives
+/// with the authoritative reset — the producer (CLI / watcher) no longer owns
+/// the window math, so the two paths can't diverge (AGENTS.md §4 #8). `Arc` so
+/// caching + re-anchoring never clones the vector.
+#[derive(Debug, Clone)]
+pub struct ClaudeJsonlInput {
+    pub events: Arc<Vec<UsageEvent>>,
+    pub files_scanned: usize,
+}
+
 /// Successful data payload from one source. The variant identifies the source;
 /// the inner type is whatever that source produces.
+///
+/// Note there is no `AnthropicApiCost` variant: the API-rate cost is *derived*
+/// from `ClaudeJsonl`'s events inside the coordinator (via `summarize_jsonl`),
+/// never sent as its own partial. `Source::AnthropicApiCost` still exists as the
+/// error-slot tag for that derived cell.
 #[derive(Debug, Clone)]
 pub enum SourcePartial {
     ClaudeOAuth(ClaudeOAuthSnapshot),
-    ClaudeJsonl(JsonlSnapshot),
-    AnthropicApiCost(Cost),
+    ClaudeJsonl(ClaudeJsonlInput),
     CodexQuota(CodexQuotaSnapshot),
     OpenAiCosts(OpenAiCosts),
     ClaudeStatusline(StatuslineFilePayload),
@@ -63,7 +85,6 @@ impl SourcePartial {
         match self {
             SourcePartial::ClaudeOAuth(_) => Source::ClaudeOAuth,
             SourcePartial::ClaudeJsonl(_) => Source::ClaudeJsonl,
-            SourcePartial::AnthropicApiCost(_) => Source::AnthropicApiCost,
             SourcePartial::CodexQuota(_) => Source::CodexQuota,
             SourcePartial::OpenAiCosts(_) => Source::OpenAiCosts,
             SourcePartial::ClaudeStatusline(_) => Source::ClaudeStatusline,

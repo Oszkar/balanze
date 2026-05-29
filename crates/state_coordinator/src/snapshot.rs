@@ -15,7 +15,7 @@ use predictor::Prediction;
 use serde::{Deserialize, Serialize};
 use window::WindowSummary;
 
-use crate::messages::{Source, SourcePartial};
+use crate::messages::Source;
 
 /// Canonical Balanze state. `None` fields = "not yet observed"; `*_error`
 /// fields hold the most recent failure for that source. Successful data and
@@ -125,40 +125,6 @@ pub struct JsonlSnapshot {
     pub window: WindowSummary,
 }
 
-/// Merge a successful source update into the snapshot.
-///
-/// A successful update overwrites the source's data slot AND clears its
-/// `_error` slot — the fetch succeeded, so the previous error (if any) is no
-/// longer relevant.
-pub fn merge_partial(snapshot: &mut Snapshot, partial: SourcePartial) {
-    match partial {
-        SourcePartial::ClaudeOAuth(o) => {
-            snapshot.claude_oauth = Some(o);
-            snapshot.claude_oauth_error = None;
-        }
-        SourcePartial::ClaudeJsonl(j) => {
-            snapshot.claude_jsonl = Some(j);
-            snapshot.claude_jsonl_error = None;
-        }
-        SourcePartial::AnthropicApiCost(c) => {
-            snapshot.anthropic_api_cost = Some(c);
-            snapshot.anthropic_api_cost_error = None;
-        }
-        SourcePartial::CodexQuota(q) => {
-            snapshot.codex_quota = Some(q);
-            snapshot.codex_quota_error = None;
-        }
-        SourcePartial::OpenAiCosts(c) => {
-            snapshot.openai = Some(c);
-            snapshot.openai_error = None;
-        }
-        SourcePartial::ClaudeStatusline(p) => {
-            snapshot.claude_statusline = Some(p);
-            snapshot.claude_statusline_error = None;
-        }
-    }
-}
-
 /// Record an error for a source WITHOUT clearing its existing data. The UI
 /// should render stale-but-known data with a "degraded" indicator rather
 /// than blanking it.
@@ -177,63 +143,18 @@ pub fn record_error(snapshot: &mut Snapshot, source: Source, error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{
-        anthropic_api_cost, codex_quota, fixture_now, jsonl_snapshot, oauth_snapshot, openai_costs,
-        statusline_payload,
-    };
+    use crate::test_support::{fixture_now, oauth_snapshot};
 
-    #[test]
-    fn merge_oauth_overwrites_data_and_clears_error() {
-        let mut s = Snapshot::empty(fixture_now());
-        s.claude_oauth_error = Some("previous fetch failed".to_string());
-        merge_partial(&mut s, SourcePartial::ClaudeOAuth(oauth_snapshot()));
-        assert!(s.claude_oauth.is_some());
-        assert!(s.claude_oauth_error.is_none(), "success clears prior error");
-    }
-
-    #[test]
-    fn merge_jsonl_overwrites_data_and_clears_error() {
-        let mut s = Snapshot::empty(fixture_now());
-        s.claude_jsonl_error = Some("permission denied".to_string());
-        merge_partial(&mut s, SourcePartial::ClaudeJsonl(jsonl_snapshot()));
-        assert!(s.claude_jsonl.is_some());
-        assert!(s.claude_jsonl_error.is_none());
-    }
-
-    #[test]
-    fn merge_openai_overwrites_data_and_clears_error() {
-        let mut s = Snapshot::empty(fixture_now());
-        s.openai_error = Some("401".to_string());
-        merge_partial(&mut s, SourcePartial::OpenAiCosts(openai_costs()));
-        assert!(s.openai.is_some());
-        assert!(s.openai_error.is_none());
-    }
-
-    #[test]
-    fn merge_anthropic_api_cost_overwrites_data_and_clears_error() {
-        let mut s = Snapshot::empty(fixture_now());
-        s.anthropic_api_cost_error = Some("price table corrupt".to_string());
-        merge_partial(
-            &mut s,
-            SourcePartial::AnthropicApiCost(anthropic_api_cost()),
-        );
-        assert!(s.anthropic_api_cost.is_some());
-        assert!(s.anthropic_api_cost_error.is_none());
-    }
-
-    #[test]
-    fn merge_codex_quota_overwrites_data_and_clears_error() {
-        let mut s = Snapshot::empty(fixture_now());
-        s.codex_quota_error = Some("schema drift".to_string());
-        merge_partial(&mut s, SourcePartial::CodexQuota(codex_quota()));
-        assert!(s.codex_quota.is_some());
-        assert!(s.codex_quota_error.is_none());
-    }
+    // The "successful update overwrites data + clears the source's error" and
+    // cross-source-isolation invariants now live in `coordinator::tests`
+    // (exercised end-to-end through `StateMsg::Update`), since snapshot
+    // mutation moved into the coordinator's `apply_partial`. These tests cover
+    // `record_error`, which still lives here.
 
     #[test]
     fn record_error_preserves_existing_data() {
         let mut s = Snapshot::empty(fixture_now());
-        merge_partial(&mut s, SourcePartial::ClaudeOAuth(oauth_snapshot()));
+        s.claude_oauth = Some(oauth_snapshot());
         record_error(&mut s, Source::ClaudeOAuth, "network unreachable");
         // Data preserved (degraded UI shows stale numbers with warning):
         assert!(s.claude_oauth.is_some());
@@ -259,18 +180,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_claude_statusline_overwrites_data_and_clears_error() {
-        let mut s = Snapshot::empty(fixture_now());
-        s.claude_statusline_error = Some("file missing".to_string());
-        merge_partial(
-            &mut s,
-            SourcePartial::ClaudeStatusline(statusline_payload()),
-        );
-        assert!(s.claude_statusline.is_some());
-        assert!(s.claude_statusline_error.is_none());
-    }
-
-    #[test]
     fn record_error_routes_claude_statusline() {
         let mut s = Snapshot::empty(fixture_now());
         record_error(&mut s, Source::ClaudeStatusline, "schema drift v2");
@@ -279,29 +188,5 @@ mod tests {
             Some("schema drift v2")
         );
         assert!(s.claude_statusline.is_none());
-    }
-
-    #[test]
-    fn merge_one_source_does_not_clear_another_sources_error() {
-        // Cross-source isolation invariant: a successful merge clears ONLY
-        // the merged source's `_error` slot. A mis-routed slot write (e.g. a
-        // future refactor that clears the wrong field) would blank an
-        // unrelated source's degraded indicator and silently hide a failure.
-        let mut s = Snapshot::empty(fixture_now());
-        s.openai_error = Some("openai 500".to_string());
-        s.claude_jsonl_error = Some("jsonl perm denied".to_string());
-
-        merge_partial(&mut s, SourcePartial::ClaudeJsonl(jsonl_snapshot()));
-
-        assert!(s.claude_jsonl.is_some());
-        assert!(
-            s.claude_jsonl_error.is_none(),
-            "merged source's own error is cleared"
-        );
-        assert_eq!(
-            s.openai_error.as_deref(),
-            Some("openai 500"),
-            "an unrelated source's error must be left untouched"
-        );
     }
 }

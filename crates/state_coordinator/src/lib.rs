@@ -24,6 +24,7 @@
 //! doesn't depend on Tauri.
 
 mod coordinator;
+mod jsonl;
 mod messages;
 mod sink;
 mod snapshot;
@@ -32,7 +33,8 @@ mod snapshot;
 mod test_support;
 
 pub use coordinator::{spawn, StateCoordinatorHandle};
-pub use messages::{Source, SourcePartial, SourceUpdate, StateMsg};
+pub use jsonl::{summarize_jsonl, JsonlCells};
+pub use messages::{ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateMsg};
 pub use predictor::{Prediction, PredictionState, WindowSnapshot};
 pub use sink::{LogSink, NullSink, Sink};
-pub use snapshot::{merge_partial, record_error, JsonlSnapshot, Snapshot};
+pub use snapshot::{record_error, JsonlSnapshot, Snapshot};

@@ -10,17 +10,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use claude_cost::{compute_cost, load_bundled_prices, Cost, PriceTable};
 use claude_parser::{
     dedup_events, find_claude_projects_dir, find_jsonl_files, parse_str, UsageEvent,
 };
 use notify::{RecursiveMode, Watcher as _};
 use state_coordinator::{
-    JsonlSnapshot, Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg,
+    ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg,
 };
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
 
 use crate::errors::WatcherError;
 
@@ -51,23 +49,6 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
                     "watcher/jsonl: no Claude projects dir found ({e}); task exits clean"
                 );
                 return Ok(());
-            }
-        };
-
-        // Load the bundled LiteLLM price table ONCE for the task lifetime.
-        // It's embedded JSON of fixed-known shape (no I/O on rescan, no
-        // network) and never changes between scans, so reparsing it per
-        // burst is pure waste. If the bundled file itself is corrupt we
-        // log + still emit JSONL snapshots (cost emits become per-burst
-        // errors, which the coordinator records as `anthropic_api_cost_error`).
-        let prices: Option<Arc<PriceTable>> = match load_bundled_prices() {
-            Ok(p) => Some(Arc::new(p)),
-            Err(e) => {
-                tracing::error!(
-                    "watcher/jsonl: bundled price table load failed once at task \
-                     start ({e}); will emit AnthropicApiCost errors per rescan"
-                );
-                None
             }
         };
 
@@ -120,7 +101,7 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
         // and drained by the notify callback below. So the only events the
         // OS does NOT deliver are those that landed before `watch()`
         // returned — this scan covers exactly that window.
-        emit_jsonl_snapshot(&coord, &projects_dir, prices.as_deref()).await;
+        emit_jsonl_snapshot(&coord, &projects_dir).await;
 
         loop {
             // Wait for at least one notify event.
@@ -129,48 +110,38 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             // this sleep coalesce into the next iteration's notified()
             // (Notify accumulates at most one pending permit).
             tokio::time::sleep(DEBOUNCE).await;
-            emit_jsonl_snapshot(&coord, &projects_dir, prices.as_deref()).await;
+            emit_jsonl_snapshot(&coord, &projects_dir).await;
         }
     })
 }
 
-/// Result of the blocking scan + compute step. Carries everything the
-/// async caller needs to send to the coordinator; constructed off the
-/// tokio runtime by `scan_and_compute`.
+/// Result of the blocking walk + parse step. Carries the deduped events the
+/// async caller forwards to the coordinator, which derives the window summary
+/// and the API-rate cost from them (anchoring the window to the OAuth 5h
+/// reset). Constructed off the tokio runtime by `scan_events`.
 pub(crate) enum ScanResult {
-    /// Successful walk + parse. Includes both cells (cost may be `Err`
-    /// if no prices were available at task start).
+    /// Successful walk + parse + dedup.
     Ok {
-        jsonl: JsonlSnapshot,
-        cost: Result<Cost, String>,
+        events: Vec<UsageEvent>,
+        files_scanned: usize,
     },
     /// `find_jsonl_files` itself failed — the rescan never even started.
     Fatal { error: String },
 }
 
-/// Re-scan the projects directory, synthesize a `JsonlSnapshot` and
-/// (if a price table was loaded at task start) an `AnthropicApiCost`,
-/// and send both to the coordinator.
+/// Re-scan the projects directory and send the deduped events to the
+/// coordinator as a `ClaudeJsonl` update. The coordinator derives BOTH the
+/// window summary and the API-rate cost from these events (anchoring the
+/// window to the OAuth 5h reset), so this task no longer computes them — that
+/// keeps the live path identical to the one-shot CLI (AGENTS.md §4 #8).
 ///
 /// The sync I/O (`find_jsonl_files` + per-file `read_to_string` + parse +
-/// dedup) is wrapped in `tokio::task::spawn_blocking` so it does not
-/// block a tokio worker. The coordinator sends stay on the async side.
-async fn emit_jsonl_snapshot(
-    coord: &StateCoordinatorHandle,
-    projects_dir: &Path,
-    prices: Option<&PriceTable>,
-) {
+/// dedup) is wrapped in `tokio::task::spawn_blocking` so it does not block a
+/// tokio worker. The coordinator send stays on the async side.
+async fn emit_jsonl_snapshot(coord: &StateCoordinatorHandle, projects_dir: &Path) {
     let projects_dir_owned: PathBuf = projects_dir.to_path_buf();
-    // `compute_cost` takes `&PriceTable`; the blocking task moves owned
-    // data only, so clone the table into a fresh Arc-owned copy for
-    // moving. Cloning is cheap (the table is a small embedded JSON
-    // structure) and bounded by the bundled file size.
-    let prices_owned: Option<PriceTable> = prices.cloned();
 
-    let result = tokio::task::spawn_blocking(move || {
-        scan_and_compute(&projects_dir_owned, prices_owned.as_ref())
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || scan_events(&projects_dir_owned)).await;
 
     let scan = match result {
         Ok(r) => r,
@@ -189,35 +160,19 @@ async fn emit_jsonl_snapshot(
     };
 
     match scan {
-        ScanResult::Ok { jsonl, cost } => {
+        ScanResult::Ok {
+            events,
+            files_scanned,
+        } => {
             let _ = coord
                 .send(StateMsg::Update(SourceUpdate {
                     source: Source::ClaudeJsonl,
-                    result: Ok(SourcePartial::ClaudeJsonl(jsonl)),
+                    result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                        events: Arc::new(events),
+                        files_scanned,
+                    })),
                 }))
                 .await;
-
-            // Cost emit is separate so a price-load failure doesn't suppress
-            // the JSONL window snapshot (the two cells are independent in
-            // the UI).
-            match cost {
-                Ok(c) => {
-                    let _ = coord
-                        .send(StateMsg::Update(SourceUpdate {
-                            source: Source::AnthropicApiCost,
-                            result: Ok(SourcePartial::AnthropicApiCost(c)),
-                        }))
-                        .await;
-                }
-                Err(msg) => {
-                    let _ = coord
-                        .send(StateMsg::Update(SourceUpdate {
-                            source: Source::AnthropicApiCost,
-                            result: Err(msg),
-                        }))
-                        .await;
-                }
-            }
         }
         ScanResult::Fatal { error } => {
             let _ = coord
@@ -230,14 +185,16 @@ async fn emit_jsonl_snapshot(
     }
 }
 
-/// Synchronous scan + parse + compute. Runs on a blocking worker via
-/// `spawn_blocking`; does NOT touch the tokio runtime. Errors from
-/// individual JSONL files are logged at `warn!` and skipped (mirrors
+/// Synchronous walk + parse + dedup. Runs on a blocking worker via
+/// `spawn_blocking`; does NOT touch the tokio runtime. Errors from individual
+/// JSONL files are logged at `warn!` and skipped (mirrors
 /// `live_load_claude_events` in `balanze_cli`).
 ///
-/// `pub(crate)` so the safety-poll task can reuse it without duplicating
-/// the walk-parse-summarize-cost pipeline.
-pub(crate) fn scan_and_compute(projects_dir: &Path, prices: Option<&PriceTable>) -> ScanResult {
+/// `pub(crate)` so the safety-poll task can reuse it without duplicating the
+/// walk-parse-dedup pipeline. The window + cost synthesis lives in the
+/// coordinator (`state_coordinator::summarize_jsonl`), shared with the CLI, so
+/// the OAuth-anchored window is computed identically on both paths.
+pub(crate) fn scan_events(projects_dir: &Path) -> ScanResult {
     let files = match find_jsonl_files(projects_dir) {
         Ok(f) => f,
         Err(e) => {
@@ -266,24 +223,8 @@ pub(crate) fn scan_and_compute(projects_dir: &Path, prices: Option<&PriceTable>)
     }
     dedup_events(&mut all_events);
 
-    let now = chrono::Utc::now();
-    let summary = summarize_window(
-        &all_events,
-        now,
-        DEFAULT_WINDOW,
-        DEFAULT_BURN_WINDOW,
-        DEFAULT_MIN_BURN_EVENTS,
-        None, // window_anchor — OAuth-anchored math is 5b territory
-    );
-
-    let jsonl = JsonlSnapshot {
+    ScanResult::Ok {
+        events: all_events,
         files_scanned,
-        window: summary,
-    };
-    let cost = match prices {
-        Some(p) => Ok(compute_cost(&all_events, p)),
-        None => Err("price table unavailable (load failed at task start)".to_string()),
-    };
-
-    ScanResult::Ok { jsonl, cost }
+    }
 }

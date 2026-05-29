@@ -3,16 +3,21 @@
 //! notifies a `Sink` for side effects.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
+use anthropic_oauth::ClaudeOAuthSnapshot;
 use chrono::Utc;
+use claude_cost::PriceTable;
+use claude_parser::UsageEvent;
 use predictor::{predict, WindowSnapshot};
 use settings::Settings;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::messages::{Source, SourceUpdate, StateMsg};
+use crate::jsonl::summarize_jsonl;
+use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg};
 use crate::sink::Sink;
-use crate::snapshot::{merge_partial, record_error, Snapshot};
+use crate::snapshot::{record_error, Snapshot};
 
 /// History ring capacity for the predictor's `WindowSnapshot` series.
 /// 128 samples ≈ 10+ hours at the planned 5-min OAuth poll cadence —
@@ -22,12 +27,23 @@ const HISTORY_CAPACITY: usize = 128;
 
 /// Mutable state owned by the coordinator's single tokio task. Grouped
 /// into one struct so `handle_msg` takes one `&mut` instead of threading
-/// three. Never crosses a thread boundary — only `StateCoordinatorHandle`
+/// several. Never crosses a thread boundary — only `StateCoordinatorHandle`
 /// (a clone of the mpsc `Sender`) is shared.
 struct CoordinatorState {
     snapshot: Snapshot,
     history: VecDeque<WindowSnapshot>,
     last_settings: Option<Settings>,
+    /// Most recent deduped JSONL event slice (from the `ClaudeJsonl` source).
+    /// Cached so an OAuth update — which carries the authoritative 5h reset —
+    /// can re-derive the window with the correct anchor without the producer
+    /// having to re-send the events. `None` until the first JSONL update.
+    jsonl_events: Option<Arc<Vec<UsageEvent>>>,
+    /// `files_scanned` from the most recent JSONL update, carried alongside
+    /// `jsonl_events` so a re-anchor reproduces the same `JsonlSnapshot`.
+    files_scanned: usize,
+    /// Bundled LiteLLM price table, loaded once at startup. `None` if the
+    /// embedded table failed to load (then the cost cell carries an error).
+    prices: Option<PriceTable>,
 }
 
 /// Default mpsc capacity. AGENTS.md §3.2 mentions a "dropped state-coordinator
@@ -103,10 +119,27 @@ pub fn spawn_with_capacity<S: Sink>(
 }
 
 async fn run_loop<S: Sink>(mut rx: mpsc::Receiver<StateMsg>, mut sink: S) {
+    // Load the bundled LiteLLM price table once for the coordinator's lifetime.
+    // The table is embedded and never changes; a load failure (corrupt embed —
+    // shouldn't happen on a release build) degrades only the cost cell, not the
+    // window.
+    let prices = match claude_cost::load_bundled_prices() {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::error!(
+                "state_coordinator: bundled price table failed to load ({e}); \
+                 anthropic_api_cost will report an error on each JSONL update"
+            );
+            None
+        }
+    };
     let mut state = CoordinatorState {
         snapshot: Snapshot::empty(Utc::now()),
         history: VecDeque::with_capacity(HISTORY_CAPACITY),
         last_settings: None,
+        jsonl_events: None,
+        files_scanned: 0,
+        prices,
     };
     while let Some(msg) = rx.recv().await {
         handle_msg(&mut state, &mut sink, msg);
@@ -128,7 +161,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                     );
                 }
                 let merged_source = partial.source();
-                merge_partial(&mut state.snapshot, partial);
+                apply_partial(state, partial);
                 state.snapshot.fetched_at = Utc::now();
                 maybe_recompute_prediction(state, merged_source);
                 sink.on_snapshot(&state.snapshot);
@@ -152,6 +185,85 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             // via a settings-change broadcast.
             state.last_settings = Some(s);
         }
+    }
+}
+
+/// Apply one successful source partial to the snapshot. The coordinator is the
+/// sole writer of the in-memory `Snapshot` (AGENTS.md §4 #7), so all mutation
+/// is centralized here rather than in a free `merge_partial`.
+///
+/// Four sources write their cell + clear their own error slot directly.
+/// `ClaudeJsonl` is special: it carries raw events, not a finished snapshot, so
+/// the coordinator derives the window + cost via [`recompute_jsonl_cells`],
+/// anchoring the window to the OAuth 5h reset. `ClaudeOAuth` also triggers a
+/// re-derive, because a new reset changes that anchor.
+fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) {
+    match partial {
+        SourcePartial::ClaudeOAuth(o) => {
+            state.snapshot.claude_oauth = Some(o);
+            state.snapshot.claude_oauth_error = None;
+            // The OAuth feed carries the authoritative 5h reset; re-anchor the
+            // cached JSONL window so the live path matches the one-shot CLI.
+            recompute_jsonl_cells(state);
+        }
+        SourcePartial::ClaudeJsonl(input) => {
+            state.jsonl_events = Some(input.events);
+            state.files_scanned = input.files_scanned;
+            // A fresh successful scan clears the JSONL error slot.
+            state.snapshot.claude_jsonl_error = None;
+            recompute_jsonl_cells(state);
+        }
+        SourcePartial::CodexQuota(q) => {
+            state.snapshot.codex_quota = Some(q);
+            state.snapshot.codex_quota_error = None;
+        }
+        SourcePartial::OpenAiCosts(c) => {
+            state.snapshot.openai = Some(c);
+            state.snapshot.openai_error = None;
+        }
+        SourcePartial::ClaudeStatusline(p) => {
+            state.snapshot.claude_statusline = Some(p);
+            state.snapshot.claude_statusline_error = None;
+        }
+    }
+}
+
+/// Re-derive the two JSONL-fed cells (`claude_jsonl` window + `anthropic_api_cost`)
+/// from the cached event slice, anchoring the rolling window to the OAuth 5-hour
+/// reset when one is known. Called on every JSONL update (fresh events) AND on
+/// every OAuth update (the anchor may have changed) — this is the fix for the
+/// CLI≢watcher window divergence: both paths now run `summarize_jsonl` with the
+/// same anchor. No-op until the first JSONL events arrive.
+///
+/// Does NOT touch `claude_jsonl_error` (owned by the JSONL update path). It does
+/// own `anthropic_api_cost_error`, since that error is purely a function of
+/// price-table availability, which it evaluates here.
+fn recompute_jsonl_cells(state: &mut CoordinatorState) {
+    // Cheap Arc clone to drop the borrow on `state.jsonl_events` before we take
+    // `&mut state.snapshot` below.
+    let Some(events) = state.jsonl_events.clone() else {
+        return;
+    };
+    let anchor = state
+        .snapshot
+        .claude_oauth
+        .as_ref()
+        .and_then(ClaudeOAuthSnapshot::five_hour_reset);
+    let cells = summarize_jsonl(
+        &events,
+        Utc::now(),
+        state.files_scanned,
+        anchor,
+        state.prices.as_ref(),
+    );
+    state.snapshot.claude_jsonl = Some(cells.jsonl);
+    match cells.cost {
+        Ok(c) => {
+            state.snapshot.anthropic_api_cost = Some(c);
+            state.snapshot.anthropic_api_cost_error = None;
+        }
+        // Keep any prior cost data visible (stale-with-indicator); set the error.
+        Err(e) => state.snapshot.anthropic_api_cost_error = Some(e),
     }
 }
 
@@ -201,10 +313,13 @@ fn maybe_recompute_prediction(state: &mut CoordinatorState, merged_source: Sourc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messages::{Source, SourcePartial, SourceUpdate};
+    use crate::messages::{ClaudeJsonlInput, Source, SourcePartial, SourceUpdate};
     use crate::sink::{NullSink, Sink};
     use crate::snapshot::Snapshot;
-    use crate::test_support::{jsonl_snapshot, oauth_snapshot, openai_costs};
+    use crate::test_support::{
+        oauth_snapshot, oauth_snapshot_with_reset, openai_costs, sample_events,
+    };
+    use chrono::Duration;
     use predictor::PredictionState;
     use std::sync::{Arc, Mutex};
 
@@ -289,11 +404,15 @@ mod tests {
     #[tokio::test]
     async fn query_msg_returns_current_snapshot() {
         let (handle, _join) = spawn(NullSink);
-        // Seed the snapshot with one update.
+        // Seed the snapshot with one JSONL update (raw events; the coordinator
+        // derives the window + cost cells).
         handle
             .send(StateMsg::Update(SourceUpdate {
                 source: Source::ClaudeJsonl,
-                result: Ok(SourcePartial::ClaudeJsonl(jsonl_snapshot())),
+                result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                    events: Arc::new(sample_events()),
+                    files_scanned: 5,
+                })),
             }))
             .await
             .unwrap();
@@ -301,6 +420,122 @@ mod tests {
         let snap = handle.query().await.unwrap();
         assert!(snap.claude_jsonl.is_some());
         assert_eq!(snap.claude_jsonl.as_ref().unwrap().files_scanned, 5);
+    }
+
+    #[tokio::test]
+    async fn jsonl_update_derives_window_and_cost_cells() {
+        let (handle, _join) = spawn(NullSink);
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeJsonl,
+                result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                    events: Arc::new(sample_events()),
+                    files_scanned: 2,
+                })),
+            }))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        // The coordinator derives BOTH JSONL-fed cells from the raw events.
+        assert!(snap.claude_jsonl.is_some(), "window cell derived");
+        assert!(snap.claude_jsonl_error.is_none());
+        let cost = snap
+            .anthropic_api_cost
+            .expect("cost cell derived from the same events");
+        assert!(
+            cost.total_micro_usd > 0,
+            "sample models are in the bundled price table"
+        );
+        assert!(snap.anthropic_api_cost_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn oauth_update_reanchors_cached_jsonl_window() {
+        // The WS1 invariant: the window the watcher path produces must anchor
+        // to the OAuth 5h reset (parity with the one-shot CLI), even though
+        // JSONL events arrive in a separate message BEFORE the reset is known.
+        // A regression here reintroduces the CLI≢watcher divergence.
+        let (handle, _join) = spawn(NullSink);
+
+        // 1) JSONL events arrive first — no OAuth yet ⇒ now-relative window.
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeJsonl,
+                result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                    events: Arc::new(sample_events()),
+                    files_scanned: 1,
+                })),
+            }))
+            .await
+            .unwrap();
+
+        // 2) OAuth arrives with a strictly-future 5h reset.
+        let reset = Utc::now() + Duration::minutes(90);
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot_with_reset(reset))),
+            }))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        let window = snap.claude_jsonl.expect("jsonl cell present").window;
+        // Re-anchored: window_start is reset - 5h, NOT now - 5h.
+        assert_eq!(
+            window.window_start,
+            reset - window::DEFAULT_WINDOW,
+            "OAuth update must re-anchor the cached JSONL window to reset - 5h"
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_update_clears_only_its_own_error() {
+        // Cross-source isolation: a successful merge clears ONLY the merged
+        // source's error slot. Migrated from snapshot.rs now that snapshot
+        // mutation lives in the coordinator's `apply_partial`.
+        let (handle, _join) = spawn(NullSink);
+
+        // Seed two independent errors.
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::OpenAiCosts,
+                result: Err("openai 500".to_string()),
+            }))
+            .await
+            .unwrap();
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeJsonl,
+                result: Err("jsonl perm denied".to_string()),
+            }))
+            .await
+            .unwrap();
+
+        // A successful JSONL update clears its own error and leaves OpenAI's.
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeJsonl,
+                result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                    events: Arc::new(sample_events()),
+                    files_scanned: 1,
+                })),
+            }))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        assert!(snap.claude_jsonl.is_some());
+        assert!(
+            snap.claude_jsonl_error.is_none(),
+            "merged source's own error is cleared"
+        );
+        assert_eq!(
+            snap.openai_error.as_deref(),
+            Some("openai 500"),
+            "an unrelated source's error must be left untouched"
+        );
     }
 
     #[tokio::test]

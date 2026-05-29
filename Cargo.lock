@@ -5250,7 +5250,6 @@ dependencies = [
  "anyhow",
  "backoff",
  "chrono",
- "claude_cost",
  "claude_parser",
  "claude_statusline",
  "codex_local",
@@ -5265,7 +5264,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "window",
 ]
 
 [[package]]
