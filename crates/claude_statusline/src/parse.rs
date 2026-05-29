@@ -24,13 +24,30 @@ struct RawRateLimits {
 
 #[derive(Debug, Deserialize)]
 struct RawWindow {
-    // Optional so a partial window-shape change (a future field rename) degrades
-    // THIS window to `None` rather than failing the whole payload — see
-    // `window_or_drop`. A present-but-wrong-TYPE value still errors as
-    // `SchemaDrift` during deserialization.
+    // `#[serde(default)]` + `deserialize_non_null` make an ABSENT field degrade
+    // to `None` (forward-compat for a future field rename — see
+    // `window_or_drop`), while a present `null` or wrong-TYPE value still errors
+    // as `SchemaDrift`. Forward-compat covers renames, not corrupt/null values
+    // for a required numeric field.
+    #[serde(default, deserialize_with = "deserialize_non_null")]
     used_percentage: Option<f32>,
     /// Unix epoch SECONDS (per the documented schema).
+    #[serde(default, deserialize_with = "deserialize_non_null")]
     resets_at: Option<i64>,
+}
+
+/// Deserialize a *present* field but treat an explicit `null` as an error, not
+/// `None`. Paired with `#[serde(default)]` on the field: an ABSENT field → `None`
+/// (this fn isn't called), a present `null` → the inner `T::deserialize` fails
+/// (a required numeric can't be null) → `SchemaDrift`, a present value →
+/// `Some(value)`. So the degrade-to-`None` forward-compat applies only to
+/// genuinely-missing fields, never to null/corrupt values.
+fn deserialize_non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 /// Parse the Claude Code statusLine stdin payload. Pure, infallible except
@@ -64,11 +81,16 @@ pub fn parse(input: &str) -> Result<StatuslineSnapshot, StatuslineError> {
 /// statusLine field rename) degrades to `None` — that one window is dropped
 /// rather than failing the whole payload, so a single rename can't blank the
 /// user's shell prompt or take out the other window + the session cost. A
-/// present-but-WRONG-TYPE field still surfaces as `SchemaDrift` upstream (it
-/// fails `serde` deserialization before we get here). A dropped window is logged
-/// at `warn!` so the drift stays visible to operators (a no-op when no tracing
-/// subscriber is installed — e.g. the bare `balanze-cli statusline` shell
-/// command — so it never pollutes the prompt).
+/// present `null` or wrong-TYPE field still surfaces as `SchemaDrift` upstream
+/// (it fails `serde` before we get here — see `deserialize_non_null`), so
+/// genuine corruption is not silently swallowed.
+///
+/// A dropped window is logged at `warn!`. `balanze-cli` installs a `tracing`
+/// subscriber for every subcommand (including `statusline`), so the warning is
+/// observable on stderr when the env filter enables warn-level (e.g.
+/// `RUST_LOG=warn`); it goes to stderr, never the statusLine's stdout, so it
+/// can't pollute the prompt. With no subscriber installed (a library embedding
+/// the parser) it is a silent no-op.
 fn window_or_drop(name: &str, raw: Option<RawWindow>) -> Option<RateWindow> {
     let raw = raw?;
     match (raw.used_percentage, raw.resets_at) {
@@ -189,6 +211,19 @@ mod tests {
             Some(2_500_000),
             "session cost still parsed"
         );
+    }
+
+    #[test]
+    fn explicit_null_required_field_is_schema_drift_not_dropped() {
+        // An explicit `null` for a required numeric is corruption, not a missing
+        // field — it must hard-error (SchemaDrift), NOT silently drop the window
+        // (which `Option<T>` would do by mapping null → None). Distinguishes
+        // absent (degrade) from present-null (error).
+        let body = r#"{"rate_limits":{"five_hour":{"used_percentage":1.0,"resets_at":null}}}"#;
+        match parse(body) {
+            Err(StatuslineError::SchemaDrift { .. }) => {}
+            other => panic!("expected SchemaDrift for explicit null, got {other:?}"),
+        }
     }
 
     #[test]
