@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -50,6 +51,11 @@ pub fn candidate_claude_projects_dirs() -> Vec<PathBuf> {
 /// exists. If none exist, returns `ParseError::FileMissing` with the canonical
 /// `<home>/.claude/projects` path (the expected default — XDG / `.config`
 /// candidates are fallbacks, not the default).
+///
+/// To read events from EVERY existing root (a dual-install machine can have
+/// both `~/.claude/projects` and `~/.config/claude/projects`), use
+/// [`find_all_claude_projects_dirs`] instead — this single-root accessor is for
+/// callers that just need the one preferred directory.
 pub fn find_claude_projects_dir() -> Result<PathBuf, ParseError> {
     let candidates = candidate_claude_projects_dirs();
     for c in &candidates {
@@ -65,6 +71,44 @@ pub fn find_claude_projects_dir() -> Result<PathBuf, ParseError> {
         .or_else(|| candidates.into_iter().next())
         .unwrap_or_else(|| PathBuf::from(".claude/projects"));
     Err(ParseError::FileMissing(primary))
+}
+
+/// Every EXISTING Claude Code projects directory from the candidate list.
+///
+/// Unlike [`find_claude_projects_dir`] (which returns only the FIRST existing
+/// candidate), this returns ALL of them. A machine that has both
+/// `~/.claude/projects` and `~/.config/claude/projects` — e.g. after Claude
+/// Code's path migration, or a dual install — would otherwise have the events
+/// under the non-preferred root silently undercounted. Callers walk every
+/// returned root and concatenate; `dedup_events` collapses any session that
+/// appears under more than one root by `(message_id, request_id)`.
+///
+/// Roots that canonicalize to the same physical directory (e.g. one is a
+/// symlink to the other) are returned once, so their files aren't walked twice.
+/// Empty vec ⇒ no projects directory exists anywhere.
+pub fn find_all_claude_projects_dirs() -> Vec<PathBuf> {
+    existing_unique_dirs(candidate_claude_projects_dirs())
+}
+
+/// Filter `candidates` to those that exist on disk, deduping any that resolve
+/// to the same physical directory (via `canonicalize`). Preserves candidate
+/// order. Pure-ish (touches the filesystem for `exists` / `canonicalize`) and
+/// env-free, so it's unit-testable against tempdir candidate lists.
+fn existing_unique_dirs(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut out = Vec::new();
+    for c in candidates {
+        if !c.exists() {
+            continue;
+        }
+        // Dedup by canonical path so a symlinked root isn't walked twice;
+        // fall back to the literal path if canonicalize fails (rare).
+        let key = c.canonicalize().unwrap_or_else(|_| c.clone());
+        if seen.insert(key) {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Recursively find all `*.jsonl` files under `root`.
@@ -298,5 +342,61 @@ mod tests {
         let candidates = candidate_claude_projects_dirs_in(dir.path(), Some(&xdg_root));
         let found = candidates.iter().find(|p| p.exists()).cloned();
         assert_eq!(found, Some(xdg_projects));
+    }
+
+    // --- find_all_claude_projects_dirs / existing_unique_dirs ---
+
+    #[test]
+    fn find_all_unions_both_existing_roots() {
+        // The WS2 fix: a machine with BOTH ~/.claude/projects and
+        // ~/.config/claude/projects must walk both (single-root selection
+        // silently undercounts). Order follows the candidate list.
+        let dir = tempfile::tempdir().unwrap();
+        let dot_claude = dir.path().join(".claude").join("projects");
+        let dot_config = dir.path().join(".config").join("claude").join("projects");
+        fs::create_dir_all(&dot_claude).unwrap();
+        fs::create_dir_all(&dot_config).unwrap();
+        let got = existing_unique_dirs(candidate_claude_projects_dirs_in(dir.path(), None));
+        assert_eq!(got, vec![dot_claude, dot_config]);
+    }
+
+    #[test]
+    fn find_all_returns_single_existing_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let dot_config = dir.path().join(".config").join("claude").join("projects");
+        fs::create_dir_all(&dot_config).unwrap();
+        let got = existing_unique_dirs(candidate_claude_projects_dirs_in(dir.path(), None));
+        assert_eq!(got, vec![dot_config]);
+    }
+
+    #[test]
+    fn find_all_empty_when_no_root_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let got = existing_unique_dirs(candidate_claude_projects_dirs_in(dir.path(), None));
+        assert!(got.is_empty());
+    }
+
+    // Symlink dedup is Unix-only (Windows symlink creation needs privilege and
+    // the canonicalize semantics differ).
+    #[cfg(unix)]
+    #[test]
+    fn find_all_dedups_roots_that_resolve_to_the_same_dir() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let dot_claude = dir.path().join(".claude").join("projects");
+        fs::create_dir_all(&dot_claude).unwrap();
+        // Make ~/.config/claude a symlink to ~/.claude, so
+        // ~/.config/claude/projects resolves to the same physical dir.
+        let config = dir.path().join(".config");
+        fs::create_dir_all(&config).unwrap();
+        symlink(dir.path().join(".claude"), config.join("claude")).unwrap();
+
+        let got = existing_unique_dirs(candidate_claude_projects_dirs_in(dir.path(), None));
+        assert_eq!(
+            got.len(),
+            1,
+            "two roots resolving to one physical dir must dedup; got {got:?}"
+        );
+        assert_eq!(got[0], dot_claude, "the first candidate wins");
     }
 }
