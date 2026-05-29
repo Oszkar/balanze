@@ -161,10 +161,17 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                     );
                 }
                 let merged_source = partial.source();
-                apply_partial(state, partial);
+                let derived_cost_error = apply_partial(state, partial);
                 state.snapshot.fetched_at = Utc::now();
                 maybe_recompute_prediction(state, merged_source);
                 sink.on_snapshot(&state.snapshot);
+                // The JSONL-derived cost can fail (no price table) inside an
+                // otherwise-successful JSONL/OAuth merge. Its error slot is set
+                // in the snapshot above; also surface it on the degraded-state
+                // channel so sinks emitting `degraded_state` don't miss it.
+                if let Some(err) = derived_cost_error {
+                    sink.on_degraded(Source::AnthropicApiCost, &err);
+                }
             }
             Err(err) => {
                 record_error(&mut state.snapshot, source, &err);
@@ -197,33 +204,40 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
 /// the coordinator derives the window + cost via [`recompute_jsonl_cells`],
 /// anchoring the window to the OAuth 5h reset. `ClaudeOAuth` also triggers a
 /// re-derive, because a new reset changes that anchor.
-fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) {
+///
+/// Returns `Some(err)` if the derived cost failed during this update, so
+/// `handle_msg` can fire `Sink::on_degraded(AnthropicApiCost, ..)`.
+#[must_use]
+fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) -> Option<String> {
     match partial {
         SourcePartial::ClaudeOAuth(o) => {
             state.snapshot.claude_oauth = Some(o);
             state.snapshot.claude_oauth_error = None;
             // The OAuth feed carries the authoritative 5h reset; re-anchor the
             // cached JSONL window so the live path matches the one-shot CLI.
-            recompute_jsonl_cells(state);
+            recompute_jsonl_cells(state)
         }
         SourcePartial::ClaudeJsonl(input) => {
             state.jsonl_events = Some(input.events);
             state.files_scanned = input.files_scanned;
             // A fresh successful scan clears the JSONL error slot.
             state.snapshot.claude_jsonl_error = None;
-            recompute_jsonl_cells(state);
+            recompute_jsonl_cells(state)
         }
         SourcePartial::CodexQuota(q) => {
             state.snapshot.codex_quota = Some(q);
             state.snapshot.codex_quota_error = None;
+            None
         }
         SourcePartial::OpenAiCosts(c) => {
             state.snapshot.openai = Some(c);
             state.snapshot.openai_error = None;
+            None
         }
         SourcePartial::ClaudeStatusline(p) => {
             state.snapshot.claude_statusline = Some(p);
             state.snapshot.claude_statusline_error = None;
+            None
         }
     }
 }
@@ -238,12 +252,17 @@ fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) {
 /// Does NOT touch `claude_jsonl_error` (owned by the JSONL update path). It does
 /// own `anthropic_api_cost_error`, since that error is purely a function of
 /// price-table availability, which it evaluates here.
-fn recompute_jsonl_cells(state: &mut CoordinatorState) {
+///
+/// Returns `Some(err)` when the derived cost failed (no price table). The caller
+/// (`handle_msg`) surfaces it through `Sink::on_degraded` in addition to setting
+/// the snapshot's `anthropic_api_cost_error` slot — so sinks that emit the
+/// `degraded_state` event (the v0.3 Tauri UI) don't miss a cost degradation now
+/// that the cost is derived here rather than arriving as its own `Err` update.
+#[must_use]
+fn recompute_jsonl_cells(state: &mut CoordinatorState) -> Option<String> {
     // Cheap Arc clone to drop the borrow on `state.jsonl_events` before we take
     // `&mut state.snapshot` below.
-    let Some(events) = state.jsonl_events.clone() else {
-        return;
-    };
+    let events = state.jsonl_events.clone()?;
     let anchor = state
         .snapshot
         .claude_oauth
@@ -261,9 +280,14 @@ fn recompute_jsonl_cells(state: &mut CoordinatorState) {
         Ok(c) => {
             state.snapshot.anthropic_api_cost = Some(c);
             state.snapshot.anthropic_api_cost_error = None;
+            None
         }
-        // Keep any prior cost data visible (stale-with-indicator); set the error.
-        Err(e) => state.snapshot.anthropic_api_cost_error = Some(e),
+        // Keep any prior cost data visible (stale-with-indicator); set the error
+        // slot AND return it so the caller can fire `on_degraded`.
+        Err(e) => {
+            state.snapshot.anthropic_api_cost_error = Some(e.clone());
+            Some(e)
+        }
     }
 }
 
@@ -535,6 +559,38 @@ mod tests {
             snap.openai_error.as_deref(),
             Some("openai 500"),
             "an unrelated source's error must be left untouched"
+        );
+    }
+
+    #[test]
+    fn cost_failure_sets_error_and_is_returned_for_on_degraded() {
+        // When the bundled price table is unavailable, the JSONL-derived cost
+        // fails. `recompute_jsonl_cells` must set `anthropic_api_cost_error` AND
+        // return the error so `handle_msg` fires `on_degraded` — the cost
+        // degradation must not be silently buried in the snapshot (pre-refactor
+        // it arrived as its own `Err` update that reached `on_degraded`).
+        let mut state = CoordinatorState {
+            snapshot: Snapshot::empty(Utc::now()),
+            history: VecDeque::new(),
+            last_settings: None,
+            jsonl_events: Some(Arc::new(sample_events())),
+            files_scanned: 1,
+            prices: None, // bundled table "unavailable"
+        };
+
+        let returned = recompute_jsonl_cells(&mut state);
+
+        assert!(
+            returned.is_some(),
+            "cost failure must be returned so the caller can fire on_degraded"
+        );
+        assert!(
+            state.snapshot.anthropic_api_cost_error.is_some(),
+            "the error slot is also set on the snapshot"
+        );
+        assert!(
+            state.snapshot.claude_jsonl.is_some(),
+            "the window cell is still produced despite the cost failure"
         );
     }
 
