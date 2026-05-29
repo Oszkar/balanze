@@ -283,6 +283,13 @@ impl SnapshotSources for FixtureSources {
     }
 }
 
+// NOTE: despite the name, this currently exercises only the CLI's `compose()`
+// path — it does NOT assert CLI ≡ watcher parity. The watcher builds snapshots
+// through its own `scan_and_compute` pipeline (crates/watcher/src/tasks/jsonl.rs)
+// and notably passes `window_anchor: None` where `compose()` anchors to the
+// OAuth 5h reset, so the two paths can diverge on the JSONL rolling window.
+// A true parity assertion (or routing the watcher through `compose()`) is a
+// tracked follow-up from the v0.2 review.
 #[tokio::test]
 async fn compose_parity_against_fixtures() {
     // Same fixed `now` as `full_pipeline_populates_claude_jsonl_in_snapshot`
