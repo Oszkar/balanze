@@ -30,7 +30,8 @@ use anthropic_oauth::{
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
 use claude_parser::{
-    dedup_events, find_claude_projects_dir, find_jsonl_files, parse_str, UsageEvent,
+    dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir, find_jsonl_files,
+    parse_str, UsageEvent,
 };
 use openai_client::{
     costs_this_month, OpenAiCosts, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE,
@@ -577,7 +578,7 @@ fn print_readiness(
         AnthropicOAuthStatus::NotFound => "✗ not configured — run `claude login`",
     };
     // Anthropic API $ derivation only needs JSONL files; OAuth isn't required.
-    let claude_cost = if claude_parser::find_claude_projects_dir().is_ok() {
+    let claude_cost = if !find_all_claude_projects_dirs().is_empty() {
         "✓ ready (claude_cost — estimated from JSONL)"
     } else {
         "✗ no Claude Code JSONL found"
@@ -922,12 +923,41 @@ impl snapshot_composer::SnapshotSources for LiveSources {
 /// are logged (warn level) but don't fail the whole call — matches the
 /// existing tolerant policy.
 fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
-    let claude_dir = find_claude_projects_dir()?;
-    let files = find_jsonl_files(&claude_dir)?;
+    // Union ALL existing project roots: a dual-install machine can have both
+    // ~/.claude/projects and ~/.config/claude/projects, and reading only the
+    // first silently undercounts events + cost. `dedup_events` below collapses
+    // any session that appears under more than one root.
+    let roots = find_all_claude_projects_dirs();
+    if roots.is_empty() {
+        // No projects dir anywhere — surface the canonical FileMissing error
+        // (compose maps it to claude_jsonl_error), preserving the prior
+        // single-root "JSONL source failed" behavior rather than an empty-Ok.
+        find_claude_projects_dir()?;
+    }
+
+    let mut files = Vec::new();
+    let mut walk_err = None;
+    for root in &roots {
+        match find_jsonl_files(root) {
+            Ok(mut f) => files.append(&mut f),
+            Err(e) => {
+                warn!("jsonl: skipping root {} ({e})", root.display());
+                walk_err.get_or_insert(e);
+            }
+        }
+    }
+    // Every existing root failed to walk (e.g. permission denied) ⇒ surface it
+    // rather than reporting an empty window. A partial failure (some roots
+    // walked) keeps what we got.
+    if files.is_empty() {
+        if let Some(e) = walk_err {
+            return Err(e.into());
+        }
+    }
     info!(
-        "jsonl: scanning {} files under {}",
+        "jsonl: scanning {} files across {} root(s)",
         files.len(),
-        claude_dir.display()
+        roots.len()
     );
 
     let mut all_events: Vec<UsageEvent> = Vec::new();

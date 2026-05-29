@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use claude_parser::find_claude_projects_dir;
+use claude_parser::find_all_claude_projects_dirs;
 use claude_statusline::{read_snapshot, FileIoError};
 use codex_local::read_codex_quota;
 use state_coordinator::{
@@ -48,17 +48,16 @@ fn statusline_snapshot_path() -> Option<PathBuf> {
 /// first few milliseconds.
 pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
-        // Resolve JSONL projects dir once — it doesn't change at runtime.
-        let projects_dir = match find_claude_projects_dir() {
-            Ok(p) => Some(p),
-            Err(e) => {
-                tracing::warn!(
-                    "watcher/safety: no Claude projects dir found ({e}); \
-                     JSONL/cost cells won't be safety-polled"
-                );
-                None
-            }
-        };
+        // Resolve ALL JSONL project roots once — they don't change at runtime.
+        // A dual-install machine can have both ~/.claude/projects and
+        // ~/.config/claude/projects; empty ⇒ Claude Code not installed.
+        let roots = find_all_claude_projects_dirs();
+        if roots.is_empty() {
+            tracing::warn!(
+                "watcher/safety: no Claude projects dir found; \
+                 JSONL/cost cells won't be safety-polled"
+            );
+        }
 
         let statusline_path = statusline_snapshot_path();
 
@@ -78,9 +77,9 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             tracing::debug!("watcher/safety: tick");
 
             // ── JSONL (window + cost are derived in the coordinator) ──────────
-            if let Some(ref dir) = projects_dir {
-                let dir_owned = dir.clone();
-                let scan = tokio::task::spawn_blocking(move || scan_events(&dir_owned)).await;
+            if !roots.is_empty() {
+                let roots_owned = roots.clone();
+                let scan = tokio::task::spawn_blocking(move || scan_events(&roots_owned)).await;
 
                 match scan {
                     Ok(ScanResult::Ok {
