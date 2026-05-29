@@ -17,6 +17,9 @@ name: ci
 #   workflow also matrix-builds at tag time, so you have two layers of
 #   pre-release validation.
 # - `deny` is fast (~30s) and platform-agnostic — always on.
+# - `pr-title` validates the PR title against Conventional Commits (PRs only) —
+#   the server-side backstop for the local `commit-msg` hook, since squash-merge
+#   lands the PR title as the commit subject on `main`.
 
 on:
   push:
@@ -124,3 +127,32 @@ jobs:
         with:
           command: check
           arguments: --workspace
+
+  pr-title:
+    name: pr-title
+    # Squash-merge lands the PR title as the commit subject on `main`, so it must
+    # match the same Conventional Commits grammar the local `commit-msg` hook
+    # enforces (.lefthook/commit-msg/conventional.sh) — this is the server-side
+    # backstop for a `--no-verify` push. Only meaningful on PRs (push / schedule
+    # / dispatch have no PR title), so it's gated to `pull_request`.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        # PR title passed via env (not inline `${{ }}`) so a crafted title can't
+        # inject shell. Regex mirrors conventional.sh exactly.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf 'PR title: %s\n' "$PR_TITLE"
+          if printf '%s' "$PR_TITLE" | grep -qE '^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([^)]+\))?!?: .+'; then
+            echo "OK: matches Conventional Commits."
+          else
+            {
+              echo "::error::PR title is not Conventional Commits (squash-merge lands it on main)."
+              echo "  Format: <type>(optional-scope)(!)?: <subject>"
+              echo "  Types:  feat fix chore docs style refactor perf test build ci revert"
+              echo "  Got:    $PR_TITLE"
+            } >&2
+            exit 1
+          fi
