@@ -1,4 +1,4 @@
-use anthropic_oauth::{fetch_usage, refresh_access_token, OAuthError};
+use anthropic_oauth::{OAuthError, fetch_usage, refresh_access_token};
 use std::time::Duration;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

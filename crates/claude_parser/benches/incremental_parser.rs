@@ -39,7 +39,7 @@
 use std::io::Write;
 
 use claude_parser::IncrementalParser;
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use tempfile::NamedTempFile;
 
 /// Realistic assistant-line shape. Token counts vary so the parser's

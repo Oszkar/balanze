@@ -24,7 +24,7 @@
 use chrono::{TimeZone, Utc};
 use claude_cost::{compute_cost, load_bundled_prices};
 use claude_parser::{AccountType, DataSource, Provider, UsageEvent};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 /// Build a deterministic slice of N synthetic events spread across three
 /// real model names from the bundled price table. Mixing models exercises

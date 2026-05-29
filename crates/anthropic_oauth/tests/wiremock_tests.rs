@@ -5,7 +5,7 @@
 //! - maps other non-200 status to OAuthError::UnexpectedStatus
 //! - propagates network errors
 
-use anthropic_oauth::{fetch_usage, OAuthError};
+use anthropic_oauth::{OAuthError, fetch_usage};
 use reqwest::Client;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

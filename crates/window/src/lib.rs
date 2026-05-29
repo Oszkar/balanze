@@ -391,8 +391,8 @@ mod tests {
     #[test]
     fn anchored_window_uses_reset_minus_window_not_now() {
         let n = now(); // 2026-05-14 12:00:00
-                       // Server says the 5h window resets 2h from now → the active anchored
-                       // window is [reset - 5h, reset) = [n - 3h, n + 2h).
+        // Server says the 5h window resets 2h from now → the active anchored
+        // window is [reset - 5h, reset) = [n - 3h, n + 2h).
         let reset = n + Duration::hours(2);
         // One event 4h ago: INSIDE the legacy now-5h window [n - 5h, n) but
         // OUTSIDE the anchored window (which starts at n - 3h). Same input,
@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn anchored_window_with_past_reset_falls_back_to_now_window() {
         let n = now(); // 2026-05-14 12:00:00
-                       // Server reports a reset 1h in the PAST (skew / rollover-echo).
+        // Server reports a reset 1h in the PAST (skew / rollover-echo).
         let stale_reset = n - Duration::hours(1);
         // A fresh event 30 min ago: inside the legacy now-5h window, and it is
         // AFTER stale_reset — the buggy half-open bound would drop it.

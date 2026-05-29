@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use reqwest::{Client, StatusCode};
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de};
 use tracing::debug;
 
 use crate::types::{LineItemCost, OpenAiCosts, OpenAiError};

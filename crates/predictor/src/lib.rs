@@ -214,11 +214,7 @@ fn compute_variance(history: &[WindowSnapshot], ewma_rate: f64) -> f64 {
         sum_sq += d * d;
         n += 1;
     }
-    if n == 0 {
-        0.0
-    } else {
-        sum_sq / n as f64
-    }
+    if n == 0 { 0.0 } else { sum_sq / n as f64 }
 }
 
 // ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use claude_statusline::{read_snapshot, FileIoError};
+use claude_statusline::{FileIoError, read_snapshot};
 use notify::{RecursiveMode, Watcher as _};
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
 use tokio::sync::Notify;

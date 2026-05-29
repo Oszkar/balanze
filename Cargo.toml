@@ -14,8 +14,8 @@ default-members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.1"
-edition = "2021"
-rust-version = "1.77"
+edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 authors = ["Oszkar"]
 # All workspace crates are project-internal — never published to crates.io.

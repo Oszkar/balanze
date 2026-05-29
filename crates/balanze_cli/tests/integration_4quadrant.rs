@@ -22,11 +22,11 @@
 use std::path::PathBuf;
 
 use claude_cost::{compute_cost, load_bundled_prices};
-use claude_parser::{dedup_events, find_jsonl_files, parse_str, UsageEvent};
+use claude_parser::{UsageEvent, dedup_events, find_jsonl_files, parse_str};
 use codex_local::{find_latest_session, read_latest_quota_snapshot};
-use snapshot_composer::{compose, SnapshotSources};
-use state_coordinator::{summarize_jsonl, JsonlSnapshot, Snapshot};
-use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
+use snapshot_composer::{SnapshotSources, compose};
+use state_coordinator::{JsonlSnapshot, Snapshot, summarize_jsonl};
+use window::{DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW, summarize_window};
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")

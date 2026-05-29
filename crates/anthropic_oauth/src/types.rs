@@ -174,7 +174,9 @@ pub enum OAuthError {
         source: std::io::Error,
     },
 
-    #[error("oauth bearer expired or invalid (HTTP 401) — user must re-run `claude login` or refresh token must be exchanged")]
+    #[error(
+        "oauth bearer expired or invalid (HTTP 401) — user must re-run `claude login` or refresh token must be exchanged"
+    )]
     AuthExpired,
 
     #[error("oauth refresh-token grant failed (HTTP {status}): {body}")]

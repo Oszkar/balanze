@@ -14,7 +14,7 @@
 //! branches.
 
 use anyhow::Result;
-use state_coordinator::{spawn as spawn_coord, Sink};
+use state_coordinator::{Sink, spawn as spawn_coord};
 use tokio::sync::mpsc;
 use watcher::Watcher;
 

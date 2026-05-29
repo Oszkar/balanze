@@ -9,7 +9,7 @@ use anthropic_oauth::ClaudeOAuthSnapshot;
 use chrono::Utc;
 use claude_cost::PriceTable;
 use claude_parser::UsageEvent;
-use predictor::{predict, WindowSnapshot};
+use predictor::{WindowSnapshot, predict};
 use settings::Settings;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 use crate::jsonl::summarize_jsonl;
 use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg};
 use crate::sink::Sink;
-use crate::snapshot::{record_error, Snapshot};
+use crate::snapshot::{Snapshot, record_error};
 
 /// History ring capacity for the predictor's `WindowSnapshot` series.
 /// 128 samples ≈ 10+ hours at the planned 5-min OAuth poll cadence —

@@ -246,9 +246,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let sessions = tmp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
-        std::env::set_var(CODEX_CONFIG_DIR_ENV, tmp.path());
+        // SAFETY: env-mutating tests are serialized via ENV_MUTEX (held above);
+        // test-only CODEX_CONFIG_DIR override. set_var/remove_var are unsafe as
+        // of edition 2024.
+        unsafe { std::env::set_var(CODEX_CONFIG_DIR_ENV, tmp.path()) };
         let resolved = find_codex_sessions_dir().unwrap();
-        std::env::remove_var(CODEX_CONFIG_DIR_ENV);
+        unsafe { std::env::remove_var(CODEX_CONFIG_DIR_ENV) };
         assert_eq!(resolved, sessions);
     }
 
@@ -257,9 +260,11 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let nonexistent = tmp.path().join("does-not-exist");
-        std::env::set_var(CODEX_CONFIG_DIR_ENV, &nonexistent);
+        // SAFETY: serialized via ENV_MUTEX (held above); test-only env override.
+        // set_var/remove_var are unsafe as of edition 2024.
+        unsafe { std::env::set_var(CODEX_CONFIG_DIR_ENV, &nonexistent) };
         let result = find_codex_sessions_dir();
-        std::env::remove_var(CODEX_CONFIG_DIR_ENV);
+        unsafe { std::env::remove_var(CODEX_CONFIG_DIR_ENV) };
         match result {
             Err(ParseError::FileMissing(p)) => {
                 assert!(p.to_string_lossy().contains("does-not-exist"));
@@ -323,7 +328,7 @@ mod tests {
         touch_jsonl(&root.join("a/rollout-old.jsonl"), "{}", -3600); // 1h ago
         touch_jsonl(&root.join("b/rollout-new.jsonl"), "{}", -60); // 1min ago
         touch_jsonl(&root.join("c/rollout-mid.jsonl"), "{}", -1800); // 30min ago
-                                                                     // Non-matching files must be ignored.
+        // Non-matching files must be ignored.
         touch_jsonl(&root.join("c/random.jsonl"), "{}", -10);
         touch_jsonl(&root.join("c/rollout-foo.txt"), "{}", -10);
 
@@ -380,9 +385,12 @@ mod tests {
         let newer_content = format!("{SESSION_META}\n");
         touch_jsonl(&newer, &newer_content, -60); // 1min ago
 
-        std::env::set_var(CODEX_CONFIG_DIR_ENV, tmp.path());
+        // SAFETY: env-mutating tests are serialized via ENV_MUTEX (held above);
+        // test-only CODEX_CONFIG_DIR override. set_var/remove_var are unsafe as
+        // of edition 2024.
+        unsafe { std::env::set_var(CODEX_CONFIG_DIR_ENV, tmp.path()) };
         let result = crate::read_codex_quota();
-        std::env::remove_var(CODEX_CONFIG_DIR_ENV);
+        unsafe { std::env::remove_var(CODEX_CONFIG_DIR_ENV) };
 
         let snap = result
             .unwrap()
@@ -414,9 +422,12 @@ mod tests {
             -3600,
         );
 
-        std::env::set_var(CODEX_CONFIG_DIR_ENV, tmp.path());
+        // SAFETY: env-mutating tests are serialized via ENV_MUTEX (held above);
+        // test-only CODEX_CONFIG_DIR override. set_var/remove_var are unsafe as
+        // of edition 2024.
+        unsafe { std::env::set_var(CODEX_CONFIG_DIR_ENV, tmp.path()) };
         let result = crate::read_codex_quota();
-        std::env::remove_var(CODEX_CONFIG_DIR_ENV);
+        unsafe { std::env::remove_var(CODEX_CONFIG_DIR_ENV) };
 
         assert!(
             result.unwrap().is_none(),

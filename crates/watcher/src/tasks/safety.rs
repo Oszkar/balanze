@@ -16,14 +16,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use claude_parser::find_all_claude_projects_dirs;
-use claude_statusline::{read_snapshot, FileIoError};
+use claude_statusline::{FileIoError, read_snapshot};
 use codex_local::read_codex_quota;
 use state_coordinator::{
     ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg,
 };
 use tokio::task::JoinHandle;
 
-use super::jsonl::{scan_events, ScanResult};
+use super::jsonl::{ScanResult, scan_events};
 use crate::errors::WatcherError;
 
 // Re-export of the statusline snapshot-path helper — mirrored here so the

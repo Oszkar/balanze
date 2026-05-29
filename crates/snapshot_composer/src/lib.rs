@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use claude_parser::UsageEvent;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
-use state_coordinator::{summarize_jsonl, JsonlSnapshot, Snapshot};
+use state_coordinator::{JsonlSnapshot, Snapshot, summarize_jsonl};
 use tracing::{info, warn};
 
 /// The four I/O-bound source fetches `compose` needs. CLI (`LiveSources`),

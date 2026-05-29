@@ -23,7 +23,7 @@
 
 use std::fs;
 
-use claude_cost::{compute_cost, load_bundled_prices, PRICE_TABLE_COMMIT, PRICE_TABLE_DATE};
+use claude_cost::{PRICE_TABLE_COMMIT, PRICE_TABLE_DATE, compute_cost, load_bundled_prices};
 use claude_parser::{dedup_events, find_jsonl_files, parse_str};
 
 fn main() -> anyhow::Result<()> {
