@@ -283,6 +283,11 @@ fn recompute_jsonl_cells(state: &mut CoordinatorState) -> Option<String> {
 
 /// Recompute `snapshot.pace` from the current OAuth cadence bars. Only an OAuth
 /// merge changes the cadence data, so other sources are a no-op.
+///
+// TODO: also derive pace from the statusline feed. During an active Claude Code
+// session the statusline payload carries fresh `rate_limits` and is the live
+// backbone (OAuth is the backoff'd, 429-prone fallback), so OAuth-only pace can
+// go stale or empty exactly when the user is most active. Not yet wired.
 fn recompute_pace(state: &mut CoordinatorState, merged_source: Source) {
     if merged_source != Source::ClaudeOAuth {
         return;

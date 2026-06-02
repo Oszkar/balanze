@@ -29,10 +29,16 @@ pub struct WindowPace {
 }
 
 fn window_len_for(key: &str) -> Option<Duration> {
-    match key {
-        "five_hour" => Some(DEFAULT_WINDOW),
-        "seven_day" => Some(SEVEN_DAY_WINDOW),
-        _ => None,
+    // Cadence keys are model-specific in practice (`seven_day_sonnet`,
+    // `seven_day_opus`, `seven_day_oauth_apps`, …), not a bare `seven_day`, so
+    // match by family prefix — otherwise real Max-account 7-day windows are
+    // silently dropped from the pace view.
+    if key.starts_with("five_hour") {
+        Some(DEFAULT_WINDOW)
+    } else if key.starts_with("seven_day") {
+        Some(SEVEN_DAY_WINDOW)
+    } else {
+        None
     }
 }
 
@@ -272,6 +278,29 @@ mod tests {
         assert!(
             result.is_empty(),
             "unknown cadence key must be filtered out; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn pace_for_oauth_maps_model_specific_seven_day_variants() {
+        // Real Max accounts report model-specific 7-day cadences (e.g.
+        // `seven_day_sonnet`), NOT a bare `seven_day`. They must still map to
+        // the 7-day window, not be dropped.
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now + chrono::Duration::days(7)
+            - chrono::Duration::days(3)
+            - chrono::Duration::hours(12); // 50% elapsed
+        let oauth = make_oauth(&[("seven_day_sonnet", 25.0, resets_at)]);
+        let result = pace_for_oauth(&oauth, now);
+        assert_eq!(
+            result.len(),
+            1,
+            "seven_day_sonnet must produce a pace entry"
+        );
+        assert_eq!(result[0].key, "seven_day_sonnet");
+        assert!(
+            (result[0].elapsed_fraction - 0.5).abs() < 1e-9,
+            "must use the 7-day window length"
         );
     }
 

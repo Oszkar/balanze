@@ -1594,16 +1594,27 @@ fn compact_anthropic_cost(s: &Snapshot) -> String {
 
 /// The JSONL list-price estimate, rendered as a clearly-secondary insight
 /// OUTSIDE the matrix — what the local Claude Code usage would cost at API
-/// list prices. Subscription leverage, never billed. `None` when there's no
-/// JSONL data to estimate from.
+/// list prices. Subscription leverage, never billed. Also surfaces JSONL /
+/// cost-synthesis failures here: the measured-only matrix cell can't show them
+/// (it's real-billed-$ only), so without this line those errors would be
+/// invisible in the compact view. `None` only when there's genuinely no data
+/// and no error.
 fn compact_subscription_leverage(s: &Snapshot) -> Option<String> {
-    match &s.anthropic_api_cost {
-        Some(cost) if cost.total_event_count > 0 => Some(format!(
-            "Subscription leverage: ~{} of Claude Code usage at API list prices (leverage — NOT billed)",
-            micro_usd_to_display_dollars(cost.total_micro_usd)
-        )),
-        _ => None,
+    if let Some(cost) = &s.anthropic_api_cost {
+        if cost.total_event_count > 0 {
+            return Some(format!(
+                "Subscription leverage: ~{} of Claude Code usage at API list prices (leverage — NOT billed)",
+                micro_usd_to_display_dollars(cost.total_micro_usd)
+            ));
+        }
     }
+    if s.anthropic_api_cost_error.is_some() {
+        return Some("Subscription leverage: ✗ cost synthesis failed".to_string());
+    }
+    if s.claude_jsonl_error.is_some() {
+        return Some("Subscription leverage: ✗ jsonl load failed".to_string());
+    }
+    None
 }
 
 /// Per-window pace line: used % vs elapsed % of the window, plus the ratio.
@@ -2092,6 +2103,33 @@ mod tests {
         assert!(
             !out.contains("Subscription leverage:"),
             "Subscription leverage line must be absent when total_event_count == 0:\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_leverage_line_surfaces_cost_synthesis_error() {
+        // The measured-only matrix cell can't show a cost-synthesis failure;
+        // the leverage line must surface it instead of going silent.
+        let mut snap = fully_populated_snapshot();
+        snap.anthropic_api_cost = None;
+        snap.anthropic_api_cost_error = Some("price table missing".to_string());
+        let out = render_compact(&snap);
+        assert!(
+            out.contains("Subscription leverage: ✗ cost synthesis failed"),
+            "cost synthesis error must be surfaced on the leverage line:\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_leverage_line_surfaces_jsonl_load_error() {
+        let mut snap = fully_populated_snapshot();
+        snap.anthropic_api_cost = None;
+        snap.anthropic_api_cost_error = None;
+        snap.claude_jsonl_error = Some("permission denied".to_string());
+        let out = render_compact(&snap);
+        assert!(
+            out.contains("Subscription leverage: ✗ jsonl load failed"),
+            "jsonl load error must be surfaced on the leverage line:\n{out}"
         );
     }
 
