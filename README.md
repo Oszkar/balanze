@@ -77,14 +77,13 @@ Default compact view — the matrix holds measured reality only (real billed $ o
 Anthropic           ✓ 82.0% 5h, 88.0% 7d (oauth)            $20.92/$25.00 overage (real)
 OpenAI              ✓ 6.0% 7d (codex go)                    $4.20 (admin costs)
 
-Pace: 5h 49% used / 60% elapsed (0.8×);  7d 88% used / 95% elapsed (0.9×)
-Subscription leverage: your Claude Code usage would cost ~$2197.11 at
-API list prices — leverage from the Max plan, NOT billed (estimate).
+Pace: 5h 82% used / 60% elapsed (1.4×);  7d 88% used / 95% elapsed (0.9×)
+Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (leverage — NOT billed)
 
-Quota % = live server-reported utilization. API $ (real billed): Anthropic =
-pay-as-you-go overage (— not available unless you enabled it); OpenAI = Admin
-Costs API. The 'subscription leverage' figure is a separate list-price
-estimate, never charged.
+Quota % = live server-reported utilization. API $ = real billed spend
+only: Anthropic = pay-as-you-go overage (n/a unless enabled); OpenAI =
+Admin Costs API. 'Subscription leverage' is a separate
+list-price estimate, never charged.
 ```
 
 (Without "Extra usage" enabled, the Anthropic API-$ cell reads `— not available` and only the leverage line carries a Claude dollar figure.)
