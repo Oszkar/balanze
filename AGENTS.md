@@ -10,7 +10,7 @@ If requirements are ambiguous, incomplete, or conflicting: stop, ask targeted qu
 
 **Calibration:**
 
-- High-impact / hard-to-reverse (changes to `UsageEvent` / `Snapshot` schema, the IPC contract, the actor-model write boundary, the keychain wrapper, the predictor algorithm, anything touching secrets, `settings.json` schema, new Tauri capabilities) → **wait**.
+- High-impact / hard-to-reverse (changes to `UsageEvent` / `Snapshot` schema, the IPC contract, the actor-model write boundary, the keychain wrapper, anything touching secrets, `settings.json` schema, new Tauri capabilities) → **wait**.
 - Low-impact / reversible (a clippy fix, a unit test, a CSS tweak, a doc reword, a new tray menu item, a log-level adjustment, a non-breaking refactor inside a single module) → **state the assumption and proceed**.
 - When in doubt, wait.
 
@@ -77,7 +77,7 @@ There is no internal rate-limit gate — the only thing being rate-limited is *u
 | `error` | Operator must look — supervisor exits, persistent keychain failures, repeated parse errors after schema drift |
 | `warn` | Recoverable but worth noticing — OpenAI 429 retry, watcher restart, atomic-rewrite cursor invalidation, dropped state-coordinator mpsc message |
 | `info` | Normal lifecycle — app start, first JSONL parse complete, OpenAI tile populated, settings saved, window-reset transition observed |
-| `debug` | Per-event detail — individual JSONL line parsed, state-coordinator message handled, predictor result computed |
+| `debug` | Per-event detail — individual JSONL line parsed, state-coordinator message handled, window pace recomputed |
 | `trace` | Raw frame dumps; almost never enabled |
 
 Default level: `INFO` for app modules, `WARN` for the parser (DEBUG-per-file JSONL parsing is gated behind `BALANZE_LOG=debug,balanze::claude_parser=trace`). Logs rotate via `tracing-appender` (5 MB max, keep last 3). Don't log secrets at any level. Periodic logs cap at one line per N minutes; never one-per-event at info level.
@@ -146,7 +146,7 @@ Before claiming work is done:
 | Change touches | Required gates |
 |---|---|
 | Any `**/*.rs` in workspace | `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo fmt --all -- --check` |
-| Any crate's logic | That crate's own tests stay green **and** you add/extend a test for the specific invariant you changed. For pure crates (`window`, `claude_cost`, `predictor`): write the test **before** the impl change. Don't weaken an assertion to make it pass — see §7 |
+| Any crate's logic | That crate's own tests stay green **and** you add/extend a test for the specific invariant you changed. For pure crates (`window`, `claude_cost`): write the test **before** the impl change. Don't weaken an assertion to make it pass — see §7 |
 | `crates/claude_parser/**` | + documented failure modes still pass (file missing / partial final line / schema drift / empty / permission denied) + real-data smoke (`cargo run -p claude_parser --example claude_parser_smoke`) |
 | `crates/keychain/**` | + run the `#[ignore]`'d real-keychain smoke **manually on each OS before tagging a release** — cross-OS keychain in CI is unreliable, so CI green ≠ keychain works |
 | `crates/{anthropic_oauth,openai_client}/**` | + the wiremock suite; manual check against the real endpoint on the dev machine |
@@ -167,7 +167,7 @@ Before claiming work is done:
 - Don't weaken assertions or modify tests without invariant reasoning.
 - If you find unrelated failures, call them out separately with evidence.
 - Tests encode invariants — treat them accordingly.
-- **When you change a load-bearing pure function, add a test before changing the implementation.** Especially `window`, `predictor`, `claude_parser`.
+- **When you change a load-bearing pure function, add a test before changing the implementation.** Especially `window`, `claude_parser`.
 
 ### Where tests live
 
@@ -222,10 +222,6 @@ Fix: attach the handler via `app.tray_by_id("main").unwrap().on_tray_icon_event(
 ### "macOS tray click events don't fire"
 
 If the handler is attached correctly (above) and clicks still don't fire on macOS, check `iconAsTemplate` in `tauri.conf.json`. Template-mode icons can interact strangely with click events on certain macOS versions. Balanze's tray icon should have `iconAsTemplate: false` (the color gauge IS the signal; we don't want macOS inverting it).
-
-### "Predictor returns confidently-wrong numbers right after window reset"
-
-The warm-up state was skipped or the gate was set wrong. Check the `predictor` state machine: for the first 15 minutes after a window reset OR while `events_since_reset < 10`, the predictor MUST return `Insufficient`, not a number. The variance check alone is not enough — right after reset you have ~0 events and variance is also ~0, which the variance check reads as "high confidence."
 
 ### "JSONL parser eats 100% CPU during an active Claude session"
 

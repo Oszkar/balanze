@@ -18,7 +18,7 @@ A **complete, honest data layer** exposed as a CLI (`balanze-cli`); a tray UI is
 | **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
 | **OpenAI**    | Codex CLI rate-limit %               | real billed spend (Admin Costs API)                 |
 
-The JSONL list-price estimate is **not** a matrix cell — it's a separate **"Subscription leverage"** insight (see below). **Note:** this measured-only matrix is the *planned* layout ("R1"). The **current shipped CLI compact view still prints the list-price estimate inside the Anthropic API-$ cell** (with a legend distinguishing it from real billed `extra_usage`); the reshape to the layout described here is tracked — see the R1 note in [`docs/PRD.md`](docs/PRD.md). The `--json` shape is unchanged either way.
+The JSONL list-price estimate is **not** a matrix cell — it's a separate **"Subscription leverage"** insight (see below).
 
 - **Anthropic quota** — the same `/api/oauth/usage` endpoint Claude Code uses: live 5-hour / 7-day / per-model bars + `resets_at` clocks. No scraping.
 - **Anthropic API $ — real or nothing.** Anthropic exposes no per-user API spend, so this cell shows the real `extra_usage` pay-as-you-go overage *if* you enabled it on claude.ai (the same billed cents claude.ai's overage meter shows), and otherwise reads as **not available** — never backfilled with a substitute number.
@@ -68,7 +68,7 @@ Known issues).
 
 `balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) — shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit.
 
-Default compact view — **target layout (R1)**. The matrix holds measured reality only (real billed $ or *n/a*), with the list-price estimate below it as a clearly-separate "Subscription leverage" line so it can't be mistaken for the real OpenAI bill. *(The current CLI still prints the estimate inside the Anthropic API-$ cell with a legend; the reshape to the layout shown here is tracked — see [`docs/PRD.md`](docs/PRD.md).)*
+Default compact view — the matrix holds measured reality only (real billed $ or *n/a*), with the list-price estimate below it as a clearly-separate "Subscription leverage" line so it can't be mistaken for the real OpenAI bill.
 
 ```text
 === Balanze status (2026-05-20 04:27:42 UTC) ===
@@ -77,18 +77,19 @@ Default compact view — **target layout (R1)**. The matrix holds measured reali
 Anthropic           ✓ 82.0% 5h, 88.0% 7d (oauth)            $20.92/$25.00 overage (real)
 OpenAI              ✓ 6.0% 7d (codex go)                    $4.20 (admin costs)
 
+Pace: 5h 49% used / 60% elapsed (0.8×);  7d 88% used / 95% elapsed (0.9×)
 Subscription leverage: your Claude Code usage would cost ~$2197.11 at
 API list prices — leverage from the Max plan, NOT billed (estimate).
 
-Quota % = live server-reported utilization. API $ = real billed spend
-only: Anthropic = pay-as-you-go overage (n/a unless you enabled it);
-OpenAI = Admin Costs API. The 'subscription leverage' figure is a
-separate list-price estimate, never charged.
+Quota % = live server-reported utilization. API $ (real billed): Anthropic =
+pay-as-you-go overage (— not available unless you enabled it); OpenAI = Admin
+Costs API. The 'subscription leverage' figure is a separate list-price
+estimate, never charged.
 ```
 
 (Without "Extra usage" enabled, the Anthropic API-$ cell reads `— not available` and only the leverage line carries a Claude dollar figure.)
 
-`--sections` expands each source (cadence bars + reset clocks, the per-model JSONL breakdown + burn rate, the estimated-cost detail with LiteLLM provenance, the Codex window, OpenAI spend by line item). `--json` emits a machine-readable document where every money cell is `{ value_micro_usd, source, confidence, details }`, so a script can read `.anthropic_api_cost.value_micro_usd` and `.openai.value_micro_usd` uniformly and tell `jsonl_list_price`/`estimate` apart from `openai_admin_costs`/`real` without parsing labels. Two extra cells (v0.2): `.claude_statusline` carries the live `StatuslineFilePayload` envelope (`captured_at` + `payload.rate_limits` + `payload.cost.total_cost_usd` — Claude Code's *session* estimate, an explicitly distinct cost tier), and `.prediction` carries the predictor's `Insufficient` / `Uncertain` / `Confident` warm-up state (`Confident` adds `predicted_reset_at` + confidence bounds). `--json -v` adds account identifiers (`org_uuid`, Codex `session_id`); without `-v` they're redacted. `--watch --json` reuses this same DTO, emitted one JSON object per line.
+`--sections` expands each source (cadence bars + reset clocks, the per-model JSONL breakdown + burn rate, the estimated-cost detail with LiteLLM provenance, the Codex window, OpenAI spend by line item). `--json` emits a machine-readable document where every money cell is `{ value_micro_usd, source, confidence, details }`, so a script can read `.anthropic_api_cost.value_micro_usd` and `.openai.value_micro_usd` uniformly and tell `jsonl_list_price`/`estimate` apart from `openai_admin_costs`/`real` without parsing labels. Two extra cells (v0.2): `.claude_statusline` carries the live `StatuslineFilePayload` envelope (`captured_at` + `payload.rate_limits` + `payload.cost.total_cost_usd` — Claude Code's *session* estimate, an explicitly distinct cost tier), and `.pace` carries a per-window array of `{ key, used_fraction, elapsed_fraction, ratio }` — used % vs elapsed % of each quota window (5h, 7d) plus their ratio, computed by `window::pace`; `ratio` is null right after a window reset. `--json -v` adds account identifiers (`org_uuid`, Codex `session_id`); without `-v` they're redacted. `--watch --json` reuses this same DTO, emitted one JSON object per line.
 
 ## Install
 
