@@ -29,10 +29,11 @@ pub struct WindowPace {
 }
 
 fn window_len_for(key: &str) -> Option<Duration> {
-    // Cadence keys are model-specific in practice (`seven_day_sonnet`,
-    // `seven_day_opus`, `seven_day_oauth_apps`, …), not a bare `seven_day`, so
-    // match by family prefix — otherwise real Max-account 7-day windows are
-    // silently dropped from the pace view.
+    // Cadence keys come in a bare form (`five_hour`, `seven_day`) AND
+    // model-specific variants (`seven_day_sonnet`, `seven_day_opus`,
+    // `seven_day_oauth_apps`, …). Match by family prefix so both forms map to
+    // their window — otherwise real Max-account 7-day windows are silently
+    // dropped from the pace view.
     if key.starts_with("five_hour") {
         Some(DEFAULT_WINDOW)
     } else if key.starts_with("seven_day") {
