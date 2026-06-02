@@ -47,7 +47,7 @@ pub struct WindowSummary {
     pub total_tokens_in_window: u64,
     /// Tokens-per-minute averaged across the short burn window. `None` when
     /// fewer than `min_burn_events` events fall in the burn window — keeps
-    /// the predictor away from "1 event, 5000 tokens/min, ship it" noise.
+    /// callers away from "1 event, 5000 tokens/min, ship it" noise.
     pub recent_burn_tokens_per_min: Option<f64>,
     /// Per-model breakdown across the main window, sorted by total tokens
     /// descending (ties broken by model name ascending for determinism).
