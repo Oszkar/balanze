@@ -164,7 +164,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 let derived_cost_error = apply_partial(state, partial);
                 state.snapshot.fetched_at = Utc::now();
                 maybe_recompute_prediction(state, merged_source);
-                recompute_pace(state);
+                recompute_pace(state, merged_source);
                 sink.on_snapshot(&state.snapshot);
                 // The JSONL-derived cost can fail (no price table) inside an
                 // otherwise-successful JSONL/OAuth merge. Its error slot is set
@@ -292,9 +292,13 @@ fn recompute_jsonl_cells(state: &mut CoordinatorState) -> Option<String> {
     }
 }
 
-/// Recompute `snapshot.pace` from the current OAuth cadence bars after a merge.
-/// Empty when no OAuth snapshot is present.
-fn recompute_pace(state: &mut CoordinatorState) {
+/// Recompute `snapshot.pace` from the current OAuth cadence bars. Only an OAuth
+/// merge changes the cadence data, so other sources are a no-op (mirrors
+/// `maybe_recompute_prediction`'s source guard).
+fn recompute_pace(state: &mut CoordinatorState, merged_source: Source) {
+    if merged_source != Source::ClaudeOAuth {
+        return;
+    }
     state.snapshot.pace = state
         .snapshot
         .claude_oauth

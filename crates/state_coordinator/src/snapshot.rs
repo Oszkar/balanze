@@ -187,6 +187,7 @@ pub fn record_error(snapshot: &mut Snapshot, source: Source, error: &str) {
 mod tests {
     use super::*;
     use crate::test_support::{fixture_now, oauth_snapshot};
+    use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot};
 
     // The "successful update overwrites data + clears the source's error" and
     // cross-source-isolation invariants now live in `coordinator::tests`
@@ -231,5 +232,106 @@ mod tests {
             Some("schema drift v2")
         );
         assert!(s.claude_statusline.is_none());
+    }
+
+    // --- pace_for_oauth ---
+
+    /// Build a `ClaudeOAuthSnapshot` from a compact `(key, util_pct, resets_at)`
+    /// tuple list. Keeps test bodies short; non-cadence fields are filled with
+    /// sensible defaults that don't affect `pace_for_oauth`.
+    fn make_oauth(cadences: &[(&str, f32, DateTime<Utc>)]) -> ClaudeOAuthSnapshot {
+        ClaudeOAuthSnapshot {
+            cadences: cadences
+                .iter()
+                .map(|(key, util, resets)| CadenceBar {
+                    key: key.to_string(),
+                    display_label: key.to_string(),
+                    utilization_percent: *util,
+                    resets_at: *resets,
+                })
+                .collect(),
+            extra_usage: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            org_uuid: None,
+            fetched_at: fixture_now(),
+        }
+    }
+
+    fn t(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn pace_for_oauth_empty_cadences_returns_empty_vec() {
+        let oauth = make_oauth(&[]);
+        let result = pace_for_oauth(&oauth, fixture_now());
+        assert!(result.is_empty(), "no cadences → empty pace vec");
+    }
+
+    #[test]
+    fn pace_for_oauth_unknown_key_is_skipped() {
+        // "monthly" is not in `window_len_for`, so it produces no entry.
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now + chrono::Duration::hours(5);
+        let oauth = make_oauth(&[("monthly", 50.0, resets_at)]);
+        let result = pace_for_oauth(&oauth, now);
+        assert!(
+            result.is_empty(),
+            "unknown cadence key must be filtered out; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn pace_for_oauth_five_hour_and_seven_day_produce_two_entries() {
+        // now = 2026-06-02 12:00:00 UTC
+        // five_hour: resets in 3h → window_start = now - 2h → 40% elapsed; 82% used.
+        // seven_day: resets in 3.5d → window_start = now - 3.5d → 50% elapsed; 25% used.
+        let now = t("2026-06-02T12:00:00Z");
+        let five_resets = now + chrono::Duration::hours(3);
+        let seven_resets = now + chrono::Duration::days(3) + chrono::Duration::hours(12);
+
+        let oauth = make_oauth(&[
+            ("five_hour", 82.0, five_resets),
+            ("seven_day", 25.0, seven_resets),
+        ]);
+        let result = pace_for_oauth(&oauth, now);
+
+        assert_eq!(result.len(), 2, "two known keys → two entries");
+
+        let five = result.iter().find(|wp| wp.key == "five_hour").unwrap();
+        let seven = result.iter().find(|wp| wp.key == "seven_day").unwrap();
+
+        // five_hour: 2h elapsed out of 5h → 40% elapsed; 82% used.
+        let expected_five = pace(82.0, five_resets, DEFAULT_WINDOW, now);
+        assert!(
+            (five.used_fraction - expected_five.used_fraction).abs() < 1e-9,
+            "five_hour used_fraction mismatch"
+        );
+        assert!(
+            (five.elapsed_fraction - expected_five.elapsed_fraction).abs() < 1e-9,
+            "five_hour elapsed_fraction mismatch: got {}, expected {}",
+            five.elapsed_fraction,
+            expected_five.elapsed_fraction
+        );
+        assert_eq!(
+            five.ratio.is_some(),
+            expected_five.ratio.is_some(),
+            "five_hour ratio presence must match"
+        );
+        if let (Some(got), Some(exp)) = (five.ratio, expected_five.ratio) {
+            assert!((got - exp).abs() < 1e-6, "five_hour ratio mismatch");
+        }
+
+        // seven_day: 3.5 days elapsed out of 7 → 50% elapsed; 25% used.
+        let expected_seven = pace(25.0, seven_resets, SEVEN_DAY_WINDOW, now);
+        assert!(
+            (seven.used_fraction - expected_seven.used_fraction).abs() < 1e-9,
+            "seven_day used_fraction mismatch"
+        );
+        assert!(
+            (seven.elapsed_fraction - expected_seven.elapsed_fraction).abs() < 1e-9,
+            "seven_day elapsed_fraction mismatch"
+        );
     }
 }
