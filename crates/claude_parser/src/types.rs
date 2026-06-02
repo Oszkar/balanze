@@ -32,8 +32,8 @@ pub enum DataSource {
 }
 
 /// One billing-relevant assistant turn. Produced by `parse_str` and consumed
-/// downstream by `dedup_events` (via `(message_id, request_id)`),
-/// `window::summarize_window`, and eventually the predictor.
+/// downstream by `dedup_events` (via `(message_id, request_id)`) and
+/// `window::summarize_window`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageEvent {
     /// Wall-clock timestamp Claude Code recorded for this turn (top-level
