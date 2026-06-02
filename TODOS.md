@@ -69,3 +69,52 @@ Each item:
 - Nothing. `redact_for_display` is already `pub(crate)` in `anthropic_oauth` (Task 1); `openai_client` has its own equivalent.
 
 **Captured**: 2026-05-15, Track A v0.1.1 Task 1 code-quality review.
+
+---
+
+## TODO-004 — Degrade the Codex indicator when its snapshot has outlived its own window
+
+**What**: In the compact view, when the latest Codex rollout snapshot is older than the window it describes (its `resets_at` has already passed), degrade the indicator from `✓` to a stale/warning marker instead of showing the now-meaningless used % behind a green check.
+
+**Why**: `codex_local` reads `rate_limits` from the newest rollout file, which only updates when the user runs Codex. After a few idle hours the cached % is confidently wrong. Observed 2026-06-02: compact showed `✓ 36.0% 0d (codex plus, 5h old)` with `resets in (passed)`, while the live Codex dashboard showed the 5-hour limit at ~1% used (99% remaining). The age string and "(passed)" are easy to miss next to a prominent green `✓` and bold %. This violates the "honest about data quality" principle — the glance reads authoritative when the number is effectively dead.
+
+**Pros**:
+- The glance stops misleading on stale Codex data; aligns with the degraded-state honesty discipline.
+- Cheap, self-contained presentation change.
+
+**Cons**:
+- Need a clear threshold (snapshot age vs the window's own reset) and a marker that doesn't over-warn for merely-minutes-old data.
+
+**Context**:
+- Compact cell built in `crates/balanze_cli/src/main.rs::compact_codex_quota`; data from `codex_local`.
+- Suggested rule: if `now > primary.resets_at` (the snapshot's own window has already reset), mark stale (e.g. `⚠ stale (Nh old)`) rather than `✓`; keep the number but visually demote it. A softer "minutes old" case can stay `✓`.
+- Pre-existing — `codex_local` and `compact_codex_quota` were unchanged by PR #54; the cross-reference exercise just surfaced it.
+
+**Depends on / blocked by**:
+- Nothing.
+
+**Captured**: 2026-06-02, manual real-data cross-reference QA of PR #54.
+
+---
+
+## TODO-005 — Fix the Codex window-duration label (`0d` for a 5-hour window)
+
+**What**: In the compact view, the Codex primary window (300 minutes = 5 hours) renders as `0d` because `window_duration_minutes / 1440` rounds to zero days. Show a human duration (`5h`) instead.
+
+**Why**: `✓ 36.0% 0d (codex plus)` — "0d" is meaningless/confusing for a sub-day window and reads as a bug. The Codex primary window is 5 hours; it should say so.
+
+**Pros**:
+- Accurate, readable label.
+
+**Cons**:
+- Trivial; just pick/extend a humanize-duration helper.
+
+**Context**:
+- `crates/balanze_cli/src/main.rs::compact_codex_quota`, the `let days = q.primary.window_duration_minutes as f64 / 1440.0;` line.
+- Likely reuse the existing `pretty_duration` (or equivalent) helper already used elsewhere in the CLI rather than the days-only computation.
+- Surfaced 2026-06-02 during the PR #54 cross-reference; pre-existing.
+
+**Depends on / blocked by**:
+- Nothing.
+
+**Captured**: 2026-06-02, manual real-data cross-reference QA of PR #54.
