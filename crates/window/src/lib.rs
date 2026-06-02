@@ -14,6 +14,11 @@ use serde::{Deserialize, Serialize};
 /// Default rolling window — matches Anthropic's 5-hour subscription cadence.
 pub const DEFAULT_WINDOW: Duration = Duration::hours(5);
 
+/// Length of the Claude "7-day" rolling quota window. (`DEFAULT_WINDOW` is the
+/// 5-hour window.) Used by `pace` to turn a cadence's `resets_at` into an
+/// elapsed fraction.
+pub const SEVEN_DAY_WINDOW: Duration = Duration::days(7);
+
 /// Default short-term burn-rate window.
 pub const DEFAULT_BURN_WINDOW: Duration = Duration::minutes(30);
 
@@ -47,6 +52,53 @@ pub struct WindowSummary {
     /// Per-model breakdown across the main window, sorted by total tokens
     /// descending (ties broken by model name ascending for determinism).
     pub by_model: Vec<ByModel>,
+}
+
+/// Where a quota window stands right now: how much is used vs. how much of the
+/// window's wall-clock has elapsed. The honest replacement for a forward
+/// prediction — two measured facts plus their ratio, no forecast.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Pace {
+    /// Fraction of the quota consumed (`used_percent / 100`). NOT clamped —
+    /// can exceed 1.0 when an account is over cap.
+    pub used_fraction: f64,
+    /// Fraction of the window's wall-clock elapsed, clamped to `[0.0, 1.0]`.
+    pub elapsed_fraction: f64,
+    /// `used_fraction / elapsed_fraction` — > 1.0 means burning faster than a
+    /// linear pace, < 1.0 means comfortably behind. `None` right after a reset
+    /// (no time elapsed yet), where no honest verdict is possible.
+    pub ratio: Option<f64>,
+}
+
+/// Compute the current pace of a quota window from its server-reported
+/// utilization and reset time. Pure: a function of `(used_percent, resets_at,
+/// window_len, now)` only — no warm-up state, no history, never lies after a
+/// reset (it just reports `ratio: None` until the clock moves).
+pub fn pace(
+    used_percent: f64,
+    resets_at: DateTime<Utc>,
+    window_len: Duration,
+    now: DateTime<Utc>,
+) -> Pace {
+    let used_fraction = used_percent / 100.0;
+    let window_start = resets_at - window_len;
+    let window_secs = window_len.num_seconds() as f64;
+    let elapsed_secs = (now - window_start).num_seconds() as f64;
+    let elapsed_fraction = if window_secs > 0.0 {
+        (elapsed_secs / window_secs).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let ratio = if elapsed_fraction > 0.0 {
+        Some(used_fraction / elapsed_fraction)
+    } else {
+        None
+    };
+    Pace {
+        used_fraction,
+        elapsed_fraction,
+        ratio,
+    }
 }
 
 /// Summarize a slice of `UsageEvent`s over a rolling window ending at `now`.
@@ -580,5 +632,67 @@ mod tests {
             s.total_events_in_window, 1,
             "only the past-dated event survives [reset-window, reset) ∩ [..now]"
         );
+    }
+
+    // --- pace ---
+    fn t(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn pace_ahead_of_linear() {
+        // 2h into a 5h window (40% elapsed), 82% used → ratio ≈ 2.05.
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now + Duration::hours(3); // window_start = now - 2h
+        let p = pace(82.0, resets_at, DEFAULT_WINDOW, now);
+        assert!((p.used_fraction - 0.82).abs() < 1e-9);
+        assert!((p.elapsed_fraction - 0.40).abs() < 1e-9);
+        assert!((p.ratio.unwrap() - 2.05).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pace_on_track() {
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now + Duration::hours(3);
+        let p = pace(40.0, resets_at, DEFAULT_WINDOW, now);
+        assert!((p.ratio.unwrap() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pace_just_after_reset_has_no_ratio() {
+        // window_start == now → 0 elapsed → no honest verdict.
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now + DEFAULT_WINDOW;
+        let p = pace(0.5, resets_at, DEFAULT_WINDOW, now);
+        assert_eq!(p.elapsed_fraction, 0.0);
+        assert_eq!(p.ratio, None);
+    }
+
+    #[test]
+    fn pace_past_reset_clamps_elapsed_to_one() {
+        // now is past resets_at (stale data) → elapsed clamped to 1.0, not >1.
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now - Duration::hours(1);
+        let p = pace(90.0, resets_at, DEFAULT_WINDOW, now);
+        assert_eq!(p.elapsed_fraction, 1.0);
+        assert!((p.ratio.unwrap() - 0.90).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pace_over_cap_used_not_clamped() {
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now + Duration::hours(3);
+        let p = pace(120.0, resets_at, DEFAULT_WINDOW, now);
+        assert!((p.used_fraction - 1.20).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pace_seven_day_window_length() {
+        // 7d window; 3.5 days in → 50% elapsed.
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now + Duration::days(7) - Duration::days(3) - Duration::hours(12);
+        let p = pace(25.0, resets_at, SEVEN_DAY_WINDOW, now);
+        assert!((p.elapsed_fraction - 0.5).abs() < 1e-9);
+        assert!((p.ratio.unwrap() - 0.5).abs() < 1e-9);
     }
 }
