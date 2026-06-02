@@ -623,4 +623,66 @@ mod tests {
             "clone sees the same coordinator's state"
         );
     }
+
+    #[tokio::test]
+    async fn oauth_merge_populates_snapshot_pace() {
+        // An OAuth update carrying a five_hour cadence must produce a non-empty
+        // `pace` vec with a `five_hour` entry with plausible fractions in [0, 1].
+        let (handle, _join) = spawn(NullSink);
+
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+            }))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        assert!(
+            !snap.pace.is_empty(),
+            "OAuth merge with cadence data must populate snap.pace"
+        );
+        let five = snap
+            .pace
+            .iter()
+            .find(|wp| wp.key == "five_hour")
+            .expect("five_hour entry must be present after OAuth merge");
+        assert!(
+            (0.0..=1.0).contains(&five.used_fraction),
+            "used_fraction must be in [0, 1]; got {}",
+            five.used_fraction
+        );
+        assert!(
+            (0.0..=1.0).contains(&five.elapsed_fraction),
+            "elapsed_fraction must be in [0, 1]; got {}",
+            five.elapsed_fraction
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_only_update_does_not_populate_pace() {
+        // `recompute_pace` is guarded to OAuth merges. A JSONL-only update must
+        // leave `pace` empty (no OAuth cadence data is available to derive from).
+        let (handle, _join) = spawn(NullSink);
+
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeJsonl,
+                result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                    events: Arc::new(sample_events()),
+                    files_scanned: 3,
+                })),
+            }))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        assert!(
+            snap.pace.is_empty(),
+            "a JSONL-only update must not populate pace (no OAuth cadence to derive from); \
+             got {:?}",
+            snap.pace
+        );
+    }
 }

@@ -362,7 +362,6 @@ struct JsonPace {
     used_fraction: f64,
     elapsed_fraction: f64,
     ratio: Option<f64>,
-    source: &'static str,
 }
 
 impl From<&WindowPace> for JsonPace {
@@ -372,7 +371,6 @@ impl From<&WindowPace> for JsonPace {
             used_fraction: p.used_fraction,
             elapsed_fraction: p.elapsed_fraction,
             ratio: p.ratio,
-            source: "window_pace",
         }
     }
 }
@@ -652,5 +650,86 @@ mod tests {
         let s = Snapshot::empty(fixed_now());
         let v = render_to_value(&s, false);
         assert!(v["claude_statusline"].is_null());
+    }
+
+    // --- pace cell shape ---
+
+    fn make_pace_entries() -> Vec<state_coordinator::WindowPace> {
+        vec![
+            state_coordinator::WindowPace {
+                key: "five_hour".to_string(),
+                used_fraction: 0.82,
+                elapsed_fraction: 0.40,
+                ratio: Some(2.05),
+            },
+            state_coordinator::WindowPace {
+                key: "seven_day".to_string(),
+                used_fraction: 0.25,
+                elapsed_fraction: 0.50,
+                ratio: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn pace_cell_serializes_with_correct_keys_and_no_source() {
+        let mut s = Snapshot::empty(fixed_now());
+        s.pace = make_pace_entries();
+        let v = render_to_value(&s, false);
+
+        let arr = v["pace"].as_array().expect(".pace must be an array");
+        assert_eq!(arr.len(), 2, ".pace must have 2 entries");
+
+        // Find the five_hour entry and check it has exactly the documented keys.
+        let five = arr
+            .iter()
+            .find(|e| e["key"] == "five_hour")
+            .expect("five_hour entry must be present");
+
+        assert_eq!(five["used_fraction"].as_f64().unwrap(), 0.82);
+        assert_eq!(five["elapsed_fraction"].as_f64().unwrap(), 0.40);
+        assert!(
+            (five["ratio"].as_f64().unwrap() - 2.05).abs() < 1e-9,
+            "ratio should be ~2.05, got {:?}",
+            five["ratio"]
+        );
+        // The undocumented `source` field must NOT appear.
+        assert!(
+            five.get("source").is_none() || five["source"].is_null(),
+            "pace entries must NOT serialize a `source` field; got {:?}",
+            five.get("source")
+        );
+    }
+
+    #[test]
+    fn pace_entry_with_none_ratio_serializes_ratio_as_null() {
+        let mut s = Snapshot::empty(fixed_now());
+        s.pace = make_pace_entries();
+        let v = render_to_value(&s, false);
+
+        let arr = v["pace"].as_array().expect(".pace must be an array");
+        let seven = arr
+            .iter()
+            .find(|e| e["key"] == "seven_day")
+            .expect("seven_day entry must be present");
+
+        // `ratio: None` → JSON `null` (field is present, value is null).
+        assert!(
+            seven["ratio"].is_null(),
+            "ratio: None must serialize as JSON null, got {:?}",
+            seven["ratio"]
+        );
+    }
+
+    #[test]
+    fn pace_empty_vec_serializes_pace_as_empty_array() {
+        let mut s = Snapshot::empty(fixed_now());
+        s.pace = Vec::new();
+        let v = render_to_value(&s, false);
+
+        let arr = v["pace"]
+            .as_array()
+            .expect(".pace must be a JSON array even when empty");
+        assert!(arr.is_empty(), ".pace must be [] when snap.pace is empty");
     }
 }
