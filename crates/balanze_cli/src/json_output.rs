@@ -35,7 +35,7 @@ use claude_statusline::StatuslineFilePayload;
 use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
 use openai_client::{LineItemCost, OpenAiCosts};
 use serde::Serialize;
-use state_coordinator::{JsonlSnapshot, Prediction, PredictionState, Snapshot};
+use state_coordinator::{JsonlSnapshot, Prediction, PredictionState, Snapshot, WindowPace};
 
 /// Sentinel inserted in place of `codex_quota.session_id` when `verbose=false`.
 const SESSION_ID_REDACTED: &str = "<redacted>";
@@ -78,6 +78,7 @@ struct JsonDoc<'a> {
     claude_statusline: Option<JsonClaudeStatusline>,
     claude_statusline_error: Option<&'a str>,
     prediction: Option<JsonPrediction>,
+    pace: Vec<JsonPace>,
 }
 
 impl<'a> JsonDoc<'a> {
@@ -109,6 +110,7 @@ impl<'a> JsonDoc<'a> {
                 .map(JsonClaudeStatusline::from),
             claude_statusline_error: snap.claude_statusline_error.as_deref(),
             prediction: snap.prediction.as_ref().map(JsonPrediction::from),
+            pace: snap.pace.iter().map(JsonPace::from).collect(),
         }
     }
 }
@@ -379,6 +381,31 @@ impl From<&Prediction> for JsonPrediction {
             computed_at: p.computed_at,
             source: "predictor_ewma",
             confidence: "estimate",
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// pace (used vs elapsed, per cadence window)
+// ----------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct JsonPace {
+    key: String,
+    used_fraction: f64,
+    elapsed_fraction: f64,
+    ratio: Option<f64>,
+    source: &'static str,
+}
+
+impl From<&WindowPace> for JsonPace {
+    fn from(p: &WindowPace) -> Self {
+        Self {
+            key: p.key.clone(),
+            used_fraction: p.used_fraction,
+            elapsed_fraction: p.elapsed_fraction,
+            ratio: p.ratio,
+            source: "window_pace",
         }
     }
 }

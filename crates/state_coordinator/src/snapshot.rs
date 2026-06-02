@@ -6,16 +6,55 @@
 //! AGENTS.md §4 #8, identical inputs must yield identical `Snapshot`s.
 
 use anthropic_oauth::ClaudeOAuthSnapshot;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use claude_cost::Cost;
 use claude_statusline::StatuslineFilePayload;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
 use predictor::Prediction;
 use serde::{Deserialize, Serialize};
-use window::WindowSummary;
+use window::{DEFAULT_WINDOW, Pace, SEVEN_DAY_WINDOW, WindowSummary, pace};
 
 use crate::messages::Source;
+
+/// Per-window pace, mirrored from the OAuth cadence bars. Replaces the retired
+/// forward predictor: measured used % vs elapsed % of the window, plus their
+/// ratio. One entry per cadence whose window length is known.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowPace {
+    /// Cadence key, e.g. `"five_hour"` / `"seven_day"`.
+    pub key: String,
+    pub used_fraction: f64,
+    pub elapsed_fraction: f64,
+    pub ratio: Option<f64>,
+}
+
+fn window_len_for(key: &str) -> Option<Duration> {
+    match key {
+        "five_hour" => Some(DEFAULT_WINDOW),
+        "seven_day" => Some(SEVEN_DAY_WINDOW),
+        _ => None,
+    }
+}
+
+/// Map the OAuth cadence bars into per-window pace. Shared by `compose()` (CLI)
+/// and the coordinator (watcher) so the two paths cannot diverge.
+pub fn pace_for_oauth(oauth: &ClaudeOAuthSnapshot, now: DateTime<Utc>) -> Vec<WindowPace> {
+    oauth
+        .cadences
+        .iter()
+        .filter_map(|c| {
+            let len = window_len_for(&c.key)?;
+            let p: Pace = pace(c.utilization_percent as f64, c.resets_at, len, now);
+            Some(WindowPace {
+                key: c.key.clone(),
+                used_fraction: p.used_fraction,
+                elapsed_fraction: p.elapsed_fraction,
+                ratio: p.ratio,
+            })
+        })
+        .collect()
+}
 
 /// Canonical Balanze state. `None` fields = "not yet observed"; `*_error`
 /// fields hold the most recent failure for that source. Successful data and
@@ -85,6 +124,9 @@ pub struct Snapshot {
     /// `ClaudeJsonl` merge. `None` until the first OAuth merge with a
     /// `five_hour` cadence.
     pub prediction: Option<Prediction>,
+    /// Per-window pace (used vs elapsed) derived from the OAuth cadence bars.
+    /// Empty until an OAuth snapshot with a known cadence is present.
+    pub pace: Vec<WindowPace>,
 }
 
 impl Snapshot {
@@ -106,6 +148,7 @@ impl Snapshot {
             claude_statusline: None,
             claude_statusline_error: None,
             prediction: None,
+            pace: Vec::new(),
         }
     }
 }

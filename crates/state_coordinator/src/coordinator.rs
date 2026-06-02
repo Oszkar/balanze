@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 use crate::jsonl::summarize_jsonl;
 use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg};
 use crate::sink::Sink;
-use crate::snapshot::{Snapshot, record_error};
+use crate::snapshot::{Snapshot, pace_for_oauth, record_error};
 
 /// History ring capacity for the predictor's `WindowSnapshot` series.
 /// 128 samples ≈ 10+ hours at the planned 5-min OAuth poll cadence —
@@ -164,6 +164,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 let derived_cost_error = apply_partial(state, partial);
                 state.snapshot.fetched_at = Utc::now();
                 maybe_recompute_prediction(state, merged_source);
+                recompute_pace(state);
                 sink.on_snapshot(&state.snapshot);
                 // The JSONL-derived cost can fail (no price table) inside an
                 // otherwise-successful JSONL/OAuth merge. Its error slot is set
@@ -289,6 +290,17 @@ fn recompute_jsonl_cells(state: &mut CoordinatorState) -> Option<String> {
             Some(e)
         }
     }
+}
+
+/// Recompute `snapshot.pace` from the current OAuth cadence bars after a merge.
+/// Empty when no OAuth snapshot is present.
+fn recompute_pace(state: &mut CoordinatorState) {
+    state.snapshot.pace = state
+        .snapshot
+        .claude_oauth
+        .as_ref()
+        .map(|o| pace_for_oauth(o, Utc::now()))
+        .unwrap_or_default();
 }
 
 /// Update `snapshot.prediction` after a successful JSONL or OAuth merge.
