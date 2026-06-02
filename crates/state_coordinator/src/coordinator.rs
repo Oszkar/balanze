@@ -2,14 +2,12 @@
 //! `StateMsg`s on a bounded mpsc channel; owns the in-memory `Snapshot`;
 //! notifies a `Sink` for side effects.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use anthropic_oauth::ClaudeOAuthSnapshot;
 use chrono::Utc;
 use claude_cost::PriceTable;
 use claude_parser::UsageEvent;
-use predictor::{WindowSnapshot, predict};
 use settings::Settings;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -19,19 +17,12 @@ use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg};
 use crate::sink::Sink;
 use crate::snapshot::{Snapshot, pace_for_oauth, record_error};
 
-/// History ring capacity for the predictor's `WindowSnapshot` series.
-/// 128 samples ≈ 10+ hours at the planned 5-min OAuth poll cadence —
-/// more than the 5-hour rolling window needs while bounded enough to
-/// cap memory.
-const HISTORY_CAPACITY: usize = 128;
-
 /// Mutable state owned by the coordinator's single tokio task. Grouped
 /// into one struct so `handle_msg` takes one `&mut` instead of threading
 /// several. Never crosses a thread boundary — only `StateCoordinatorHandle`
 /// (a clone of the mpsc `Sender`) is shared.
 struct CoordinatorState {
     snapshot: Snapshot,
-    history: VecDeque<WindowSnapshot>,
     last_settings: Option<Settings>,
     /// Most recent deduped JSONL event slice (from the `ClaudeJsonl` source).
     /// Cached so an OAuth update — which carries the authoritative 5h reset —
@@ -135,7 +126,6 @@ async fn run_loop<S: Sink>(mut rx: mpsc::Receiver<StateMsg>, mut sink: S) {
     };
     let mut state = CoordinatorState {
         snapshot: Snapshot::empty(Utc::now()),
-        history: VecDeque::with_capacity(HISTORY_CAPACITY),
         last_settings: None,
         jsonl_events: None,
         files_scanned: 0,
@@ -163,7 +153,6 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 let merged_source = partial.source();
                 let derived_cost_error = apply_partial(state, partial);
                 state.snapshot.fetched_at = Utc::now();
-                maybe_recompute_prediction(state, merged_source);
                 recompute_pace(state, merged_source);
                 sink.on_snapshot(&state.snapshot);
                 // The JSONL-derived cost can fail (no price table) inside an
@@ -293,8 +282,7 @@ fn recompute_jsonl_cells(state: &mut CoordinatorState) -> Option<String> {
 }
 
 /// Recompute `snapshot.pace` from the current OAuth cadence bars. Only an OAuth
-/// merge changes the cadence data, so other sources are a no-op (mirrors
-/// `maybe_recompute_prediction`'s source guard).
+/// merge changes the cadence data, so other sources are a no-op.
 fn recompute_pace(state: &mut CoordinatorState, merged_source: Source) {
     if merged_source != Source::ClaudeOAuth {
         return;
@@ -307,49 +295,6 @@ fn recompute_pace(state: &mut CoordinatorState, merged_source: Source) {
         .unwrap_or_default();
 }
 
-/// Update `snapshot.prediction` after a successful JSONL or OAuth merge.
-/// OAuth merges also push a new `WindowSnapshot` into the history ring
-/// (with the server-authoritative `five_hour` utilization). JSONL merges
-/// only recompute against the existing history — JSONL events don't
-/// carry a fresh server-side pct. Skips when prerequisites are absent
-/// (no OAuth snapshot, no `five_hour` reset, no `five_hour` utilization).
-fn maybe_recompute_prediction(state: &mut CoordinatorState, merged_source: Source) {
-    if !matches!(merged_source, Source::ClaudeJsonl | Source::ClaudeOAuth) {
-        return;
-    }
-    let Some(oauth) = state.snapshot.claude_oauth.as_ref() else {
-        return;
-    };
-    let Some(reset) = oauth.five_hour_reset() else {
-        return;
-    };
-    let Some(util_pct) = oauth.five_hour_utilization() else {
-        return;
-    };
-    let now = Utc::now();
-
-    if merged_source == Source::ClaudeOAuth {
-        if state.history.len() == HISTORY_CAPACITY {
-            state.history.pop_front();
-        }
-        state.history.push_back(WindowSnapshot {
-            ts: now,
-            used_pct: util_pct as f64,
-        });
-    }
-    // ClaudeJsonl recomputes against the existing history but does NOT add a
-    // new sample — JSONL has no fresh server-side pct (the OAuth `five_hour`
-    // utilization stays whatever the last OAuth merge wrote).
-
-    // `make_contiguous` rotates the deque's internal buffer into a single
-    // slice (in place; no allocation, no per-entry clone) and returns it.
-    // Cheaper than `iter().cloned().collect()` for the recompute hot path
-    // — predict() takes &[WindowSnapshot] and this hands it the same data
-    // without copying.
-    let history_slice = state.history.make_contiguous();
-    state.snapshot.prediction = Some(predict(now, util_pct as f64, history_slice, reset));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,7 +305,6 @@ mod tests {
         oauth_snapshot, oauth_snapshot_with_reset, openai_costs, sample_events,
     };
     use chrono::Duration;
-    use predictor::PredictionState;
     use std::sync::{Arc, Mutex};
 
     /// Test sink: records every event so the test can assert on them.
@@ -587,7 +531,6 @@ mod tests {
         // it arrived as its own `Err` update that reached `on_degraded`).
         let mut state = CoordinatorState {
             snapshot: Snapshot::empty(Utc::now()),
-            history: VecDeque::new(),
             last_settings: None,
             jsonl_events: Some(Arc::new(sample_events())),
             files_scanned: 1,
@@ -659,35 +602,6 @@ mod tests {
             "last update wins; no message was dropped"
         );
         assert_eq!(sink.snapshot_count(), N, "every update reached the sink");
-    }
-
-    #[tokio::test]
-    async fn oauth_merge_recomputes_prediction() {
-        let sink = NullSink;
-        let (handle, _join) = spawn(sink);
-
-        handle
-            .send(StateMsg::Update(SourceUpdate {
-                source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
-            }))
-            .await
-            .unwrap();
-
-        let snap = handle.query().await.unwrap();
-        assert!(
-            snap.prediction.is_some(),
-            "prediction set after OAuth merge"
-        );
-        // Only 1 history sample → Insufficient.
-        assert!(
-            matches!(
-                snap.prediction.as_ref().unwrap().state,
-                PredictionState::Insufficient,
-            ),
-            "expected Insufficient with only 1 history point, got {:?}",
-            snap.prediction.as_ref().unwrap().state
-        );
     }
 
     #[tokio::test]

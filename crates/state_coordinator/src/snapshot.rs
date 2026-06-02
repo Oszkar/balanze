@@ -11,7 +11,6 @@ use claude_cost::Cost;
 use claude_statusline::StatuslineFilePayload;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
-use predictor::Prediction;
 use serde::{Deserialize, Serialize};
 use window::{DEFAULT_WINDOW, Pace, SEVEN_DAY_WINDOW, WindowSummary, pace};
 
@@ -70,8 +69,8 @@ pub fn pace_for_oauth(oauth: &ClaudeOAuthSnapshot, now: DateTime<Utc>) -> Vec<Wi
 /// - OpenAI API $           ← `openai`
 ///
 /// Plus `claude_jsonl` which holds the raw JSONL window math that feeds
-/// both Anthropic cells, `claude_statusline` from the statusLine file
-/// payload, and `prediction` from the EWMA predictor.
+/// both Anthropic cells, and `claude_statusline` from the statusLine file
+/// payload.
 // PartialEq is intentionally NOT derived: `ClaudeOAuthSnapshot` doesn't
 // implement it, and the upstream change to add it would force a float-equality
 // debate that doesn't pay off. Tests compare individual fields.
@@ -119,11 +118,6 @@ pub struct Snapshot {
     /// drift). Coexists with `claude_statusline` when a previously-good read
     /// is now stale.
     pub claude_statusline_error: Option<String>,
-    /// Most recent EWMA-based prediction computed from OAuth cadence history.
-    /// Recomputed by the coordinator after each successful `ClaudeOAuth` or
-    /// `ClaudeJsonl` merge. `None` until the first OAuth merge with a
-    /// `five_hour` cadence.
-    pub prediction: Option<Prediction>,
     /// Per-window pace (used vs elapsed) derived from the OAuth cadence bars.
     /// Empty until an OAuth snapshot with a known cadence is present.
     pub pace: Vec<WindowPace>,
@@ -147,7 +141,6 @@ impl Snapshot {
             openai_error: None,
             claude_statusline: None,
             claude_statusline_error: None,
-            prediction: None,
             pace: Vec::new(),
         }
     }

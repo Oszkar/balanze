@@ -29,13 +29,13 @@
 //! row, this module's tests, and the README example block in lockstep.
 
 use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot, ExtraUsage};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use claude_cost::{Cost, ModelCost};
 use claude_statusline::StatuslineFilePayload;
 use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
 use openai_client::{LineItemCost, OpenAiCosts};
 use serde::Serialize;
-use state_coordinator::{JsonlSnapshot, Prediction, PredictionState, Snapshot, WindowPace};
+use state_coordinator::{JsonlSnapshot, Snapshot, WindowPace};
 
 /// Sentinel inserted in place of `codex_quota.session_id` when `verbose=false`.
 const SESSION_ID_REDACTED: &str = "<redacted>";
@@ -77,7 +77,6 @@ struct JsonDoc<'a> {
     openai_error: Option<&'a str>,
     claude_statusline: Option<JsonClaudeStatusline>,
     claude_statusline_error: Option<&'a str>,
-    prediction: Option<JsonPrediction>,
     pace: Vec<JsonPace>,
 }
 
@@ -109,7 +108,6 @@ impl<'a> JsonDoc<'a> {
                 .as_ref()
                 .map(JsonClaudeStatusline::from),
             claude_statusline_error: snap.claude_statusline_error.as_deref(),
-            prediction: snap.prediction.as_ref().map(JsonPrediction::from),
             pace: snap.pace.iter().map(JsonPace::from).collect(),
         }
     }
@@ -349,37 +347,6 @@ impl From<&StatuslineFilePayload> for JsonClaudeStatusline {
                 .map(|micro| micro as f64 / 1_000_000.0),
             claude_code_version: snap.claude_code_version.clone(),
             source: "claude_code_statusline",
-            confidence: "estimate",
-        }
-    }
-}
-
-// ----------------------------------------------------------------------------
-// prediction (EWMA predictor output)
-// ----------------------------------------------------------------------------
-
-#[derive(Serialize)]
-struct JsonPrediction {
-    state: &'static str,
-    eta_to_cap_seconds: Option<i64>,
-    eta_to_reset_seconds: i64,
-    computed_at: DateTime<Utc>,
-    source: &'static str,
-    confidence: &'static str,
-}
-
-impl From<&Prediction> for JsonPrediction {
-    fn from(p: &Prediction) -> Self {
-        Self {
-            state: match p.state {
-                PredictionState::Insufficient => "Insufficient",
-                PredictionState::Uncertain => "Uncertain",
-                PredictionState::Confident => "Confident",
-            },
-            eta_to_cap_seconds: p.eta_to_cap.map(|d: Duration| d.num_seconds()),
-            eta_to_reset_seconds: p.eta_to_reset.num_seconds(),
-            computed_at: p.computed_at,
-            source: "predictor_ewma",
             confidence: "estimate",
         }
     }
@@ -662,16 +629,6 @@ mod tests {
         StatuslineFilePayload::new(snap, fixed_now())
     }
 
-    fn sample_prediction() -> Prediction {
-        // Build a Confident prediction directly: warm-up passed, cap not reached.
-        Prediction {
-            state: state_coordinator::PredictionState::Confident,
-            eta_to_cap: Some(chrono::Duration::seconds(11_280)),
-            eta_to_reset: chrono::Duration::seconds(16_200),
-            computed_at: fixed_now(),
-        }
-    }
-
     #[test]
     fn claude_statusline_cell_shape() {
         let mut s = Snapshot::empty(fixed_now());
@@ -695,61 +652,5 @@ mod tests {
         let s = Snapshot::empty(fixed_now());
         let v = render_to_value(&s, false);
         assert!(v["claude_statusline"].is_null());
-    }
-
-    #[test]
-    fn prediction_cell_shape() {
-        let mut s = Snapshot::empty(fixed_now());
-        s.prediction = Some(sample_prediction());
-        let v = render_to_value(&s, false);
-        let cell = &v["prediction"];
-        // sample_prediction() constructs PredictionState::Confident — assert the
-        // exact string so a state swap (e.g. Confident → Insufficient) is caught.
-        assert_eq!(cell["state"].as_str().unwrap(), "Confident");
-        assert_eq!(cell["source"], "predictor_ewma");
-        assert_eq!(cell["confidence"], "estimate");
-        // eta_to_reset: 16 200 s from sample_prediction()
-        assert_eq!(cell["eta_to_reset_seconds"].as_i64().unwrap(), 16_200);
-        // eta_to_cap: 11 280 s from sample_prediction() (Some → not null)
-        assert_eq!(cell["eta_to_cap_seconds"].as_i64().unwrap(), 11_280);
-        // computed_at serialises to an ISO-8601 string
-        assert!(cell["computed_at"].is_string());
-    }
-
-    #[test]
-    fn prediction_cell_insufficient_state_serializes_eta_as_null() {
-        // Build an Insufficient prediction (warm-up / too few history points).
-        // eta_to_cap must be None → serialises as JSON null.
-        // eta_to_reset is always present.
-        let insufficient = state_coordinator::Prediction {
-            state: state_coordinator::PredictionState::Insufficient,
-            eta_to_cap: None,
-            eta_to_reset: chrono::Duration::seconds(16_200),
-            computed_at: fixed_now(),
-        };
-        let mut s = Snapshot::empty(fixed_now());
-        s.prediction = Some(insufficient);
-        let v = render_to_value(&s, false);
-        let cell = &v["prediction"];
-        assert_eq!(cell["state"].as_str().unwrap(), "Insufficient");
-        // Option<Duration> with None must serialise as JSON null.
-        assert!(
-            cell["eta_to_cap_seconds"].is_null(),
-            "eta_to_cap_seconds should be null for Insufficient, got {}",
-            cell["eta_to_cap_seconds"]
-        );
-        // eta_to_reset is always present regardless of state.
-        assert_eq!(
-            cell["eta_to_reset_seconds"].as_i64().unwrap(),
-            16_200,
-            "eta_to_reset_seconds must always be an i64"
-        );
-    }
-
-    #[test]
-    fn prediction_absent_is_null() {
-        let s = Snapshot::empty(fixed_now());
-        let v = render_to_value(&s, false);
-        assert!(v["prediction"].is_null());
     }
 }

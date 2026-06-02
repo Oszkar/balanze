@@ -145,11 +145,10 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
         codex_quota_error,
         openai,
         openai_error,
-        // statusline and prediction are populated by the coordinator
-        // actor (watcher-driven) and not by the single-shot CLI compose path.
+        // statusline is populated by the coordinator actor (watcher-driven)
+        // and not by the single-shot CLI compose path.
         claude_statusline: None,
         claude_statusline_error: None,
-        prediction: None,
         // pace is computed before the struct literal so `claude_oauth` is not
         // consumed before it can be moved into the `claude_oauth` field above.
         pace,
