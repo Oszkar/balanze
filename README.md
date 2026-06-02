@@ -18,7 +18,7 @@ A **complete, honest data layer** exposed as a CLI (`balanze-cli`); a tray UI is
 | **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
 | **OpenAI**    | Codex CLI rate-limit %               | real billed spend (Admin Costs API)                 |
 
-The JSONL list-price estimate is **not** a matrix cell — it's a separate **"Subscription leverage"** insight (see below). *(The CLI compact view is being reshaped to this measured-only matrix — see the R1 note in [`docs/PRD.md`](docs/PRD.md); the `--json` shape is unchanged.)*
+The JSONL list-price estimate is **not** a matrix cell — it's a separate **"Subscription leverage"** insight (see below). **Note:** this measured-only matrix is the *planned* layout ("R1"). The **current shipped CLI compact view still prints the list-price estimate inside the Anthropic API-$ cell** (with a legend distinguishing it from real billed `extra_usage`); the reshape to the layout described here is tracked — see the R1 note in [`docs/PRD.md`](docs/PRD.md). The `--json` shape is unchanged either way.
 
 - **Anthropic quota** — the same `/api/oauth/usage` endpoint Claude Code uses: live 5-hour / 7-day / per-model bars + `resets_at` clocks. No scraping.
 - **Anthropic API $ — real or nothing.** Anthropic exposes no per-user API spend, so this cell shows the real `extra_usage` pay-as-you-go overage *if* you enabled it on claude.ai (the same billed cents claude.ai's overage meter shows), and otherwise reads as **not available** — never backfilled with a substitute number.
@@ -68,7 +68,7 @@ Known issues).
 
 `balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) — shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit.
 
-Default compact view — the matrix holds measured reality only (real billed $ or *n/a*), and the list-price estimate sits below it as a clearly-separate "Subscription leverage" line so it can't be mistaken for the real OpenAI bill:
+Default compact view — **target layout (R1)**. The matrix holds measured reality only (real billed $ or *n/a*), with the list-price estimate below it as a clearly-separate "Subscription leverage" line so it can't be mistaken for the real OpenAI bill. *(The current CLI still prints the estimate inside the Anthropic API-$ cell with a legend; the reshape to the layout shown here is tracked — see [`docs/PRD.md`](docs/PRD.md).)*
 
 ```text
 === Balanze status (2026-05-20 04:27:42 UTC) ===

@@ -891,7 +891,7 @@ fn print_help() {
     eprintln!(
         "                                Recommended on Windows until the keychain backend is"
     );
-    eprintln!("                                fixed.");
+    eprintln!("                                fixed (it currently no-ops there).");
     eprintln!();
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
