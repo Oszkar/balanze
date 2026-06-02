@@ -31,7 +31,7 @@ use crate::errors::WatcherError;
 // module. Both are identical.
 // MIRRORS balanze_cli::statusline_snapshot_path and
 //         watcher::tasks::statusline::statusline_snapshot_path — see
-// TODO(v0.2-followup): extract live_fetch crate / shared paths helper.
+// TODO: extract a shared live-fetch / paths helper.
 fn statusline_snapshot_path() -> Option<PathBuf> {
     if let Ok(env_path) = std::env::var("BALANZE_DATA_DIR_OVERRIDE") {
         return Some(PathBuf::from(env_path).join("statusline.snapshot.json"));

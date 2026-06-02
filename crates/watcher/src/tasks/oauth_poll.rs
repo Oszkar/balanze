@@ -8,7 +8,7 @@
 //! 5. Emits `Update(ClaudeOAuth, ...)` to the state coordinator.
 //!
 //! MIRRORS balanze_cli::live_fetch_oauth and balanze_cli::refresh_and_persist
-//! — see TODO(v0.2-followup): extract live_fetch crate so the CLI and watcher
+//! — see TODO: extract a shared live-fetch helper so the CLI and watcher
 //! share one implementation.
 
 use anthropic_oauth::{

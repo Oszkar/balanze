@@ -112,8 +112,8 @@ fn cmd_status(args: &[String]) -> Result<()> {
         // org_uuid / session_id. Warn if the user explicitly asks for verbose
         // alongside --json so they don't quietly get redacted output and
         // wonder why their jq filters don't see the identifiers.
-        // TODO(v0.2-followup): pass verbose to JsonlSink so --watch --json -v
-        //                      surfaces org_uuid / codex session_id.
+        // TODO: pass verbose to JsonlSink so --watch --json -v
+        //       surfaces org_uuid / codex session_id.
         if verbose && json_mode {
             eprintln!(
                 "warning: -v / --verbose is not yet threaded into --watch --json; \
@@ -650,8 +650,8 @@ fn cmd_statusline() -> Result<()> {
 }
 
 /// Formats a parsed [`claude_statusline::StatuslineSnapshot`] into a terse
-/// one-liner for Claude Code's statusLine display. Track D = a minimal honest
-/// line. Rich/configurable formatting + feeding the live Snapshot is Track E.
+/// one-liner for Claude Code's statusLine display. A minimal honest line;
+/// rich/configurable formatting and feeding the live Snapshot come later.
 fn format_statusline_from_snapshot(snap: &claude_statusline::StatuslineSnapshot) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(rl) = &snap.rate_limits {
@@ -697,7 +697,7 @@ fn format_statusline(payload: &str) -> String {
 
 /// Writes the parsed statusline snapshot to `<data_dir>/statusline.snapshot.json`
 /// — where `<data_dir>` is `directories::ProjectDirs.data_dir()`, which
-/// already includes the per-OS Balanze subpath — for the Track E watcher
+/// already includes the per-OS Balanze subpath — for the watcher
 /// to notify-watch.
 ///
 /// Write failures log at `warn!` and are swallowed — Claude Code's statusLine
@@ -891,7 +891,7 @@ fn print_help() {
     eprintln!(
         "                                Recommended on Windows until the keychain backend is"
     );
-    eprintln!("                                migrated to keyring v4 in v0.3.");
+    eprintln!("                                fixed.");
     eprintln!();
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
@@ -1232,10 +1232,10 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
                 pretty_duration(resets_in)
             )?;
         }
-        // Extra-usage = pay-as-you-go overage. Resolved 2026-05-19 spike:
-        // raw ints are cents; this is the claude.ai "Extra usage" meter —
-        // REAL billed money, distinct from the estimated API-rate figure
-        // below. Only meaningful when the user enabled it.
+        // Extra-usage = pay-as-you-go overage. The raw ints are cents; this is
+        // the claude.ai "Extra usage" meter — REAL billed money, distinct from
+        // the estimated API-rate figure below. Only meaningful when the user
+        // enabled it.
         if let Some(eu) = &oauth.extra_usage {
             if eu.is_enabled {
                 writeln!(w)?;
@@ -1303,7 +1303,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             w,
             "  `balanze-cli set-openai-key` (note: keychain backend currently unreliable on"
         )?;
-        writeln!(w, "  Windows; env var is the recommended path until v0.3).")?;
+        writeln!(w, "  Windows; env var is the recommended path).")?;
         writeln!(
             w,
             "  Create an admin key at https://platform.openai.com/settings/organization/admin-keys"

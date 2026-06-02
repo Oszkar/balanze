@@ -7,18 +7,18 @@
 //! (AGENTS.md §3.1) with budget to spare for the other sources.
 //!
 //! Baseline workflow. `cargo bench -p claude_cost -- --save-baseline
-//! track_e_initial` writes Criterion's output to
-//! `target/criterion/compute_cost_10k_events/track_e_initial/estimates.json`.
+//! committed` writes Criterion's output to
+//! `target/criterion/compute_cost_10k_events/committed/estimates.json`.
 //! The committed `crates/claude_cost/benches/baseline.json` is a **manual
-//! copy** of that file — a reference snapshot of what the bench looked like
-//! at Track E ship time. Criterion does NOT auto-consume the committed
-//! file; on a fresh checkout, `cargo bench -- --baseline track_e_initial`
+//! copy** of that file — a reference snapshot of what the bench looked like.
+//! Criterion does NOT auto-consume the committed
+//! file; on a fresh checkout, `cargo bench -- --baseline committed`
 //! finds nothing because `target/criterion/` is empty. To compare against
 //! the committed snapshot, copy
 //! `crates/claude_cost/benches/baseline.json` into
-//! `target/criterion/compute_cost_10k_events/track_e_initial/estimates.json`
-//! first, then run with `--baseline track_e_initial`. To refresh the
-//! committed snapshot, run with `--save-baseline track_e_initial` and copy
+//! `target/criterion/compute_cost_10k_events/committed/estimates.json`
+//! first, then run with `--baseline committed`. To refresh the
+//! committed snapshot, run with `--save-baseline committed` and copy
 //! the new `estimates.json` back over `benches/baseline.json`.
 
 use chrono::{TimeZone, Utc};

@@ -6,7 +6,7 @@
 //! are namespaced constants in `keys`.
 //!
 //! On macOS: macOS Keychain. On Windows: Credential Manager. (Linux: Secret
-//! Service via libsecret — out of v0.1 scope but `keyring` supports it.)
+//! Service via libsecret — out of scope for now but `keyring` supports it.)
 //!
 //! Reads and writes can prompt the user for permission on first use; the
 //! caller should not assume operations are silent.
@@ -110,7 +110,7 @@ mod tests {
     /// `keyring = "3.6.3"` — set returns Ok but a subsequent get returns
     /// NoEntry, meaning the credential never actually persists. The fix is
     /// to migrate to `keyring-core` (the v4 successor crate) with an
-    /// explicit `set_default_store` initialization. Tracked as a v0.2 task;
+    /// explicit `set_default_store` initialization. A known limitation;
     /// in the meantime, the CLI honors a `BALANZE_OPENAI_KEY` env var as a
     /// fallback. See AGENTS.md "Known issues" section.
     #[test]

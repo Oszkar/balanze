@@ -181,7 +181,7 @@ Before claiming work is done:
 
 **Ask before:** schema changes (`UsageEvent`, `Snapshot`, `Settings`, IPC contract), new crate dependencies, invariant changes, cross-crate refactors, touching the actor-model write boundary, adding a new `DegradedState` variant, expanding the secrets surface, adding a new Tauri capability.
 
-**Document:** assumptions, trade-offs, tech debt. Load-bearing tech debt for v0.1 lands as `// TODO(v0.2):` with a one-line note on the eventual fix.
+**Document:** assumptions, trade-offs, tech debt. Load-bearing tech debt lands as a plain `// TODO:` with a one-line note on the eventual fix. Keep code comments free of ephemeral project/release nomenclature (release/version tags like `v0.2`, track/phase/milestone labels, spike references) — that framing belongs in the PRD and the changelog, not in the code; durable spec cross-references (e.g. `AGENTS.md §3.1`) are fine.
 
 **Tests:** add tests when behavior changes or fixes could regress. Tests encode intent and invariants. Don't relax assertions to make things green.
 

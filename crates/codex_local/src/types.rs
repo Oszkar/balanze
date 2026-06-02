@@ -1,6 +1,6 @@
 //! Public types: `CodexQuotaSnapshot` and `RateLimitWindow`.
 //!
-//! Single-value output shape per the post-spike design decision: the
+//! Single-value output shape per the design decision: the
 //! Codex 4-quadrant matrix cell needs ONE number (the latest rate-limit
 //! utilization), not a stream of events. See `SCHEMA-NOTES.md` for the
 //! reasoning.
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 /// One Codex rate-limit window — `primary` is always present in
 /// observed data (7-day rolling); `secondary` may carry a 5-hour
-/// sub-window on higher-tier plans (not observed on the spike's "go"
-/// plan but documented in the Codex CLI schema as `Option`).
+/// sub-window on higher-tier plans (not observed on the "go" plan
+/// but documented in the Codex CLI schema as `Option`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitWindow {
     /// Percentage of the window consumed. Range `0.0..100.0`; values

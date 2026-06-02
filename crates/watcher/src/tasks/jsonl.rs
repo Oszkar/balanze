@@ -2,7 +2,7 @@
 //! `notify::recommended_watcher`, debounces bursts for 300ms, then
 //! re-walks + parses on each batch (full rescan for now;
 //! `IncrementalParser` byte-cursor optimization is a follow-up if
-//! cold-start latency bites — TODO(v0.2-followup): replace the full
+//! cold-start latency bites — TODO: replace the full
 //! rescan with `IncrementalParser` byte-cursor reads to reduce I/O on
 //! large `~/.claude/` trees during active Claude Code sessions).
 

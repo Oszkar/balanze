@@ -256,7 +256,7 @@ fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) -> Option
 /// Returns `Some(err)` when the derived cost failed (no price table). The caller
 /// (`handle_msg`) surfaces it through `Sink::on_degraded` in addition to setting
 /// the snapshot's `anthropic_api_cost_error` slot — so sinks that emit the
-/// `degraded_state` event (the v0.3 Tauri UI) don't miss a cost degradation now
+/// `degraded_state` event (the Tauri UI) don't miss a cost degradation now
 /// that the cost is derived here rather than arriving as its own `Err` update.
 #[must_use]
 fn recompute_jsonl_cells(state: &mut CoordinatorState) -> Option<String> {
