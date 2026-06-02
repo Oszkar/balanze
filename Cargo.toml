@@ -2,7 +2,7 @@
 resolver = "2"
 members = ["src-tauri", "crates/*"]
 # Bare `cargo build` / `test` / `run` operate on the crates only — NOT
-# `src-tauri`. The v0.1 deliverable is the `balanze-cli` binary, which has zero
+# `src-tauri`. The deliverable is the `balanze-cli` binary, which has zero
 # system-library deps (pure Rust + rustls) and builds on Linux with nothing but
 # a Rust toolchain. `src-tauri` drags in the GTK/WebKit native stack, which a
 # CLI user should never have to install. Building the Tauri app is the explicit
@@ -44,7 +44,7 @@ notify-debouncer-full = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
 predictor = { path = "crates/predictor" }
-# Criterion benches (Track E Task 8). Dev-only; not pulled into release
+# Criterion benches. Dev-only; not pulled into release
 # artifacts. Pinned to 0.5 — the 0.6 line dropped `BatchSize::SmallInput`'s
 # stable rendering and we depend on the JSON estimates layout for our
 # committed baselines.

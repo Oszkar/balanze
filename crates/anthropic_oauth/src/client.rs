@@ -97,7 +97,7 @@ pub async fn fetch_usage(
         }
         // AuthExpired / RefreshFailed / ResponseShape / CredentialsMissing / etc.
         // must NOT be retried — especially AuthExpired, which triggers the
-        // caller's refresh+retry-once path (Track A).
+        // caller's refresh+retry-once path.
         _ => backoff::RetryDecision::DoNotRetry,
     };
 
@@ -209,9 +209,9 @@ fn parse_response(
         if key == "extra_usage" {
             match serde_json::from_value::<RawExtraUsage>(value.clone()) {
                 Ok(raw) => {
-                    // Raw values are integer CENTS. Resolved first-hand by
-                    // the 2026-05-19 reconciliation spike (Max-5x: OAuth
-                    // 2500/2092 ↔ claude.ai "Extra usage" $25.00/$20.92/84%);
+                    // Raw values are integer CENTS. Reconciled against a real
+                    // Max-5x OAuth payload (OAuth 2500/2092 ↔ claude.ai
+                    // "Extra usage" $25.00/$20.92/84%);
                     // see anthropic_oauth/src/types.rs ExtraUsage doc.
                     // Convert cents → micro-USD via × 10_000.
                     extra_usage = Some(ExtraUsage {
@@ -373,8 +373,7 @@ mod tests {
 
     #[test]
     fn extra_usage_reconciled_cents_semantic() {
-        // Regression pin for the 2026-05-19 reconciliation spike
-        // (~/.gstack/projects/balanze/spike-extra-usage-reconciliation-20260519.md).
+        // Regression pin for the extra_usage reconciliation (raw ints are cents).
         // claude.ai/settings/usage "Extra usage" showed $20.92 / $25.00 / 84%
         // for a Max-5x account; OAuth returned monthly_limit=2500,
         // used_credits=2092, utilization=83.7. Raw ints are CENTS. This test

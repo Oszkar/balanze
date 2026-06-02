@@ -74,7 +74,7 @@ pub struct Snapshot {
     /// configured but the fetch failed.
     pub openai_error: Option<String>,
     /// Most recent successful Claude Code statusLine file payload. `None`
-    /// until the first successful read (Track E, v0.2 live wiring).
+    /// until the first successful read (populated by the live watcher).
     pub claude_statusline: Option<StatuslineFilePayload>,
     /// Most recent failure from the statusline reader (file missing, schema
     /// drift). Coexists with `claude_statusline` when a previously-good read

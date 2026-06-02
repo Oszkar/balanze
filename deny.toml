@@ -11,7 +11,7 @@
 
 [graph]
 # By default cargo-deny only checks the host platform. We ship for
-# Windows + macOS today (v0.1); Linux comes in a later phase per PRD
+# Windows + macOS today; Linux comes in a later phase per PRD
 # Phasing. Targeting only the platforms we actually build for keeps
 # the dep graph honest — e.g., Tauri pulls GTK3 transitively on
 # Linux, which is RustSec-unmaintained, but we don't ship that path

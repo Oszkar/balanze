@@ -198,7 +198,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn exhaustion_returns_the_real_last_error_not_a_wrapper() {
-        // Track A's 401→refresh and the CLI error surface depend on `retry`
+        // The 401→refresh path and the CLI error surface depend on `retry`
         // surfacing the genuine final error (e.g. AuthExpired), never a
         // synthetic "retries exhausted". Pin it with a sentinel value.
         let policy = BackoffPolicy::custom(Duration::ZERO, 2, Duration::ZERO, 2);

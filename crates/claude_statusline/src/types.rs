@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// One server-authoritative subscription window from the statusLine feed.
 /// `anthropic_oauth::CadenceBar`'s analogous field is `utilization_percent`;
 /// `RateWindow` uses the shorter `used_percent` and `resets_at: DateTime<Utc>`.
-/// Track E aligns the two sources (a small field-name mapping step).
+/// The watcher aligns the two sources (a small field-name mapping step).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RateWindow {
     pub used_percent: f32,

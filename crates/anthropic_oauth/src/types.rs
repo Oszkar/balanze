@@ -70,8 +70,7 @@ pub struct CadenceBar {
 /// from cadence bars because it is a billed-money counter, not a
 /// utilization %.
 ///
-/// **Semantic RESOLVED 2026-05-19** (spike:
-/// `~/.gstack/projects/balanze/spike-extra-usage-reconciliation-20260519.md`).
+/// **Semantics** (reconciled against a real OAuth payload):
 /// Raw `monthly_limit` / `used_credits` are integer **cents**; this block
 /// is the claude.ai "Extra usage" pay-as-you-go overage meter — **real
 /// money billed** beyond the subscription, exact, first-party. Reconciled
@@ -79,7 +78,7 @@ pub struct CadenceBar {
 /// `used_credits 2092 = $20.92`, `utilization 83.7 ≈ "84% used"`). It is
 /// NOT total spend and NOT the JSONL-derived subscription-leverage
 /// estimate; `balanze_cli` renders it as a distinct REAL line only when
-/// `is_enabled` (shipped in Track C).
+/// `is_enabled`.
 ///
 /// `resets_at` and the prepaid "current balance" are visible in the
 /// claude.ai UI but are NOT in the OAuth wire response (see the

@@ -1,4 +1,4 @@
-//! End-to-end integration test for the v0.1 4-quadrant pipeline.
+//! End-to-end integration test for the 4-quadrant pipeline.
 //!
 //! The eng-review test plan explicitly called for this (under "Critical
 //! Paths" item 7): a test that exercises the full
@@ -289,7 +289,7 @@ impl SnapshotSources for FixtureSources {
 // and notably passes `window_anchor: None` where `compose()` anchors to the
 // OAuth 5h reset, so the two paths can diverge on the JSONL rolling window.
 // A true parity assertion (or routing the watcher through `compose()`) is a
-// tracked follow-up from the v0.2 review.
+// tracked follow-up.
 #[tokio::test]
 async fn compose_parity_against_fixtures() {
     // Same fixed `now` as `full_pipeline_populates_claude_jsonl_in_snapshot`

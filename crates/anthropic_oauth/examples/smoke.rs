@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let client = reqwest::Client::builder()
-        .user_agent("balanze/0.1.0-spike")
+        .user_agent(concat!("balanze/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let snapshot = fetch_usage(
         &client,

@@ -27,7 +27,7 @@ use crate::errors::WatcherError;
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
 // MIRRORS balanze_cli::statusline_snapshot_path — see
-// TODO(v0.2-followup): extract into a shared `paths` helper (either in
+// TODO: extract into a shared `paths` helper (either in
 // `settings` or a small new `balanze_paths` crate) so CLI and watcher
 // resolve the same path via one code path.
 fn statusline_snapshot_path() -> Option<PathBuf> {

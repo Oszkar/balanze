@@ -4,8 +4,8 @@ use tauri::{
     tray::TrayIconEvent,
 };
 
-// Sink-seam checkpoint — see `tauri_sink` module docs. Skeleton only; v0.3
-// wires it into the state_coordinator actor.
+// Production sink for the state_coordinator actor — see `tauri_sink` module
+// docs. Compile-only skeleton for now; wired in when the UI lands.
 mod tauri_sink;
 
 fn show_main_window(app: &tauri::AppHandle) {
@@ -34,7 +34,7 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
     tray.on_menu_event(|app, event| match event.id().as_ref() {
         "open" => show_main_window(app),
         "settings" => {
-            // TODO: open settings window when it exists; for v0.1 spike, reuse main window.
+            // TODO: open a dedicated settings window when it exists; reuse the main window for now.
             show_main_window(app);
         }
         "quit" => app.exit(0),
@@ -69,8 +69,8 @@ pub fn run() {
         })
         // No commands registered: the documented IPC contract (AGENTS.md §4 #9)
         // — get_snapshot, get_history, refresh_now, set_api_key, get_settings,
-        // set_settings — is v0.3 work. Until then the Tauri surface is the tray
-        // menu only; no command is exposed to the webview.
+        // set_settings — is not implemented yet. Until then the Tauri surface is
+        // the tray menu only; no command is exposed to the webview.
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

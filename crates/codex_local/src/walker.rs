@@ -15,7 +15,7 @@ use crate::errors::ParseError;
 /// Environment variable that overrides the default `~/.codex/sessions/`
 /// path. Mirrors the `CLAUDE_CONFIG_DIR` pattern from ccusage. Accepts
 /// a single path; future versions may accept comma-separated multi-path
-/// if user demand surfaces (none observed in the field as of v0.1).
+/// if user demand surfaces (none observed in the field).
 pub const CODEX_CONFIG_DIR_ENV: &str = "CODEX_CONFIG_DIR";
 
 /// Resolve the directory holding Codex session JSONL files.

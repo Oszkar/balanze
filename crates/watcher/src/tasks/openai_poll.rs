@@ -10,7 +10,7 @@
 //!   3. Neither configured → log at `info!` and exit `Ok(())` immediately.
 //!
 //! MIRRORS balanze_cli::live_fetch_openai — see
-//! TODO(v0.2-followup): extract live_fetch crate so CLI and watcher share
+//! TODO: extract a shared live-fetch helper so CLI and watcher share
 //! one implementation.
 
 use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, costs_this_month};

@@ -15,7 +15,7 @@
 
   <p>
     UI scaffold only. The real surface — tray popover with the 4-quadrant
-    matrix and live cadence bars — lands in v0.3. Use
+    matrix and live cadence bars — not yet implemented. Use
     <code>balanze-cli</code> for the data layer today.
   </p>
 </main>

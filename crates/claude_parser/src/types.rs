@@ -25,7 +25,7 @@ pub enum DataSource {
     Jsonl,
     /// OpenAI Admin Costs API (`/v1/organization/costs`).
     OpenAiBilling,
-    /// Anthropic Console (cookie-based scrape, planned for v0.2).
+    /// Anthropic Console (cookie-based scrape; not implemented).
     AnthropicConsole,
     /// Derived locally (e.g., burn-rate extrapolations); not authoritative.
     Inferred,

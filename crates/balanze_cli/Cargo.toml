@@ -10,7 +10,7 @@ publish.workspace = true
 
 [[bin]]
 # `balanze` (no suffix) is reserved for the src-tauri package's binary (the tray
-# app, which becomes the headline product in v0.2+). The CLI is the power-user
+# app, which becomes the headline product). The CLI is the power-user
 # tool; distinct artifact names avoid a `target/<profile>/balanze` write race
 # when `cargo build --workspace` builds both.
 name = "balanze-cli"
