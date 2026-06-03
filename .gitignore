@@ -56,6 +56,9 @@ balanze.log*
 # gstack session state
 .claude/
 
+# Superpowers brainstorming mockups (visual companion)
+.superpowers/
+
 # Network captures — frequently contain live session cookies and PII
 *.har
 
