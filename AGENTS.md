@@ -254,3 +254,7 @@ Expected. Console UI changes will break scrapes regularly — that's why the des
 ### "I want to test against a fixture directory of JSONL"
 
 The committed fixtures are the canonical set: `crates/balanze_cli/tests/fixtures/` (a small Claude-JSONL + Codex-rollout tree the E2E test runs against). For ad-hoc real-data checks, the example smokes read your actual `~/.claude` / `~/.codex`. There is no dedicated parse-root env override in v0.1 — discovery follows `HOME` / `XDG_CONFIG_HOME` (and `CODEX_CONFIG_DIR` for Codex); point those at a fixture tree if you need to redirect it.
+
+### "Popover loads blank in tauri dev after changing a frontend dependency"
+
+Changing a frontend dep edits `bun.lock`, so the next `bun run tauri dev` makes Vite re-optimize dependencies. If the webview loads during that window, the SSR module-runner can time out (`transport invoke timed out … fetchModule`) and the popover renders blank. This is transient: reload the popover (or restart `tauri dev` once) after the `.vite` cache is warm. Not a code bug — the production/static build is unaffected.

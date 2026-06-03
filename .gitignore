@@ -56,6 +56,12 @@ balanze.log*
 # gstack session state
 .claude/
 
+# Superpowers brainstorming mockups (visual companion)
+.superpowers/
+
+# Playwright MCP output (ad-hoc browser verification)
+.playwright-mcp/
+
 # Network captures — frequently contain live session cookies and PII
 *.har
 

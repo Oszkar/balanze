@@ -1,0 +1,26 @@
+:root {
+  --paper: #ffffff; --ink: #1f2227; --ink2: #5a5f68; --faint: #9aa0aa;
+  --ok: #3f8f5f; --warn: #cf8a2a; --bad: #c0493a; --real: #3667a6;
+  --hair: #e6e2db; --tile-bg: #fbfaf7; --tile-border: #e8e3db;
+  --track: #ece8e1; --hatch: rgba(0,0,0,.09);
+  --seg-on: #1f2227; --seg-on-text: #fff; --seg-border: #d9d4cc;
+  --lev-border: #d9d4cc; --lev-bg: #faf8f4;
+  --tip-bg: #26292e; --tip-ink: #f2f3f5; --tip-faint: #aab2bd;
+  --shadow: 0 16px 44px rgba(40,36,28,.18);
+  --radius: 15px;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #171a20; --ink: #e9ecf1; --ink2: #aab2bd; --faint: #6f7886;
+    --ok: #57c98a; --warn: #e6a24a; --bad: #e3685a; --real: #6ea3e6;
+    --hair: rgba(255,255,255,.10); --tile-bg: rgba(255,255,255,.035); --tile-border: rgba(255,255,255,.08);
+    --track: rgba(255,255,255,.10); --hatch: rgba(255,255,255,.10);
+    --seg-on: #e9ecf1; --seg-on-text: #171a20; --seg-border: rgba(255,255,255,.22);
+    --lev-border: rgba(255,255,255,.18); --lev-bg: rgba(255,255,255,.02);
+    --tip-bg: #0d0f13; --tip-ink: #e9ecf1; --tip-faint: #8a93a0;
+    --shadow: 0 18px 50px rgba(0,0,0,.55);
+  }
+}
+html, body { margin: 0; background: transparent; color: var(--ink); }
+*, *::before, *::after { box-sizing: border-box; }
