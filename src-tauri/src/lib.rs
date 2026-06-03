@@ -10,10 +10,36 @@ mod tray_icon;
 
 use tauri_sink::TauriSink;
 
+/// Ask the coordinator to re-emit the current snapshot via `usage_updated`.
+///
+/// Every successful show path calls this so the popover reflects the latest
+/// state even if its webview listener missed a live emit (the OpenAI-only
+/// startup race). `try_send` is sync + non-blocking; a full channel or an
+/// absent coordinator (boot ordering, headless tests) is a no-op, not an error.
+fn refresh_state_on_open(app: &tauri::AppHandle) {
+    if let Some(handle) = app.try_state::<state_coordinator::StateCoordinatorHandle>() {
+        let _ = handle.try_send(state_coordinator::StateMsg::Refresh);
+    }
+}
+
 fn position_and_show(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
+        refresh_state_on_open(app);
+    }
+}
+
+/// Show the popover anchored at the current cursor, for open paths that have
+/// no click event of their own (the tray menu item and the single-instance
+/// callback). Falls back to the unanchored path if the cursor is unavailable.
+fn show_popover_at_cursor(app: &tauri::AppHandle) {
+    match app.cursor_position() {
+        Ok(p) => show_popover_anchored(app, p),
+        Err(e) => {
+            tracing::warn!("cursor_position failed ({e}); showing unanchored");
+            position_and_show(app);
+        }
     }
 }
 
@@ -83,6 +109,7 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     }
     let _ = window.show();
     let _ = window.set_focus();
+    refresh_state_on_open(app);
 }
 
 fn setup_tray(app: &mut App) -> tauri::Result<()> {
@@ -97,7 +124,7 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
         .expect("tray 'main' is declared in tauri.conf.json");
     tray.set_menu(Some(menu))?;
     tray.on_menu_event(|app, event| match event.id().as_ref() {
-        "open" => position_and_show(app),
+        "open" => show_popover_at_cursor(app),
         "quit" => app.exit(0),
         _ => {}
     });
@@ -164,7 +191,7 @@ pub fn run() {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            position_and_show(app);
+            show_popover_at_cursor(app);
         }));
     }
 
