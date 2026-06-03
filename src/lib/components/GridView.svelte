@@ -15,6 +15,11 @@
   const openai = $derived(snapshot.openai);
   const hasOpenAI = $derived(!!codex || !!openai || !!snapshot.openai_error);
   const anthStale = $derived(!!degraded['claude_statusline'] && aq?.source === 'oauth');
+  // When no quota is available, distinguish a real failure (an error slot is
+  // set) from a cold-start window where the first OAuth poll is still in flight
+  // (no data, no error yet — OAuth backs off on the 429s that happen during
+  // active Claude Code use, so this can take a moment when statusline isn't wired).
+  const anthErr = $derived(snapshot.claude_oauth_error ?? snapshot.claude_statusline_error ?? null);
 </script>
 
 <div class="grid" class:single={!hasOpenAI}>
@@ -27,8 +32,12 @@
       resetsAt={aq.headline.resetsAt} secondary={aq.secondary ? `7-day ${aq.secondary.pct.toFixed(0)}%` : ''}
       stale={anthStale}
       title={aq.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title} />
+  {:else if anthErr}
+    <BilledCell hatch placeholder="unavailable" note="quota fetch failed"
+      title={`Anthropic quota unavailable — ${anthErr}`} />
   {:else}
-    <BilledCell note="no quota data" title="Quota unavailable — run `claude login` / open Claude Code" />
+    <BilledCell placeholder="connecting…" note="fetching quota…"
+      title="Waiting for the first quota fetch — the OAuth usage endpoint backs off on the 429s it returns during active Claude Code use. Wire Balanze as your Claude statusLine for instant live quota." />
   {/if}
   {#if hasOpenAI}
     {#if codex}

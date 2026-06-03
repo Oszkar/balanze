@@ -1,10 +1,10 @@
 <script lang="ts">
-  let { amount = null, note, title, hatch = false }:
-    { amount?: string | null; note: string; title: string; hatch?: boolean } = $props();
+  let { amount = null, note, title, hatch = false, placeholder = 'unavailable' }:
+    { amount?: string | null; note: string; title: string; hatch?: boolean; placeholder?: string } = $props();
 </script>
 
 <div class="cell bcell" class:hatch {title}>
-  {#if amount}<span class="amt">{amount}</span>{:else}<span class="na">unavailable</span>{/if}
+  {#if amount}<span class="amt">{amount}</span>{:else}<span class="na">{placeholder}</span>{/if}
   <span class="note">{note}</span>
 </div>
 
