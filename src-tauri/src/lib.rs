@@ -1,5 +1,5 @@
 use tauri::{
-    App, Manager, WindowEvent,
+    App, Manager, PhysicalPosition, WindowEvent,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconEvent},
 };
@@ -15,6 +15,74 @@ fn position_and_show(app: &tauri::AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+/// Show the popover anchored next to the tray icon, fully on-screen.
+///
+/// `cursor` is the click position (physical px) carried by
+/// `TrayIconEvent::Click`. We place the window's bottom-right corner at the
+/// cursor (the common Windows bottom-right taskbar case) and clamp to the
+/// monitor under the cursor so it never lands off-screen. Anything that can
+/// fail (monitor/size lookups) degrades to the unanchored show path; no panics.
+fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    let win = match window.outer_size() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("popover anchor: outer_size failed ({e}); showing unanchored");
+            position_and_show(app);
+            return;
+        }
+    };
+
+    // Monitor under the cursor gives clamp bounds (full monitor, not work area
+    // — fine because we anchor ABOVE the cursor, above a bottom taskbar).
+    let monitor = match app.monitor_from_point(cursor.x, cursor.y) {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            tracing::warn!("popover anchor: no monitor under cursor; showing unanchored");
+            position_and_show(app);
+            return;
+        }
+        Err(e) => {
+            tracing::warn!("popover anchor: monitor_from_point failed ({e}); showing unanchored");
+            position_and_show(app);
+            return;
+        }
+    };
+
+    let mon_pos = monitor.position();
+    let mon_size = monitor.size();
+    let win_w = win.width as i32;
+    let win_h = win.height as i32;
+
+    let mon_left = mon_pos.x;
+    let mon_top = mon_pos.y;
+    let mon_right = mon_pos.x + mon_size.width as i32;
+    let mon_bottom = mon_pos.y + mon_size.height as i32;
+
+    // Bottom-right corner at the cursor.
+    let mut x = cursor.x as i32 - win_w;
+    let mut y = cursor.y as i32 - win_h;
+
+    // Clamp fully on-monitor. `max_x`/`max_y` can fall below the monitor origin
+    // if the window is wider/taller than the monitor; `max(left, …)` keeps the
+    // top-left corner on-screen in that degenerate case.
+    let max_x = (mon_right - win_w).max(mon_left);
+    let max_y = (mon_bottom - win_h).max(mon_top);
+    x = x.clamp(mon_left, max_x);
+    y = y.clamp(mon_top, max_y);
+
+    if let Err(e) = window.set_position(PhysicalPosition::new(x, y)) {
+        tracing::warn!("popover anchor: set_position failed ({e}); showing unanchored");
+        position_and_show(app);
+        return;
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
 }
 
 fn setup_tray(app: &mut App) -> tauri::Result<()> {
@@ -37,10 +105,11 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
         if let TrayIconEvent::Click {
             button: MouseButton::Left,
             button_state: MouseButtonState::Up,
+            position,
             ..
         } = event
         {
-            position_and_show(tray.app_handle());
+            show_popover_anchored(tray.app_handle(), position);
         }
     });
     Ok(())
