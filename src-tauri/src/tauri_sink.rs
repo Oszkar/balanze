@@ -108,12 +108,25 @@ impl TauriSink {
     }
 }
 
+/// True if any source's error slot is set. Used to keep the tray on the
+/// warning bucket while ANY source is degraded — a later success from a
+/// different source must not clear the warning while another source is still
+/// failing (the bug: `on_snapshot` previously hard-coded `degraded = false`).
+fn any_source_degraded(s: &Snapshot) -> bool {
+    s.claude_oauth_error.is_some()
+        || s.claude_jsonl_error.is_some()
+        || s.anthropic_api_cost_error.is_some()
+        || s.codex_quota_error.is_some()
+        || s.openai_error.is_some()
+        || s.claude_statusline_error.is_some()
+}
+
 impl Sink for TauriSink {
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
         if let Err(e) = self.app.emit("usage_updated", snapshot) {
             tracing::warn!("tauri_sink: emit usage_updated failed: {e}");
         }
-        let target = self.paint_target(snapshot, false);
+        let target = self.paint_target(snapshot, any_source_degraded(snapshot));
         if self.last_painted.as_ref() != Some(&target) {
             tray_icon::paint(&self.app, target.0, &target.1);
             self.last_painted = Some(target);
@@ -144,6 +157,15 @@ impl Sink for TauriSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn any_source_error_keeps_warning() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        assert!(!any_source_degraded(&s));
+        s.openai_error = Some("HTTP 500".into());
+        assert!(any_source_degraded(&s));
+    }
 
     #[test]
     fn bucket_thresholds() {
