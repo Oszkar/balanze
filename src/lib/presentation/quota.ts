@@ -3,8 +3,7 @@ import type { Tone } from './pace';
 
 export function quotaTone(pct: number): Tone {
   if (pct >= 90) return 'bad';
-  if (pct >= 75) return 'warn';
-  if (pct >= 50) return 'warn';
+  if (pct >= 50) return 'warn'; // 50–90 is warn; the UI Tone has no distinct 'orange'
   return 'ok';
 }
 

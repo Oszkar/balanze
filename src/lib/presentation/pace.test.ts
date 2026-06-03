@@ -22,4 +22,9 @@ describe('paceVerdict', () => {
   it('calls the middle band on pace', () => {
     expect(paceVerdict(0.50, 0.50).text).toBe('on pace');
   });
+  it('0.04 elapsed is the boundary — not too early', () => {
+    const v = paceVerdict(0.04, 0.04);
+    expect(v.ratio).not.toBeNull();
+    expect(v.text).not.toBe('too early');
+  });
 });

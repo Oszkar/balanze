@@ -7,6 +7,7 @@ describe('format', () => {
     expect(formatBurn(null)).toBe('—');
     expect(formatBurn(3200)).toBe('~3.2k/min');
     expect(formatBurn(840)).toBe('~840/min');
+    expect(formatBurn(1000)).toBe('~1.0k/min');
   });
   it('relative reset', () => {
     const now = new Date('2026-06-03T12:00:00Z');

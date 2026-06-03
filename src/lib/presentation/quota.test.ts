@@ -18,6 +18,10 @@ describe('quota', () => {
     expect(quotaTone(20)).toBe('ok');
     expect(quotaTone(60)).toBe('warn');
     expect(quotaTone(95)).toBe('bad');
+    expect(quotaTone(49)).toBe('ok');
+    expect(quotaTone(50)).toBe('warn');
+    expect(quotaTone(89)).toBe('warn');
+    expect(quotaTone(90)).toBe('bad');
   });
   it('prefers statusline over oauth', () => {
     const s: Snapshot = { ...base,
