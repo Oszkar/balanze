@@ -263,13 +263,20 @@ dependencies = [
 name = "balanze"
 version = "0.1.1"
 dependencies = [
+ "anthropic_oauth",
+ "chrono",
  "serde",
  "serde_json",
+ "settings",
  "state_coordinator",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "watcher",
 ]
 
 [[package]]
