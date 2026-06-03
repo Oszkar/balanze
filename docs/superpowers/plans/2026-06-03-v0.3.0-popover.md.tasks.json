@@ -1,87 +1,18 @@
 {
   "planPath": "docs/superpowers/plans/2026-06-03-v0.3.0-popover.md",
-  "lastUpdated": "2026-06-03T00:00:00Z",
+  "lastUpdated": "2026-06-04T00:00:00Z",
   "tasks": [
-    {
-      "id": 9,
-      "subject": "Task 1: Frontend Snapshot types + IPC layer",
-      "status": "pending",
-      "description": "TS mirror of the raw Snapshot serde shape + invoke/listen wrappers. Files: src/lib/types/snapshot.ts, src/lib/ipc.ts. Verify: bun run check. Full code in plan Task 1.\n\n```json:metadata\n{\"files\": [\"src/lib/types/snapshot.ts\", \"src/lib/ipc.ts\"], \"verifyCommand\": \"bun run check\", \"acceptanceCriteria\": [\"Snapshot types match serde\", \"claude_jsonl flattened\", \"getSnapshot/refreshNow/onUsageUpdated/onDegraded exported\"]}\n```"
-    },
-    {
-      "id": 10,
-      "subject": "Task 2: Frontend presentation helpers + Vitest",
-      "status": "pending",
-      "blockedBy": [9],
-      "description": "Pure unit-tested helpers (pace/quota/format/provenance) + vitest. Files: src/lib/presentation/*.ts + tests, package.json, vite.config.js. Verify: bun run test. Full code in plan Task 2.\n\n```json:metadata\n{\"files\": [\"src/lib/presentation/pace.ts\", \"src/lib/presentation/format.ts\", \"src/lib/presentation/quota.ts\", \"src/lib/presentation/provenance.ts\", \"package.json\", \"vite.config.js\"], \"verifyCommand\": \"bun run test\", \"acceptanceCriteria\": [\"paceVerdict thresholds\", \"quotaTone 50/75/90\", \"anthropicQuota statusline-preferred\", \"format helpers\"]}\n```"
-    },
-    {
-      "id": 11,
-      "subject": "Task 3: Frontend usage store",
-      "status": "pending",
-      "blockedBy": [9],
-      "description": "Svelte 5 runes store wiring IPC + degraded map + refresh. File: src/lib/stores/usage.svelte.ts. Verify: bun run check. Full code in plan Task 3.\n\n```json:metadata\n{\"files\": [\"src/lib/stores/usage.svelte.ts\"], \"verifyCommand\": \"bun run check\", \"acceptanceCriteria\": [\"init fetches + listens\", \"destroy unlistens\", \"reactive state\", \"refresh\"]}\n```"
-    },
-    {
-      "id": 12,
-      "subject": "Task 4: Frontend theme tokens + UsageBar primitive",
-      "status": "pending",
-      "blockedBy": [10],
-      "description": "Light/dark CSS tokens + UsageBar (fill=used, tick=elapsed). Files: src/lib/theme.css, src/routes/+layout.svelte, src/lib/components/UsageBar.svelte. Verify: bun run check. Full code in plan Task 4.\n\n```json:metadata\n{\"files\": [\"src/lib/theme.css\", \"src/routes/+layout.svelte\", \"src/lib/components/UsageBar.svelte\"], \"verifyCommand\": \"bun run check\", \"acceptanceCriteria\": [\"theme light/dark\", \"UsageBar fill+tick optional\"]}\n```"
-    },
-    {
-      "id": 13,
-      "subject": "Task 5: Frontend Grid view",
-      "status": "pending",
-      "blockedBy": [12, 10],
-      "description": "Bare 2-column Grid: QuotaCell/BilledCell/GridView, hover provenance, degraded marker. Files: src/lib/components/{QuotaCell,BilledCell,GridView}.svelte. Verify: bun run check. Full code in plan Task 5.\n\n```json:metadata\n{\"files\": [\"src/lib/components/QuotaCell.svelte\", \"src/lib/components/BilledCell.svelte\", \"src/lib/components/GridView.svelte\"], \"verifyCommand\": \"bun run check\", \"acceptanceCriteria\": [\"bare 2-col no badges\", \"degraded marker\", \"provenance title\", \"single-provider drops column\"]}\n```"
-    },
-    {
-      "id": 14,
-      "subject": "Task 6: Frontend Cards view + density toggle",
-      "status": "pending",
-      "blockedBy": [12, 10],
-      "description": "Cards (per-cadence bars + inline badges) + DensityToggle. Files: src/lib/components/{Badge,ProviderCard,CardsView,DensityToggle}.svelte. Verify: bun run check. Full code in plan Task 6.\n\n```json:metadata\n{\"files\": [\"src/lib/components/Badge.svelte\", \"src/lib/components/ProviderCard.svelte\", \"src/lib/components/CardsView.svelte\", \"src/lib/components/DensityToggle.svelte\"], \"verifyCommand\": \"bun run check\", \"acceptanceCriteria\": [\"per-cadence bars\", \"inline badges\", \"toggle bindable\"]}\n```"
-    },
-    {
-      "id": 15,
-      "subject": "Task 7: Frontend Popover composition + page wiring",
-      "status": "pending",
-      "blockedBy": [13, 14, 11],
-      "description": "Header/BurnIndicator/LeverageBox/Popover + +page wiring (init/destroy, loading/empty). Files: src/lib/components/{Header,BurnIndicator,LeverageBox,Popover}.svelte, src/routes/+page.svelte. Verify: bun run check. Full code in plan Task 7.\n\n```json:metadata\n{\"files\": [\"src/lib/components/Header.svelte\", \"src/lib/components/BurnIndicator.svelte\", \"src/lib/components/LeverageBox.svelte\", \"src/lib/components/Popover.svelte\", \"src/routes/+page.svelte\"], \"verifyCommand\": \"bun run check\", \"acceptanceCriteria\": [\"header toggle+refresh+disabled gear\", \"renders views+burn+leverage\", \"page init/destroy + loading/empty\"]}\n```"
-    },
-    {
-      "id": 16,
-      "subject": "Task 8: TauriSink — emit events + ColorBucket + dedup",
-      "status": "pending",
-      "description": "Fill TauriSink: emit usage_updated/degraded_state, ColorBucket worst-window, dedup. Files: src-tauri/src/tauri_sink.rs, src-tauri/src/lib.rs. Verify: cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings. Compiles+commits with Task 9. Full code in plan Task 8.\n\n```json:metadata\n{\"files\": [\"src-tauri/src/tauri_sink.rs\", \"src-tauri/src/lib.rs\"], \"verifyCommand\": \"cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings\", \"acceptanceCriteria\": [\"emit usage_updated\", \"worst_utilization\", \"from_util 50/75/90 + Warn\", \"dedup\", \"emit degraded_state\", \"unit tests\"]}\n```"
-    },
-    {
-      "id": 17,
-      "subject": "Task 9: Runtime-rendered gauge tray icon",
-      "status": "pending",
-      "blockedBy": [16],
-      "description": "Hand-rolled RGBA ring gauge per ColorBucket; set via tray.set_icon (tray_by_id main). File: src-tauri/src/tray_icon.rs. Verify: cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings. Commit Tasks 8+9 together. Full code in plan Task 9.\n\n```json:metadata\n{\"files\": [\"src-tauri/src/tray_icon.rs\"], \"verifyCommand\": \"cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings\", \"acceptanceCriteria\": [\"paint sets icon+tooltip\", \"render_gauge RGBA length\", \"tray_by_id main\", \"pixel-count test\"]}\n```"
-    },
-    {
-      "id": 18,
-      "subject": "Task 10: IPC commands (get_snapshot, refresh_now)",
-      "status": "pending",
-      "description": "get_snapshot (handle.query) + refresh_now (StateMsg::Refresh), Result<_,String>. Files: src-tauri/src/commands.rs, src-tauri/src/lib.rs. Verify: cargo build --workspace (within Task 11). Full code in plan Task 10.\n\n```json:metadata\n{\"files\": [\"src-tauri/src/commands.rs\", \"src-tauri/src/lib.rs\"], \"verifyCommand\": \"cargo build --workspace\", \"acceptanceCriteria\": [\"get_snapshot via query\", \"refresh_now Refresh\", \"Result<_,String>\"]}\n```"
-    },
-    {
-      "id": 19,
-      "subject": "Task 11: Boot the live spine + popover window mechanics",
-      "status": "pending",
-      "blockedBy": [16, 17, 18],
-      "description": "Boot tokio runtime + coordinator(TauriSink) + watcher, manage handle, register commands, supervise, popover window + tray-click/blur. Files: src-tauri/src/lib.rs, src-tauri/tauri.conf.json, src-tauri/Cargo.toml. Verify: cargo build --workspace && cargo clippy --workspace --all-targets -- -D warnings && bun run tauri build --no-bundle. Full code in plan Task 11.\n\n```json:metadata\n{\"files\": [\"src-tauri/src/lib.rs\", \"src-tauri/tauri.conf.json\", \"src-tauri/Cargo.toml\"], \"verifyCommand\": \"cargo build --workspace && cargo clippy --workspace --all-targets -- -D warnings && bun run tauri build --no-bundle\", \"acceptanceCriteria\": [\"coordinator+watcher boot + manage\", \"commands registered\", \"supervised\", \"tray click + blur hide\", \"borderless always-on-top hidden\"]}\n```"
-    },
-    {
-      "id": 20,
-      "subject": "Task 12: Integration smoke + full validation",
-      "status": "pending",
-      "blockedBy": [15, 19],
-      "description": "Full AGENTS.md §6 gates + manual tauri dev smoke (gauge/click/blur/live/toggle/light-dark/degraded) + PR. Verify: cargo build/clippy/test/fmt + bun run check/test; human runs bun run tauri dev. Full steps in plan Task 12.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"cargo build --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo fmt --all -- --check && bun run check && bun run test\", \"acceptanceCriteria\": [\"all gates clean\", \"tauri dev smoke checklist\", \"PR opened\"]}\n```"
-    }
+    { "id": 9,  "subject": "Task 1: Frontend Snapshot types + IPC layer", "status": "completed", "description": "TS mirror of raw Snapshot + invoke/listen wrappers. Commit c04558c." },
+    { "id": 10, "subject": "Task 2: Frontend presentation helpers + Vitest", "status": "completed", "blockedBy": [9], "description": "pace/quota/format/provenance + vitest (12 tests). Commits 517cd12, 4d67e8c." },
+    { "id": 11, "subject": "Task 3: Frontend usage store", "status": "completed", "blockedBy": [9], "description": "runes store wiring IPC. Commit 96285e1." },
+    { "id": 12, "subject": "Task 4: Frontend theme tokens + UsageBar primitive", "status": "completed", "blockedBy": [10], "description": "light/dark theme + UsageBar. Commit 35d2788." },
+    { "id": 13, "subject": "Task 5: Frontend Grid view", "status": "completed", "blockedBy": [12, 10], "description": "badge-free Grid + hover provenance + degraded marker. Commit 313f873." },
+    { "id": 14, "subject": "Task 6: Frontend Cards view + density toggle", "status": "completed", "blockedBy": [12, 10], "description": "per-cadence Cards + badges + toggle. Commit 0d0be38." },
+    { "id": 15, "subject": "Task 7: Frontend Popover composition + page wiring", "status": "completed", "blockedBy": [13, 14, 11], "description": "Header/Burn/Leverage/Popover + page. Commit 002aa69." },
+    { "id": 16, "subject": "Task 8: TauriSink — emit events + ColorBucket + dedup", "status": "completed", "description": "TauriSink emit + ColorBucket + dedup. Commit 7bf192c." },
+    { "id": 17, "subject": "Task 9: Runtime-rendered gauge tray icon", "status": "completed", "blockedBy": [16], "description": "hand-rolled RGBA gauge. Commit 7bf192c." },
+    { "id": 18, "subject": "Task 10: IPC commands (get_snapshot, refresh_now)", "status": "completed", "description": "get_snapshot + refresh_now. Commit d18ab4b." },
+    { "id": 19, "subject": "Task 11: Boot live spine + popover window mechanics", "status": "completed", "blockedBy": [16, 17, 18], "description": "coordinator+watcher+TauriSink boot, popover window. Commits d18ab4b, 007d5a2 (macOSPrivateApi)." },
+    { "id": 20, "subject": "Task 12: Integration smoke + full validation", "status": "completed", "blockedBy": [15, 19], "description": "All automated gates green; manual tauri dev smoke passed on Windows 11 (tray gauge + tooltip, anchored popover, live Grid/Cards). Post-smoke fixes: tray-anchored positioning (2cf4956), left-click-opens + refresh-on-open + listener reorder (cb37054/9d768b3), connecting-vs-unavailable quota state (7c916ed). macOSPrivateApi enabled (007d5a2)." }
   ]
 }
