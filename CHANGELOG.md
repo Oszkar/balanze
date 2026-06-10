@@ -80,3 +80,4 @@ v0.1 — **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distr
 [0.1.1]: https://github.com/Oszkar/balanze/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Oszkar/balanze/releases/tag/v0.1.0
 [0.2.0]: https://github.com/Oszkar/balanze/releases/tag/v0.2.0
+[0.3.0]: https://github.com/Oszkar/balanze/releases/tag/v0.3.0
