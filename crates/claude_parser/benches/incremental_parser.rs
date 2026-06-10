@@ -36,10 +36,11 @@
 //! first. To refresh: run `--save-baseline committed` and copy the
 //! new `estimates.json` back over `benches/baseline.json`.
 
+use std::hint::black_box;
 use std::io::Write;
 
 use claude_parser::IncrementalParser;
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use tempfile::NamedTempFile;
 
 /// Realistic assistant-line shape. Token counts vary so the parser's

@@ -21,10 +21,12 @@
 //! committed snapshot, run with `--save-baseline committed` and copy
 //! the new `estimates.json` back over `benches/baseline.json`.
 
+use std::hint::black_box;
+
 use chrono::{TimeZone, Utc};
 use claude_cost::{compute_cost, load_bundled_prices};
 use claude_parser::{AccountType, DataSource, Provider, UsageEvent};
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 /// Build a deterministic slice of N synthetic events spread across three
 /// real model names from the bundled price table. Mixing models exercises
