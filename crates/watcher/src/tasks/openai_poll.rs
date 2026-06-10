@@ -49,23 +49,6 @@ pub(crate) fn spawn(
             }
         };
 
-        let client = match reqwest::Client::builder()
-            .user_agent("balanze-watcher/0.1.0")
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("watcher/openai_poll: reqwest client build failed: {e}");
-                let _ = coord
-                    .send(StateMsg::Update(SourceUpdate {
-                        source: Source::OpenAiCosts,
-                        result: Err(format!("reqwest client build failed: {e}")),
-                    }))
-                    .await;
-                return Ok(());
-            }
-        };
-
         // First tick fires immediately. `Delay` (not default `Burst`) so a
         // slow `costs_this_month` under `BackoffPolicy::standard()` backoff
         // can't queue up multiple missed ticks and fire a burst on recovery.
@@ -74,6 +57,28 @@ pub(crate) fn spawn(
 
         loop {
             ticker.tick().await;
+
+            // Build the client per tick. A build failure (e.g. TLS backend
+            // init) previously `return Ok(())`'d — which the supervisor reads
+            // as a clean exit, silently freezing the OpenAI cell until restart.
+            // Emitting the error + `continue` instead keeps the task alive: the
+            // cell shows a persistent degraded state and the next tick retries.
+            let client = match reqwest::Client::builder()
+                .user_agent("balanze-watcher/0.1.0")
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("watcher/openai_poll: reqwest client build failed: {e}");
+                    let _ = coord
+                        .send(StateMsg::Update(SourceUpdate {
+                            source: Source::OpenAiCosts,
+                            result: Err(format!("reqwest client build failed: {e}")),
+                        }))
+                        .await;
+                    continue;
+                }
+            };
 
             let update = match costs_this_month(
                 &client,

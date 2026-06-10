@@ -68,23 +68,6 @@ pub(crate) fn spawn(
             return Ok(());
         }
 
-        let client = match reqwest::Client::builder()
-            .user_agent("balanze-watcher/0.1.0")
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("watcher/oauth_poll: reqwest client build failed: {e}");
-                let _ = coord
-                    .send(StateMsg::Update(SourceUpdate {
-                        source: Source::ClaudeOAuth,
-                        result: Err(format!("reqwest client build failed: {e}")),
-                    }))
-                    .await;
-                return Ok(());
-            }
-        };
-
         // First tick fires immediately (interval fires on first `.tick()` call).
         // `Delay` (not the default `Burst`) so a slow tick — `fetch_usage`
         // backing off for up to 10 minutes under `BackoffPolicy::standard()` —
@@ -96,6 +79,28 @@ pub(crate) fn spawn(
 
         loop {
             ticker.tick().await;
+
+            // Build the client per tick. A build failure (e.g. TLS backend
+            // init) previously `return Ok(())`'d — which the supervisor reads
+            // as a clean exit, silently freezing the OAuth cell until restart.
+            // Emitting the error + `continue` keeps the task alive: the cell
+            // shows a persistent degraded state and the next tick retries.
+            let client = match reqwest::Client::builder()
+                .user_agent("balanze-watcher/0.1.0")
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("watcher/oauth_poll: reqwest client build failed: {e}");
+                    let _ = coord
+                        .send(StateMsg::Update(SourceUpdate {
+                            source: Source::ClaudeOAuth,
+                            result: Err(format!("reqwest client build failed: {e}")),
+                        }))
+                        .await;
+                    continue;
+                }
+            };
 
             let result = poll_once(&client).await;
             let update = match result {
