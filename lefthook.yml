@@ -10,6 +10,13 @@
 pre-commit:
   parallel: true
   commands:
+    secrets:
+      # No glob: runs on every commit. Scans only staged content for secret
+      # patterns and blocks .env files (AGENTS.md 3.4). Sub-second.
+      run: bun scripts/check-secrets.mjs
+      fail_text: |
+        Potential secret detected in staged changes. See output above.
+
     rustfmt:
       tags: rust
       glob: "*.rs"
