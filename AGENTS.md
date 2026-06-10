@@ -125,6 +125,16 @@ Avoid drive-by refactors.
 
 ### Local dev (for agents that can run commands)
 
+Preferred loop (`just` recipes wrap the raw commands below):
+
+```bash
+just check                       # rustfmt + clippy -D warnings + svelte-check + cargo deny
+just test                        # cargo-nextest + vitest
+just dev                         # run the desktop app
+```
+
+Raw commands (what the recipes run, plus extras):
+
 ```bash
 # Run the desktop app:
 bun run tauri dev
@@ -132,7 +142,7 @@ bun run tauri dev
 # Subsystem checks (fast feedback):
 cargo check --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo nextest run --workspace    # or: cargo test --workspace
 bun run check                    # svelte-check + tsc
 
 # Release build:

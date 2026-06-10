@@ -56,6 +56,9 @@ jobs:
           # other's caches.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
@@ -69,8 +72,11 @@ jobs:
         # present natively.
         run: cargo clippy --workspace --exclude balanze --all-targets -- -D warnings
 
-      - name: cargo test (workspace minus src-tauri)
-        run: cargo test --workspace --exclude balanze
+      - name: cargo nextest (workspace minus src-tauri)
+        # No separate doc-test step: the workspace has zero doctests today.
+        # If doctests appear, add `cargo test --doc --workspace` here
+        # (nextest doesn't run doctests).
+        run: cargo nextest run --workspace --exclude balanze
 
       - name: svelte-check
         run: bun run check
@@ -106,11 +112,14 @@ jobs:
             src-tauri -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: cargo test (full workspace, including src-tauri)
-        run: cargo test --workspace
+      - name: cargo nextest (full workspace, including src-tauri)
+        run: cargo nextest run --workspace
 
       - name: clippy src-tauri
         run: cargo clippy -p balanze --all-targets -- -D warnings

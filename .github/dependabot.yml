@@ -14,8 +14,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "06:00"
-      timezone: Europe/Budapest
+      time: "10:00"
+      timezone: Asia/Tokyo
     open-pull-requests-limit: 5
     labels:
       - dependencies
@@ -44,8 +44,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "06:00"
-      timezone: Europe/Budapest
+      time: "10:00"
+      timezone: Asia/Tokyo
     open-pull-requests-limit: 3
     labels:
       - dependencies
@@ -64,8 +64,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "06:00"
-      timezone: Europe/Budapest
+      time: "10:00"
+      timezone: Asia/Tokyo
     open-pull-requests-limit: 3
     labels:
       - dependencies
