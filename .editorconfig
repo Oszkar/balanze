@@ -1,30 +1,30 @@
-# EditorConfig — https://editorconfig.org
-# Keeps line endings, indentation, and trailing whitespace consistent across
-# any editor that reads .editorconfig (most do, including VS Code, JetBrains,
-# Vim, Emacs, Sublime, etc.). rustfmt (Rust) and svelte-check/tsc (frontend)
-# enforce stricter per-filetype rules in CI; .gitattributes git-enforces LF.
-# This file is the cross-cutting editor baseline. (Prettier is intentionally
-# NOT used — see AGENTS.md §2.1.)
-
+# Shared editor baseline across the fleet (degner / oto / balanze / norrix).
+# 4-space default; 2-space only where the language's formatter or ecosystem
+# convention is firmly 2 (web stack, YAML, Dart). LF everywhere (matching
+# .gitattributes); trailing whitespace trimmed except in Markdown (hard
+# line breaks are syntax there).
 root = true
 
 [*]
 charset = utf-8
 end_of_line = lf
 insert_final_newline = true
-trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
+trim_trailing_whitespace = true
 
-# Web + config formats conventionally use 2-space indent.
-[*.{svelte,ts,js,mjs,cjs,json,jsonc,html,css,yml,yaml,toml,md}]
+[*.{js,mjs,cjs,ts,svelte,json,jsonc,html,css,scss,yml,yaml,dart}]
 indent_size = 2
 
-# Markdown trailing whitespace is sometimes meaningful (line breaks). Leave it.
 [*.md]
 trim_trailing_whitespace = false
 
+[Makefile]
+indent_style = tab
+
+# --- Repo-specific overrides below this line ---
+
 # Generated lockfiles shouldn't be reformatted by an editor save.
-[{Cargo.lock,bun.lock,package-lock.json}]
+[{Cargo.lock,bun.lock}]
 insert_final_newline = unset
 trim_trailing_whitespace = unset
