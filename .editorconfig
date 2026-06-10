@@ -22,9 +22,6 @@ trim_trailing_whitespace = false
 [Makefile]
 indent_style = tab
 
-[*.{bat,cmd}]
-end_of_line = crlf
-
 # --- Repo-specific overrides below this line ---
 
 # Generated lockfiles shouldn't be reformatted by an editor save.

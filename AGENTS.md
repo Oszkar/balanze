@@ -157,7 +157,7 @@ Before claiming work is done:
 
 | Change touches | Required gates |
 |---|---|
-| Any `**/*.rs` in workspace | `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo fmt --all -- --check` |
+| Any `**/*.rs` in workspace | `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace`, `cargo fmt --all -- --check` |
 | Any crate's logic | That crate's own tests stay green **and** you add/extend a test for the specific invariant you changed. For pure crates (`window`, `claude_cost`): write the test **before** the impl change. Don't weaken an assertion to make it pass — see §7 |
 | `crates/claude_parser/**` | + documented failure modes still pass (file missing / partial final line / schema drift / empty / permission denied) + real-data smoke (`cargo run -p claude_parser --example claude_parser_smoke`) |
 | `crates/keychain/**` | + run the `#[ignore]`'d real-keychain smoke **manually on each OS before tagging a release** — cross-OS keychain in CI is unreliable, so CI green ≠ keychain works |
@@ -182,7 +182,7 @@ Before claiming work is done:
 
 ### Where tests live
 
-- **Unit tests:** inline `#[cfg(test)] mod tests` in each crate's `src/`. `cargo test --workspace` is the gate.
+- **Unit tests:** inline `#[cfg(test)] mod tests` in each crate's `src/`. `cargo nextest run --workspace` is the gate (plain `cargo test --workspace` works too).
 - **Integration:** `crates/<crate>/tests/` — `anthropic_oauth` / `openai_client` use `wiremock`; `balanze_cli/tests/integration_4quadrant.rs` is the end-to-end composition test against committed fixtures with a fixed `now`.
 - **Real-data smokes:** `cargo run -p <crate> --example <name>` against the developer's actual `~/.claude` / `~/.codex` — not run in CI; maintainer runs them before tagging.
 - **`#[ignore]`'d:** the real-keychain smoke (CI keychain is unreliable; run manually per §6).
