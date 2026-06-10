@@ -4,13 +4,7 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 — minor bumps may break; patch bumps are fixes only.
 
-**Entries stay terse (one line, ideally).** The *why* — design rationale, trade-offs, spike findings — lives in [`docs/PRD.md`](docs/PRD.md) and [`docs/superpowers/`](docs/superpowers/), not here. This keeps the log scannable as it grows.
-
-> **0.2.0 and 0.3.0 are documented but not yet git-tagged.** Both are fully merged to `main`; the tags get cut from `main` at release time. Until then `compare/v0.1.1...HEAD` covers all of it.
-
 ## [Unreleased]
-
-_Next: **v0.3.1 — Settings & trust** (settings UI, `keyring`→`keyring-core` migration, degraded-state surfacing, Codex-staleness honesty, uniform serde redaction). See [`docs/PRD.md`](docs/PRD.md)._
 
 ## [0.3.0] — UI: the popover (pending tag)
 
@@ -86,15 +80,6 @@ v0.1 — **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distr
 - **Windows keychain backend silently no-ops** (`keyring 3.6.3`). Workaround: `BALANZE_OPENAI_KEY`. Real fix rides the settings UI (`keyring`→`keyring-core` v4, v0.3.1).
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated — Phase-0 NO-GO).
 
-## Roadmap
-
-Theme per phase: **Data → Liveness → UI → Distribution & Legibility → Vision.** Full detail in [`docs/PRD.md`](docs/PRD.md).
-
-- **v0.1 / v0.1.1 — Data** ✅ tagged — four-quadrant CLI; OAuth refresh + v0.2 de-risk foundations.
-- **v0.2 — Liveness** ✅ on `main` (pending tag) — watcher, statusline source, `--watch`, pace view.
-- **v0.3 — UI** — popover (**v0.3.0** ✅ on `main`, pending tag) → settings & trust (v0.3.1) → alerts (v0.3.2) → dashboard + SQLite history (v0.3.3).
-- **v0.4 — Distribution & Legibility** — unsigned runnable binaries, README screenshots / "how it works" writeup.
-- **Vision** — Ubuntu GNOME, cross-device sync, Android companion, hosted wallboard, a third connector.
 
 [Unreleased]: https://github.com/Oszkar/balanze/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/Oszkar/balanze/compare/v0.1.0...v0.1.1

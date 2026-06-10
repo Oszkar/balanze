@@ -199,11 +199,9 @@ Before claiming work is done:
 
 ## 10a. Known issues
 
-- **Keychain backend broken on Windows (v0.1):** `keyring = "3.6.3"` silently no-ops on Windows — `set_password` returns `Ok` but the credential never lands in Credential Manager. Reproducible via `cargo test --release -p keychain -- --ignored`. Workaround: the CLI honors `BALANZE_OPENAI_KEY`, which takes precedence over the keychain. Real fix is migrating to `keyring-core` (v4); scheduled for v0.3 alongside the Tauri settings UI.
+- **Keychain backend broken on Windows (v0.1):** `keyring = "3.6.3"` silently no-ops on Windows — `set_password` returns `Ok` but the credential never lands in Credential Manager. Reproducible via `cargo test --release -p keychain -- --ignored`. Workaround: the CLI honors `BALANZE_OPENAI_KEY`, which takes precedence over the keychain. Real fix is migrating to `keyring-core` (v4).
 
 ## 10. Troubleshooting
-
-The Tauri tray UI is still scaffold.
 
 ### "Tray icon doesn't appear" or "two tray icons in the menu bar"
 
