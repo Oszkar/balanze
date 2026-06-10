@@ -15,8 +15,12 @@ let errors = 0;
 function run(cmd) {
   try {
     return execSync(cmd, { encoding: 'utf-8' }).trim();
-  } catch {
-    return '';
+  } catch (err) {
+    // Fail closed: a secret gate that cannot inspect the staged content must
+    // block the commit, not silently wave it through.
+    console.error(`${RED}ERROR: secret scan could not inspect staged changes:${NC} ${cmd}`);
+    console.error(String(err?.message ?? err));
+    process.exit(1);
   }
 }
 
@@ -55,22 +59,36 @@ const SECRET_PATTERNS = [
   /Bearer\s+eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
 ];
 
-const combined = new RegExp(SECRET_PATTERNS.map((r) => r.source).join('|'));
+// Test each pattern individually (a single combined RegExp would drop
+// per-pattern flags like /i).
+const matchesSecret = (line) => SECRET_PATTERNS.some((re) => re.test(line));
 
-// Only scan staged diff, skip .example files, this script, and markdown
+// Mask every matched span before printing - the hook must not re-expose the
+// very secret it just caught (AGENTS.md 3.4: never log secrets).
+function redact(line) {
+  let out = line;
+  for (const re of SECRET_PATTERNS) {
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    out = out.replace(g, (m) => `${m.slice(0, 4)}***REDACTED***`);
+  }
+  return out;
+}
+
+// Only scan staged diff, skip .example files and this script. Markdown is
+// deliberately NOT excluded: a real key pasted into docs is still a leak.
 const diff = run(
-  'git diff --cached -U0 --diff-filter=ACMR -- . ":!*.example" ":!*.example.*" ":!*check-secrets*" ":!*.md"',
+  'git diff --cached -U0 --diff-filter=ACMR -- . ":!*.example" ":!*.example.*" ":!*check-secrets*"',
 );
 
 if (diff) {
   const matches = diff
     .split('\n')
-    .filter((line) => line.startsWith('+') && !line.startsWith('+++') && combined.test(line))
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++') && matchesSecret(line))
     .slice(0, 20);
 
   if (matches.length > 0) {
     console.error(`${RED}ERROR: Potential secrets detected in staged changes:${NC}`);
-    matches.forEach((m) => console.error(`  ${m}`));
+    matches.forEach((m) => console.error(`  ${redact(m)}`));
     console.error(`${YELLOW}Hint: if this is a false positive, narrow SECRET_PATTERNS in scripts/check-secrets.mjs.${NC}`);
     errors++;
   }
