@@ -38,7 +38,7 @@ Correctness > Cleverness · Security > Convenience · Simplicity > Flexibility �
 | Concern | Convention |
 |---|---|
 | Rust edition | 2024 (workspace). Migrated 2026-05-29. The former "Tauri 2 macros lag on edition 2024" pin was stale: it conflated Tauri **1.x** (still catching up — [tauri#10412](https://github.com/tauri-apps/tauri/issues/10412), backported only in [tauri#15207](https://github.com/tauri-apps/tauri/pull/15207), Apr 2026) with **2.x**, which fixed edition-2024 `Cargo.toml` parsing (`tauri-build`/`tauri-codegen` via `cargo_toml` ≥ 0.20) before the edition stabilized. Balanze is on Tauri 2 |
-| Rust MSRV | 1.85 (workspace `Cargo.toml`; the floor edition 2024 requires). Toolchain pinned to 1.94.0 via `rust-toolchain.toml`; CI matches with `dtolnay/rust-toolchain@1.94` |
+| Rust MSRV | 1.85 (workspace `Cargo.toml`; the floor edition 2024 requires). Toolchain pinned to 1.94.0 via `rust-toolchain.toml` - the single pin source: CI installs it with `actions-rust-lang/setup-rust-toolchain@v1`, which reads that file, so a toolchain bump is one file + this row |
 | Workspace | Single Cargo workspace at repo root; `src-tauri` + `crates/*` are members; shared deps declared at workspace level |
 | Logging | `tracing` (not `log`); see §3.2 for level discipline |
 | Async | `tokio` everywhere; never block the runtime; never hold a `tokio::sync::Mutex` across an unrelated `.await` |

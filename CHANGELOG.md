@@ -9,8 +9,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 ### Changed
 - Toolchain unification: Rust pinned to 1.94.0 via `rust-toolchain.toml` (CI matches; MSRV stays 1.85), Bun pinned to 1.3.13 via `packageManager` + CI `bun-version-file`.
 - PR titles are now CI-validated as Conventional Commits (`pr-title.yml`), matching the local `commit-msg` hook.
+- CI installs Rust via `actions-rust-lang/setup-rust-toolchain@v1`, which reads `rust-toolchain.toml` - the toml is now the single pin source, and dependabot no longer proposes toolchain releases as action-tag bumps (the dtolnay action encoded the version in its ref).
 
 ### Fixed
+- Statusline windows with an out-of-range `resets_at` are dropped with a warning instead of being silently rewritten to the Unix epoch.
 - Statusline parser tolerates partial window-shape drift: a present-but-incomplete `rate_limits.{five_hour,seven_day}` window (missing `used_percentage`/`resets_at`, e.g. a future field rename) degrades that one window to `None` - logged at `warn!` so the drift stays visible - instead of erroring the whole payload; the other window and the session cost survive. A present `null` or wrong-type field still surfaces as `SchemaDrift`.
 - Watcher pollers survive a `reqwest` client-build failure: `openai_poll` / `oauth_poll` built the HTTP client once before the loop and exited cleanly on failure - silently freezing that cell until restart. They now build the client per tick, emit the error, and retry, so the degraded state stays visible and self-heals.
 
