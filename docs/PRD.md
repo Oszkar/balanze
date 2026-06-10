@@ -274,7 +274,7 @@ Engineering bar (what "finished-feeling" means here):
 
 The MVP lands across four release phases plus an uncommitted Vision tier. Each phase has **one dominant theme** — Data → Liveness → UI → Distribution & Legibility → Vision — so "done" for each is hard to fudge and risk is sequenced correctly (read-only data primitives first, asymmetric/UI work later). v0.3 (UI) is delivered as **bounded sub-milestones** (v0.3.0–v0.3.3) that each ship on their own, so the hero artifact — the popover — exists early rather than at the end of one large release. This summary supersedes an earlier phasing that tried to ship the full tray UI + predictor in v0.1, and a later one that packed all UI work into a single monolithic v0.3. The detailed build sequence lives in the design doc; this is the product-level summary.
 
-### Phase 1 — v0.1: Data (shipped, pre-tag)
+### Phase 1 — v0.1: Data (shipped — tagged `v0.1.0` / `v0.1.1`)
 
 A complete, honest **data layer** exposed as a CLI (`balanze-cli`). No tray UI yet — the CLI prints the same normalized snapshot the eventual popover will show. The bar for v0.1 is the **four-quadrant matrix fully lit**:
 
@@ -296,7 +296,7 @@ Per the matrix presentation contract above, every cell holds measured reality on
 - **Distribution: source only.** `cargo install --git https://github.com/Oszkar/balanze balanze_cli` (the repo root is a virtual workspace, so the package is named explicitly; it builds the `balanze-cli` binary). No binaries, no installers, no GitHub Releases in v0.1 — the audience (org-admin tinkerer power-users) accepts the Rust-toolchain prerequisite. Linux works via `cargo install` (no separate test matrix; tray UI is later anyway).
 - **Not in v0.1:** tray UI, popover, file watcher, pace view, alerts, dashboard window. All deliberately moved to later phases.
 
-### Phase 2 — v0.2: Liveness
+### Phase 2 — v0.2: Liveness (shipped — merged to `main`, tag pending)
 
 Make the data update itself, make the Anthropic API $ figure honest, and project forward. No UI yet; the CLI gets "alive." Delivery is sequenced into tracks so the riskiest work (a live loop) is preceded by the de-risking it depends on. Schema, new-crate, and secret-surface changes called out below pass through the `AGENTS.md` §8 change-control gate at implementation time.
 
@@ -330,18 +330,20 @@ Sequencing: Track A → Track B → Track C → **Track D** → Track E. (Track 
 
 The Tauri surface — the hero artifact of the project. The full UI scope from the original plan stays intact (popover, settings, alerts, dashboard), but it ships as **bounded sub-milestones**, each shippable on its own, so the popover screenshot exists early instead of after one large release. The biggest known risk — the `state_coordinator` `Sink` / `TauriSink` seam, validated as a compile-only skeleton in v0.2 — is exercised live in the very first sub-milestone.
 
-**v0.3.0 — Popover (the hero).** The glanceable surface, and the thing that makes the whole backend legible.
+**v0.3.0 — Popover (the hero). ✅ Shipped — merged to `main` (#58), tag pending.** The glanceable surface, and the thing that makes the whole backend legible.
 
-- Tauri 2 popover/tray UI: color-shifting gauge tray icon (repaint deduped by `(ColorBucket, title_text)`), hidden-on-launch popover with one progress bar per Anthropic cadence + reset sublines, burn sparkline, the **pace view**, and the matrix tiles.
-- **Pace view (replaces the retired predictor).** Per window (5h / 7-day), show two measured facts side by side — *quota used %* and *window elapsed %* — plus a transparent **pace ratio** (used ÷ elapsed) rendered as a glanceable verdict ("on pace" / "burning ~2.0× faster than linear"). It is pure division of two measured numbers, **not** a time forecast: always defined, no warm-up, no post-reset lie. The 30-minute burn sparkline (current rate, also a measured fact) stays alongside it.
+- Tauri 2 popover/tray UI: color-shifting gauge tray icon (RGBA ring rendered at runtime, repaint deduped by `(ColorBucket, title_text)`), hidden-on-launch popover (left-click toggles, blur hides) with one progress bar per Anthropic cadence + reset sublines, the burn number, the **pace view**, and the matrix tiles — in a transposed grid (providers as columns) plus a Cards density view.
+- **Pace view (replaces the retired predictor).** Per window (5h / 7-day), show two measured facts side by side — *quota used %* and *window elapsed %* — plus a transparent **pace ratio** (used ÷ elapsed) rendered as a glanceable verdict ("on pace" / "burning ~2.0× faster than linear"). It is pure division of two measured numbers, **not** a time forecast: always defined, no warm-up, no post-reset lie. The 30-minute burn rate shows alongside it as a number (the sparkline *glyph* + its series ride with durable history in v0.3.3).
 - The tiles obey the **matrix presentation contract** (see Functional requirements): the 2×2 holds **measured reality only** — server quota % and real billed $ — with each cell carrying a **visible source/confidence badge** (REAL billed vs quota %), the primary quota source being the statusline feed with OAuth shown as the stale/fallback state. The **"Subscription leverage"** estimate (JSONL list-price) renders as a separate, clearly-secondary insight outside the grid — never as a matrix cell. Making the provenance model *visible* is a first-class goal of this milestone, not a label afterthought.
-- Wires the live spine into the Tauri host (the watcher → coordinator → `TauriSink` path) and the minimal IPC the popover needs: `get_snapshot`, `get_history`, `refresh_now`, and the `usage_updated` event. `tauri-plugin-single-instance` so the user cannot double-launch.
+- Wires the live spine into the Tauri host (the watcher → coordinator → `TauriSink` path) and the minimal IPC the popover needs: commands `get_snapshot` + `refresh_now`, events `usage_updated` + `degraded_state`. `tauri-plugin-single-instance` so the user cannot double-launch. (`get_history` stays in the contract but defers to v0.3.3 with the sparkline — no v0.3.0 reader.)
 
 **v0.3.1 — Settings & trust.**
 
 - Settings UI: paste API keys, save to OS keychain. With a real key-input box the keychain code is exercised on both platforms, so this is where the **`keyring` → `keyring-core` (v4) migration** lands — fixing the v0.1 Windows keychain no-op, a visible flaw on the primary dev OS. Adds `set_api_key` / `get_settings` / `set_settings`.
 - Surfaces the Track D `statusLine` wiring (the CLI `setup` does it headless; the settings UI shows/edits it).
 - Degraded-state events surfaced visually (`degraded_state` event): stale data shown with a warning rather than blanked.
+- **Codex-staleness honesty** *(folded from the old TODO-004/005)*. When the latest Codex rollout snapshot has outlived the window it describes (`now > primary.resets_at`), degrade the indicator from `✓` to a stale marker instead of a confidently-wrong used % behind a green check (observed 2026-06-02: `✓ 36.0% … (5h old)` while the live dashboard read ~1%). The same pass fixes the window-duration label — the 5-hour Codex primary window renders `0d` because `window_duration_minutes / 1440` floors to zero; show `5h`. Both in `balanze_cli::compact_codex_quota` and the popover's Codex cell; pre-existing, surfaced in PR #54 cross-reference QA.
+- **Uniform serde-error redaction** *(folded from the old TODO-003, defense-in-depth)*. Route the serde `Display` through `redact_for_display` / `e.classify()` on the three top-level JSON-parse error sites (`anthropic_oauth` `refresh.rs` + `client.rs`, `openai_client` `client.rs`) so a type-confused provider 200 carrying an `sk-…`-shaped value can't leak it into an error string — extending the precedent already applied to the nested `extra_usage` parse. Low realistic probability, but closes the gap consistently across both HTTP clients; rides the trust milestone.
 
 **v0.3.2 — Alerts.** Kept deliberately minimal — table-stakes, not gold-plated.
 
@@ -361,6 +363,7 @@ Make it runnable without a Rust toolchain, and make the engineering legible to a
 - **Runnable release.** Unsigned binaries on GitHub Releases (MSI/NSIS, DMG/app) so someone can download and run it without `cargo`. Linux still via `cargo install`.
 - **Legibility.** A polished README with screenshots / a short GIF of the popover, and a "how it works" writeup centered on the three things worth showing: the data-provenance model (the measured-only matrix + the leverage insight), the "measured status, not forecasts" call (built an EWMA predictor, dogfooded it, retired it for honest pace facts), and the actor-model architecture / the twelve boundaries.
 - "Send Logs" menu item bundling rotated logs + a recent state snapshot for support.
+- **Price-table refresh script** *(folded from the old TODO-001, maintenance)*. A `scripts/refresh-claude-prices.*` mechanizing the vendored LiteLLM Anthropic price-table refresh (fetch → filter to `claude-*` → save with a `_meta` block → bump the `include_str!` path → `cargo test -p claude_cost`). Low-priority: Track C demoted the list-price recompute to a diagnostic fallback, but that fallback still needs a current table for events lacking a pre-calculated cost. The procedure is documented manually in `crates/claude_cost/README.md` today; mechanizing it removes a footgun.
 - **Optional (not committed):** Windows code-signing, macOS notarization, Homebrew tap, WinGet manifest, Tauri auto-update. Done only if the cert/admin cost feels worth it — low engineering-taste signal per hour, and unsigned-runnable already clears the "an evaluator can try it" bar. (If pursued, the release pipeline itself — notarization, auto-update manifest — is the artifact worth showing.)
 
 ### Vision — uncommitted

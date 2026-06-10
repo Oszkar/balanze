@@ -80,7 +80,7 @@ the data file can never drift.
 
 ## Refresh procedure (manual, v0.1)
 
-See `TODO-001` in `TODOS.md` (repo root) for the planned automation script.
+A script to automate this refresh is planned — see the v0.4 "Price-table refresh script" item in `docs/PRD.md`.
 
 1. Fetch `model_prices_and_context_window.json` from a chosen LiteLLM
    commit:
