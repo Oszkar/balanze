@@ -7,11 +7,11 @@
 
 A local-first utility that consolidates personal AI usage into one normalized view — Claude subscription quota, an estimate of Claude Code's API-rate value, OpenAI Codex quota, and real OpenAI API spend, in one glance. Rust + Tauri 2 + Svelte 5. Side project; Windows 11 and macOS 15+ (CLI also runs on Linux).
 
-> Not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Reads only endpoints and files you already have access to with your own credentials. MIT licensed.
+> Not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Reads only endpoints and files you already have access to with your own credentials.
 
 ## What it does
 
-A **complete, honest data layer** exposed as a CLI (`balanze-cli`); a tray UI is on the roadmap. The CLI prints the same normalized snapshot the eventual popover will show. The matrix holds **measured reality only** — server-reported quota % and real billed $ — so cells in a column are always the same *kind* of number:
+A **complete, honest data layer** surfaced two ways — the `balanze-cli` CLI and a **tray popover** (v0.3.0: a color-shifting gauge tray icon + a glanceable grid/cards view). Both render the same normalized snapshot. The matrix holds **measured reality only** — server-reported quota % and real billed $ — so cells in a column are always the same *kind* of number:
 
 |               | Quota %                              | API $ (real billed)                                 |
 |---------------|--------------------------------------|-----------------------------------------------------|
@@ -30,7 +30,7 @@ Planning and history live elsewhere: roadmap and phase detail in [`docs/PRD.md`]
 
 ## CLI
 
-`balanze-cli` is the current surface and the reference composition for the eventual tray popover.
+`balanze-cli` is the headless surface and the reference composition the tray popover (v0.3.0) renders.
 
 ```text
 balanze-cli                       4-quadrant compact status (default)
@@ -67,8 +67,6 @@ Known issues).
 ```
 
 `balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) — shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit.
-
-Default compact view — the matrix holds measured reality only (real billed $ or *n/a*), with the list-price estimate below it as a clearly-separate "Subscription leverage" line so it can't be mistaken for the real OpenAI bill.
 
 ```text
 === Balanze status (2026-05-20 04:27:42 UTC) ===
@@ -109,7 +107,7 @@ The Claude side reads `~/.claude/.credentials.json` directly — no setup needed
 
 ## Develop
 
-Prerequisites: Rust 1.85+ (all you need for the CLI); Bun 1.3+ (only for the Svelte frontend scaffold / `tauri dev`).
+Prerequisites: Rust 1.85+ (all you need for the CLI); Bun 1.3+ (only for the Svelte popover frontend / `tauri dev`).
 
 ```bash
 # CLI from the workspace:
@@ -120,7 +118,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 bun run check                                  # svelte-check + tsc
 
-# Desktop app (scaffold only — tray icon, no data yet; real UI is on the roadmap):
+# Desktop app — gauge tray icon + live popover (v0.3.0):
 bun install                                    # also installs git hooks (see below)
 bun run tauri dev
 ```

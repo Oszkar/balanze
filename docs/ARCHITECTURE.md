@@ -36,8 +36,8 @@ The statusLine push is the v0.2 live backbone for Anthropic quota when the user 
 balanze/
 ├── Cargo.toml, package.json, svelte.config.js, vite.config.js, tsconfig.json
 ├── docs/PRD.md                 product spec
-├── src/                        Svelte 5 frontend (scaffold today; real UI is v0.3)
-├── src-tauri/                  Tauri 2 app crate (scaffold tray + single-instance + compile-only TauriSink)
+├── src/                        Svelte 5 frontend — popover (grid/cards views, IPC store, presentation helpers); v0.3.0
+├── src-tauri/                  Tauri 2 app — gauge tray + live popover + single-instance + filled TauriSink; v0.3.0
 ├── crates/
 │   ├── claude_parser/          JSONL wire format: parse, walker, dedup, IncrementalParser, find_claude_projects_dir
 │   ├── claude_cost/            pure JSONL → estimated $ vs vendored LiteLLM prices; infallible
@@ -86,6 +86,8 @@ Frontend ↔ backend, via Tauri commands and events only. Commands return `Resul
 | Command | `get_settings` / `set_settings` | Non-secret config (settings.json shape). |
 | Event | `usage_updated` | New `Snapshot` available. |
 | Event | `degraded_state` | A source is stale / errored; surface visually. |
+
+**Status:** v0.3.0 implements `get_snapshot`, `refresh_now`, `usage_updated`, `degraded_state`. Planned: `set_api_key` / `get_settings` / `set_settings` (v0.3.1, with the settings UI + `keyring-core` migration); `get_history` (v0.3.3, with durable SQLite history + the sparkline). `refresh_now` today re-emits the current snapshot to the sink (repaint + catch-up); an on-demand provider re-poll is a v0.3.x follow-up.
 
 The CLI `--json` schema is the same `Snapshot` rendered through a presentation DTO (`crates/balanze_cli/src/json_output.rs`): every money cell is `{ value_micro_usd: i64, source, confidence, details }`, so consumers tell `jsonl_list_price` / `estimate` apart from `openai_admin_costs` / `real` and `extra_usage_billed` / `real` from the wire shape. Two extra cells (v0.2): `claude_statusline` carries the live `StatuslineFilePayload` envelope (Claude Code's session estimate — a distinct cost tier, no money normalization); `.pace` carries a per-window array (`key`, `used_fraction`, `elapsed_fraction`, `ratio`) derived from the OAuth cadence bars — used % vs elapsed % of each quota window (5h, 7d) plus their ratio, computed by `window::pace`; `ratio` is null right after a window reset. `--watch --json` reuses this DTO, one JSON document per line. Identifiers (`org_uuid`, Codex `session_id`) are redacted unless `-v`.
 
