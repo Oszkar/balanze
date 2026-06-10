@@ -155,13 +155,7 @@ mod tests {
             |_| RetryDecision::RetryAfter(None),
             || {
                 let n = calls.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if n < 3 {
-                        Err("transient")
-                    } else {
-                        Ok(n)
-                    }
-                }
+                async move { if n < 3 { Err("transient") } else { Ok(n) } }
             },
         )
         .await;
@@ -194,13 +188,7 @@ mod tests {
             |_| RetryDecision::RetryAfter(Some(Duration::from_secs(5))),
             || {
                 let n = calls.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if n == 0 {
-                        Err("rate limited")
-                    } else {
-                        Ok(())
-                    }
-                }
+                async move { if n == 0 { Err("rate limited") } else { Ok(()) } }
             },
         )
         .await;
@@ -210,7 +198,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn exhaustion_returns_the_real_last_error_not_a_wrapper() {
-        // Track A's 401→refresh and the CLI error surface depend on `retry`
+        // The 401→refresh path and the CLI error surface depend on `retry`
         // surfacing the genuine final error (e.g. AuthExpired), never a
         // synthetic "retries exhausted". Pin it with a sentinel value.
         let policy = BackoffPolicy::custom(Duration::ZERO, 2, Duration::ZERO, 2);
@@ -235,13 +223,7 @@ mod tests {
             |_| RetryDecision::RetryAfter(Some(Duration::from_secs(86_400))),
             || {
                 let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                async move {
-                    if n == 0 {
-                        Err("rate limited")
-                    } else {
-                        Ok(())
-                    }
-                }
+                async move { if n == 0 { Err("rate limited") } else { Ok(()) } }
             },
         )
         .await;

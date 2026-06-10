@@ -6,8 +6,8 @@
 //! `openai_client`. Unlike `claude_parser`, the output is a single
 //! [`CodexQuotaSnapshot`] (not a stream of events) because the Codex
 //! 4-quadrant matrix cell needs ONE number — the latest rate-limit
-//! utilization. See `SCHEMA-NOTES.md` (in this crate) for the spike
-//! that established this design and the field-by-field schema.
+//! utilization. See `SCHEMA-NOTES.md` (in this crate) for the schema
+//! investigation that established this design and the field-by-field schema.
 //!
 //! # Public API
 //!
@@ -25,7 +25,7 @@
 //! Every fallible function returns `Result<_, ParseError>`. The four
 //! outcomes are designed to map cleanly into the eventual
 //! `state_coordinator::DegradedState` enum (per AGENTS.md §3.2; the
-//! enum itself lands in v0.1 step 5 when state_coordinator is wired
+//! enum itself lands when state_coordinator is wired
 //! to consume codex_local's output):
 //!
 //! - `Err(FileMissing)` — Codex CLI isn't installed (sessions
@@ -59,8 +59,8 @@ pub use errors::ParseError;
 pub use parser::read_latest_quota_snapshot;
 pub use types::{CodexQuotaSnapshot, RateLimitWindow};
 pub use walker::{
-    collect_sessions_newest_first, find_codex_sessions_dir, find_latest_session,
-    CODEX_CONFIG_DIR_ENV,
+    CODEX_CONFIG_DIR_ENV, collect_sessions_newest_first, find_codex_sessions_dir,
+    find_latest_session,
 };
 
 /// One-stop convenience: resolve the Codex sessions directory, walk rollout

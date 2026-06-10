@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use claude_parser::UsageEvent;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
-use state_coordinator::{summarize_jsonl, JsonlSnapshot, Snapshot};
+use state_coordinator::{JsonlSnapshot, Snapshot, pace_for_oauth, summarize_jsonl};
 use tracing::{info, warn};
 
 /// The four I/O-bound source fetches `compose` needs. CLI (`LiveSources`),
@@ -58,7 +58,7 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
 
     // Anchor the JSONL rolling window to Anthropic's authoritative 5-hour
     // reset when we have it (removes local clock-drift error); fall back to
-    // now-relative when OAuth is unavailable. AGENTS.md v0.1.1 / §7.
+    // now-relative when OAuth is unavailable. AGENTS.md §7.
     let window_anchor = claude_oauth
         .as_ref()
         .and_then(ClaudeOAuthSnapshot::five_hour_reset);
@@ -126,6 +126,13 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
         }
     };
 
+    // Compute pace before the struct literal so `claude_oauth` can be moved
+    // into the struct field while still borrowing it here.
+    let pace = claude_oauth
+        .as_ref()
+        .map(|o| pace_for_oauth(o, now))
+        .unwrap_or_default();
+
     Snapshot {
         fetched_at: now,
         claude_oauth,
@@ -138,11 +145,13 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
         codex_quota_error,
         openai,
         openai_error,
-        // Track E: statusline and prediction are populated by the coordinator
-        // actor (watcher-driven) and not by the single-shot CLI compose path.
+        // statusline is populated by the coordinator actor (watcher-driven)
+        // and not by the single-shot CLI compose path.
         claude_statusline: None,
         claude_statusline_error: None,
-        prediction: None,
+        // pace is computed before the struct literal so `claude_oauth` is not
+        // consumed before it can be moved into the `claude_oauth` field above.
+        pace,
     }
 }
 

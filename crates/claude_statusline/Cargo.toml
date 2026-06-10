@@ -17,4 +17,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-tempfile = "3"  # used by wiring.rs atomic-write tests (Track D Task 4)
+tempfile = "3"  # used by wiring.rs atomic-write tests

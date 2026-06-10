@@ -9,13 +9,13 @@
 //! events/sec; staying under 200µs per tick keeps the parser well below
 //! 1% CPU on the hot path.
 //!
-//! **Measured baseline (track_e_initial): ~7 ms** on Windows 11 dev box
+//! **Measured baseline (committed): ~7 ms** on Windows 11 dev box
 //! against a tempfile under the system temp dir. The bulk is Win32
 //! `CreateFile` + `GetFileInformationByHandle` overhead on the temp
 //! directory, NOT the parser's hot loop (a 25 KB read + 100 JSON parses
 //! is well under 1 ms in isolation). Linux/macOS measurements are
 //! expected to be substantially closer to the design target; once the
-//! v0.3 file watcher reads real `~/.claude/projects/**/*.jsonl` (which
+//! file watcher reads real `~/.claude/projects/**/*.jsonl` (which
 //! lives off the system temp dir on a non-FAT volume) this should
 //! converge toward the budget on Windows too.
 //!
@@ -24,22 +24,23 @@
 //! though the absolute figure is higher than design.
 //!
 //! Baseline workflow. `cargo bench -p claude_parser -- --save-baseline
-//! track_e_initial` writes Criterion's output to
-//! `target/criterion/incremental_parser_100_new_lines/track_e_initial/estimates.json`.
+//! committed` writes Criterion's output to
+//! `target/criterion/incremental_parser_100_new_lines/committed/estimates.json`.
 //! The committed `crates/claude_parser/benches/baseline.json` is a
-//! **manual copy** of that file — a reference snapshot at Track E ship
-//! time. Criterion does NOT auto-consume the committed file; on a fresh
-//! checkout, `cargo bench -- --baseline track_e_initial` finds nothing
+//! **manual copy** of that file — a reference snapshot. Criterion does NOT
+//! auto-consume the committed file; on a fresh
+//! checkout, `cargo bench -- --baseline committed` finds nothing
 //! because `target/criterion/` is empty. To compare against the committed
 //! snapshot, copy `crates/claude_parser/benches/baseline.json` into
-//! `target/criterion/incremental_parser_100_new_lines/track_e_initial/estimates.json`
-//! first. To refresh: run `--save-baseline track_e_initial` and copy the
+//! `target/criterion/incremental_parser_100_new_lines/committed/estimates.json`
+//! first. To refresh: run `--save-baseline committed` and copy the
 //! new `estimates.json` back over `benches/baseline.json`.
 
+use std::hint::black_box;
 use std::io::Write;
 
 use claude_parser::IncrementalParser;
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use tempfile::NamedTempFile;
 
 /// Realistic assistant-line shape. Token counts vary so the parser's

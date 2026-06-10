@@ -2,16 +2,16 @@
 //! `notify::recommended_watcher`, debounces bursts for 300ms, then
 //! re-walks + parses on each batch (full rescan for now;
 //! `IncrementalParser` byte-cursor optimization is a follow-up if
-//! cold-start latency bites — TODO(v0.2-followup): replace the full
+//! cold-start latency bites — TODO: replace the full
 //! rescan with `IncrementalParser` byte-cursor reads to reduce I/O on
 //! large `~/.claude/` trees during active Claude Code sessions).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use claude_parser::{
-    dedup_events, find_claude_projects_dir, find_jsonl_files, parse_str, UsageEvent,
+    UsageEvent, dedup_events, find_all_claude_projects_dirs, find_jsonl_files, parse_str,
 };
 use notify::{RecursiveMode, Watcher as _};
 use state_coordinator::{
@@ -30,10 +30,11 @@ const DEBOUNCE: Duration = Duration::from_millis(300);
 /// Spawn the JSONL notify task and return its `JoinHandle`.
 ///
 /// The task:
-/// 1. Resolves the Claude projects directory via `find_claude_projects_dir()`.
-///    If absent, logs at `warn!` and exits `Ok(())` — not all users have
-///    Claude Code installed.
-/// 2. Sets up a `notify::recommended_watcher` on the projects directory.
+/// 1. Resolves ALL existing Claude projects directories via
+///    `find_all_claude_projects_dirs()` (a dual-install machine can have both
+///    `~/.claude/projects` and `~/.config/claude/projects`). If none, logs at
+///    `warn!` and exits `Ok(())` — not all users have Claude Code installed.
+/// 2. Sets up a `notify::recommended_watcher` watching EACH root.
 ///    If that fails (OS resource exhausted), returns
 ///    `Err(WatcherError::NotifyExhausted)`.
 /// 3. Emits an initial snapshot immediately (picks up existing JSONL files).
@@ -42,15 +43,11 @@ const DEBOUNCE: Duration = Duration::from_millis(300);
 /// The task exits `Ok(())` when the notify channel closes (tx dropped).
 pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
-        let projects_dir = match find_claude_projects_dir() {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(
-                    "watcher/jsonl: no Claude projects dir found ({e}); task exits clean"
-                );
-                return Ok(());
-            }
-        };
+        let roots = find_all_claude_projects_dirs();
+        if roots.is_empty() {
+            tracing::warn!("watcher/jsonl: no Claude projects dir found; task exits clean");
+            return Ok(());
+        }
 
         // `Notify` coalesces "something changed" signals without queuing —
         // multiple notify_one() calls before notified().await fires
@@ -83,14 +80,16 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
                 }
             };
 
-        if let Err(e) = watcher.watch(&projects_dir, RecursiveMode::Recursive) {
-            tracing::error!(
-                "watcher/jsonl: failed to watch {} ({e}); reporting NotifyExhausted",
-                projects_dir.display()
-            );
-            return Err(WatcherError::NotifyExhausted {
-                affected: Source::ClaudeJsonl,
-            });
+        for root in &roots {
+            if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
+                tracing::error!(
+                    "watcher/jsonl: failed to watch {} ({e}); reporting NotifyExhausted",
+                    root.display()
+                );
+                return Err(WatcherError::NotifyExhausted {
+                    affected: Source::ClaudeJsonl,
+                });
+            }
         }
 
         // Initial scan — picks up files that already exist when the watcher
@@ -101,7 +100,7 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
         // and drained by the notify callback below. So the only events the
         // OS does NOT deliver are those that landed before `watch()`
         // returned — this scan covers exactly that window.
-        emit_jsonl_snapshot(&coord, &projects_dir).await;
+        emit_jsonl_snapshot(&coord, &roots).await;
 
         loop {
             // Wait for at least one notify event.
@@ -110,7 +109,7 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             // this sleep coalesce into the next iteration's notified()
             // (Notify accumulates at most one pending permit).
             tokio::time::sleep(DEBOUNCE).await;
-            emit_jsonl_snapshot(&coord, &projects_dir).await;
+            emit_jsonl_snapshot(&coord, &roots).await;
         }
     })
 }
@@ -129,7 +128,7 @@ pub(crate) enum ScanResult {
     Fatal { error: String },
 }
 
-/// Re-scan the projects directory and send the deduped events to the
+/// Re-scan ALL project roots and send the unioned deduped events to the
 /// coordinator as a `ClaudeJsonl` update. The coordinator derives BOTH the
 /// window summary and the API-rate cost from these events (anchoring the
 /// window to the OAuth 5h reset), so this task no longer computes them — that
@@ -138,10 +137,10 @@ pub(crate) enum ScanResult {
 /// The sync I/O (`find_jsonl_files` + per-file `read_to_string` + parse +
 /// dedup) is wrapped in `tokio::task::spawn_blocking` so it does not block a
 /// tokio worker. The coordinator send stays on the async side.
-async fn emit_jsonl_snapshot(coord: &StateCoordinatorHandle, projects_dir: &Path) {
-    let projects_dir_owned: PathBuf = projects_dir.to_path_buf();
+async fn emit_jsonl_snapshot(coord: &StateCoordinatorHandle, roots: &[PathBuf]) {
+    let roots_owned: Vec<PathBuf> = roots.to_vec();
 
-    let result = tokio::task::spawn_blocking(move || scan_events(&projects_dir_owned)).await;
+    let result = tokio::task::spawn_blocking(move || scan_events(&roots_owned)).await;
 
     let scan = match result {
         Ok(r) => r,
@@ -185,24 +184,37 @@ async fn emit_jsonl_snapshot(coord: &StateCoordinatorHandle, projects_dir: &Path
     }
 }
 
-/// Synchronous walk + parse + dedup. Runs on a blocking worker via
-/// `spawn_blocking`; does NOT touch the tokio runtime. Errors from individual
-/// JSONL files are logged at `warn!` and skipped (mirrors
-/// `live_load_claude_events` in `balanze_cli`).
+/// Synchronous walk + parse + dedup across ALL project roots. Runs on a
+/// blocking worker via `spawn_blocking`; does NOT touch the tokio runtime.
+/// Errors from individual JSONL files are logged at `warn!` and skipped
+/// (mirrors `live_load_claude_events` in `balanze_cli`).
 ///
-/// `pub(crate)` so the safety-poll task can reuse it without duplicating the
-/// walk-parse-dedup pipeline. The window + cost synthesis lives in the
-/// coordinator (`state_coordinator::summarize_jsonl`), shared with the CLI, so
-/// the OAuth-anchored window is computed identically on both paths.
-pub(crate) fn scan_events(projects_dir: &Path) -> ScanResult {
-    let files = match find_jsonl_files(projects_dir) {
-        Ok(f) => f,
-        Err(e) => {
-            return ScanResult::Fatal {
-                error: format!("find_jsonl_files: {e}"),
-            };
+/// Per-root walk failures are logged + skipped so one bad root doesn't lose the
+/// others. `Fatal` is returned only when NO files were collected from any root
+/// AND at least one root failed — so an unreadable root can't masquerade as an
+/// empty-but-fine window (the degraded signal isn't silently dropped). A
+/// partial success (≥1 file found on any root) keeps what walked. `pub(crate)`
+/// so the safety-poll task can reuse it. The window + cost synthesis lives in
+/// the coordinator (`state_coordinator::summarize_jsonl`), shared with the CLI,
+/// so the OAuth-anchored window is computed identically on both paths.
+pub(crate) fn scan_events(roots: &[PathBuf]) -> ScanResult {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut walk_err: Option<String> = None;
+    for root in roots {
+        match find_jsonl_files(root) {
+            Ok(mut f) => files.append(&mut f),
+            Err(e) => {
+                let msg = format!("find_jsonl_files {}: {e}", root.display());
+                tracing::warn!("watcher/jsonl: skipping root ({msg})");
+                walk_err.get_or_insert(msg);
+            }
         }
-    };
+    }
+    if files.is_empty() {
+        if let Some(error) = walk_err {
+            return ScanResult::Fatal { error };
+        }
+    }
 
     let files_scanned = files.len();
     let mut all_events: Vec<UsageEvent> = Vec::new();

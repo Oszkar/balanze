@@ -23,17 +23,18 @@ mod sinks;
 mod watch_cmd;
 
 use anthropic_oauth::{
-    fetch_usage, load_from as load_credentials_from, locate_credentials, refresh_access_token,
-    write_back, ClaudeOAuthSnapshot, CredentialsClaudeAiOauth, OAuthError, WriteBack,
-    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, DEFAULT_API_BASE as ANTHROPIC_API_BASE,
+    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, ClaudeOAuthSnapshot, CredentialsClaudeAiOauth,
+    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage,
+    load_from as load_credentials_from, locate_credentials, refresh_access_token, write_back,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Duration, Utc};
 use claude_parser::{
-    dedup_events, find_claude_projects_dir, find_jsonl_files, parse_str, UsageEvent,
+    UsageEvent, dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir,
+    find_jsonl_files, parse_str,
 };
 use openai_client::{
-    costs_this_month, OpenAiCosts, OpenAiError, DEFAULT_API_BASE as OPENAI_API_BASE,
+    DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiCosts, OpenAiError, costs_this_month,
 };
 use state_coordinator::Snapshot;
 use tracing::{info, warn};
@@ -111,8 +112,8 @@ fn cmd_status(args: &[String]) -> Result<()> {
         // org_uuid / session_id. Warn if the user explicitly asks for verbose
         // alongside --json so they don't quietly get redacted output and
         // wonder why their jq filters don't see the identifiers.
-        // TODO(v0.2-followup): pass verbose to JsonlSink so --watch --json -v
-        //                      surfaces org_uuid / codex session_id.
+        // TODO: pass verbose to JsonlSink so --watch --json -v
+        //       surfaces org_uuid / codex session_id.
         if verbose && json_mode {
             eprintln!(
                 "warning: -v / --verbose is not yet threaded into --watch --json; \
@@ -481,7 +482,7 @@ fn prompt_for_openai_key() -> Result<String> {
 
 fn setup_statusline() {
     use claude_statusline::{
-        default_settings_path, locate_settings_path, read_wire_status, wire_statusline, WireStatus,
+        WireStatus, default_settings_path, locate_settings_path, read_wire_status, wire_statusline,
     };
     // Bare `balanze-cli` assumes it is on PATH (true after `cargo install`).
     let invocation = "balanze-cli statusline";
@@ -577,7 +578,7 @@ fn print_readiness(
         AnthropicOAuthStatus::NotFound => "✗ not configured — run `claude login`",
     };
     // Anthropic API $ derivation only needs JSONL files; OAuth isn't required.
-    let claude_cost = if claude_parser::find_claude_projects_dir().is_ok() {
+    let claude_cost = if !find_all_claude_projects_dirs().is_empty() {
         "✓ ready (claude_cost — estimated from JSONL)"
     } else {
         "✗ no Claude Code JSONL found"
@@ -649,8 +650,8 @@ fn cmd_statusline() -> Result<()> {
 }
 
 /// Formats a parsed [`claude_statusline::StatuslineSnapshot`] into a terse
-/// one-liner for Claude Code's statusLine display. Track D = a minimal honest
-/// line. Rich/configurable formatting + feeding the live Snapshot is Track E.
+/// one-liner for Claude Code's statusLine display. A minimal honest line;
+/// rich/configurable formatting and feeding the live Snapshot come later.
 fn format_statusline_from_snapshot(snap: &claude_statusline::StatuslineSnapshot) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(rl) = &snap.rate_limits {
@@ -696,7 +697,7 @@ fn format_statusline(payload: &str) -> String {
 
 /// Writes the parsed statusline snapshot to `<data_dir>/statusline.snapshot.json`
 /// — where `<data_dir>` is `directories::ProjectDirs.data_dir()`, which
-/// already includes the per-OS Balanze subpath — for the Track E watcher
+/// already includes the per-OS Balanze subpath — for the watcher
 /// to notify-watch.
 ///
 /// Write failures log at `warn!` and are swallowed — Claude Code's statusLine
@@ -758,15 +759,23 @@ mod statusline_tests {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let prev = std::env::var(key).ok();
-            std::env::set_var(key, value);
+            // SAFETY: ENV_LOCK (held for this guard's whole lifetime) serializes
+            // every env-touching statusline test, so no concurrent reader races
+            // this write. set_var is unsafe as of edition 2024.
+            unsafe { std::env::set_var(key, value) };
             Self { key, prev, _lock }
         }
     }
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
+            // SAFETY: see `EnvGuard::set` — ENV_LOCK is still held here, so the
+            // restore is serialized against all other env-touching tests.
+            // set_var/remove_var are unsafe as of edition 2024.
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var(self.key, v),
+                    None => std::env::remove_var(self.key),
+                }
             }
         }
     }
@@ -815,7 +824,7 @@ mod statusline_tests {
 
     #[test]
     fn write_statusline_snapshot_lands_at_data_dir_override() {
-        use claude_statusline::{read_snapshot, StatuslineSnapshot, SCHEMA_VERSION};
+        use claude_statusline::{SCHEMA_VERSION, StatuslineSnapshot, read_snapshot};
 
         let dir = tempfile::tempdir().unwrap();
         let _guard = EnvGuard::set("BALANZE_DATA_DIR_OVERRIDE", dir.path());
@@ -882,7 +891,7 @@ fn print_help() {
     eprintln!(
         "                                Recommended on Windows until the keychain backend is"
     );
-    eprintln!("                                migrated to keyring v4 in v0.3.");
+    eprintln!("                                fixed (it currently no-ops there).");
     eprintln!();
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
@@ -922,12 +931,45 @@ impl snapshot_composer::SnapshotSources for LiveSources {
 /// are logged (warn level) but don't fail the whole call — matches the
 /// existing tolerant policy.
 fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
-    let claude_dir = find_claude_projects_dir()?;
-    let files = find_jsonl_files(&claude_dir)?;
+    // Union ALL existing project roots: a dual-install machine can have both
+    // ~/.claude/projects and ~/.config/claude/projects, and reading only the
+    // first silently undercounts events + cost. `dedup_events` below collapses
+    // any session that appears under more than one root.
+    let roots = find_all_claude_projects_dirs();
+    if roots.is_empty() {
+        // No projects dir anywhere — surface the canonical FileMissing error
+        // (compose maps it to claude_jsonl_error), preserving the prior
+        // single-root "JSONL source failed" behavior rather than an empty-Ok.
+        find_claude_projects_dir()?;
+    }
+
+    let mut files = Vec::new();
+    let mut walk_err = None;
+    for root in &roots {
+        match find_jsonl_files(root) {
+            Ok(mut f) => files.append(&mut f),
+            Err(e) => {
+                warn!("jsonl: skipping root {} ({e})", root.display());
+                walk_err.get_or_insert(e);
+            }
+        }
+    }
+    // No files collected from ANY root AND at least one root failed to walk
+    // (e.g. permission denied) ⇒ surface that error rather than reporting an
+    // empty window that may be wrong — the unreadable root could hold events.
+    // (This also fires when another root walked successfully but was empty:
+    // an unreadable root must not masquerade as an empty-but-fine result.)
+    // A partial success — ≥1 file found on any root — keeps what walked and
+    // only warns about the failed roots, above.
+    if files.is_empty() {
+        if let Some(e) = walk_err {
+            return Err(e.into());
+        }
+    }
     info!(
-        "jsonl: scanning {} files under {}",
+        "jsonl: scanning {} files across {} root(s)",
         files.len(),
-        claude_dir.display()
+        roots.len()
     );
 
     let mut all_events: Vec<UsageEvent> = Vec::new();
@@ -1109,8 +1151,13 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
         .user_agent("balanze-cli/0.1.0")
         .build()?;
     // One-shot CLI must not block on provider backoff; watcher passes standard().
-    match costs_this_month(&client, OPENAI_API_BASE, &key, &backoff::BackoffPolicy::fail_fast())
-        .await
+    match costs_this_month(
+        &client,
+        OPENAI_API_BASE,
+        &key,
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
     {
         Ok(costs) => {
             info!(
@@ -1185,10 +1232,10 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
                 pretty_duration(resets_in)
             )?;
         }
-        // Extra-usage = pay-as-you-go overage. Resolved 2026-05-19 spike:
-        // raw ints are cents; this is the claude.ai "Extra usage" meter —
-        // REAL billed money, distinct from the estimated API-rate figure
-        // below. Only meaningful when the user enabled it.
+        // Extra-usage = pay-as-you-go overage. The raw ints are cents; this is
+        // the claude.ai "Extra usage" meter — REAL billed money, distinct from
+        // the estimated API-rate figure below. Only meaningful when the user
+        // enabled it.
         if let Some(eu) = &oauth.extra_usage {
             if eu.is_enabled {
                 writeln!(w)?;
@@ -1256,7 +1303,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             w,
             "  `balanze-cli set-openai-key` (note: keychain backend currently unreliable on"
         )?;
-        writeln!(w, "  Windows; env var is the recommended path until v0.3).")?;
+        writeln!(w, "  Windows; env var is the recommended path).")?;
         writeln!(
             w,
             "  Create an admin key at https://platform.openai.com/settings/organization/admin-keys"
@@ -1463,28 +1510,37 @@ pub(crate) fn write_compact<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Res
     let openai_quota = compact_codex_quota(snapshot);
     let openai_cost = compact_openai_cost(snapshot);
 
-    writeln!(w, "                    {:38}  API $", "Quota %")?;
+    writeln!(
+        w,
+        "                    {:38}  API $ (real billed)",
+        "Quota %"
+    )?;
     writeln!(w, "Anthropic           {anth_quota:38}  {anth_cost}")?;
     writeln!(w, "OpenAI              {openai_quota:38}  {openai_cost}")?;
     writeln!(w)?;
-    // The four cells are NOT the same kind of number. Two are live
-    // server-reported utilization, one is a local estimate, one is a
-    // real bill. Flattening them into a grid makes them look uniformly
-    // authoritative; this legend re-establishes the confidence split so
-    // a ~$4,000 estimate is never mistaken for ~$4,000 of real spend.
+
+    if let Some(pace) = compact_pace_line(snapshot) {
+        writeln!(w, "{pace}")?;
+    }
+    if let Some(lev) = compact_subscription_leverage(snapshot) {
+        writeln!(w, "{lev}")?;
+    }
+    writeln!(w)?;
+
+    // The matrix holds measured reality only — server-reported quota % and
+    // real billed $. The list-price estimate is the separate "Subscription
+    // leverage" line above, never a matrix cell, so a ~$4,000 estimate is
+    // never mistaken for ~$4,000 of real spend.
     writeln!(
         w,
-        "Quota % = live server-reported utilization. API $: Anthropic ="
+        "Quota % = live server-reported utilization. API $ = real billed spend"
     )?;
     writeln!(
         w,
-        "estimated list-price for local Claude Code tokens (subscription"
+        "only: Anthropic = pay-as-you-go overage (n/a unless enabled); OpenAI ="
     )?;
-    writeln!(
-        w,
-        "leverage — NOT billed). 'overage billed' = REAL pay-as-you-go"
-    )?;
-    writeln!(w, "spend from Anthropic. OpenAI = real billed spend.")?;
+    writeln!(w, "Admin Costs API. 'Subscription leverage' is a separate")?;
+    writeln!(w, "list-price estimate, never charged.")?;
     writeln!(w)?;
     writeln!(
         w,
@@ -1518,35 +1574,72 @@ fn compact_anthropic_quota(s: &Snapshot) -> String {
 }
 
 fn compact_anthropic_cost(s: &Snapshot) -> String {
-    // Real billed overage (only when the user enabled pay-as-you-go) leads;
-    // the JSONL figure is ALWAYS tagged leverage-not-billed so a ~$4,000
-    // estimate is never read as ~$4,000 of real spend.
-    let overage = s
+    // Measured-only matrix cell: real billed money or nothing. The list-price
+    // estimate is NOT here — it renders on the separate "Subscription leverage"
+    // line (see compact_subscription_leverage).
+    match s
         .claude_oauth
         .as_ref()
         .and_then(|o| o.extra_usage.as_ref())
         .filter(|eu| eu.is_enabled)
-        .map(|eu| {
-            format!(
-                "{}/{} overage billed",
-                micro_usd_to_display_dollars(eu.used_credits_micro_usd),
-                micro_usd_to_display_dollars(eu.monthly_limit_micro_usd)
-            )
-        });
-    let est = match (&s.anthropic_api_cost, &s.anthropic_api_cost_error) {
-        (Some(cost), _) if cost.total_event_count == 0 => "○ no jsonl data yet".to_string(),
-        (Some(cost), _) => format!(
-            "~{} est-leverage (not billed)",
-            micro_usd_to_display_dollars(cost.total_micro_usd)
+    {
+        Some(eu) => format!(
+            "{}/{} overage (real)",
+            micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+            micro_usd_to_display_dollars(eu.monthly_limit_micro_usd)
         ),
-        (None, Some(_)) => "✗ cost synthesis failed".to_string(),
-        (None, None) if s.claude_jsonl_error.is_some() => "✗ jsonl load failed".to_string(),
-        (None, None) => "○ no jsonl data".to_string(),
-    };
-    match overage {
-        Some(o) => format!("{o} · {est}"),
-        None => est,
+        None => "— not available".to_string(),
     }
+}
+
+/// The JSONL list-price estimate, rendered as a clearly-secondary insight
+/// OUTSIDE the matrix — what the local Claude Code usage would cost at API
+/// list prices. Subscription leverage, never billed. Also surfaces JSONL /
+/// cost-synthesis failures here: the measured-only matrix cell can't show them
+/// (it's real-billed-$ only), so without this line those errors would be
+/// invisible in the compact view. `None` only when there's genuinely no data
+/// and no error.
+fn compact_subscription_leverage(s: &Snapshot) -> Option<String> {
+    if let Some(cost) = &s.anthropic_api_cost {
+        if cost.total_event_count > 0 {
+            return Some(format!(
+                "Subscription leverage: ~{} of Claude Code usage at API list prices (leverage — NOT billed)",
+                micro_usd_to_display_dollars(cost.total_micro_usd)
+            ));
+        }
+    }
+    if s.anthropic_api_cost_error.is_some() {
+        return Some("Subscription leverage: ✗ cost synthesis failed".to_string());
+    }
+    if s.claude_jsonl_error.is_some() {
+        return Some("Subscription leverage: ✗ jsonl load failed".to_string());
+    }
+    None
+}
+
+/// Per-window pace line: used % vs elapsed % of the window, plus the ratio.
+/// `None` when no pace data is present.
+fn compact_pace_line(s: &Snapshot) -> Option<String> {
+    if s.pace.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = s
+        .pace
+        .iter()
+        .map(|p| {
+            let ratio = match p.ratio {
+                Some(r) => format!("{r:.1}×"),
+                None => "—".to_string(),
+            };
+            format!(
+                "{} {:.0}% used / {:.0}% elapsed ({ratio})",
+                short_cadence(&p.key),
+                p.used_fraction * 100.0,
+                p.elapsed_fraction * 100.0,
+            )
+        })
+        .collect();
+    Some(format!("Pace: {}", parts.join(";  ")))
 }
 
 fn compact_codex_quota(s: &Snapshot) -> String {
@@ -1856,21 +1949,54 @@ mod tests {
 
     #[test]
     fn compact_view_keeps_four_tiers_visibly_distinct() {
-        let snap = fully_populated_snapshot();
+        let mut snap = fully_populated_snapshot();
+        // Add pace data so the Pace: line appears.
+        snap.pace = vec![state_coordinator::WindowPace {
+            key: "five_hour".into(),
+            used_fraction: 0.82,
+            elapsed_fraction: 0.40,
+            ratio: Some(2.05),
+        }];
         let out = render_compact(&snap);
 
-        // Tier 1 — JSONL × list-price estimate. MUST be tagged "leverage"
-        // and "not billed". Renaming to anything subtler is a regression.
+        // R1: column header must say "API $ (real billed)", not just "API $".
         assert!(
-            out.contains("est-leverage (not billed)"),
-            "compact must label the JSONL × list-price figure as a leverage estimate, NOT billed\n{out}"
+            out.contains("API $ (real billed)"),
+            "compact header must say 'API $ (real billed)':\n{out}"
         );
 
-        // Tier 2 — Real pay-as-you-go overage. MUST keep "overage billed" or
-        // equivalent. Without it the user can't tell this from the estimate.
+        // R1: the matrix cell for Anthropic API $ must show "overage (real)"
+        // when extra_usage is enabled, NOT the JSONL estimate.
         assert!(
-            out.contains("overage billed"),
-            "compact must label the extra_usage block as real overage billing\n{out}"
+            out.contains("overage (real)"),
+            "compact Anthropic-cost cell must carry 'overage (real)' when extra_usage enabled:\n{out}"
+        );
+
+        // R1: the JSONL estimate must NOT appear in the matrix — it lives on
+        // the separate Subscription leverage line.
+        assert!(
+            !out.contains("est-leverage"),
+            "the matrix must not contain 'est-leverage' — it belongs on the leverage line:\n{out}"
+        );
+
+        // Subscription leverage line — shows the JSONL estimate outside the matrix.
+        assert!(
+            out.contains("Subscription leverage:"),
+            "compact must have a 'Subscription leverage:' line:\n{out}"
+        );
+        assert!(
+            out.contains("NOT billed"),
+            "Subscription leverage line must carry 'NOT billed' qualifier:\n{out}"
+        );
+
+        // Pace line — must show used% / elapsed% and ratio.
+        assert!(
+            out.contains("Pace:"),
+            "compact must have a 'Pace:' line when pace is non-empty:\n{out}"
+        );
+        assert!(
+            out.contains("5h"),
+            "Pace line must show the short cadence key '5h':\n{out}"
         );
 
         // Tier 3a — Anthropic server quota. The "(oauth)" suffix is the
@@ -1892,24 +2018,18 @@ mod tests {
             "compact OpenAI-cost cell must carry the (admin costs) source tag\n{out}"
         );
 
-        // Legend re-establishes the confidence split. All three phrases are
-        // load-bearing — removing any of them silently downgrades the safety
-        // net the legend exists to provide.
-        assert!(
-            out.contains("subscription"),
-            "legend must mention subscription leverage:\n{out}"
-        );
-        assert!(
-            out.contains("NOT billed"),
-            "legend must include 'NOT billed' qualifier:\n{out}"
-        );
-        assert!(
-            out.contains("REAL pay-as-you-go"),
-            "legend must call out REAL pay-as-you-go spend:\n{out}"
-        );
+        // Legend re-establishes the confidence split.
         assert!(
             out.contains("real billed spend"),
             "legend must label OpenAI as real billed spend:\n{out}"
+        );
+        assert!(
+            out.contains("Subscription leverage"),
+            "legend must mention 'Subscription leverage':\n{out}"
+        );
+        assert!(
+            out.contains("never charged"),
+            "legend must say estimate is 'never charged':\n{out}"
         );
 
         // Codex age tag — observed_at is 5min behind fetched_at, so the
@@ -1921,24 +2041,110 @@ mod tests {
     }
 
     #[test]
+    fn compact_anthropic_cost_absent_extra_usage_shows_not_available() {
+        // When extra_usage is absent or disabled, the Anthropic API $ cell
+        // must show "— not available", never the JSONL estimate.
+        let mut snap = fully_populated_snapshot();
+        if let Some(oauth) = snap.claude_oauth.as_mut() {
+            oauth.extra_usage = None;
+        }
+        let out = render_compact(&snap);
+        assert!(
+            out.contains("— not available"),
+            "Anthropic cost cell must show '— not available' when extra_usage is absent:\n{out}"
+        );
+        // The JSONL estimate must still appear on the leverage line, not in the matrix.
+        assert!(
+            out.contains("Subscription leverage:"),
+            "Subscription leverage line must still appear when extra_usage is absent:\n{out}"
+        );
+        assert!(
+            !out.contains("est-leverage"),
+            "matrix must never contain est-leverage:\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_pace_line_absent_when_pace_is_empty() {
+        let mut snap = fully_populated_snapshot();
+        snap.pace = vec![];
+        let out = render_compact(&snap);
+        assert!(
+            !out.contains("Pace:"),
+            "Pace: line must be absent when pace vec is empty:\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_pace_line_ratio_none_shows_dash() {
+        let mut snap = fully_populated_snapshot();
+        snap.pace = vec![state_coordinator::WindowPace {
+            key: "five_hour".into(),
+            used_fraction: 0.10,
+            elapsed_fraction: 0.00,
+            ratio: None,
+        }];
+        let out = render_compact(&snap);
+        assert!(out.contains("Pace:"), "Pace: line must appear:\n{out}");
+        assert!(
+            out.contains("(—)"),
+            "ratio: None must render as (—):\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_leverage_line_absent_when_no_jsonl_events() {
+        let mut snap = fully_populated_snapshot();
+        // Zero events → leverage line must be absent.
+        if let Some(cost) = snap.anthropic_api_cost.as_mut() {
+            cost.total_event_count = 0;
+        }
+        let out = render_compact(&snap);
+        assert!(
+            !out.contains("Subscription leverage:"),
+            "Subscription leverage line must be absent when total_event_count == 0:\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_leverage_line_surfaces_cost_synthesis_error() {
+        // The measured-only matrix cell can't show a cost-synthesis failure;
+        // the leverage line must surface it instead of going silent.
+        let mut snap = fully_populated_snapshot();
+        snap.anthropic_api_cost = None;
+        snap.anthropic_api_cost_error = Some("price table missing".to_string());
+        let out = render_compact(&snap);
+        assert!(
+            out.contains("Subscription leverage: ✗ cost synthesis failed"),
+            "cost synthesis error must be surfaced on the leverage line:\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_leverage_line_surfaces_jsonl_load_error() {
+        let mut snap = fully_populated_snapshot();
+        snap.anthropic_api_cost = None;
+        snap.anthropic_api_cost_error = None;
+        snap.claude_jsonl_error = Some("permission denied".to_string());
+        let out = render_compact(&snap);
+        assert!(
+            out.contains("Subscription leverage: ✗ jsonl load failed"),
+            "jsonl load error must be surfaced on the leverage line:\n{out}"
+        );
+    }
+
+    #[test]
     fn compact_view_does_not_conflate_estimate_and_real_spend() {
         let snap = fully_populated_snapshot();
         let out = render_compact(&snap);
 
-        // Negative guards: phrases that, if they ever appear on the
-        // estimate line, would obliterate the confidence split.
-        assert!(
-            !out.contains("est-leverage (billed)"),
-            "the estimate line must never claim it is billed:\n{out}"
-        );
-        // The estimate $ value must not appear unqualified — every
-        // appearance must sit next to the leverage tag on the same line.
+        // The JSONL estimate ($4.20) must never appear in the matrix cells.
+        // It must only appear on the Subscription leverage line (outside matrix).
         for line in out.lines() {
             if line.contains("$4.20") {
                 assert!(
-                    line.contains("est-leverage")
-                        || line.contains("est."),
-                    "every line carrying the estimate $ must carry a qualifier; offending line: {line:?}\nfull output:\n{out}"
+                    line.contains("Subscription leverage") || line.contains("leverage"),
+                    "every line carrying the estimate $ must be on the leverage line; offending line: {line:?}\nfull output:\n{out}"
                 );
             }
         }

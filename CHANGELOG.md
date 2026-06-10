@@ -2,108 +2,90 @@
 
 All notable changes to Balanze are documented here.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The project is pre-1.0 — minor version bumps may include breaking changes; patch bumps are bug fixes only.
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 — minor bumps may break; patch bumps are fixes only.
 
 ## [Unreleased]
 
-### Added
-- **`balanze-cli --watch` mode.** Long-running refresh loop with two sinks: the human `StdoutSink` (ANSI clear-and-redraw on TTY, separator-prefixed append on non-TTY, broken-pipe latched, debounced) and `JsonlSink` (one compact JSON document per snapshot per line — `jq`-pipeable). The mode is supervised: `tokio::select!` across `ctrl_c()`, the coordinator `JoinHandle`, and a per-watcher-task exit channel; only `Ok(Err(_))` or panic from a watcher task is fatal, so a clean exit (e.g. `openai_poll` with no key configured) doesn't tear down `--watch` for the modal user. Reachable as `balanze-cli status --watch [--json]` or the top-level `balanze-cli --watch` shortcut.
-- **`watcher` crate** — the only crate that imports `notify` (§4 #4 boundary). `Watcher::spawn(handle, &Settings)` returns labeled `JoinHandle`s for `jsonl` (notify-debounced on `~/.claude/projects/**/*.jsonl`), `statusline` (notify on `<ProjectDirs.data>/statusline.snapshot.json`), `openai_poll` (Admin Costs API at `settings.oauth_poll_interval_secs`, floor 300 s per §3.1), `safety` (60 s re-scan of JSONL + statusline + Codex), and conditionally `oauth_poll` (Anthropic `/api/oauth/usage`, only when `providers.anthropic_enabled`). Tasks feed the `state_coordinator` directly via `StateCoordinatorHandle::send(StateMsg::Update(...))`.
-- **`predictor` crate** — pure-function EWMA over `window::WindowSummary` history with an explicit `Insufficient → Uncertain → Confident` warm-up state machine. The predictor is forbidden from returning a number for the first 15 minutes after a window reset OR while `events_since_reset < 10`, so it can never lie immediately after rollover. Output rides on `Snapshot.prediction` (recomputed in the coordinator after each successful `ClaudeOAuth` or `ClaudeJsonl` merge).
-- **Statusline file IPC bridge.** `balanze-cli statusline` now also writes an atomic (tmp+rename) `<ProjectDirs.data>/statusline.snapshot.json` envelope (`StatuslineFilePayload` = `captured_at` + `payload`); the v0.2 watcher's `statusline` task notify-reads it. This is the spec-decided glue between two processes the user already has running (Claude Code → `balanze-cli statusline` → the watcher in `--watch` / the v0.3 Tauri host). `claude_statusline` is the only crate that reads or writes this file.
-- **TauriSink compile-only skeleton** (`src-tauri/src/tauri_sink.rs`) — proves the `state_coordinator::Sink` trait shape compiles inside `src-tauri` against a realistic `TauriSink { app: AppHandle, last_painted: Option<(ColorBucket, String)> }` today, so the v0.3 UI wiring doesn't discover late that the bounds need to change. Bodies are explicit `TODO(v0.3-ui):` markers; a `#[cfg(test)] _seam_check()` locks in `Sink`'s `Send + 'static` bounds against `TauriSink`.
-- **Criterion baselines** for the cost/parse hot paths: `compute_cost` (10k events), `summarize_window` (10k events / 5 h slice), `incremental_parser` (100 newly-appended lines). Each crate ships a committed `benches/baseline.json` — a **manual reference snapshot** (copy of Criterion's `target/criterion/<bench>/track_e_initial/estimates.json` from a `--save-baseline track_e_initial` run on the dev box at Track E ship time). Criterion does NOT auto-consume the committed file; to use `cargo bench -- --baseline track_e_initial` on a fresh checkout, copy the committed JSON back into the `target/criterion/...` path first (the bench module docstrings document the exact path). CI workflows are unchanged — benches are local-only and slow.
-- **Claude Code statusLine integration.** New `claude_statusline` crate + `balanze-cli statusline` subcommand: reads Claude Code's statusLine JSON and prints live 5h/7d subscription quota + session cost in your shell — zero-auth, no rate limit. `balanze-cli setup` offers to wire it (ask-first, never clobbers an existing statusLine, reversible by restoring your `settings.json`).
-- **Real pay-as-you-go overage surfaced.** If you enabled Anthropic "Extra usage", `balanze-cli` now shows your real billed overage (spent / limit / %) in both the compact grid and `--sections` — the exact figure claude.ai shows. Previously suppressed because its units were unverified; a reconciliation spike resolved it (cents; the claude.ai overage meter).
-- **Tagged-DTO `--json` schema.** `balanze-cli status --json` now renders a presentation DTO (in `crates/balanze_cli/src/json_output.rs`) where every money cell normalizes to `{ value_micro_usd, source, confidence, details }`. Consumers can read `.value_micro_usd` uniformly across providers and tell `jsonl_list_price`/`estimate` apart from `openai_admin_costs`/`real` and `extra_usage_billed`/`real` from the wire shape alone. Schema documented in `AGENTS.md` §2.1.
-- **HTTP-date `Retry-After` support.** Both `anthropic_oauth` and `openai_client` now accept the IMF-fixdate form of `Retry-After` (`Sun, 06 Nov 1994 08:49:37 GMT`) in addition to delta-seconds, per RFC 7231 §7.1.3. Past dates clamp to zero so a stale server clock can't park retries indefinitely.
-- **CI lints the PR title against Conventional Commits.** Squash-merge lands the PR title as the commit subject on `main`, so a new `pull_request`-only `pr-title` CI job mirrors the local `commit-msg` hook's grammar — the server-side backstop for a `--no-verify` push that would otherwise land a non-conventional title in the changelog. Inline shell (no marketplace action); the title is passed via env so a crafted title can't inject.
-
 ### Changed
-- **`Snapshot` gained two cells for Track E.** `claude_statusline` carries the live `StatuslineFilePayload` envelope (`captured_at` + `payload`, i.e. `rate_limits.{five_hour,seven_day}` + `cost.total_cost_usd` — Claude Code's session estimate, a third explicitly-labeled cost tier per Track C's honesty discipline). `prediction` carries the predictor's warm-up-aware output (`Insufficient` / `Uncertain` / `Confident`); the coordinator recomputes it after each successful `ClaudeOAuth` or `ClaudeJsonl` merge.
-- **`Settings::oauth_poll_interval_secs` (new, default 300).** Drives both `oauth_poll` and `openai_poll` cadences in the v0.2 watcher. serde-default 300 on absent key — older schema-version-1 `settings.json` files load unchanged. Each poller clamps to `max(300, value)` so the §3.1 API-politeness floor cannot be lowered by a hand-edit.
-- **The Anthropic API-$ estimate is now hard-labeled.** The JSONL × list-price number is explicitly tagged "estimate — subscription leverage, NOT billed" and visually separated from the real overage, so a large estimate can't be misread as real spend.
-- **`set-openai-key` is no longer positional.** Passing `sk-...` as an argv could leak through shell history and `ps`; the subcommand now uses a masked TTY prompt (via `rpassword`, same pattern as `balanze-cli setup`) and accepts piped stdin (`echo $KEY | balanze-cli set-openai-key`) for automation.
-- **`--json -v` guard for account identifiers.** `balanze-cli status --json` now redacts `claude_oauth.org_uuid` and `codex_quota.session_id` by default; pass `-v`/`--verbose` to include them. Matches the existing `-v` guard on the human `--sections` view.
-- **`release.yml` requires an explicit tag input.** The manual-only workflow now demands a `tag` input matching `v*.*.*`; a dispatch from `main` no longer drafts a release named "Balanze main".
-
-### Removed
-- **Scaffold `greet` Tauri command** dropped along with its frontend caller — outside the documented IPC contract (AGENTS.md §4 #9), real production commands land with the v0.3 UI.
+- Toolchain unification: Rust pinned to 1.94.0 via `rust-toolchain.toml` (CI matches; MSRV stays 1.85), Bun pinned to 1.3.13 via `packageManager` + CI `bun-version-file`.
+- PR titles are now CI-validated as Conventional Commits (`pr-title.yml`), matching the local `commit-msg` hook.
 
 ### Fixed
-- **Statusline parser tolerates partial window-shape drift.** A present-but-incomplete `rate_limits.{five_hour,seven_day}` block (missing `used_percentage`/`resets_at`, e.g. a future field rename) now degrades that one window to `None` — logged at `warn!` so the drift stays visible — instead of erroring the whole payload; the other window and the session cost survive. A present-but-wrong-*type* field still surfaces as `SchemaDrift`.
-- **Watcher pollers survive a `reqwest` client-build failure.** `openai_poll` / `oauth_poll` built the HTTP client once before the loop and `return Ok(())` on failure — a clean exit the supervisor ignored, silently freezing that cell until restart. They now build the client per tick, emit the error, and retry, so the degraded state stays visible and self-heals.
-- **`--watch` now anchors the JSONL rolling window to the OAuth reset (CLI ≡ watcher).** The live watcher computed the window now-relative (`now − 5h`) while one-shot `status` anchored it to the OAuth-reported 5-hour `resets_at`, so the two shipped surfaces could disagree on the JSONL window / burn rate. The JSONL → window+cost synthesis is now a single `state_coordinator::summarize_jsonl` helper that both `snapshot_composer::compose` (one-shot) and the coordinator merge (watcher) call; the coordinator caches the deduped events and re-anchors them when an OAuth update arrives. Internal-only message change (the `ClaudeJsonl` partial now carries raw events and the redundant `AnthropicApiCost` partial is gone — cost is derived from the same events); the public `Snapshot` / `--json` schema is unchanged. The `compose_parity_against_fixtures` test now actually asserts parity against the shared helper instead of only checking that cells populate.
-- `anthropic_oauth` `ExtraUsage` docs no longer say the semantic is "unknown" (resolved: cents / overage meter); `claude_cost` no longer references a non-existent `Confidence::Estimated` type. Corrected the PRD's false "Claude Code records a per-event cost in the JSONL" premise.
+- Statusline parser tolerates partial window-shape drift: a present-but-incomplete `rate_limits.{five_hour,seven_day}` window (missing `used_percentage`/`resets_at`, e.g. a future field rename) degrades that one window to `None` - logged at `warn!` so the drift stays visible - instead of erroring the whole payload; the other window and the session cost survive. A present `null` or wrong-type field still surfaces as `SchemaDrift`.
+- Watcher pollers survive a `reqwest` client-build failure: `openai_poll` / `oauth_poll` built the HTTP client once before the loop and exited cleanly on failure - silently freezing that cell until restart. They now build the client per tick, emit the error, and retry, so the degraded state stays visible and self-heals.
+
+## [0.3.0] — UI: the popover PoC - 2025-06-10
+
+The Tauri surface — the hero artifact. Gauge tray + glanceable popover, wired live to the v0.2 watcher spine.
+
+### Added
+- **Tauri popover + gauge tray icon.** Color-shifting ring gauge (RGBA rendered at runtime, repaint deduped by `(ColorBucket, title_text)`); hidden-on-launch, left-click toggles, blur hides.
+- **Popover views.** Transposed matrix grid (providers as columns, quota/billed rows, pace tick inline on the usage bar) + a Cards density view; "Subscription leverage" box; burn number; source/confidence on hover; light/dark.
+- **Live IPC**: commands `get_snapshot`, `refresh_now`; events `usage_updated`, `degraded_state`.
+- **`TauriSink` filled** — real tray paint + emit (was the compile-only seam-check skeleton in v0.2). `tauri-plugin-single-instance` prevents double-launch.
+
+## [0.2.0] — Liveness - 2026-06-03
+
+The data updates itself. New live spine = statusline-push + JSONL `notify`; OAuth demoted to a backoff'd fallback poll.
+
+### Added
+- **`balanze-cli --watch`** — long-running refresh loop; `StdoutSink` (TTY redraw) + `JsonlSink` (one JSON doc/line); supervised under `tokio::select!`.
+- **`watcher` crate** — the only `notify` importer; spawns `jsonl` / `statusline` / `openai_poll` / `safety` (+ `oauth_poll` when enabled), feeding the coordinator.
+- **Claude Code statusLine integration** — `claude_statusline` crate + `balanze-cli statusline` (live 5h/7d quota + session cost, zero-auth); `setup` offers to wire it. Atomic `statusline.snapshot.json` is the IPC bridge the watcher reads.
+- **Real pay-as-you-go overage surfaced** — `extra_usage` spent/limit/% (cents; reconciled against claude.ai).
+- **Tagged-DTO `--json`** — every money cell is `{ value_micro_usd, source, confidence, details }`.
+- **HTTP-date `Retry-After`** (IMF-fixdate + delta-seconds; past dates clamp to 0).
+- **Criterion baselines** for the cost/parse hot paths (`compute_cost` / `summarize_window` / `incremental_parser`; local-only).
+
+### Changed
+- **Pace view replaces the EWMA predictor** (`Snapshot.pace`, `window::pace`); `predictor` crate retired. R1: the list-price estimate leaves the matrix cell → separate "Subscription leverage" line.
+- `Settings::oauth_poll_interval_secs` (default 300; floor-clamped to 300 per §3.1).
+- Anthropic API-$ estimate hard-labeled "subscription leverage, NOT billed".
+- `set-openai-key` uses a masked TTY prompt / piped stdin (no longer positional argv).
+- `--json` redacts `org_uuid` / Codex `session_id` unless `-v`.
+- `release.yml` requires an explicit `v*.*.*` tag input.
+
+### Fixed
+- JSONL discovery unions every project root — dual-install machines no longer undercount.
+- `--watch` anchors the JSONL window to the OAuth reset (CLI ≡ watcher) via a shared `summarize_jsonl` helper.
+- Parse `extra_usage` when `utilization` is `null` at $0 usage (#56).
 
 ## [0.1.1] - 2026-05-19
 
-**v0.1.1 base** — Track A of the v0.2 roadmap (Liveness foundations). The JSONL→estimate honesty redesign, statusline source, and the watcher/predictor are later v0.2 tracks; see `docs/PRD.md` Phase 2.
+OAuth keepalive + the v0.2 de-risk foundations (Tracks A + B), shipped in one tag.
 
 ### Added
-- **Proactive Anthropic OAuth refresh.** `anthropic_oauth` gained a refresh-token grant (`refresh_access_token`) and an atomic, anti-clobber credential write-back (`write_back`: tmp+rename, preserves permissions, reuses Anthropic's file, never regresses a concurrently-newer on-disk token). `balanze-cli` now refreshes the bearer pre-flight when it is expired or within a 5-minute margin, and recovers from a hard 401 with one refresh + retry — the bearer no longer hard-fails every ~7–8 h. Refresh failure still surfaces as `AuthExpired` (re-run `claude login`); no new `DegradedState`. Tokens are never logged; the refresh endpoint/client-id constants are gated by an `#[ignore]`'d real-endpoint smoke run pre-tag.
-- `window::summarize_window` takes an optional `window_anchor`; the cap window is anchored to Anthropic's server-reported `five_hour` `resets_at` (half-open `[reset − 5h, reset)`), falling back to the legacy `now − 5h` when OAuth is unavailable — removing local clock-drift error from the cap math. `ClaudeOAuthSnapshot::five_hour_reset()` keeps the OAuth wire key in the schema-owning crate.
+- **Proactive Anthropic OAuth refresh** — `refresh_access_token` + atomic anti-clobber `write_back`; pre-flight refresh + one 401-retry. Bearer no longer hard-fails every ~7–8 h.
+- Cap window anchored to OAuth's `resets_at` (was `now − 5h`), removing clock-drift error.
+- **`snapshot_composer` crate** — one `compose()` shared by the CLI and the future watcher (parity-tested).
+- **`backoff` crate** — exponential policy + async retry, wired into both HTTP clients (CLI fail-fast; watcher standard).
 
 ### Changed
-- The secret surface expanded: `anthropic_oauth` is now a *writer* of `~/.claude/.credentials.json` (was read-only). The write obeys AGENTS.md §3.4 (atomic, perms-preserving, Anthropic's own file, OAuth fields only).
-
-### Fixed
-- `extra_usage` Known-issue note retargeted: the OAuth `extra_usage` reconciliation is now a scheduled v0.2 Track C spike (was a vague v0.3 HAR item) — see README / `docs/PRD.md`.
-
-**v0.2 Track B (de-risk)** — foundations for a poller, no user-facing behavior change (the CLI is byte-identical; the new retry layer is inert under the CLI's fail-fast policy). See `docs/PRD.md` Phase 2.
-
-### Added
-- **`snapshot_composer` crate.** The source-orchestration policy (`build_snapshot`) is extracted behind a `SnapshotSources` trait into one `compose()` function. `balanze-cli` runs it via `LiveSources`; the future v0.2 watcher will run the *same* `compose()` via its own `SnapshotSources` — so the two composition paths cannot silently diverge (AGENTS.md §4 #8). A fixture-driven `compose_parity_against_fixtures` integration test guards it.
-- **`backoff` crate.** Pure exponential-backoff policy (`standard` = 30 s × 2ⁿ, cap 10 min / `fail_fast` = 0 retries / `custom`) plus a generic async `retry` combinator with no HTTP knowledge. Wired into `anthropic_oauth` and `openai_client` (each fetch fn takes a `&BackoffPolicy`). Idempotent GETs retry on 429 + 5xx + transport; the token-rotating `refresh_access_token` POST retries **429-only** (a 5xx/timeout retry could replay a consumed refresh token). `Retry-After` honored (delta-seconds), clamped to the policy cap; no jitter (single user). The one-shot CLI passes `fail_fast()` (never blocks an interactive invocation); the v0.2 watcher will pass `standard()`.
-
-### Changed
-- `balanze-cli`'s `build_snapshot` is now a one-line delegate to `snapshot_composer::compose`; the per-source fetch helpers moved into a `LiveSources` impl. Behavior-preserving — the integration suite + the new parity test pin it.
+- `anthropic_oauth` is now also a *writer* of `~/.claude/.credentials.json` (atomic, perms-preserving, OAuth fields only).
 
 ## [0.1.0] - 2026-05-15
 
-v0.1 — **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distribution is source-only (`cargo install --git … balanze_cli`); no binaries or GitHub Release artifacts (that's the v0.4 phase).
+v0.1 — **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distribution is source-only (`cargo install --git … balanze_cli`).
 
 ### Added
-- **`balanze-cli`** binary. Subcommands: `status` (default — 4-quadrant compact view with a confidence legend) / `setup` / `set-openai-key` / `clear-openai-key` / `settings` / `help`. `status` takes `--sections` (per-source detail), `--json` (machine Snapshot; wins over `--sections`), and `-v` (account-identifying fields); `--sections` / `--json` are also accepted as bare top-level shortcuts (e.g. `balanze-cli --json`).
-- **Four-quadrant matrix**: Anthropic quota % (OAuth) · Anthropic API $ *estimated* (JSONL × LiteLLM prices — subscription leverage, not real spend) · OpenAI Codex quota % (`~/.codex/sessions/`) · OpenAI API $ real billed spend (Admin Costs API).
-- `claude_parser` crate — JSONL parser, dedup by `(message_id, request_id)`, `IncrementalParser` (byte-cursor reads with truncation + same-size-rewrite detection), `find_claude_projects_dir()` with XDG + `~/.claude/` + `~/.config/claude/` search.
-- `claude_cost` crate — pure JSONL→estimated-$ synthesis against a vendored LiteLLM Anthropic price subset (MIT; `build.rs` stamps table provenance). Infallible: unknown models route to `skipped_models`. Output is explicitly labelled an estimate / subscription leverage, never presented as real spend.
-- `anthropic_oauth` crate — calls `GET api.anthropic.com/api/oauth/usage` with the bearer from `~/.claude/.credentials.json`. Maps known cadence keys to display labels; titlecases unknown keys. Credentials carry a redacting `Debug`; error bodies are redacted before `Display`.
-- `openai_client` crate — `GET /v1/organization/costs` with an `sk-admin-…` bearer. Aggregates this-month spend by line item. Defensive `sk-`-pattern redaction on error bodies.
-- `codex_local` crate — reads `~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-*.jsonl`, extracts the latest `rate_limits.primary`. Single-snapshot (no streaming/dedup in v0.1). Honors `CODEX_CONFIG_DIR`.
-- `window` crate — pure rolling-window math: 5-hour main window + 30-minute burn rate + per-model breakdown.
-- `state_coordinator` crate — actor scaffold (Snapshot + Sink trait + bounded-mpsc StateMsg loop). Tauri-free; the production `TauriSink` lands with the v0.3 UI.
-- `settings` crate — non-secret `settings.json` with atomic writes (tmp + rename) and schema versioning.
-- `keychain` crate — `keyring` wrapper for OS-keychain credential storage (only crate that imports `keyring`).
-- `balanze-cli setup` — interactive auth wizard: checks Anthropic OAuth + Codex presence, prompts for the OpenAI admin key (masked input via `rpassword`), validates it live, stores it.
-- A 4-test end-to-end integration suite (`integration_4quadrant.rs`) exercising the real composition path against committed fixtures.
-- README, AGENTS.md (operational contract), SECURITY.md, MIT LICENSE.
-- CI on Windows + macOS (rustfmt + clippy + cargo test + svelte-check); Dependabot for cargo / npm / github-actions.
+- **`balanze-cli`** — `status` (4-quadrant compact view) / `setup` / `set-openai-key` / `clear-openai-key` / `settings`; `status` takes `--sections` / `--json` / `-v`.
+- **Four-quadrant matrix** — Anthropic quota % (OAuth) · Anthropic API $ estimate (JSONL × LiteLLM, labeled leverage) · OpenAI Codex quota % · OpenAI API $ real billed (Admin Costs).
+- Crates: `claude_parser` (JSONL parse/dedup/incremental), `claude_cost` (pure estimate vs vendored prices), `anthropic_oauth`, `openai_client`, `codex_local`, `window`, `state_coordinator` (actor scaffold), `settings` (atomic), `keychain`.
+- `balanze-cli setup` interactive auth wizard; a 4-test end-to-end integration suite; CI on Windows + macOS; Dependabot.
+- README, AGENTS.md, SECURITY.md, MIT LICENSE.
 
 ### Changed
-- Conventional Commits is now **enforced** by a blocking `commit-msg` lefthook hook (`<type>(scope)?: subject`; Merge/Revert/fixup!/squash! exempt). Keeps `git log` and squash-merge PR titles clean for the changelog.
-- The CLI binary is **`balanze-cli`**, not `balanze`. `balanze` is reserved for the future src-tauri tray app to avoid a workspace build-artifact collision.
-- Workspace `default-members = ["crates/*"]`: bare `cargo build`/`test`/`run` no longer build `src-tauri`. The `balanze-cli` deliverable now builds on Linux with **only a Rust toolchain** (+ a C compiler for `ring`) — no GTK/WebKit/`pkg-config` chain. The desktop app is the explicit `--workspace` / `bun run tauri dev` opt-in; its GUI system deps are documented in the README.
-- `--sections` accepted as a bare top-level shortcut (peer of `--json`), so `balanze-cli --sections` works as the compact view's own footer and the docs advertise.
-- Pre-tag cleanup (multi-agent review follow-up): de-flaked the integration test (deterministic `now`), sharpened the compact estimate label + legend, redacted a serde-error log path and the OAuth `Debug`/error-body surfaces, and closed several §6 validation-matrix test gaps.
+- Conventional Commits enforced by a blocking `commit-msg` hook.
+- CLI binary is **`balanze-cli`** (`balanze` reserved for the tray app).
+- `default-members = ["crates/*"]` — bare `cargo` skips `src-tauri`, so the CLI builds with no GUI stack.
 
 ### Known issues
-- **Windows keychain backend silently no-ops** (`keyring 3.6.3`). Workaround: `BALANZE_OPENAI_KEY` env var takes precedence over keychain reads. Real fix lands with the `keyring` → `keyring-core` (v4) migration in **v0.3** (it rides with the settings UI that exercises the key-input box on both platforms).
-- **Anthropic OAuth bearer expires every ~7–8 hours.** Currently surfaced as `AuthExpired`; re-run `claude login` and retry. Refresh-token flow is v0.1.1 work.
-- **`extra_usage` block from OAuth has unclear semantics** — the `used_credits` field doesn't reconcile with claude.ai's "$ spent this month" UI. Suppressed in pretty CLI output; still in `--json` for diagnostics. The v0.3 Anthropic Console (HAR) investigation should resolve the units.
-- **Anthropic API $ is an estimate, not real spend.** The official Usage & Cost API is enterprise/org-admin-gated (Phase-0 spike: NO-GO for the modal user). The JSONL-derived figure is the honest best-available signal and is labelled as such; a real-spend source is a v0.2+ research note contingent on enterprise access.
+- **Windows keychain backend silently no-ops** (`keyring 3.6.3`). Workaround: `BALANZE_OPENAI_KEY`. Real fix rides the settings UI (`keyring`→`keyring-core` v4, v0.3.1).
+- Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated — Phase-0 NO-GO).
 
-## Roadmap
-
-Theme per phase: **Data → Liveness → UI → Distribution**.
-
-- **v0.1 — Data** (this milestone): the four-quadrant CLI above.
-- **v0.1.1 — released 2026-05-19** — proactive OAuth refresh-token flow; cap window anchored to OAuth's `resets_at` (was `now - 5h`); plus v0.2 Track B de-risk (`snapshot_composer` + `backoff`) shipped in the same tag.
-- **v0.2 — Liveness** — Track C (Anthropic API $ honesty redesign), Track D (Claude Code statusline source), and Track E (the `watcher` + `predictor` crates, `balanze-cli --watch`, the statusline-file IPC bridge, the v0.2→v0.3 `TauriSink` seam-check, and Criterion baselines for the cost/parse hot paths) all shipped on `main`; v0.2 release tag to follow.
-- **v0.3 — UI** — Tauri tray + popover; settings UI; `keyring` → `keyring-core` v4 migration (fixes the Windows keychain bug); degraded-state events; dashboard window; alerts. (Anthropic Console cookie-paste demoted from a committed v0.3 item to opt-in — implement only if a concrete user need surfaces; see `docs/PRD.md`.)
-- **v0.4 — Distribution** — signed binaries (Windows cert, macOS notarization), Homebrew tap, WinGet manifest, Tauri auto-update.
-- **v1+** — Ubuntu GNOME, cross-device sync, Android companion, hosted wallboard.
 
 [Unreleased]: https://github.com/Oszkar/balanze/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/Oszkar/balanze/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Oszkar/balanze/releases/tag/v0.1.0
+[0.2.0]: https://github.com/Oszkar/balanze/releases/tag/v0.2.0
+[0.3.0]: https://github.com/Oszkar/balanze/releases/tag/v0.3.0

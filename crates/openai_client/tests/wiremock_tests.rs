@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
-use openai_client::{costs_this_month, fetch_costs, OpenAiError};
+use openai_client::{OpenAiError, costs_this_month, fetch_costs};
 use reqwest::Client;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};

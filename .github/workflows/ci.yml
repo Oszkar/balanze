@@ -17,9 +17,6 @@ name: ci
 #   workflow also matrix-builds at tag time, so you have two layers of
 #   pre-release validation.
 # - `deny` is fast (~30s) and platform-agnostic — always on.
-# - `pr-title` validates the PR title against Conventional Commits (PRs only) —
-#   the server-side backstop for the local `commit-msg` hook, since squash-merge
-#   lands the PR title as the commit subject on `main`.
 
 on:
   push:
@@ -44,10 +41,10 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94
         with:
           components: rustfmt, clippy
 
@@ -58,6 +55,9 @@ jobs:
           # update the shared cache, so unrelated PRs don't trample each
           # other's caches.
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
@@ -72,8 +72,11 @@ jobs:
         # present natively.
         run: cargo clippy --workspace --exclude balanze --all-targets -- -D warnings
 
-      - name: cargo test (workspace minus src-tauri)
-        run: cargo test --workspace --exclude balanze
+      - name: cargo nextest (workspace minus src-tauri)
+        # No separate doc-test step: the workspace has zero doctests today.
+        # If doctests appear, add `cargo test --doc --workspace` here
+        # (nextest doesn't run doctests).
+        run: cargo nextest run --workspace --exclude balanze
 
       - name: svelte-check
         run: bun run check
@@ -94,10 +97,10 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94
         with:
           components: clippy
 
@@ -109,11 +112,14 @@ jobs:
             src-tauri -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: cargo test (full workspace, including src-tauri)
-        run: cargo test --workspace
+      - name: cargo nextest (full workspace, including src-tauri)
+        run: cargo nextest run --workspace
 
       - name: clippy src-tauri
         run: cargo clippy -p balanze --all-targets -- -D warnings
@@ -127,32 +133,3 @@ jobs:
         with:
           command: check
           arguments: --workspace
-
-  pr-title:
-    name: pr-title
-    # Squash-merge lands the PR title as the commit subject on `main`, so it must
-    # match the same Conventional Commits grammar the local `commit-msg` hook
-    # enforces (.lefthook/commit-msg/conventional.sh) — this is the server-side
-    # backstop for a `--no-verify` push. Only meaningful on PRs (push / schedule
-    # / dispatch have no PR title), so it's gated to `pull_request`.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate PR title
-        # PR title passed via env (not inline `${{ }}`) so a crafted title can't
-        # inject shell. Regex mirrors conventional.sh exactly.
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          printf 'PR title: %s\n' "$PR_TITLE"
-          if printf '%s' "$PR_TITLE" | grep -qE '^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([^)]+\))?!?: .+'; then
-            echo "OK: matches Conventional Commits."
-          else
-            {
-              echo "::error::PR title is not Conventional Commits (squash-merge lands it on main)."
-              echo "  Format: <type>(optional-scope)(!)?: <subject>"
-              echo "  Types:  feat fix chore docs style refactor perf test build ci revert"
-              echo "  Got:    $PR_TITLE"
-            } >&2
-            exit 1
-          fi

@@ -32,9 +32,8 @@ mod snapshot;
 #[cfg(test)]
 mod test_support;
 
-pub use coordinator::{spawn, StateCoordinatorHandle};
-pub use jsonl::{summarize_jsonl, JsonlCells};
+pub use coordinator::{StateCoordinatorHandle, spawn};
+pub use jsonl::{JsonlCells, summarize_jsonl};
 pub use messages::{ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateMsg};
-pub use predictor::{Prediction, PredictionState, WindowSnapshot};
 pub use sink::{LogSink, NullSink, Sink};
-pub use snapshot::{record_error, JsonlSnapshot, Snapshot};
+pub use snapshot::{JsonlSnapshot, Snapshot, WindowPace, pace_for_oauth, record_error};

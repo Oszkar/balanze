@@ -1,53 +1,90 @@
-//! Sink-seam checkpoint for the v0.2 → v0.3 transition.
-//!
-//! `TauriSink` is the future production sink: the side-effect implementation
-//! the `state_coordinator` actor notifies after every snapshot merge. v0.3
-//! will wire it up to emit `usage_updated` / `degraded_state` events to the
-//! Svelte UI (AGENTS.md §4 #9 IPC contract) and repaint the tray icon /
-//! title with the AGENTS.md §3.1 dedup discipline.
-//!
-//! **Why a skeleton in v0.2.** The Track E plan calls this a "Sink-seam
-//! checkpoint": we prove the `state_coordinator::Sink` trait shape actually
-//! compiles inside the `src-tauri` crate against a realistic `TauriSink`
-//! signature today, so v0.3 doesn't discover at the eleventh hour that
-//! the trait needs `&Snapshot` to be `Send`, or that an async sink is
-//! actually required, or that we picked the wrong field set for
-//! `last_painted`. Bodies stay as `TODO(v0.3-ui):` markers — the live
-//! Tauri calls are explicitly out of scope for Track E (no `app.emit`,
-//! no `tray.set_icon` here yet).
-//!
-//! Per AGENTS.md §4 #7, this is the ONLY crate that may call Tauri tray
-//! APIs (`tray.set_icon`, `tray.set_title`) when those bodies land. The
-//! coordinator routes side effects through the sink; nothing else touches
-//! OS tray state directly.
+//! Production sink for the `state_coordinator` actor (AGENTS.md §4 #7 — the
+//! only crate that may call Tauri tray APIs). Emits `usage_updated` /
+//! `degraded_state` to the Svelte UI and repaints the gauge tray icon,
+//! deduped by `(ColorBucket, title)` per AGENTS.md §3.1.
 
-#![allow(dead_code)] // skeleton — fields wired in v0.3-ui
-
+use serde::Serialize;
 use state_coordinator::{Sink, Snapshot, Source};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
-/// Color bucket for the tray icon, mapped from the rolling-window usage %.
-/// The v0.3 bucketing thresholds + icon assets are TODO; this stand-in
-/// exists so the `last_painted` dedup tuple has a concrete type to compare
-/// (AGENTS.md §3.1: "Tray icon repaint: 30s cadence, deduped by
-/// `(ColorBucket, title_text)`"). When the real color buckets land in v0.3
-/// they may live in their own module — this enum is the placeholder, not
-/// the final home.
+use crate::tray_icon;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ColorBucket {
     Green,
     Yellow,
     Orange,
     Red,
+    Warn,
 }
 
-/// Production sink: emits Tauri events to the Svelte UI and repaints the
-/// OS tray. Held inside the `state_coordinator` actor task; methods are
-/// synchronous (the `Sink` trait requires sync, matching Tauri's sync
-/// emit/tray APIs). `last_painted` carries the previous
-/// `(ColorBucket, title_text)` tuple so a `Refresh` tick that doesn't
-/// change the visible state can short-circuit without calling
-/// `tray.set_icon` — see AGENTS.md §3.1.
+impl ColorBucket {
+    pub(crate) fn from_util(util_percent: f32) -> Self {
+        if util_percent >= 90.0 {
+            ColorBucket::Red
+        } else if util_percent >= 75.0 {
+            ColorBucket::Orange
+        } else if util_percent >= 50.0 {
+            ColorBucket::Yellow
+        } else {
+            ColorBucket::Green
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct DegradedPayload {
+    source: String,
+    error: String,
+}
+
+fn source_key(source: Source) -> &'static str {
+    match source {
+        Source::ClaudeOAuth => "claude_oauth",
+        Source::ClaudeJsonl => "claude_jsonl",
+        Source::AnthropicApiCost => "anthropic_api_cost",
+        Source::CodexQuota => "codex_quota",
+        Source::OpenAiCosts => "openai_costs",
+        Source::ClaudeStatusline => "claude_statusline",
+    }
+}
+
+pub(crate) fn worst_utilization(s: &Snapshot) -> f32 {
+    let mut worst = 0.0_f32;
+    if let Some(o) = &s.claude_oauth {
+        for c in &o.cadences {
+            worst = worst.max(c.utilization_percent);
+        }
+    }
+    if let Some(sl) = &s.claude_statusline {
+        if let Some(rl) = &sl.payload.rate_limits {
+            if let Some(w) = &rl.five_hour {
+                worst = worst.max(w.used_percent);
+            }
+            if let Some(w) = &rl.seven_day {
+                worst = worst.max(w.used_percent);
+            }
+        }
+    }
+    if let Some(c) = &s.codex_quota {
+        worst = worst.max(c.primary.used_percent as f32);
+    }
+    worst
+}
+
+fn tray_title(s: &Snapshot) -> String {
+    let c = s
+        .claude_oauth
+        .as_ref()
+        .and_then(|o| o.cadences.iter().find(|c| c.key == "five_hour"))
+        .map(|c| format!("C {:.0}%", c.utilization_percent));
+    let o = s
+        .codex_quota
+        .as_ref()
+        .map(|q| format!("O {:.0}%", q.primary.used_percent));
+    [c, o].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+}
+
 pub(crate) struct TauriSink {
     app: AppHandle,
     last_painted: Option<(ColorBucket, String)>,
@@ -60,41 +97,60 @@ impl TauriSink {
             last_painted: None,
         }
     }
+
+    fn paint_target(&self, s: &Snapshot, degraded: bool) -> (ColorBucket, String) {
+        let bucket = if degraded {
+            ColorBucket::Warn
+        } else {
+            ColorBucket::from_util(worst_utilization(s))
+        };
+        (bucket, tray_title(s))
+    }
+}
+
+/// True if any source's error slot is set. Used to keep the tray on the
+/// warning bucket while ANY source is degraded — a later success from a
+/// different source must not clear the warning while another source is still
+/// failing (the bug: `on_snapshot` previously hard-coded `degraded = false`).
+fn any_source_degraded(s: &Snapshot) -> bool {
+    s.claude_oauth_error.is_some()
+        || s.claude_jsonl_error.is_some()
+        || s.anthropic_api_cost_error.is_some()
+        || s.codex_quota_error.is_some()
+        || s.openai_error.is_some()
+        || s.claude_statusline_error.is_some()
 }
 
 impl Sink for TauriSink {
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
-        // TODO(v0.3-ui):
-        //   1. `self.app.emit("usage_updated", snapshot)` — sends the
-        //      Snapshot DTO to the Svelte frontend per AGENTS.md §4 #9.
-        //   2. Compute `(ColorBucket, title_text)` from `snapshot`'s
-        //      rolling-window usage % and the configured thresholds.
-        //   3. If that tuple differs from `self.last_painted`, call
-        //      `tray.set_icon(...)` + `tray.set_title(...)` and update
-        //      `self.last_painted`. Otherwise no-op (§3.1 dedup).
-        //   4. Tray handle: `self.app.tray_by_id("main")` — keep the same
-        //      id as `setup_tray` in `lib.rs`.
-        //
-        // Touch the fields so `#[allow(dead_code)]` is the only suppressant
-        // we need — no `_` underscored locals, no extra `#[allow]` noise.
-        let _ = &self.app;
-        let _ = &self.last_painted;
-        let _ = snapshot.fetched_at;
+        if let Err(e) = self.app.emit("usage_updated", snapshot) {
+            tracing::warn!("tauri_sink: emit usage_updated failed: {e}");
+        }
+        let target = self.paint_target(snapshot, any_source_degraded(snapshot));
+        if self.last_painted.as_ref() != Some(&target) {
+            tray_icon::paint(&self.app, target.0, &target.1);
+            self.last_painted = Some(target);
+        }
     }
 
     fn on_degraded(&mut self, source: Source, error: &str) {
-        // TODO(v0.3-ui):
-        //   1. `self.app.emit("degraded_state", DegradedPayload { source, error })`
-        //      — surfaces the failure to the UI's warning indicator.
-        //   2. Tray-side: a degraded source SHOULD flip the icon to the
-        //      warning-dot variant regardless of bucket (so the user sees
-        //      something is off even when usage is otherwise green).
-        //      Decide whether degraded-state lives in `ColorBucket` as a
-        //      variant or as a parallel boolean — the answer depends on
-        //      how v0.3's icon asset set is structured.
-        let _ = &self.app;
-        let _ = source;
-        let _ = error;
+        let payload = DegradedPayload {
+            source: source_key(source).to_string(),
+            error: error.to_string(),
+        };
+        if let Err(e) = self.app.emit("degraded_state", payload) {
+            tracing::warn!("tauri_sink: emit degraded_state failed: {e}");
+        }
+        let title = self
+            .last_painted
+            .as_ref()
+            .map(|(_, t)| t.clone())
+            .unwrap_or_default();
+        let target = (ColorBucket::Warn, title);
+        if self.last_painted.as_ref() != Some(&target) {
+            tray_icon::paint(&self.app, target.0, &target.1);
+            self.last_painted = Some(target);
+        }
     }
 }
 
@@ -102,15 +158,44 @@ impl Sink for TauriSink {
 mod tests {
     use super::*;
 
-    // Compile-only assertion: the trait bounds Sink requires (Send + 'static)
-    // are satisfied by TauriSink. If a future change to Sink (or to
-    // AppHandle's auto-traits) breaks this, the build fails here rather than
-    // at the v0.3 wiring site.
-    #[allow(dead_code)]
-    fn assert_sink_bounds<S: Sink>() {}
+    #[test]
+    fn any_source_error_keeps_warning() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        assert!(!any_source_degraded(&s));
+        s.openai_error = Some("HTTP 500".into());
+        assert!(any_source_degraded(&s));
+    }
 
-    #[allow(dead_code)]
-    fn _seam_check() {
-        assert_sink_bounds::<TauriSink>();
+    #[test]
+    fn bucket_thresholds() {
+        assert_eq!(ColorBucket::from_util(0.0), ColorBucket::Green);
+        assert_eq!(ColorBucket::from_util(49.9), ColorBucket::Green);
+        assert_eq!(ColorBucket::from_util(50.0), ColorBucket::Yellow);
+        assert_eq!(ColorBucket::from_util(74.9), ColorBucket::Yellow);
+        assert_eq!(ColorBucket::from_util(75.0), ColorBucket::Orange);
+        assert_eq!(ColorBucket::from_util(90.0), ColorBucket::Red);
+        assert_eq!(ColorBucket::from_util(150.0), ColorBucket::Red);
+    }
+
+    #[test]
+    fn worst_util_picks_max_across_sources() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        assert_eq!(worst_utilization(&s), 0.0);
+        s.claude_oauth = Some(anthropic_oauth::ClaudeOAuthSnapshot {
+            cadences: vec![anthropic_oauth::CadenceBar {
+                key: "five_hour".into(),
+                display_label: "5h".into(),
+                utilization_percent: 62.0,
+                resets_at: Utc::now(),
+            }],
+            extra_usage: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            org_uuid: None,
+            fetched_at: Utc::now(),
+        });
+        assert_eq!(worst_utilization(&s), 62.0);
     }
 }

@@ -10,7 +10,7 @@
 //! `rate_limits` is Pro/Max-only and only present after the first API
 //! response in a session; absent is `None`, never an error. The payload
 //! schema evolves (e.g. `context_window.*` at v2.1.132) so unknown/missing
-//! fields are tolerated. Track E (not this crate) wires the parsed snapshot
+//! fields are tolerated. The watcher (not this crate) wires the parsed snapshot
 //! into the live Snapshot/coordinator.
 
 pub mod errors;
@@ -21,10 +21,10 @@ pub mod types;
 pub mod wiring;
 
 pub use errors::StatuslineError;
-pub use file_io::{atomic_write_snapshot, read_snapshot, FileIoError};
+pub use file_io::{FileIoError, atomic_write_snapshot, read_snapshot};
 pub use parse::parse;
-pub use payload::{StatuslineFilePayload, SCHEMA_VERSION};
+pub use payload::{SCHEMA_VERSION, StatuslineFilePayload};
 pub use types::{RateLimits, RateWindow, StatuslineSnapshot};
 pub use wiring::{
-    default_settings_path, locate_settings_path, read_wire_status, wire_statusline, WireStatus,
+    WireStatus, default_settings_path, locate_settings_path, read_wire_status, wire_statusline,
 };

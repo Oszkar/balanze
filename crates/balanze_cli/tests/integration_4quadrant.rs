@@ -1,4 +1,4 @@
-//! End-to-end integration test for the v0.1 4-quadrant pipeline.
+//! End-to-end integration test for the 4-quadrant pipeline.
 //!
 //! The eng-review test plan explicitly called for this (under "Critical
 //! Paths" item 7): a test that exercises the full
@@ -22,11 +22,11 @@
 use std::path::PathBuf;
 
 use claude_cost::{compute_cost, load_bundled_prices};
-use claude_parser::{dedup_events, find_jsonl_files, parse_str, UsageEvent};
+use claude_parser::{UsageEvent, dedup_events, find_jsonl_files, parse_str};
 use codex_local::{find_latest_session, read_latest_quota_snapshot};
-use snapshot_composer::{compose, SnapshotSources};
-use state_coordinator::{summarize_jsonl, JsonlSnapshot, Snapshot};
-use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
+use snapshot_composer::{SnapshotSources, compose};
+use state_coordinator::{JsonlSnapshot, Snapshot, summarize_jsonl};
+use window::{DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW, summarize_window};
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -289,7 +289,7 @@ impl SnapshotSources for FixtureSources {
 // and notably passes `window_anchor: None` where `compose()` anchors to the
 // OAuth 5h reset, so the two paths can diverge on the JSONL rolling window.
 // A true parity assertion (or routing the watcher through `compose()`) is a
-// tracked follow-up from the v0.2 review.
+// tracked follow-up.
 #[tokio::test]
 async fn compose_parity_against_fixtures() {
     // Same fixed `now` as `full_pipeline_populates_claude_jsonl_in_snapshot`

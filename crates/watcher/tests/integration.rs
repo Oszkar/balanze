@@ -22,7 +22,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::sleep;
 
-use state_coordinator::{spawn as spawn_coord, LogSink};
+use state_coordinator::{LogSink, spawn as spawn_coord};
 use watcher::Watcher;
 
 /// Create a tempdir with `<tempdir>/.claude/projects/proj1/session.jsonl`

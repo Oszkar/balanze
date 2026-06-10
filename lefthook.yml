@@ -10,6 +10,13 @@
 pre-commit:
   parallel: true
   commands:
+    secrets:
+      # No glob: runs on every commit. Scans only staged content for secret
+      # patterns and blocks .env files (AGENTS.md 3.4). Sub-second.
+      run: bun scripts/check-secrets.mjs
+      fail_text: |
+        Potential secret detected in staged changes. See output above.
+
     rustfmt:
       tags: rust
       glob: "*.rs"
@@ -35,9 +42,13 @@ pre-push:
 
     test:
       tags: rust
-      run: cargo test --workspace
+      # Requires cargo-nextest: cargo install cargo-nextest --locked
+      # (the workspace has zero doctests, so nextest covers everything
+      # plain `cargo test` did).
+      run: cargo nextest run --workspace
       fail_text: |
-        cargo test --workspace failed. Don't push broken main.
+        cargo nextest run --workspace failed. Don't push broken main.
+        (Missing nextest? Install it: cargo install cargo-nextest --locked)
 
 # Enforces Conventional Commits on the subject line. The squash-merge model
 # means a clean per-commit history also yields clean PR titles / changelog.

@@ -102,7 +102,7 @@ pub enum WriteBack {
 /// Balanze both re-parse by key — but the rewritten file is intentionally
 /// not byte-identical to Claude Code's original compact layout.
 ///
-/// TODO(v0.2): the read→refresh→write race with Claude Code's own refresh is
+/// TODO: the read→refresh→write race with Claude Code's own refresh is
 /// only "skip if disk newer" here. A long-running watcher must serialize
 /// refreshes and re-read on `SkippedDiskNewer`; for the one-shot CLI the race
 /// window is ~1s and benign.

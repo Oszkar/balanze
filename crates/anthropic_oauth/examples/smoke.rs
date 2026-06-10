@@ -7,7 +7,7 @@
 //! Run with:
 //!   cargo run --release -p anthropic_oauth --example anthropic_oauth_smoke
 
-use anthropic_oauth::{fetch_usage, load, DEFAULT_API_BASE};
+use anthropic_oauth::{DEFAULT_API_BASE, fetch_usage, load};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let client = reqwest::Client::builder()
-        .user_agent("balanze/0.1.0-spike")
+        .user_agent(concat!("balanze/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let snapshot = fetch_usage(
         &client,

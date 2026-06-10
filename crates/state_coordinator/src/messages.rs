@@ -29,7 +29,7 @@ use crate::snapshot::Snapshot;
 /// differ from the API-rate cost derived from it.
 ///
 /// `ClaudeStatusline` carries the parsed statusLine payload written by
-/// `balanze-cli statusline` and read by the Track E watcher.
+/// `balanze-cli statusline` and read by the watcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     /// `anthropic_oauth::fetch_usage` — the 5h / 7d / per-model cadence bars.
@@ -42,7 +42,7 @@ pub enum Source {
     CodexQuota,
     /// `openai_client::costs_this_month` — month-to-date OpenAI spend.
     OpenAiCosts,
-    /// `claude_statusline` — parsed statusLine payload from the Track E file.
+    /// `claude_statusline` — parsed statusLine payload from the statusline snapshot file.
     ClaudeStatusline,
 }
 

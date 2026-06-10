@@ -6,16 +6,61 @@
 //! AGENTS.md §4 #8, identical inputs must yield identical `Snapshot`s.
 
 use anthropic_oauth::ClaudeOAuthSnapshot;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use claude_cost::Cost;
 use claude_statusline::StatuslineFilePayload;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
-use predictor::Prediction;
 use serde::{Deserialize, Serialize};
-use window::WindowSummary;
+use window::{DEFAULT_WINDOW, Pace, SEVEN_DAY_WINDOW, WindowSummary, pace};
 
 use crate::messages::Source;
+
+/// Per-window pace, mirrored from the OAuth cadence bars. Replaces the retired
+/// forward predictor: measured used % vs elapsed % of the window, plus their
+/// ratio. One entry per cadence whose window length is known.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowPace {
+    /// Cadence key, e.g. `"five_hour"` / `"seven_day"`.
+    pub key: String,
+    pub used_fraction: f64,
+    pub elapsed_fraction: f64,
+    pub ratio: Option<f64>,
+}
+
+fn window_len_for(key: &str) -> Option<Duration> {
+    // Cadence keys come in a bare form (`five_hour`, `seven_day`) AND
+    // model-specific variants (`seven_day_sonnet`, `seven_day_opus`,
+    // `seven_day_oauth_apps`, …). Match by family prefix so both forms map to
+    // their window — otherwise real Max-account 7-day windows are silently
+    // dropped from the pace view.
+    if key.starts_with("five_hour") {
+        Some(DEFAULT_WINDOW)
+    } else if key.starts_with("seven_day") {
+        Some(SEVEN_DAY_WINDOW)
+    } else {
+        None
+    }
+}
+
+/// Map the OAuth cadence bars into per-window pace. Shared by `compose()` (CLI)
+/// and the coordinator (watcher) so the two paths cannot diverge.
+pub fn pace_for_oauth(oauth: &ClaudeOAuthSnapshot, now: DateTime<Utc>) -> Vec<WindowPace> {
+    oauth
+        .cadences
+        .iter()
+        .filter_map(|c| {
+            let len = window_len_for(&c.key)?;
+            let p: Pace = pace(c.utilization_percent as f64, c.resets_at, len, now);
+            Some(WindowPace {
+                key: c.key.clone(),
+                used_fraction: p.used_fraction,
+                elapsed_fraction: p.elapsed_fraction,
+                ratio: p.ratio,
+            })
+        })
+        .collect()
+}
 
 /// Canonical Balanze state. `None` fields = "not yet observed"; `*_error`
 /// fields hold the most recent failure for that source. Successful data and
@@ -31,8 +76,8 @@ use crate::messages::Source;
 /// - OpenAI API $           ← `openai`
 ///
 /// Plus `claude_jsonl` which holds the raw JSONL window math that feeds
-/// both Anthropic cells, `claude_statusline` from the statusLine file
-/// payload, and `prediction` from the EWMA predictor.
+/// both Anthropic cells, and `claude_statusline` from the statusLine file
+/// payload.
 // PartialEq is intentionally NOT derived: `ClaudeOAuthSnapshot` doesn't
 // implement it, and the upstream change to add it would force a float-equality
 // debate that doesn't pay off. Tests compare individual fields.
@@ -74,17 +119,15 @@ pub struct Snapshot {
     /// configured but the fetch failed.
     pub openai_error: Option<String>,
     /// Most recent successful Claude Code statusLine file payload. `None`
-    /// until the first successful read (Track E, v0.2 live wiring).
+    /// until the first successful read (populated by the live watcher).
     pub claude_statusline: Option<StatuslineFilePayload>,
     /// Most recent failure from the statusline reader (file missing, schema
     /// drift). Coexists with `claude_statusline` when a previously-good read
     /// is now stale.
     pub claude_statusline_error: Option<String>,
-    /// Most recent EWMA-based prediction computed from OAuth cadence history.
-    /// Recomputed by the coordinator after each successful `ClaudeOAuth` or
-    /// `ClaudeJsonl` merge. `None` until the first OAuth merge with a
-    /// `five_hour` cadence.
-    pub prediction: Option<Prediction>,
+    /// Per-window pace (used vs elapsed) derived from the OAuth cadence bars.
+    /// Empty until an OAuth snapshot with a known cadence is present.
+    pub pace: Vec<WindowPace>,
 }
 
 impl Snapshot {
@@ -105,7 +148,7 @@ impl Snapshot {
             openai_error: None,
             claude_statusline: None,
             claude_statusline_error: None,
-            prediction: None,
+            pace: Vec::new(),
         }
     }
 }
@@ -144,6 +187,7 @@ pub fn record_error(snapshot: &mut Snapshot, source: Source, error: &str) {
 mod tests {
     use super::*;
     use crate::test_support::{fixture_now, oauth_snapshot};
+    use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot};
 
     // The "successful update overwrites data + clears the source's error" and
     // cross-source-isolation invariants now live in `coordinator::tests`
@@ -188,5 +232,129 @@ mod tests {
             Some("schema drift v2")
         );
         assert!(s.claude_statusline.is_none());
+    }
+
+    // --- pace_for_oauth ---
+
+    /// Build a `ClaudeOAuthSnapshot` from a compact `(key, util_pct, resets_at)`
+    /// tuple list. Keeps test bodies short; non-cadence fields are filled with
+    /// sensible defaults that don't affect `pace_for_oauth`.
+    fn make_oauth(cadences: &[(&str, f32, DateTime<Utc>)]) -> ClaudeOAuthSnapshot {
+        ClaudeOAuthSnapshot {
+            cadences: cadences
+                .iter()
+                .map(|(key, util, resets)| CadenceBar {
+                    key: key.to_string(),
+                    display_label: key.to_string(),
+                    utilization_percent: *util,
+                    resets_at: *resets,
+                })
+                .collect(),
+            extra_usage: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            org_uuid: None,
+            fetched_at: fixture_now(),
+        }
+    }
+
+    fn t(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn pace_for_oauth_empty_cadences_returns_empty_vec() {
+        let oauth = make_oauth(&[]);
+        let result = pace_for_oauth(&oauth, fixture_now());
+        assert!(result.is_empty(), "no cadences → empty pace vec");
+    }
+
+    #[test]
+    fn pace_for_oauth_unknown_key_is_skipped() {
+        // "monthly" is not in `window_len_for`, so it produces no entry.
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now + chrono::Duration::hours(5);
+        let oauth = make_oauth(&[("monthly", 50.0, resets_at)]);
+        let result = pace_for_oauth(&oauth, now);
+        assert!(
+            result.is_empty(),
+            "unknown cadence key must be filtered out; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn pace_for_oauth_maps_model_specific_seven_day_variants() {
+        // Real Max accounts report model-specific 7-day cadences (e.g.
+        // `seven_day_sonnet`), NOT a bare `seven_day`. They must still map to
+        // the 7-day window, not be dropped.
+        let now = t("2026-06-02T12:00:00Z");
+        let resets_at = now + chrono::Duration::days(7)
+            - chrono::Duration::days(3)
+            - chrono::Duration::hours(12); // 50% elapsed
+        let oauth = make_oauth(&[("seven_day_sonnet", 25.0, resets_at)]);
+        let result = pace_for_oauth(&oauth, now);
+        assert_eq!(
+            result.len(),
+            1,
+            "seven_day_sonnet must produce a pace entry"
+        );
+        assert_eq!(result[0].key, "seven_day_sonnet");
+        assert!(
+            (result[0].elapsed_fraction - 0.5).abs() < 1e-9,
+            "must use the 7-day window length"
+        );
+    }
+
+    #[test]
+    fn pace_for_oauth_five_hour_and_seven_day_produce_two_entries() {
+        // now = 2026-06-02 12:00:00 UTC
+        // five_hour: resets in 3h → window_start = now - 2h → 40% elapsed; 82% used.
+        // seven_day: resets in 3.5d → window_start = now - 3.5d → 50% elapsed; 25% used.
+        let now = t("2026-06-02T12:00:00Z");
+        let five_resets = now + chrono::Duration::hours(3);
+        let seven_resets = now + chrono::Duration::days(3) + chrono::Duration::hours(12);
+
+        let oauth = make_oauth(&[
+            ("five_hour", 82.0, five_resets),
+            ("seven_day", 25.0, seven_resets),
+        ]);
+        let result = pace_for_oauth(&oauth, now);
+
+        assert_eq!(result.len(), 2, "two known keys → two entries");
+
+        let five = result.iter().find(|wp| wp.key == "five_hour").unwrap();
+        let seven = result.iter().find(|wp| wp.key == "seven_day").unwrap();
+
+        // five_hour: 2h elapsed out of 5h → 40% elapsed; 82% used.
+        let expected_five = pace(82.0, five_resets, DEFAULT_WINDOW, now);
+        assert!(
+            (five.used_fraction - expected_five.used_fraction).abs() < 1e-9,
+            "five_hour used_fraction mismatch"
+        );
+        assert!(
+            (five.elapsed_fraction - expected_five.elapsed_fraction).abs() < 1e-9,
+            "five_hour elapsed_fraction mismatch: got {}, expected {}",
+            five.elapsed_fraction,
+            expected_five.elapsed_fraction
+        );
+        assert_eq!(
+            five.ratio.is_some(),
+            expected_five.ratio.is_some(),
+            "five_hour ratio presence must match"
+        );
+        if let (Some(got), Some(exp)) = (five.ratio, expected_five.ratio) {
+            assert!((got - exp).abs() < 1e-6, "five_hour ratio mismatch");
+        }
+
+        // seven_day: 3.5 days elapsed out of 7 → 50% elapsed; 25% used.
+        let expected_seven = pace(25.0, seven_resets, SEVEN_DAY_WINDOW, now);
+        assert!(
+            (seven.used_fraction - expected_seven.used_fraction).abs() < 1e-9,
+            "seven_day used_fraction mismatch"
+        );
+        assert!(
+            (seven.elapsed_fraction - expected_seven.elapsed_fraction).abs() < 1e-9,
+            "seven_day elapsed_fraction mismatch"
+        );
     }
 }

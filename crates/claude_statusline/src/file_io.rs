@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::payload::{StatuslineFilePayload, SCHEMA_VERSION};
+use crate::payload::{SCHEMA_VERSION, StatuslineFilePayload};
 
 // ── Error type ────────────────────────────────────────────────────────────────
 

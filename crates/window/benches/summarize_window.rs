@@ -7,21 +7,23 @@
 //! `(ColorBucket, title_text)` dedup (AGENTS.md §3.1) that follows.
 //!
 //! Baseline workflow. `cargo bench -p window -- --save-baseline
-//! track_e_initial` writes Criterion's output to
-//! `target/criterion/summarize_window_10k_5h/track_e_initial/estimates.json`.
+//! committed` writes Criterion's output to
+//! `target/criterion/summarize_window_10k_5h/committed/estimates.json`.
 //! The committed `crates/window/benches/baseline.json` is a **manual copy**
-//! of that file — a reference snapshot at Track E ship time. Criterion
+//! of that file — a reference snapshot. Criterion
 //! does NOT auto-consume the committed file; on a fresh checkout,
-//! `cargo bench -- --baseline track_e_initial` finds nothing because
+//! `cargo bench -- --baseline committed` finds nothing because
 //! `target/criterion/` is empty. To compare against the committed
 //! snapshot, copy `crates/window/benches/baseline.json` into
-//! `target/criterion/summarize_window_10k_5h/track_e_initial/estimates.json`
-//! first. To refresh: run `--save-baseline track_e_initial` and copy the
+//! `target/criterion/summarize_window_10k_5h/committed/estimates.json`
+//! first. To refresh: run `--save-baseline committed` and copy the
 //! new `estimates.json` back over `benches/baseline.json`.
 
 use chrono::{Duration, TimeZone, Utc};
 use claude_parser::{AccountType, DataSource, Provider, UsageEvent};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use window::summarize_window;
 
 /// 10k events spread evenly across the 5-hour window so the inner-loop

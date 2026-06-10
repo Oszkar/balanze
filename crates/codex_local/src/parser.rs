@@ -202,7 +202,7 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    /// Canonical sample line shapes pulled from the spike against real
+    /// Canonical sample line shapes pulled from real
     /// `~/.codex/sessions/` data. Anonymized: session UUID is the
     /// well-known "00000000-…" pattern.
     const SESSION_META: &str = r#"{"timestamp":"2026-05-14T06:23:20.076Z","type":"session_meta","payload":{"id":"00000000-0000-7000-8000-000000000001","timestamp":"2026-05-14T06:23:10.584Z","cwd":"E:\\test","originator":"codex_exec","cli_version":"0.130.0"}}"#;

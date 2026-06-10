@@ -25,15 +25,15 @@ pub enum DataSource {
     Jsonl,
     /// OpenAI Admin Costs API (`/v1/organization/costs`).
     OpenAiBilling,
-    /// Anthropic Console (cookie-based scrape, planned for v0.2).
+    /// Anthropic Console (cookie-based scrape; not implemented).
     AnthropicConsole,
     /// Derived locally (e.g., burn-rate extrapolations); not authoritative.
     Inferred,
 }
 
 /// One billing-relevant assistant turn. Produced by `parse_str` and consumed
-/// downstream by `dedup_events` (via `(message_id, request_id)`),
-/// `window::summarize_window`, and eventually the predictor.
+/// downstream by `dedup_events` (via `(message_id, request_id)`) and
+/// `window::summarize_window`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageEvent {
     /// Wall-clock timestamp Claude Code recorded for this turn (top-level

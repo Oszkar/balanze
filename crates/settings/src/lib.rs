@@ -30,7 +30,7 @@ pub struct Settings {
     pub version: u32,
     #[serde(default)]
     pub providers: ProviderSettings,
-    /// Cadence (seconds) for the v0.2 watcher's OAuth + OpenAI pollers.
+    /// Cadence (seconds) for the watcher's OAuth + OpenAI pollers.
     /// Default 300 — the §3.1 5-min API-politeness floor for provider
     /// usage/billing endpoints. Each poller (`watcher::tasks::oauth_poll`
     /// and `watcher::tasks::openai_poll`) clamps to a 300s minimum inside

@@ -52,9 +52,9 @@ pub mod compute;
 pub mod errors;
 pub mod prices;
 
-pub use compute::{compute_cost, Cost, ModelCost};
+pub use compute::{Cost, ModelCost, compute_cost};
 pub use errors::CostError;
-pub use prices::{load_bundled_prices, ModelPrices, PriceTable};
+pub use prices::{ModelPrices, PriceTable, load_bundled_prices};
 
 /// Short commit hash of the LiteLLM source the vendored price table was
 /// taken from. Emitted by `build.rs` from the `data/litellm-prices-*.json`

@@ -27,9 +27,9 @@
 //!
 //! It does NOT work in legacy Windows `cmd.exe` without `EnableVirtualTerminalProcessing`
 //! turned on first; in that case the user will see literal `␛[2J␛[H` characters
-//! and the redraw effect breaks. Since the v0.1 / v0.2 distribution story is
+//! and the redraw effect breaks. Since the distribution story is
 //! source-only (the audience is power users on Win 11 / Windows Terminal) we
-//! accept that limitation rather than pull in `crossterm` for a v0.3-UI-only
+//! accept that limitation rather than pull in `crossterm` for a UI-only
 //! concern. If a future user hits this, the fix is a one-time
 //! `windows-sys`-backed `SetConsoleMode` call in `StdoutSink::new`.
 //!
@@ -48,7 +48,7 @@
 //! standard Unix pattern). `JsonlSink` inherits the same `println!` panic-
 //! on-broken-pipe behavior the rest of the project relies on.
 
-use std::io::{stderr, Stderr, Write};
+use std::io::{Stderr, Write, stderr};
 use std::time::{Duration, Instant};
 
 use state_coordinator::{Sink, Snapshot, Source};

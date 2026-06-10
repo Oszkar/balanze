@@ -8,13 +8,13 @@
 //! 5. Emits `Update(ClaudeOAuth, ...)` to the state coordinator.
 //!
 //! MIRRORS balanze_cli::live_fetch_oauth and balanze_cli::refresh_and_persist
-//! — see TODO(v0.2-followup): extract live_fetch crate so the CLI and watcher
+//! — see TODO: extract a shared live-fetch helper so the CLI and watcher
 //! share one implementation.
 
 use anthropic_oauth::{
-    fetch_usage, load_from as load_credentials_from, locate_credentials, refresh_access_token,
-    write_back, CredentialsClaudeAiOauth, OAuthError, WriteBack, CLAUDE_CODE_CLIENT_ID,
-    CLAUDE_CODE_TOKEN_URL, DEFAULT_API_BASE as ANTHROPIC_API_BASE,
+    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, CredentialsClaudeAiOauth,
+    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage,
+    load_from as load_credentials_from, locate_credentials, refresh_access_token, write_back,
 };
 use chrono::{Duration, Utc};
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};

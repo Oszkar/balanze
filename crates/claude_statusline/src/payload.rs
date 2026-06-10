@@ -9,7 +9,7 @@ use crate::types::StatuslineSnapshot;
 pub const SCHEMA_VERSION: u8 = 1;
 
 /// Envelope written to disk by `balanze-cli statusline` and read by the
-/// watcher (Track E). `captured_at` is the producer's wall-clock at write
+/// watcher. `captured_at` is the producer's wall-clock at write
 /// time — the authoritative freshness signal for the consumer's render-time
 /// dedup (prevents replaying stale snapshots).
 ///

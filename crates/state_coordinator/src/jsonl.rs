@@ -9,9 +9,9 @@
 //! silently diverged from the CLI here; centralizing the math fixes that.
 
 use chrono::{DateTime, Utc};
-use claude_cost::{compute_cost, Cost, PriceTable};
+use claude_cost::{Cost, PriceTable, compute_cost};
 use claude_parser::UsageEvent;
-use window::{summarize_window, DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW};
+use window::{DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW, summarize_window};
 
 use crate::snapshot::JsonlSnapshot;
 

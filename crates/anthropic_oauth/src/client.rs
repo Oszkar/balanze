@@ -57,7 +57,11 @@ struct RawExtraUsage {
     is_enabled: bool,
     monthly_limit: f64,
     used_credits: f64,
-    utilization: f32,
+    // The endpoint sends `null` here when `used_credits == 0` (nothing accrued
+    // this month) and a real percentage once there is overage. A non-optional
+    // `f32` rejected the zero-usage shape, which silently dropped the whole
+    // block (enabled-but-$0 read as "not available"). Tolerate the null.
+    utilization: Option<f32>,
     currency: String,
 }
 
@@ -97,7 +101,7 @@ pub async fn fetch_usage(
         }
         // AuthExpired / RefreshFailed / ResponseShape / CredentialsMissing / etc.
         // must NOT be retried — especially AuthExpired, which triggers the
-        // caller's refresh+retry-once path (Track A).
+        // caller's refresh+retry-once path.
         _ => backoff::RetryDecision::DoNotRetry,
     };
 
@@ -209,16 +213,17 @@ fn parse_response(
         if key == "extra_usage" {
             match serde_json::from_value::<RawExtraUsage>(value.clone()) {
                 Ok(raw) => {
-                    // Raw values are integer CENTS. Resolved first-hand by
-                    // the 2026-05-19 reconciliation spike (Max-5x: OAuth
-                    // 2500/2092 ↔ claude.ai "Extra usage" $25.00/$20.92/84%);
+                    // Raw values are integer CENTS. Reconciled against a real
+                    // Max-5x OAuth payload (OAuth 2500/2092 ↔ claude.ai
+                    // "Extra usage" $25.00/$20.92/84%);
                     // see anthropic_oauth/src/types.rs ExtraUsage doc.
                     // Convert cents → micro-USD via × 10_000.
                     extra_usage = Some(ExtraUsage {
                         is_enabled: raw.is_enabled,
                         monthly_limit_micro_usd: (raw.monthly_limit * 10_000.0).round() as i64,
                         used_credits_micro_usd: (raw.used_credits * 10_000.0).round() as i64,
-                        utilization_percent: raw.utilization,
+                        // `null` utilization means 0% used (zero accrued); see RawExtraUsage.
+                        utilization_percent: raw.utilization.unwrap_or(0.0),
                         currency: raw.currency,
                     });
                 }
@@ -373,8 +378,7 @@ mod tests {
 
     #[test]
     fn extra_usage_reconciled_cents_semantic() {
-        // Regression pin for the 2026-05-19 reconciliation spike
-        // (~/.gstack/projects/balanze/spike-extra-usage-reconciliation-20260519.md).
+        // Regression pin for the extra_usage reconciliation (raw ints are cents).
         // claude.ai/settings/usage "Extra usage" showed $20.92 / $25.00 / 84%
         // for a Max-5x account; OAuth returned monthly_limit=2500,
         // used_credits=2092, utilization=83.7. Raw ints are CENTS. This test
@@ -391,6 +395,28 @@ mod tests {
         // 2092 cents = $20.92 = 20_920_000 micro-USD
         assert_eq!(eu.used_credits_micro_usd, 20_920_000);
         assert!((eu.utilization_percent - 83.7).abs() < 1e-3);
+        assert_eq!(eu.currency, "USD");
+    }
+
+    #[test]
+    fn extra_usage_enabled_but_zero_usage_parses() {
+        // Real Max-5x payload at $0 this month: `utilization` is null (nothing
+        // accrued) and a `disabled_reason` field is present. A non-optional
+        // `utilization: f32` rejected this shape, so an enabled-but-$0 block
+        // silently dropped to None and the cell read "— not available".
+        // Regression pin for the Option<f32> + unwrap_or(0.0) fix.
+        let body = r#"{
+            "five_hour": {"utilization": 12.0, "resets_at": "2026-06-02T18:30:00Z"},
+            "extra_usage": {"is_enabled": true, "monthly_limit": 2500, "used_credits": 0, "utilization": null, "currency": "USD", "disabled_reason": null}
+        }"#;
+        let snap = parse_response(body, None, Some("max".into()), None, fixed_ts()).unwrap();
+        let eu = snap
+            .extra_usage
+            .expect("enabled-but-$0 extra_usage must parse, not drop to None");
+        assert!(eu.is_enabled);
+        assert_eq!(eu.monthly_limit_micro_usd, 25_000_000); // $25.00
+        assert_eq!(eu.used_credits_micro_usd, 0); // $0.00
+        assert_eq!(eu.utilization_percent, 0.0); // null → 0%
         assert_eq!(eu.currency, "USD");
     }
 

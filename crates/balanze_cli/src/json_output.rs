@@ -29,13 +29,13 @@
 //! row, this module's tests, and the README example block in lockstep.
 
 use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot, ExtraUsage};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use claude_cost::{Cost, ModelCost};
 use claude_statusline::StatuslineFilePayload;
 use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
 use openai_client::{LineItemCost, OpenAiCosts};
 use serde::Serialize;
-use state_coordinator::{JsonlSnapshot, Prediction, PredictionState, Snapshot};
+use state_coordinator::{JsonlSnapshot, Snapshot, WindowPace};
 
 /// Sentinel inserted in place of `codex_quota.session_id` when `verbose=false`.
 const SESSION_ID_REDACTED: &str = "<redacted>";
@@ -77,7 +77,7 @@ struct JsonDoc<'a> {
     openai_error: Option<&'a str>,
     claude_statusline: Option<JsonClaudeStatusline>,
     claude_statusline_error: Option<&'a str>,
-    prediction: Option<JsonPrediction>,
+    pace: Vec<JsonPace>,
 }
 
 impl<'a> JsonDoc<'a> {
@@ -108,7 +108,7 @@ impl<'a> JsonDoc<'a> {
                 .as_ref()
                 .map(JsonClaudeStatusline::from),
             claude_statusline_error: snap.claude_statusline_error.as_deref(),
-            prediction: snap.prediction.as_ref().map(JsonPrediction::from),
+            pace: snap.pace.iter().map(JsonPace::from).collect(),
         }
     }
 }
@@ -353,32 +353,24 @@ impl From<&StatuslineFilePayload> for JsonClaudeStatusline {
 }
 
 // ----------------------------------------------------------------------------
-// prediction (EWMA predictor output)
+// pace (used vs elapsed, per cadence window)
 // ----------------------------------------------------------------------------
 
 #[derive(Serialize)]
-struct JsonPrediction {
-    state: &'static str,
-    eta_to_cap_seconds: Option<i64>,
-    eta_to_reset_seconds: i64,
-    computed_at: DateTime<Utc>,
-    source: &'static str,
-    confidence: &'static str,
+struct JsonPace {
+    key: String,
+    used_fraction: f64,
+    elapsed_fraction: f64,
+    ratio: Option<f64>,
 }
 
-impl From<&Prediction> for JsonPrediction {
-    fn from(p: &Prediction) -> Self {
+impl From<&WindowPace> for JsonPace {
+    fn from(p: &WindowPace) -> Self {
         Self {
-            state: match p.state {
-                PredictionState::Insufficient => "Insufficient",
-                PredictionState::Uncertain => "Uncertain",
-                PredictionState::Confident => "Confident",
-            },
-            eta_to_cap_seconds: p.eta_to_cap.map(|d: Duration| d.num_seconds()),
-            eta_to_reset_seconds: p.eta_to_reset.num_seconds(),
-            computed_at: p.computed_at,
-            source: "predictor_ewma",
-            confidence: "estimate",
+            key: p.key.clone(),
+            used_fraction: p.used_fraction,
+            elapsed_fraction: p.elapsed_fraction,
+            ratio: p.ratio,
         }
     }
 }
@@ -635,16 +627,6 @@ mod tests {
         StatuslineFilePayload::new(snap, fixed_now())
     }
 
-    fn sample_prediction() -> Prediction {
-        // Build a Confident prediction directly: warm-up passed, cap not reached.
-        Prediction {
-            state: state_coordinator::PredictionState::Confident,
-            eta_to_cap: Some(chrono::Duration::seconds(11_280)),
-            eta_to_reset: chrono::Duration::seconds(16_200),
-            computed_at: fixed_now(),
-        }
-    }
-
     #[test]
     fn claude_statusline_cell_shape() {
         let mut s = Snapshot::empty(fixed_now());
@@ -670,59 +652,84 @@ mod tests {
         assert!(v["claude_statusline"].is_null());
     }
 
-    #[test]
-    fn prediction_cell_shape() {
-        let mut s = Snapshot::empty(fixed_now());
-        s.prediction = Some(sample_prediction());
-        let v = render_to_value(&s, false);
-        let cell = &v["prediction"];
-        // sample_prediction() constructs PredictionState::Confident — assert the
-        // exact string so a state swap (e.g. Confident → Insufficient) is caught.
-        assert_eq!(cell["state"].as_str().unwrap(), "Confident");
-        assert_eq!(cell["source"], "predictor_ewma");
-        assert_eq!(cell["confidence"], "estimate");
-        // eta_to_reset: 16 200 s from sample_prediction()
-        assert_eq!(cell["eta_to_reset_seconds"].as_i64().unwrap(), 16_200);
-        // eta_to_cap: 11 280 s from sample_prediction() (Some → not null)
-        assert_eq!(cell["eta_to_cap_seconds"].as_i64().unwrap(), 11_280);
-        // computed_at serialises to an ISO-8601 string
-        assert!(cell["computed_at"].is_string());
+    // --- pace cell shape ---
+
+    fn make_pace_entries() -> Vec<state_coordinator::WindowPace> {
+        vec![
+            state_coordinator::WindowPace {
+                key: "five_hour".to_string(),
+                used_fraction: 0.82,
+                elapsed_fraction: 0.40,
+                ratio: Some(2.05),
+            },
+            state_coordinator::WindowPace {
+                key: "seven_day".to_string(),
+                used_fraction: 0.25,
+                elapsed_fraction: 0.50,
+                ratio: None,
+            },
+        ]
     }
 
     #[test]
-    fn prediction_cell_insufficient_state_serializes_eta_as_null() {
-        // Build an Insufficient prediction (warm-up / too few history points).
-        // eta_to_cap must be None → serialises as JSON null.
-        // eta_to_reset is always present.
-        let insufficient = state_coordinator::Prediction {
-            state: state_coordinator::PredictionState::Insufficient,
-            eta_to_cap: None,
-            eta_to_reset: chrono::Duration::seconds(16_200),
-            computed_at: fixed_now(),
-        };
+    fn pace_cell_serializes_with_correct_keys_and_no_source() {
         let mut s = Snapshot::empty(fixed_now());
-        s.prediction = Some(insufficient);
+        s.pace = make_pace_entries();
         let v = render_to_value(&s, false);
-        let cell = &v["prediction"];
-        assert_eq!(cell["state"].as_str().unwrap(), "Insufficient");
-        // Option<Duration> with None must serialise as JSON null.
+
+        let arr = v["pace"].as_array().expect(".pace must be an array");
+        assert_eq!(arr.len(), 2, ".pace must have 2 entries");
+
+        // Find the five_hour entry and check it has exactly the documented keys.
+        let five = arr
+            .iter()
+            .find(|e| e["key"] == "five_hour")
+            .expect("five_hour entry must be present");
+
+        assert_eq!(five["used_fraction"].as_f64().unwrap(), 0.82);
+        assert_eq!(five["elapsed_fraction"].as_f64().unwrap(), 0.40);
         assert!(
-            cell["eta_to_cap_seconds"].is_null(),
-            "eta_to_cap_seconds should be null for Insufficient, got {}",
-            cell["eta_to_cap_seconds"]
+            (five["ratio"].as_f64().unwrap() - 2.05).abs() < 1e-9,
+            "ratio should be ~2.05, got {:?}",
+            five["ratio"]
         );
-        // eta_to_reset is always present regardless of state.
-        assert_eq!(
-            cell["eta_to_reset_seconds"].as_i64().unwrap(),
-            16_200,
-            "eta_to_reset_seconds must always be an i64"
+        // The undocumented `source` field must NOT appear.
+        assert!(
+            five.get("source").is_none() || five["source"].is_null(),
+            "pace entries must NOT serialize a `source` field; got {:?}",
+            five.get("source")
         );
     }
 
     #[test]
-    fn prediction_absent_is_null() {
-        let s = Snapshot::empty(fixed_now());
+    fn pace_entry_with_none_ratio_serializes_ratio_as_null() {
+        let mut s = Snapshot::empty(fixed_now());
+        s.pace = make_pace_entries();
         let v = render_to_value(&s, false);
-        assert!(v["prediction"].is_null());
+
+        let arr = v["pace"].as_array().expect(".pace must be an array");
+        let seven = arr
+            .iter()
+            .find(|e| e["key"] == "seven_day")
+            .expect("seven_day entry must be present");
+
+        // `ratio: None` → JSON `null` (field is present, value is null).
+        assert!(
+            seven["ratio"].is_null(),
+            "ratio: None must serialize as JSON null, got {:?}",
+            seven["ratio"]
+        );
+    }
+
+    #[test]
+    fn pace_empty_vec_serializes_pace_as_empty_array() {
+        let mut s = Snapshot::empty(fixed_now());
+        s.pace = Vec::new();
+        let v = render_to_value(&s, false);
+
+        let arr = v["pace"]
+            .as_array()
+            .expect(".pace must be a JSON array even when empty");
+        assert!(arr.is_empty(), ".pace must be [] when snap.pace is empty");
     }
 }

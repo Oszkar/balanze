@@ -2,7 +2,7 @@
 resolver = "2"
 members = ["src-tauri", "crates/*"]
 # Bare `cargo build` / `test` / `run` operate on the crates only — NOT
-# `src-tauri`. The v0.1 deliverable is the `balanze-cli` binary, which has zero
+# `src-tauri`. The deliverable is the `balanze-cli` binary, which has zero
 # system-library deps (pure Rust + rustls) and builds on Linux with nothing but
 # a Rust toolchain. `src-tauri` drags in the GTK/WebKit native stack, which a
 # CLI user should never have to install. Building the Tauri app is the explicit
@@ -13,9 +13,9 @@ members = ["src-tauri", "crates/*"]
 default-members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.1"
-edition = "2021"
-rust-version = "1.77"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 authors = ["Oszkar"]
 # All workspace crates are project-internal — never published to crates.io.
@@ -25,7 +25,7 @@ authors = ["Oszkar"]
 publish = false
 
 [workspace.dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-build = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
@@ -39,16 +39,15 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 directories = "6"
 keyring = "3"
-notify = "6"
+notify = "8"
 notify-debouncer-full = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
-predictor = { path = "crates/predictor" }
-# Criterion benches (Track E Task 8). Dev-only; not pulled into release
+# Criterion benches. Dev-only; not pulled into release
 # artifacts. Pinned to 0.5 — the 0.6 line dropped `BatchSize::SmallInput`'s
 # stable rendering and we depend on the JSON estimates layout for our
 # committed baselines.
-criterion = "0.5"
+criterion = "0.8"
 
 [workspace.dependencies.wiremock]
 version = "0.6"
