@@ -6,20 +6,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
-## [0.3.0] — UI: the popover (pending tag)
+## [0.3.0] — UI: the popover PoC - 2025-06-10
 
 The Tauri surface — the hero artifact. Gauge tray + glanceable popover, wired live to the v0.2 watcher spine.
 
 ### Added
 - **Tauri popover + gauge tray icon.** Color-shifting ring gauge (RGBA rendered at runtime, repaint deduped by `(ColorBucket, title_text)`); hidden-on-launch, left-click toggles, blur hides.
 - **Popover views.** Transposed matrix grid (providers as columns, quota/billed rows, pace tick inline on the usage bar) + a Cards density view; "Subscription leverage" box; burn number; source/confidence on hover; light/dark.
-- **Live IPC** (boundary #9): commands `get_snapshot`, `refresh_now`; events `usage_updated`, `degraded_state`.
+- **Live IPC**: commands `get_snapshot`, `refresh_now`; events `usage_updated`, `degraded_state`.
 - **`TauriSink` filled** — real tray paint + emit (was the compile-only seam-check skeleton in v0.2). `tauri-plugin-single-instance` prevents double-launch.
 
-### Fixed
-- Parse `extra_usage` when `utilization` is `null` at $0 usage (#56).
-
-## [0.2.0] — Liveness (pending tag)
+## [0.2.0] — Liveness - 2026-06-03
 
 The data updates itself. New live spine = statusline-push + JSONL `notify`; OAuth demoted to a backoff'd fallback poll.
 
@@ -40,12 +37,10 @@ The data updates itself. New live spine = statusline-push + JSONL `notify`; OAut
 - `--json` redacts `org_uuid` / Codex `session_id` unless `-v`.
 - `release.yml` requires an explicit `v*.*.*` tag input.
 
-### Removed
-- Scaffold `greet` Tauri command (outside the IPC contract).
-
 ### Fixed
 - JSONL discovery unions every project root — dual-install machines no longer undercount.
 - `--watch` anchors the JSONL window to the OAuth reset (CLI ≡ watcher) via a shared `summarize_jsonl` helper.
+- Parse `extra_usage` when `utilization` is `null` at $0 usage (#56).
 
 ## [0.1.1] - 2026-05-19
 
@@ -84,3 +79,4 @@ v0.1 — **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distr
 [Unreleased]: https://github.com/Oszkar/balanze/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/Oszkar/balanze/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Oszkar/balanze/releases/tag/v0.1.0
+[0.2.0]: https://github.com/Oszkar/balanze/releases/tag/v0.2.0

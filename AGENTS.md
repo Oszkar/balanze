@@ -96,6 +96,13 @@ Secrets in scope: user-supplied OpenAI API keys, plus read access to Claude Code
 - **Single writer.** `anthropic_oauth` is the only crate that reads or writes `~/.claude/.credentials.json`. The only write is the refreshed-token write-back: atomic tmp + fsync + rename, perms-preserving, reuses Anthropic's file, touches only `claudeAiOauth` token fields, never regresses a concurrently-newer on-disk token. We do not mirror, persist, or back up this file's contents anywhere.
 - **Surface discipline.** New secrets require a clear rotation path and a `DegradedState` variant for "credential unavailable / expired" before they're added. If a user-supplied key leaks, the user rotates at the provider. If a Claude OAuth token leaks, the user re-runs `claude login`. Balanze stores no audit trail of historical credentials.
 
+### 3.5. Misc.
+
+- DO NOT use em-dashes (—), use regular hyphens (-) instead including in code, PR descriptions, everywhere.
+- DO NOT use ellipses (...) at the end of sentences, use three periods (...) instead.
+- Avoid exposing project management jargon, task IDs, etc. into commit messages, PR titles, and publicly facing content (UI, changelog, etc.)
+- Soft wrapping is highly desired in markdown. Don't constrain text to a certain number of characters in a line.
+
 ## 4. Architecture
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — data-flow diagram, crate map, the twelve numbered boundaries, IPC contract, error/degraded-state discipline.
