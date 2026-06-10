@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Changed
+- Toolchain unification: Rust pinned to 1.94.0 via `rust-toolchain.toml` (CI matches; MSRV stays 1.85), Bun pinned to 1.3.13 via `packageManager` + CI `bun-version-file`.
+- PR titles are now CI-validated as Conventional Commits (`pr-title.yml`), matching the local `commit-msg` hook.
+
 ## [0.3.0] — UI: the popover PoC - 2025-06-10
 
 The Tauri surface — the hero artifact. Gauge tray + glanceable popover, wired live to the v0.2 watcher spine.
