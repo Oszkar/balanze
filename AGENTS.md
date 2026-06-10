@@ -99,9 +99,9 @@ Secrets in scope: user-supplied OpenAI API keys, plus read access to Claude Code
 ### 3.5. Misc.
 
 - DO NOT use em-dashes (—), use regular hyphens (-) instead including in code, PR descriptions, everywhere.
-- DO NOT use ellipses (...) at the end of sentences, use three periods (...) instead.
+- DO NOT use the Unicode ellipsis character at the end of sentences, use three periods (...) instead.
 - Avoid exposing project management jargon, task IDs, etc. into commit messages, PR titles, and publicly facing content (UI, changelog, etc.)
-- Soft wrapping is highly desired in markdown. Don't constrain text to a certain number of characters in a line.
+- Soft wrapping is highly desired in Markdown. Don't constrain text to a certain number of characters in a line.
 
 ## 4. Architecture
 
@@ -201,7 +201,7 @@ Before claiming work is done:
 - Present 1–3 options with trade-offs when decisions are needed.
 - Push back on: security risk, architectural violations, overengineering, premature scope expansion.
 - Be correct first, agreeable second.
-- Don't add busywork (summary docs, status reports, recap markdown) unless explicitly asked.
+- Don't add busywork (summary docs, status reports, recap Markdown) unless explicitly asked.
 - Persist until the task is complete or genuinely blocked; if blocked, state what you tried and what you need.
 
 ## 10a. Known issues
