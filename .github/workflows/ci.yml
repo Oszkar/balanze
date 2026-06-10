@@ -44,7 +44,7 @@ jobs:
           bun-version-file: package.json
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.94
+        uses: dtolnay/rust-toolchain@1.100
         with:
           components: rustfmt, clippy
 
@@ -100,7 +100,7 @@ jobs:
           bun-version-file: package.json
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.94
+        uses: dtolnay/rust-toolchain@1.100
         with:
           components: clippy
 
