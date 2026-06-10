@@ -94,6 +94,7 @@ Secrets in scope: user-supplied OpenAI API keys, plus read access to Claude Code
 - **Storage.** OpenAI keys live in the OS keychain via the `keyring` crate. The Claude OAuth file is Anthropic's; we reuse it. Neither is ever written to disk in plaintext outside those locations. `.env` is gitignored and not loaded — non-secret config goes through `directories::ProjectDirs`, env-var overrides are documented in CLI help (`BALANZE_OPENAI_KEY`, `BALANZE_LOG`).
 - **Logging.** Never log any secret at any level. The only acceptable display surface outside the settings UI's masked input is a redacted form (`sk-…45 (len=51)`) in a hypothetical debug "show config" command. The settings UI's API-key input is `type="password"`. File paths (and their existence) are loggable at INFO; their contents are not.
 - **Single writer.** `anthropic_oauth` is the only crate that reads or writes `~/.claude/.credentials.json`. The only write is the refreshed-token write-back: atomic tmp + fsync + rename, perms-preserving, reuses Anthropic's file, touches only `claudeAiOauth` token fields, never regresses a concurrently-newer on-disk token. We do not mirror, persist, or back up this file's contents anywhere.
+- **Pre-commit scan.** A lefthook pre-commit hook (`scripts/check-secrets.mjs`) scans staged content for key-shaped strings (OpenAI `sk-...` keys, `BALANZE_OPENAI_KEY` literals, high-entropy assignments) and blocks `.env` files outright.
 - **Surface discipline.** New secrets require a clear rotation path and a `DegradedState` variant for "credential unavailable / expired" before they're added. If a user-supplied key leaks, the user rotates at the provider. If a Claude OAuth token leaks, the user re-runs `claude login`. Balanze stores no audit trail of historical credentials.
 
 ### 3.5. Misc.
@@ -187,6 +188,7 @@ Before claiming work is done:
 **Branch & push:**
 
 - `main` is the only protected branch. Never force-push to it.
+- Protection is enforced by a repository ruleset on `main`: changes land via PR only, with required status checks (`linux`, `cargo-deny`, `conventional-commit title`); branch deletion and non-fast-forward pushes are blocked.
 - Branch naming: `fix/...`, `feat/...`, `docs/...`, `chore/...`. One PR per branch.
 - `git push --force-with-lease` is acceptable on feature branches; `git push --force` is not.
 - **Never use `--no-verify`** to skip git hooks or `--no-gpg-sign` to skip signing. If a hook fails, fix the issue.
