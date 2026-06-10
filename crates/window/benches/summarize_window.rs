@@ -21,7 +21,9 @@
 
 use chrono::{Duration, TimeZone, Utc};
 use claude_parser::{AccountType, DataSource, Provider, UsageEvent};
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use window::summarize_window;
 
 /// 10k events spread evenly across the 5-hour window so the inner-loop
