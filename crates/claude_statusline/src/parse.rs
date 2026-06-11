@@ -1,4 +1,4 @@
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use serde::Deserialize;
 
 use crate::errors::StatuslineError;
@@ -18,6 +18,13 @@ struct RawCost {
 
 #[derive(Debug, Deserialize)]
 struct RawRateLimits {
+    // Block-level `null` is treated the same as an absent block (`None`), by
+    // design: plain `Option` semantics, matching `cost` / `total_cost_usd`.
+    // `null` is a common serializer encoding for "no window" (e.g. a plan
+    // without a 7-day cap), so hard-erroring here would blank the whole
+    // payload over a legitimate input. The absent-vs-null distinction (see
+    // `deserialize_non_null`) applies only to required numeric fields INSIDE
+    // a present window object, where `null` means a half-formed record.
     five_hour: Option<RawWindow>,
     seven_day: Option<RawWindow>,
 }
@@ -80,7 +87,9 @@ pub fn parse(input: &str) -> Result<StatuslineSnapshot, StatuslineError> {
 /// A block that is *present but missing* a required field (e.g. a future
 /// statusLine field rename) degrades to `None` — that one window is dropped
 /// rather than failing the whole payload, so a single rename can't blank the
-/// user's shell prompt or take out the other window + the session cost. A
+/// user's shell prompt or take out the other window + the session cost. The
+/// same drop-with-warn applies to a `resets_at` outside chrono's representable
+/// range, instead of rewriting it to the Unix epoch. A
 /// present `null` or wrong-TYPE field still surfaces as `SchemaDrift` upstream
 /// (it fails `serde` before we get here — see `deserialize_non_null`), so
 /// genuine corruption is not silently swallowed.
@@ -95,10 +104,16 @@ fn window_or_drop(name: &str, raw: Option<RawWindow>) -> Option<RateWindow> {
     let raw = raw?;
     match (raw.used_percentage, raw.resets_at) {
         (Some(used_percent), Some(secs)) => {
-            let resets_at: DateTime<Utc> = Utc
-                .timestamp_opt(secs, 0)
-                .single()
-                .unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
+            // An out-of-range epoch (beyond chrono's ~±262,000-year span) is
+            // corrupt wire data: drop the window visibly rather than rewrite
+            // it to a plausible-looking 1970-01-01.
+            let Some(resets_at) = Utc.timestamp_opt(secs, 0).single() else {
+                tracing::warn!(
+                    "claude_statusline: dropping `{name}` rate-limit window - \
+                     out-of-range resets_at={secs}"
+                );
+                return None;
+            };
             Some(RateWindow {
                 used_percent,
                 resets_at,
@@ -224,6 +239,27 @@ mod tests {
             Err(StatuslineError::SchemaDrift { .. }) => {}
             other => panic!("expected SchemaDrift for explicit null, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn out_of_range_resets_at_drops_window_not_rewritten_to_epoch() {
+        // i64::MAX seconds is far outside chrono's ~±262,000-year range.
+        // The window must be dropped (None), NOT fabricated as 1970-01-01;
+        // the other window and the session cost survive.
+        let body = r#"{
+          "cost":{"total_cost_usd":2.5},
+          "rate_limits":{
+            "five_hour":{"used_percentage":13.0,"resets_at":9223372036854775807},
+            "seven_day":{"used_percentage":44.0,"resets_at":1747915200}
+          }}"#;
+        let s = parse(body).expect("an out-of-range resets_at must not fail the payload");
+        let rl = s.rate_limits.expect("rate_limits present");
+        assert!(
+            rl.five_hour.is_none(),
+            "out-of-range resets_at ⇒ window dropped, not epoch-rewritten"
+        );
+        assert!(rl.seven_day.is_some(), "seven_day intact ⇒ preserved");
+        assert_eq!(s.session_cost_micro_usd, Some(2_500_000));
     }
 
     #[test]

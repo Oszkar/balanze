@@ -58,9 +58,12 @@ jobs:
           bun-version-file: package.json
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.94
+        # Pin (channel + components) comes from rust-toolchain.toml - see ci.yml.
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+          target: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+          cache: false
+          rustflags: ""
 
       - name: Cache Rust workspace
         uses: swatinem/rust-cache@v2
