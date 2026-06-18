@@ -1645,7 +1645,12 @@ fn compact_pace_line(s: &Snapshot) -> Option<String> {
 fn compact_codex_quota(s: &Snapshot) -> String {
     match (&s.codex_quota, &s.codex_quota_error) {
         (Some(q), _) => {
-            let days = q.primary.window_duration_minutes as f64 / 1440.0;
+            let window = format_codex_window(q.primary.window_duration_minutes);
+            // Honesty: a rollout whose primary window has already reset is
+            // stale — the used% it carries describes an elapsed window. Degrade
+            // the ✓ to a ⚠ + "stale" marker rather than show a confident figure
+            // behind a green check.
+            let expired = s.fetched_at > q.primary.resets_at;
             // Append snapshot age when meaningfully stale (≥1 min). The
             // walker returns the newest-mtime rollout file regardless of
             // age, so a 7-day-old session and a 2-min-old session look
@@ -1653,17 +1658,33 @@ fn compact_codex_quota(s: &Snapshot) -> String {
             let age_tag = format_codex_age(q.observed_at, s.fetched_at)
                 .map(|s| format!(", {s} old"))
                 .unwrap_or_default();
+            let (marker, stale_tag) = if expired {
+                ("⚠", ", stale")
+            } else {
+                ("✓", "")
+            };
             // {:.1} for the same reason as the anthropic quota cell — a
             // genuine 0.4% must not collapse to "0%".
             format!(
-                "✓ {:.1}% {}d (codex {}{age_tag})",
-                q.primary.used_percent,
-                days.round() as i64,
-                q.plan_type
+                "{marker} {:.1}% {window} (codex {}{stale_tag}{age_tag})",
+                q.primary.used_percent, q.plan_type
             )
         }
         (None, Some(_)) => "✗ codex_local error".to_string(),
         (None, None) => "○ not configured (codex)".to_string(),
+    }
+}
+
+/// Render a Codex window duration in human units. Codex windows are commonly
+/// 300 minutes (5h) or 10080 minutes (7d); dividing by 1440 and flooring
+/// collapsed the 5h case to "0d". Pick the coarsest exact unit instead.
+fn format_codex_window(minutes: u64) -> String {
+    if minutes >= 1440 && minutes % 1440 == 0 {
+        format!("{}d", minutes / 1440)
+    } else if minutes >= 60 && minutes % 60 == 0 {
+        format!("{}h", minutes / 60)
+    } else {
+        format!("{minutes}m")
     }
 }
 
@@ -2037,6 +2058,60 @@ mod tests {
         assert!(
             out.contains(", 5m old"),
             "compact codex cell must surface the snapshot age:\n{out}"
+        );
+    }
+
+    #[test]
+    fn format_codex_window_renders_human_units() {
+        // 5-hour Codex primary window (300 min) must read "5h", not "0d" —
+        // 300 / 1440 floored to zero was the bug.
+        assert_eq!(format_codex_window(300), "5h");
+        // 7-day window (10080 min) reads "7d".
+        assert_eq!(format_codex_window(10_080), "7d");
+        // Exact-hour and sub-hour windows.
+        assert_eq!(format_codex_window(60), "1h");
+        assert_eq!(format_codex_window(90), "90m");
+    }
+
+    #[test]
+    fn compact_codex_quota_short_window_not_zero_days() {
+        let now = fixture_fetched_at();
+        let mut snap = fully_populated_snapshot();
+        if let Some(q) = snap.codex_quota.as_mut() {
+            q.primary.window_duration_minutes = 300; // 5h
+            q.primary.resets_at = now + Duration::hours(3); // still live
+        }
+        let cell = compact_codex_quota(&snap);
+        assert!(
+            cell.contains("5h"),
+            "5-hour window must render '5h':\n{cell}"
+        );
+        assert!(
+            !cell.contains("0d"),
+            "must not collapse a 5h window to '0d':\n{cell}"
+        );
+        assert!(
+            cell.starts_with('✓'),
+            "a live window keeps the ✓ marker:\n{cell}"
+        );
+    }
+
+    #[test]
+    fn compact_codex_quota_expired_window_marked_stale() {
+        let now = fixture_fetched_at();
+        let mut snap = fully_populated_snapshot();
+        if let Some(q) = snap.codex_quota.as_mut() {
+            // resets_at before fetched_at: the rollout outlived its window.
+            q.primary.resets_at = now - Duration::hours(1);
+        }
+        let cell = compact_codex_quota(&snap);
+        assert!(
+            !cell.starts_with('✓'),
+            "an expired window must not show a confident ✓:\n{cell}"
+        );
+        assert!(
+            cell.contains("stale"),
+            "an expired window must be labeled stale:\n{cell}"
         );
     }
 

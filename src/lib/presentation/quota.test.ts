@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { quotaTone, anthropicQuota, codexElapsedFraction } from './quota';
+import { quotaTone, anthropicQuota, codexElapsedFraction, codexWindowExpired } from './quota';
 import type { Snapshot } from '../types/snapshot';
 
 const base: Snapshot = {
@@ -37,5 +37,14 @@ describe('quota', () => {
   it('codex elapsed fraction', () => {
     const f = codexElapsedFraction({ resets_at: '2026-06-03T13:00:00Z', window_duration_minutes: 120 }, new Date('2026-06-03T12:00:00Z'));
     expect(f).toBeCloseTo(0.5, 5);
+  });
+  it('codex window expired when now is past resets_at', () => {
+    const now = new Date('2026-06-03T12:00:00Z');
+    // resets_at one hour in the past -> the rollout outlived its window.
+    expect(codexWindowExpired({ resets_at: '2026-06-03T11:00:00Z' }, now)).toBe(true);
+    // resets_at in the future -> still live.
+    expect(codexWindowExpired({ resets_at: '2026-06-03T13:00:00Z' }, now)).toBe(false);
+    // Unparseable timestamp must not be reported as expired (no false stale).
+    expect(codexWindowExpired({ resets_at: 'not-a-date' }, now)).toBe(false);
   });
 });

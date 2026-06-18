@@ -39,6 +39,14 @@ export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
   };
 }
 
+// A Codex rollout whose primary window has already reset is stale: the
+// used_percent it carries describes an elapsed window, so the cell should be
+// flagged rather than shown as a confident figure. Unparseable timestamps
+// return false (NaN comparisons are false) so we never falsely mark stale.
+export function codexWindowExpired(w: { resets_at: string }, now = new Date()): boolean {
+  return new Date(w.resets_at).getTime() < now.getTime();
+}
+
 export function codexElapsedFraction(w: { resets_at: string; window_duration_minutes: number }, now = new Date()): number {
   const totalMs = w.window_duration_minutes * 60_000;
   const remainMs = new Date(w.resets_at).getTime() - now.getTime();
