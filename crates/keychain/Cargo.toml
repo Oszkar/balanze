@@ -1,6 +1,6 @@
 [package]
 name = "keychain"
-description = "Cross-OS keyring wrapper for Balanze's user-supplied API keys. The ONLY crate in the workspace that imports the `keyring` crate (AGENTS.md §4 #5)."
+description = "Cross-OS keyring wrapper for Balanze's user-supplied API keys. The ONLY crate in the workspace that imports keyring-core and the native store crates (AGENTS.md §4 #5)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,15 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-keyring = { workspace = true }
+keyring-core = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# Per-OS native credential stores, registered as keyring-core's default by
+# `init_default_store`. Target-gated so non-target platforms (e.g. Linux CI)
+# still compile - they just have no store and keychain ops fail until one is wired.
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { workspace = true }

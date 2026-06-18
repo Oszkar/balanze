@@ -181,6 +181,10 @@ pub fn run() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    // keyring-core has no default credential store until one is registered;
+    // do it once here before the watcher (booted in `setup`) reads the key.
+    keychain::init_default_store();
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

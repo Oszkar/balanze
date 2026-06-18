@@ -51,6 +51,11 @@ fn main() -> ExitCode {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    // keyring-core has no default credential store until one is registered;
+    // do it once here before any keychain get/set (in this process or the
+    // watcher it spawns).
+    keychain::init_default_store();
+
     let args: Vec<String> = env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("status");
 
@@ -238,9 +243,10 @@ fn cmd_clear_openai_key() -> Result<()> {
 //     rather than at first `balanze-cli` run. One network call to OpenAI.
 //   - No "setup complete" marker in settings.json: the CLI infers
 //     readiness from the keychain + file presence. Idempotent setup.
-//   - Windows keychain bug detection: keyring v3 silently no-ops on
-//     Windows; we write then read back to detect, then point the user
-//     at BALANZE_OPENAI_KEY as the workaround.
+//   - Keychain write-back verification: we write then read back to
+//     confirm the credential actually persisted (a locked keychain or
+//     permission issue can fail the write); on failure we point the user
+//     at BALANZE_OPENAI_KEY as the fallback.
 //   - Existing key handling: if a key is already saved, validate it
 //     (don't re-prompt). User can answer 'y' to replace.
 // ────────────────────────────────────────────────────────────────────
@@ -425,15 +431,15 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
         return Ok(OpenAiKeyStatus::ValidationFailed);
     }
 
-    // Write to keychain, then read back to detect the known `keyring`
-    // v3 Windows silent-no-op bug. set→get→compare exposes the bug as
-    // an Err(NotFound) or value mismatch on read.
+    // Write to keychain, then read back to confirm the credential actually
+    // persisted. set→get→compare surfaces any silent write failure (a locked
+    // keychain, a permission issue) as an Err(NotFound) or value mismatch.
     keychain::set(keychain::keys::OPENAI_API_KEY, &key)?;
     let read_back = match keychain::get(keychain::keys::OPENAI_API_KEY) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("  ✗ Keychain write didn't persist (read-back failed: {e}).");
-            eprintln!("    Known `keyring` v3 issue on Windows. Workaround:");
+            eprintln!("    Fallback - set the key via env var instead:");
             eprintln!("      export BALANZE_OPENAI_KEY=sk-admin-...   (Unix shells)");
             eprintln!("      $env:BALANZE_OPENAI_KEY = 'sk-admin-...' (PowerShell)");
             eprintln!("    The CLI honors this env var with precedence over the keychain.");
@@ -442,7 +448,7 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
     };
     if read_back != key {
         eprintln!("  ✗ Keychain write didn't persist (read-back value mismatch).");
-        eprintln!("    Known `keyring` v3 issue. Workaround: use BALANZE_OPENAI_KEY env var.");
+        eprintln!("    Fallback: set BALANZE_OPENAI_KEY env var instead.");
         return Ok(OpenAiKeyStatus::KeychainBroken);
     }
 
@@ -1127,8 +1133,8 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
 /// Fetch this-month OpenAI costs if the user has configured an admin key.
 ///
 /// Source order:
-///   1. `BALANZE_OPENAI_KEY` env var (fallback while the keychain backend is
-///      unreliable on Windows — see AGENTS.md known issues)
+///   1. `BALANZE_OPENAI_KEY` env var (documented override; takes precedence
+///      over the keychain - see AGENTS.md §3.4)
 ///   2. OS keychain entry `openai_api_key`
 ///   3. None → "not configured"
 ///
