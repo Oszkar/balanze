@@ -91,7 +91,7 @@ Personal use only. Not affiliated with Anthropic or OpenAI. If a provider revoke
 
 Secrets in scope: user-supplied OpenAI API keys, plus read access to Claude Code's OAuth tokens at `~/.claude/.credentials.json` (and `~/.config/claude/.credentials.json` on newer Claude Code installs).
 
-- **Storage.** OpenAI keys live in the OS keychain via the `keyring` crate. The Claude OAuth file is Anthropic's; we reuse it. Neither is ever written to disk in plaintext outside those locations. `.env` is gitignored and not loaded — non-secret config goes through `directories::ProjectDirs`, env-var overrides are documented in CLI help (`BALANZE_OPENAI_KEY`, `BALANZE_LOG`).
+- **Storage.** OpenAI keys live in the OS keychain via `keyring-core` plus the OS-native store crates (`windows-native-keyring-store` / `apple-native-keyring-store`), registered once at startup by `keychain::init_default_store`. The Claude OAuth file is Anthropic's; we reuse it. Neither is ever written to disk in plaintext outside those locations. `.env` is gitignored and not loaded — non-secret config goes through `directories::ProjectDirs`, env-var overrides are documented in CLI help (`BALANZE_OPENAI_KEY`, `BALANZE_LOG`).
 - **Logging.** Never log any secret at any level. The only acceptable display surface outside the settings UI's masked input is a redacted form (`sk-…45 (len=51)`) in a hypothetical debug "show config" command. The settings UI's API-key input is `type="password"`. File paths (and their existence) are loggable at INFO; their contents are not.
 - **Single writer.** `anthropic_oauth` is the only crate that reads or writes `~/.claude/.credentials.json`. The only write is the refreshed-token write-back: atomic tmp + fsync + rename, perms-preserving, reuses Anthropic's file, touches only `claudeAiOauth` token fields, never regresses a concurrently-newer on-disk token. We do not mirror, persist, or back up this file's contents anywhere.
 - **Pre-commit scan.** A lefthook pre-commit hook (`scripts/check-secrets.mjs`) scans staged content for key-shaped strings (OpenAI `sk-...` keys, `BALANZE_OPENAI_KEY` literals, high-entropy assignments) and blocks `.env` files outright.
@@ -218,7 +218,7 @@ Before claiming work is done:
 
 ## 10a. Known issues
 
-- **Keychain backend broken on Windows (v0.1):** `keyring = "3.6.3"` silently no-ops on Windows — `set_password` returns `Ok` but the credential never lands in Credential Manager. Reproducible via `cargo test --release -p keychain -- --ignored`. Workaround: the CLI honors `BALANZE_OPENAI_KEY`, which takes precedence over the keychain. Real fix is migrating to `keyring-core` (v4).
+- **Keychain backend on Windows (fixed in v0.3.1):** `keyring = "3.6.3"` silently no-op'd on Windows - `set_password` returned `Ok` but the credential never landed in Credential Manager. Fixed by migrating to `keyring-core` plus the OS-native store crates, registered at startup via `keychain::init_default_store`. The real-keychain smoke (`cargo test -p keychain -- --ignored`) passes on Windows; run it manually per-OS before tagging (§6). `BALANZE_OPENAI_KEY` remains a documented env override, no longer a workaround for a broken backend.
 
 ## 10. Troubleshooting
 

@@ -30,6 +30,9 @@ tracing-subscriber = { workspace = true }
 state_coordinator = { path = "../crates/state_coordinator" }
 watcher = { path = "../crates/watcher" }
 settings = { path = "../crates/settings" }
+# Registers the OS-native credential store as keyring-core's default once at
+# host startup, before the watcher it boots reads the OpenAI key.
+keychain = { path = "../crates/keychain" }
 
 [dev-dependencies]
 anthropic_oauth = { path = "../crates/anthropic_oauth" }

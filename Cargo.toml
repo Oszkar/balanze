@@ -38,7 +38,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 directories = "6"
-keyring = "3"
+# Credential storage: keyring-core (the v4 successor) plus the per-OS native
+# store crates. The old monolithic `keyring 3.x` silently no-op'd on Windows
+# (set returned Ok, get returned NoEntry); keyring-core + the native stores fix
+# that. The store crates are pulled in per-target by the `keychain` crate.
+keyring-core = "1"
+windows-native-keyring-store = "1"
+apple-native-keyring-store = "1"
 notify = "8"
 notify-debouncer-full = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
