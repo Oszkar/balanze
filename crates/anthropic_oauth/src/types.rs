@@ -191,6 +191,11 @@ pub enum OAuthError {
     )]
     RefreshTokenMissing,
 
+    #[error(
+        "Anthropic token from the macOS login Keychain is expired, and Balanze can't refresh a credential it doesn't own — re-run `claude login` in Claude Code"
+    )]
+    CredentialExpiredReadOnly,
+
     #[error("unexpected HTTP status {status} from /api/oauth/usage: {body}")]
     UnexpectedStatus { status: u16, body: String },
 

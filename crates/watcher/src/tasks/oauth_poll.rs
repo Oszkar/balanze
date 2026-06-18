@@ -13,8 +13,8 @@
 
 use anthropic_oauth::{
     CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, CredentialsClaudeAiOauth,
-    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage,
-    load_from as load_credentials_from, locate_credentials, refresh_access_token, write_back,
+    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage, load_from_source,
+    locate_credentials, refresh_access_token, write_back,
 };
 use chrono::{Duration, Utc};
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
@@ -59,7 +59,7 @@ pub(crate) fn spawn(
         // Update errors — the watcher noticed and surfacing them is
         // helpful.
         if let Err(OAuthError::CredentialsMissing { .. }) =
-            locate_credentials().and_then(|p| load_credentials_from(&p))
+            locate_credentials().and_then(|src| load_from_source(&src))
         {
             tracing::info!(
                 "watcher/oauth_poll: no Claude credentials at startup; task exits clean. \
@@ -133,17 +133,23 @@ async fn poll_once(
     client: &reqwest::Client,
 ) -> anyhow::Result<anthropic_oauth::ClaudeOAuthSnapshot> {
     // Re-locate and re-load credentials on every tick: Claude Code may have
-    // atomically rewritten `~/.claude/.credentials.json` between polls
-    // (e.g. its own token refresh). Re-loading ensures we always have the
-    // freshest on-disk token rather than a potentially stale in-memory copy.
-    let path = locate_credentials()?;
-    let creds = load_credentials_from(&path)?;
+    // atomically rewritten its credential between polls (e.g. its own token
+    // refresh). Re-loading ensures we always have the freshest token rather
+    // than a potentially stale in-memory copy.
+    let source = locate_credentials()?;
+    let creds = load_from_source(&source)?;
     let mut oauth = creds.claude_ai_oauth;
 
-    // Pre-flight: refresh if the access token is expired or near-expiry.
-    if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
-        tracing::info!("watcher/oauth_poll: token expired/near-expiry — refreshing pre-flight");
-        oauth = refresh_and_persist(client, &path, oauth).await?;
+    // Pre-flight refresh only for a source we own (a file). The macOS Keychain
+    // entry is Claude Code's — read-only (AGENTS.md §3.4): use the token while
+    // valid; if it has already expired, surface an actionable error.
+    if let Some(path) = source.writable_path() {
+        if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
+            tracing::info!("watcher/oauth_poll: token expired/near-expiry — refreshing pre-flight");
+            oauth = refresh_and_persist(client, path, oauth).await?;
+        }
+    } else if token_needs_refresh(oauth.expires_at, Utc::now(), Duration::zero()) {
+        return Err(OAuthError::CredentialExpiredReadOnly.into());
     }
 
     let policy = backoff::BackoffPolicy::standard();
@@ -160,11 +166,16 @@ async fn poll_once(
     {
         Ok(s) => Ok(s),
         Err(OAuthError::AuthExpired) => {
-            // Pre-flight refresh already happened but we still got 401.
-            // One more refresh + retry (bounded — the retry uses `?` so a
-            // second AuthExpired propagates rather than looping).
+            // Pre-flight refresh already happened but we still got 401. For a
+            // file source, one more refresh + retry (bounded — the retry uses
+            // `?` so a second AuthExpired propagates rather than looping). For
+            // the read-only Keychain source we can't refresh, so surface the
+            // actionable error.
+            let Some(path) = source.writable_path() else {
+                return Err(OAuthError::CredentialExpiredReadOnly.into());
+            };
             tracing::warn!("watcher/oauth_poll: 401 despite pre-flight — one refresh+retry");
-            let oauth = refresh_and_persist(client, &path, oauth).await?;
+            let oauth = refresh_and_persist(client, path, oauth).await?;
             let s = fetch_usage(
                 client,
                 ANTHROPIC_API_BASE,

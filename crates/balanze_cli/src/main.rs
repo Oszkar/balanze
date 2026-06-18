@@ -24,8 +24,8 @@ mod watch_cmd;
 
 use anthropic_oauth::{
     CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, ClaudeOAuthSnapshot, CredentialsClaudeAiOauth,
-    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage,
-    load_from as load_credentials_from, locate_credentials, refresh_access_token, write_back,
+    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage, load_from_source,
+    locate_credentials, refresh_access_token, write_back,
 };
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Duration, Utc};
@@ -320,14 +320,21 @@ fn cmd_setup() -> Result<()> {
 }
 
 fn check_anthropic_oauth() -> AnthropicOAuthStatus {
-    match anthropic_oauth::locate_credentials() {
-        Ok(path) => {
-            eprintln!("  ✓ Found at {}", path.display());
+    // Locate AND load: on macOS the source is the login Keychain, returned
+    // optimistically by `locate_credentials`, so confirm the entry actually
+    // reads before reporting it found (may prompt for Keychain access once).
+    let located = locate_credentials()
+        .ok()
+        .filter(|src| load_from_source(src).is_ok());
+    match located {
+        Some(source) => {
+            eprintln!("  ✓ Found at {}", source.describe());
             AnthropicOAuthStatus::Found
         }
-        Err(_) => {
+        None => {
             eprintln!("  ✗ Not found.");
-            eprintln!("    To enable: run `claude login` (writes ~/.claude/.credentials.json).");
+            eprintln!("    To enable: run `claude login` (writes ~/.claude/.credentials.json,");
+            eprintln!("    or the login Keychain on recent macOS).");
             eprintln!("    Balanze still derives Claude API cost from JSONL session files");
             eprintln!("    without this, but the subscription-quota cell will be empty.");
             AnthropicOAuthStatus::NotFound
@@ -1075,16 +1082,23 @@ async fn refresh_and_persist(
 }
 
 async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
-    let path = locate_credentials()?;
-    let creds = load_credentials_from(&path)?;
+    let source = locate_credentials()?;
+    let creds = load_from_source(&source)?;
     let mut oauth = creds.claude_ai_oauth;
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
         .build()?;
 
-    if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
-        info!("oauth: token expired/near-expiry — refreshing pre-flight");
-        oauth = refresh_and_persist(&client, &path, oauth).await?;
+    // Refresh only a source we own (a file). The macOS Keychain entry is Claude
+    // Code's — read-only (AGENTS.md §3.4): use the token while valid; if it has
+    // already expired, surface an actionable error rather than refresh it.
+    if let Some(path) = source.writable_path() {
+        if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
+            info!("oauth: token expired/near-expiry — refreshing pre-flight");
+            oauth = refresh_and_persist(&client, path, oauth).await?;
+        }
+    } else if token_needs_refresh(oauth.expires_at, Utc::now(), Duration::zero()) {
+        return Err(OAuthError::CredentialExpiredReadOnly.into());
     }
 
     // One-shot CLI must not block on provider backoff; the watcher will pass standard().
@@ -1105,12 +1119,15 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
             Ok(s)
         }
         Err(OAuthError::AuthExpired) => {
-            // Note: if pre-flight already refreshed and we still 401, this does
-            // one more refresh+retry. Intentional and bounded — the retry uses
-            // `?`, so a second AuthExpired propagates (no loop). Do not "optimize"
-            // into a did-we-already-refresh flag; KISS over a rare cold path.
+            // 401 despite the pre-flight check. For a file source, refresh +
+            // retry once (bounded — the retry uses `?`, so a second AuthExpired
+            // propagates, no loop). For the read-only Keychain source we can't
+            // refresh, so surface the actionable error.
+            let Some(path) = source.writable_path() else {
+                return Err(OAuthError::CredentialExpiredReadOnly.into());
+            };
             warn!("oauth: 401 despite pre-flight — one refresh+retry");
-            let oauth = refresh_and_persist(&client, &path, oauth).await?;
+            let oauth = refresh_and_persist(&client, path, oauth).await?;
             let s = fetch_usage(
                 &client,
                 ANTHROPIC_API_BASE,

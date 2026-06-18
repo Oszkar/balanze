@@ -1,14 +1,21 @@
-//! Locate and load Claude Code's credentials file.
+//! Locate and load Claude Code's OAuth credentials.
 //!
-//! Search order (first existing path wins):
+//! A credential lives in one of two places, modelled by [`CredentialSource`]:
+//!
+//! - **A file** (the first existing path wins):
 //!   1. `$XDG_CONFIG_HOME/claude/.credentials.json` (if XDG_CONFIG_HOME is set)
 //!   2. `~/.claude/.credentials.json` — legacy, still used on Windows + many macOS installs
 //!   3. `~/.config/claude/.credentials.json` — Claude Code v1.0.30+ on some platforms
+//! - **The macOS login Keychain** (generic password, service
+//!   `"Claude Code-credentials"`) — recent Claude Code on macOS stores the
+//!   credential here instead of a file. Used only when no file exists.
 //!
-//! Loads are read-only. `write_back` is the ONLY writer of this file and uses
-//! atomic tmp+rename, preserves the original's permissions, reuses Anthropic's
-//! file (never invents a new one), and touches only the OAuth token fields
-//! (AGENTS.md §3.4). No other crate reads or writes these credentials.
+//! Refresh policy follows ownership (AGENTS.md §3.4): Balanze owns the file it
+//! refreshes, so a file source may be refreshed and written back via
+//! [`write_back`] (the ONLY writer — atomic tmp+rename, perms-preserving,
+//! touches only the OAuth token fields). The Keychain entry is Claude Code's;
+//! the Keychain source is **read-only** — Balanze never refreshes or writes a
+//! credential it does not own. No other crate reads or writes these credentials.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -17,15 +24,72 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::{Credentials, OAuthError, RefreshedTokens};
 
-/// Return the first existing credentials path, or `CredentialsMissing` listing
-/// every path searched.
-pub fn locate_credentials() -> Result<PathBuf, OAuthError> {
+/// macOS login-Keychain generic-password service that recent Claude Code
+/// writes its OAuth credential under. The stored value is the same JSON shape
+/// (`{"claudeAiOauth": {...}}`) the file held.
+#[cfg(target_os = "macos")]
+const MACOS_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+
+/// Where Balanze found Claude Code's OAuth credential. Determines whether
+/// Balanze may refresh + write back the token (it owns the file) or must treat
+/// it as read-only (the macOS login Keychain entry belongs to Claude Code —
+/// AGENTS.md §3.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialSource {
+    /// A credentials file Balanze may refresh and atomically write back.
+    File(PathBuf),
+    /// The macOS login Keychain entry owned by Claude Code. Read-only: Balanze
+    /// uses the token while valid and never refreshes or writes it back.
+    #[cfg(target_os = "macos")]
+    MacosKeychain,
+}
+
+impl CredentialSource {
+    /// The file path Balanze may write refreshed tokens back to, or `None` for
+    /// a read-only source (the macOS Keychain entry Claude Code owns). Callers
+    /// gate the refresh/write-back path on this.
+    pub fn writable_path(&self) -> Option<&Path> {
+        match self {
+            CredentialSource::File(p) => Some(p.as_path()),
+            #[cfg(target_os = "macos")]
+            CredentialSource::MacosKeychain => None,
+        }
+    }
+
+    /// A human-readable description for setup/diagnostic output. Never includes
+    /// any credential material — only the location.
+    pub fn describe(&self) -> String {
+        match self {
+            CredentialSource::File(p) => p.display().to_string(),
+            #[cfg(target_os = "macos")]
+            CredentialSource::MacosKeychain => {
+                format!("macOS login Keychain (service \"{MACOS_KEYCHAIN_SERVICE}\")")
+            }
+        }
+    }
+}
+
+/// Locate the credential source. Prefers a file (so Balanze can refresh it);
+/// on macOS, falls back to the login Keychain when no file exists. Returns
+/// `CredentialsMissing` (listing the file paths searched) on platforms without
+/// a Keychain fallback when nothing is found.
+///
+/// The Keychain source is returned optimistically without reading here;
+/// [`load_from_source`] performs the single read (which may prompt for Keychain
+/// access) and maps a missing entry to `CredentialsMissing`, so callers degrade
+/// exactly as they would for an absent file.
+pub fn locate_credentials() -> Result<CredentialSource, OAuthError> {
     let candidates = candidate_paths();
     for path in &candidates {
         if path.exists() {
-            return Ok(path.clone());
+            return Ok(CredentialSource::File(path.clone()));
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        return Ok(CredentialSource::MacosKeychain);
+    }
+    #[cfg(not(target_os = "macos"))]
     Err(OAuthError::CredentialsMissing {
         searched: candidates,
     })
@@ -73,10 +137,74 @@ pub fn load_from(path: &Path) -> Result<Credentials, OAuthError> {
     Ok(creds)
 }
 
-/// Locate credentials in the standard search paths and load them.
+/// Load credentials from a located source. For a file source this is
+/// [`load_from`]; for the macOS Keychain source it reads the entry.
+pub fn load_from_source(source: &CredentialSource) -> Result<Credentials, OAuthError> {
+    match source {
+        CredentialSource::File(p) => load_from(p),
+        #[cfg(target_os = "macos")]
+        CredentialSource::MacosKeychain => load_from_macos_keychain(),
+    }
+}
+
+/// Read Claude Code's OAuth credential from the macOS login Keychain.
+///
+/// Shells out to `/usr/bin/security` rather than taking a crate dependency:
+/// keeps `anthropic_oauth` self-contained (the `keychain` crate is the only one
+/// that imports the keyring stack — AGENTS.md §4 #5) and adds no new dep. The
+/// read is best-effort and may prompt the user for Keychain access on first
+/// use, exactly like any other process reading another app's entry.
+///
+/// A missing entry maps to `CredentialsMissing` so callers degrade like an
+/// absent file (e.g. the watcher's clean startup exit when Claude Code isn't
+/// installed). Any other failure surfaces as a real error. `security`'s stderr
+/// is a diagnostic, not the secret value, so it is safe to include in errors.
+#[cfg(target_os = "macos")]
+fn load_from_macos_keychain() -> Result<Credentials, OAuthError> {
+    use std::process::Command;
+
+    // Pseudo-path used only for error context; the type is `PathBuf`.
+    let marker = PathBuf::from(format!(
+        "macOS login Keychain (service \"{MACOS_KEYCHAIN_SERVICE}\")"
+    ));
+
+    let output = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", MACOS_KEYCHAIN_SERVICE, "-w"])
+        .output()
+        .map_err(|e| OAuthError::Io {
+            path: marker.clone(),
+            source: e,
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // `security` exits 44 (errSecItemNotFound) when the entry is absent.
+        let not_found = output.status.code() == Some(44) || stderr.contains("could not be found");
+        if not_found {
+            return Err(OAuthError::CredentialsMissing {
+                searched: vec![marker],
+            });
+        }
+        return Err(OAuthError::CredentialsMalformed {
+            path: marker,
+            reason: format!("`security` failed: {}", stderr.trim()),
+        });
+    }
+
+    // `-w` prints only the password (the JSON), with a trailing newline.
+    let raw = String::from_utf8(output.stdout).map_err(|e| OAuthError::CredentialsMalformed {
+        path: marker.clone(),
+        reason: format!("keychain value is not valid UTF-8: {e}"),
+    })?;
+    serde_json::from_str(raw.trim()).map_err(|e| OAuthError::CredentialsMalformed {
+        path: marker,
+        reason: e.to_string(),
+    })
+}
+
+/// Locate the credential source and load it.
 pub fn load() -> Result<Credentials, OAuthError> {
-    let path = locate_credentials()?;
-    load_from(&path)
+    load_from_source(&locate_credentials()?)
 }
 
 /// Outcome of [`write_back`].
@@ -237,6 +365,41 @@ pub fn write_back(path: &Path, refreshed: &RefreshedTokens) -> Result<WriteBack,
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn file_source_is_writable() {
+        let src = CredentialSource::File(PathBuf::from("/tmp/.credentials.json"));
+        assert_eq!(
+            src.writable_path(),
+            Some(Path::new("/tmp/.credentials.json"))
+        );
+        assert!(src.describe().contains(".credentials.json"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_keychain_source_is_read_only() {
+        let src = CredentialSource::MacosKeychain;
+        // Read-only: no path to write a refreshed token back to. This is the
+        // gate the CLI + watcher use to skip refresh for a credential we don't
+        // own (AGENTS.md §3.4).
+        assert_eq!(src.writable_path(), None);
+        assert!(src.describe().contains("Claude Code-credentials"));
+    }
+
+    /// Smoke test against the real macOS login Keychain. Ignored by default
+    /// (needs Claude Code's credential present); run manually on macOS per
+    /// AGENTS.md §6 before tagging a release.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn reads_real_macos_keychain_credential() {
+        let creds = load_from_macos_keychain().expect("read Claude Code keychain credential");
+        assert!(
+            !creds.claude_ai_oauth.access_token.is_empty(),
+            "access token should be non-empty"
+        );
+    }
 
     #[test]
     fn loads_valid_credentials_file() {
