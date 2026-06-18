@@ -1,7 +1,7 @@
 <script lang="ts">
   import DensityToggle from './DensityToggle.svelte';
-  let { view = $bindable('grid'), fetchedAt, onRefresh }:
-    { view?: 'grid' | 'cards'; fetchedAt: string; onRefresh: () => void } = $props();
+  let { view = $bindable('grid'), fetchedAt, onRefresh, onSettings }:
+    { view?: 'grid' | 'cards'; fetchedAt: string; onRefresh: () => void; onSettings: () => void } = $props();
   const ago = $derived.by(() => {
     const s = Math.max(0, Math.round((Date.now() - new Date(fetchedAt).getTime()) / 1000));
     if (s < 60) return `${s}s`;
@@ -14,7 +14,7 @@
   <div class="right">
     <DensityToggle bind:view />
     <button class="icon" title="Refresh now" onclick={onRefresh}>↻</button>
-    <button class="icon" title="Settings (coming in v0.3.1)" disabled>⚙</button>
+    <button class="icon" title="Settings" onclick={onSettings}>⚙</button>
   </div>
 </div>
 <style>

@@ -204,7 +204,10 @@ pub fn run() {
         .manage(rt)
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
-            commands::refresh_now
+            commands::refresh_now,
+            commands::get_settings,
+            commands::set_settings,
+            commands::set_api_key
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Focused(false) = event {
