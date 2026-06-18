@@ -42,11 +42,12 @@
   }
 
   async function toggle(provider: 'openai' | 'anthropic', value: boolean) {
-    if (!settings) return;
-    const providers = { ...settings.providers };
+    const current = settings;
+    if (!current) return;
+    const providers = { ...current.providers };
     if (provider === 'openai') providers.openai_enabled = value;
     else providers.anthropic_enabled = value;
-    const next: Settings = { ...settings, providers };
+    const next: Settings = { ...current, providers };
     busy = true;
     status = null;
     try {
@@ -54,7 +55,11 @@
       settings = next;
     } catch (e) {
       status = `Save failed: ${e}`;
-      await load();
+      // We never optimistically mutated `settings`, so there's nothing to
+      // reload - just reassign to the persisted value so the checkbox snaps
+      // back from its clicked state. Avoids masking this error with a reload
+      // failure and avoids an unnecessary round-trip.
+      settings = { ...current };
     } finally {
       busy = false;
     }
