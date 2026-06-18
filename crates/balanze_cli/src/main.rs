@@ -1134,8 +1134,8 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
 /// Fetch this-month OpenAI costs if the user has configured an admin key.
 ///
 /// Source order:
-///   1. `BALANZE_OPENAI_KEY` env var (fallback while the keychain backend is
-///      unreliable on Windows — see AGENTS.md known issues)
+///   1. `BALANZE_OPENAI_KEY` env var (documented override; takes precedence
+///      over the keychain - see AGENTS.md §3.4)
 ///   2. OS keychain entry `openai_api_key`
 ///   3. None → "not configured"
 ///
