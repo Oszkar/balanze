@@ -246,8 +246,7 @@ fn cmd_clear_openai_key() -> Result<()> {
 //   - Keychain write-back verification: we write then read back to
 //     confirm the credential actually persisted (a locked keychain or
 //     permission issue can fail the write); on failure we point the user
-//     at BALANZE_OPENAI_KEY as the fallback. This guard originally caught
-//     the keyring v3 Windows no-op, now fixed by the keyring-core migration.
+//     at BALANZE_OPENAI_KEY as the fallback.
 //   - Existing key handling: if a key is already saved, validate it
 //     (don't re-prompt). User can answer 'y' to replace.
 // ────────────────────────────────────────────────────────────────────

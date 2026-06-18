@@ -142,10 +142,9 @@ mod tests {
     /// CI runners don't have a usable keychain on every platform; run
     /// manually on each dev machine before tagging a release (per AGENTS.md §6).
     ///
-    /// This is the test that exposed the old `keyring 3.6.3` Windows no-op
-    /// (set returned Ok but a fresh get returned NoEntry). The migration to
-    /// keyring-core + the native store crates fixes it; a Windows spike proved
-    /// the roundtrip persists across an entry drop before the migration landed.
+    /// Regression guard for real keychain roundtrip behavior - set, overwrite,
+    /// get, and delete must persist across fresh entry handles. A backend that
+    /// silently drops writes would pass a same-handle check but fail here.
     #[test]
     #[ignore]
     fn roundtrip_against_real_keychain() {
