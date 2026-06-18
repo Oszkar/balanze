@@ -33,6 +33,9 @@ settings = { path = "../crates/settings" }
 # Registers the OS-native credential store as keyring-core's default once at
 # host startup, before the watcher it boots reads the OpenAI key.
 keychain = { path = "../crates/keychain" }
+# Owns the statusLine stanza in Claude Code's settings.json; the settings UI's
+# wire/unwire commands delegate here (boundary #12 - the only writer of it).
+claude_statusline = { path = "../crates/claude_statusline" }
 
 [dev-dependencies]
 anthropic_oauth = { path = "../crates/anthropic_oauth" }

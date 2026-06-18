@@ -11,3 +11,10 @@ export interface Settings {
   providers: ProviderSettings;
   oauth_poll_interval_secs: number;
 }
+
+// Mirrors `commands::StatuslineWire` - whether Claude Code's statusLine is
+// wired to Balanze, free, or taken by another command.
+export interface StatuslineWire {
+  status: 'wired' | 'unwired' | 'occupied';
+  command: string | null;
+}

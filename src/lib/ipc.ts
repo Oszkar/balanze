@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { Snapshot, DegradedPayload } from './types/snapshot';
-import type { Settings } from './types/settings';
+import type { Settings, StatuslineWire } from './types/settings';
 
 export const getSnapshot = (): Promise<Snapshot> => invoke<Snapshot>('get_snapshot');
 export const refreshNow = (): Promise<void> => invoke<void>('refresh_now');
@@ -15,6 +15,13 @@ export const setSettings = (settings: Settings): Promise<void> =>
   invoke<void>('set_settings', { settings });
 export const setApiKey = (provider: string, key: string): Promise<void> =>
   invoke<void>('set_api_key', { provider, key });
+
+// Claude Code statusLine wiring (delegates to claude_statusline backend-side;
+// no-clobber - won't overwrite another tool's statusLine).
+export const getStatuslineStatus = (): Promise<StatuslineWire> =>
+  invoke<StatuslineWire>('get_statusline_status');
+export const setStatuslineWired = (wired: boolean): Promise<void> =>
+  invoke<void>('set_statusline_wired', { wired });
 
 // Fires each time the popover window gains focus, i.e. every tray-click show
 // (the backend shows via `window.show()` + `set_focus()`; blur hides it). The

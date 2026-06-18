@@ -10,9 +10,19 @@
 //! is never logged or echoed, and `get_settings` returns only the non-secret
 //! `Settings` shape - the key itself never crosses back to the frontend.
 //!
+//! statusLine: `get_statusline_status` / `set_statusline_wired` are sync
+//! commands that delegate to `claude_statusline` (the only owner/writer of the
+//! `statusLine` stanza in Claude Code's `settings.json`, boundary #12). They
+//! enforce a no-clobber policy - Balanze never overwrites or strips another
+//! tool's `statusLine`.
+//!
 //! All commands return `Result<_, String>` derived from `anyhow`/error
 //! `to_string()`.
 
+use claude_statusline::{
+    STATUSLINE_INVOCATION, WireStatus, default_settings_path, locate_settings_path,
+    read_wire_status, unwire_statusline, wire_statusline,
+};
 use settings::Settings;
 use state_coordinator::{Snapshot, StateCoordinatorHandle, StateMsg};
 use tauri::State;
@@ -84,9 +94,83 @@ fn prepare_api_key<'a>(provider: &str, key: &'a str) -> Result<&'a str, String> 
     Ok(trimmed)
 }
 
+/// Whether Claude Code's `statusLine` is wired to Balanze, free, or taken by
+/// another command. Serialized to the frontend as `{ status, command }`.
+#[derive(serde::Serialize)]
+pub struct StatuslineWire {
+    /// `"wired"` (ours) | `"unwired"` (free) | `"occupied"` (another command).
+    status: &'static str,
+    /// The occupying command when `status == "occupied"`, else `null`.
+    command: Option<String>,
+}
+
+/// Report whether Claude Code's `statusLine` is wired to Balanze.
+#[tauri::command]
+pub fn get_statusline_status() -> Result<StatuslineWire, String> {
+    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+    Ok(match read_wire_status(&path).map_err(|e| e.to_string())? {
+        WireStatus::WiredToBalanze => StatuslineWire {
+            status: "wired",
+            command: None,
+        },
+        WireStatus::Unwired => StatuslineWire {
+            status: "unwired",
+            command: None,
+        },
+        WireStatus::OccupiedBy(cmd) => StatuslineWire {
+            status: "occupied",
+            command: Some(cmd),
+        },
+    })
+}
+
+/// Wire (`wired = true`) or unwire (`wired = false`) Balanze's `statusLine` in
+/// Claude Code's `settings.json`. No-clobber: refuses to overwrite a stanza set
+/// to another command, and only removes the stanza when it is ours.
+#[tauri::command]
+pub fn set_statusline_wired(wired: bool) -> Result<(), String> {
+    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+    let status = read_wire_status(&path).map_err(|e| e.to_string())?;
+    match plan_statusline_action(wired, &status) {
+        StatuslineAction::Wire => {
+            wire_statusline(&path, STATUSLINE_INVOCATION).map_err(|e| e.to_string())
+        }
+        StatuslineAction::Unwire => unwire_statusline(&path).map_err(|e| e.to_string()),
+        StatuslineAction::NoOp => Ok(()),
+        StatuslineAction::RefuseOccupied(cmd) => Err(format!(
+            "Claude Code's statusLine is set to another command ({cmd}); not overwriting it"
+        )),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum StatuslineAction {
+    Wire,
+    Unwire,
+    NoOp,
+    RefuseOccupied(String),
+}
+
+/// Pure no-clobber policy: given the requested wired state and the current
+/// status, decide the action. Balanze only ever writes or removes its own
+/// stanza - never overwrites or strips another tool's `statusLine`.
+fn plan_statusline_action(wired: bool, status: &WireStatus) -> StatuslineAction {
+    match (wired, status) {
+        // Don't overwrite someone else's command.
+        (true, WireStatus::OccupiedBy(cmd)) => StatuslineAction::RefuseOccupied(cmd.clone()),
+        // Unwired or already ours: (re)wire - idempotent.
+        (true, _) => StatuslineAction::Wire,
+        // Only remove a stanza we own.
+        (false, WireStatus::WiredToBalanze) => StatuslineAction::Unwire,
+        // Not ours / absent: nothing to remove.
+        (false, _) => StatuslineAction::NoOp,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::prepare_api_key;
+    use super::{StatuslineAction, plan_statusline_action, prepare_api_key};
+    use claude_statusline::WireStatus;
 
     #[test]
     fn prepare_api_key_rejects_unknown_provider() {
@@ -105,6 +189,44 @@ mod tests {
         assert_eq!(
             prepare_api_key("openai", "  sk-admin-xyz  ").unwrap(),
             "sk-admin-xyz"
+        );
+    }
+
+    #[test]
+    fn wire_request_wires_when_free_or_ours() {
+        assert_eq!(
+            plan_statusline_action(true, &WireStatus::Unwired),
+            StatuslineAction::Wire
+        );
+        // Idempotent: re-wiring our own stanza is still a Wire.
+        assert_eq!(
+            plan_statusline_action(true, &WireStatus::WiredToBalanze),
+            StatuslineAction::Wire
+        );
+    }
+
+    #[test]
+    fn wire_request_refuses_to_clobber_another_command() {
+        assert_eq!(
+            plan_statusline_action(true, &WireStatus::OccupiedBy("other-tool".to_string())),
+            StatuslineAction::RefuseOccupied("other-tool".to_string())
+        );
+    }
+
+    #[test]
+    fn unwire_request_only_removes_our_own_stanza() {
+        assert_eq!(
+            plan_statusline_action(false, &WireStatus::WiredToBalanze),
+            StatuslineAction::Unwire
+        );
+        // Not ours / absent: leave it alone.
+        assert_eq!(
+            plan_statusline_action(false, &WireStatus::Unwired),
+            StatuslineAction::NoOp
+        );
+        assert_eq!(
+            plan_statusline_action(false, &WireStatus::OccupiedBy("other-tool".to_string())),
+            StatuslineAction::NoOp
         );
     }
 }

@@ -1,11 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getSettings, setSettings, setApiKey } from '$lib/ipc';
-  import type { Settings } from '$lib/types/settings';
+  import {
+    getSettings,
+    setSettings,
+    setApiKey,
+    getStatuslineStatus,
+    setStatuslineWired,
+  } from '$lib/ipc';
+  import type { Settings, StatuslineWire } from '$lib/types/settings';
 
   let { onBack }: { onBack: () => void } = $props();
 
   let settings = $state<Settings | null>(null);
+  let wire = $state<StatuslineWire | null>(null);
   let keyInput = $state('');
   let status = $state<string | null>(null);
   let busy = $state(false);
@@ -16,9 +23,33 @@
     } catch (e) {
       status = `Couldn't load settings: ${e}`;
     }
+    // statusLine status is independent - a read failure here shouldn't block
+    // the rest of the panel, so just leave the section hidden.
+    try {
+      wire = await getStatuslineStatus();
+    } catch {
+      wire = null;
+    }
   }
 
   onMount(load);
+
+  async function setWire(wired: boolean) {
+    busy = true;
+    status = null;
+    try {
+      await setStatuslineWired(wired);
+      wire = await getStatuslineStatus();
+      status = wired
+        ? 'statusLine wired. Restart Claude Code to see it.'
+        : 'statusLine unwired.';
+    } catch (e) {
+      // e.g. the no-clobber refusal when another command owns the stanza.
+      status = `${e}`;
+    } finally {
+      busy = false;
+    }
+  }
 
   async function saveKey() {
     const k = keyInput.trim();
@@ -113,6 +144,26 @@
         <span>Anthropic OAuth polling</span>
       </label>
     </section>
+
+    {#if wire}
+      <section>
+        <div class="label">Claude Code statusLine</div>
+        {#if wire.status === 'wired'}
+          <div class="hint">✓ Wired to Balanze. Restart Claude Code to apply changes.</div>
+          <div class="row">
+            <button class="save" onclick={() => setWire(false)} disabled={busy}>Unwire</button>
+          </div>
+        {:else if wire.status === 'unwired'}
+          <div class="hint">Show live 5h / 7d quota directly in Claude Code's status line.</div>
+          <div class="row">
+            <button class="save" onclick={() => setWire(true)} disabled={busy}>Wire</button>
+          </div>
+        {:else}
+          <div class="hint">Set to another command - Balanze won't overwrite it:</div>
+          <div class="occupied">{wire.command}</div>
+        {/if}
+      </section>
+    {/if}
   {:else}
     <div class="loading">Loading settings...</div>
   {/if}
@@ -138,6 +189,8 @@
   .save:disabled { opacity: .5; cursor: default; }
   .toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; }
   .toggle input { cursor: pointer; }
+  .occupied { font-size: 11px; font-family: ui-monospace, monospace; color: var(--faint);
+    word-break: break-all; padding: 4px 0; }
   .loading { font-size: 12px; color: var(--faint); }
   .status { font-size: 11px; color: var(--faint); }
 </style>

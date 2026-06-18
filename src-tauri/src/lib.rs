@@ -207,7 +207,9 @@ pub fn run() {
             commands::refresh_now,
             commands::get_settings,
             commands::set_settings,
-            commands::set_api_key
+            commands::set_api_key,
+            commands::get_statusline_status,
+            commands::set_statusline_wired
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Focused(false) = event {
