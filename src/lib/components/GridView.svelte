@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, quotaTone, codexElapsedFraction } from '$lib/presentation/quota';
+  import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired } from '$lib/presentation/quota';
   import { microUsdToDollars } from '$lib/presentation/format';
   import { PROV } from '$lib/presentation/provenance';
   import QuotaCell from './QuotaCell.svelte';
@@ -44,7 +44,7 @@
       <QuotaCell pct={codex.primary.used_percent} used={codex.primary.used_percent}
         elapsed={codexElapsedFraction(codex.primary) * 100} tone={quotaTone(codex.primary.used_percent)}
         resetsAt={codex.primary.resets_at} secondary={`codex ${codex.plan_type}`}
-        stale={!!degraded['codex_quota']} title={PROV.codexQuota.title} />
+        stale={!!degraded['codex_quota'] || codexWindowExpired(codex.primary)} title={PROV.codexQuota.title} />
     {:else}
       <BilledCell note="not connected" title="OpenAI Codex not configured" />
     {/if}
