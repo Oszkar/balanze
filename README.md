@@ -103,7 +103,7 @@ balanze-cli            # 4-quadrant status
 
 **The CLI has zero system-library dependencies** — Windows 11, macOS 15+, and Linux build with just the Rust toolchain (Linux also needs a C compiler for the `ring` TLS dependency). No GTK/GLib/Cairo/WebKit — that native stack belongs to the desktop app, not the CLI.
 
-The Claude side reads Claude Code's OAuth credential directly — no setup needed if Claude Code is already configured. It uses `~/.claude/.credentials.json` (or `~/.config/claude/.credentials.json`) where present, and on recent macOS falls back to Claude Code's login Keychain entry (read-only; macOS may prompt once to allow access). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, or the `BALANZE_OPENAI_KEY` env var.
+The Claude side reads Claude Code's OAuth credential directly - no setup needed if Claude Code is already configured. It uses `~/.claude/.credentials.json` (or `~/.config/claude/.credentials.json`) where present, and on recent macOS falls back to Claude Code's login Keychain entry (read-only; macOS may prompt once to allow access). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, or the `BALANZE_OPENAI_KEY` env var.
 
 ## Develop
 

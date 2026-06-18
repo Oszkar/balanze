@@ -1082,19 +1082,27 @@ async fn refresh_and_persist(
 }
 
 async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
-    let source = locate_credentials()?;
-    let creds = load_from_source(&source)?;
+    // locate+load is sync I/O (a file read, or a `security` subprocess on
+    // macOS that can block on a Keychain access prompt), so run it on a
+    // blocking worker rather than stalling a tokio runtime thread (AGENTS.md
+    // §2.1).
+    let (source, creds) = tokio::task::spawn_blocking(|| {
+        let source = locate_credentials()?;
+        let creds = load_from_source(&source)?;
+        Ok::<_, OAuthError>((source, creds))
+    })
+    .await??;
     let mut oauth = creds.claude_ai_oauth;
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
         .build()?;
 
     // Refresh only a source we own (a file). The macOS Keychain entry is Claude
-    // Code's — read-only (AGENTS.md §3.4): use the token while valid; if it has
+    // Code's - read-only (AGENTS.md §3.4): use the token while valid; if it has
     // already expired, surface an actionable error rather than refresh it.
     if let Some(path) = source.writable_path() {
         if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
-            info!("oauth: token expired/near-expiry — refreshing pre-flight");
+            info!("oauth: token expired/near-expiry - refreshing pre-flight");
             oauth = refresh_and_persist(&client, path, oauth).await?;
         }
     } else if token_needs_refresh(oauth.expires_at, Utc::now(), Duration::zero()) {
@@ -1120,13 +1128,13 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
         }
         Err(OAuthError::AuthExpired) => {
             // 401 despite the pre-flight check. For a file source, refresh +
-            // retry once (bounded — the retry uses `?`, so a second AuthExpired
+            // retry once (bounded - the retry uses `?`, so a second AuthExpired
             // propagates, no loop). For the read-only Keychain source we can't
             // refresh, so surface the actionable error.
             let Some(path) = source.writable_path() else {
                 return Err(OAuthError::CredentialExpiredReadOnly.into());
             };
-            warn!("oauth: 401 despite pre-flight — one refresh+retry");
+            warn!("oauth: 401 despite pre-flight - one refresh+retry");
             let oauth = refresh_and_persist(&client, path, oauth).await?;
             let s = fetch_usage(
                 &client,

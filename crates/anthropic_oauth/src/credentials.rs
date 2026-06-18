@@ -4,17 +4,17 @@
 //!
 //! - **A file** (the first existing path wins):
 //!   1. `$XDG_CONFIG_HOME/claude/.credentials.json` (if XDG_CONFIG_HOME is set)
-//!   2. `~/.claude/.credentials.json` — legacy, still used on Windows + many macOS installs
-//!   3. `~/.config/claude/.credentials.json` — Claude Code v1.0.30+ on some platforms
+//!   2. `~/.claude/.credentials.json` - legacy, still used on Windows + many macOS installs
+//!   3. `~/.config/claude/.credentials.json` - Claude Code v1.0.30+ on some platforms
 //! - **The macOS login Keychain** (generic password, service
-//!   `"Claude Code-credentials"`) — recent Claude Code on macOS stores the
+//!   `"Claude Code-credentials"`) - recent Claude Code on macOS stores the
 //!   credential here instead of a file. Used only when no file exists.
 //!
 //! Refresh policy follows ownership (AGENTS.md §3.4): Balanze owns the file it
 //! refreshes, so a file source may be refreshed and written back via
-//! [`write_back`] (the ONLY writer — atomic tmp+rename, perms-preserving,
+//! [`write_back`] (the ONLY writer - atomic tmp+rename, perms-preserving,
 //! touches only the OAuth token fields). The Keychain entry is Claude Code's;
-//! the Keychain source is **read-only** — Balanze never refreshes or writes a
+//! the Keychain source is **read-only** - Balanze never refreshes or writes a
 //! credential it does not own. No other crate reads or writes these credentials.
 
 use std::io::Write as _;
@@ -32,7 +32,7 @@ const MACOS_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 /// Where Balanze found Claude Code's OAuth credential. Determines whether
 /// Balanze may refresh + write back the token (it owns the file) or must treat
-/// it as read-only (the macOS login Keychain entry belongs to Claude Code —
+/// it as read-only (the macOS login Keychain entry belongs to Claude Code -
 /// AGENTS.md §3.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialSource {
@@ -57,7 +57,7 @@ impl CredentialSource {
     }
 
     /// A human-readable description for setup/diagnostic output. Never includes
-    /// any credential material — only the location.
+    /// any credential material - only the location.
     pub fn describe(&self) -> String {
         match self {
             CredentialSource::File(p) => p.display().to_string(),
@@ -151,7 +151,7 @@ pub fn load_from_source(source: &CredentialSource) -> Result<Credentials, OAuthE
 ///
 /// Shells out to `/usr/bin/security` rather than taking a crate dependency:
 /// keeps `anthropic_oauth` self-contained (the `keychain` crate is the only one
-/// that imports the keyring stack — AGENTS.md §4 #5) and adds no new dep. The
+/// that imports the keyring stack - AGENTS.md §4 #5) and adds no new dep. The
 /// read is best-effort and may prompt the user for Keychain access on first
 /// use, exactly like any other process reading another app's entry.
 ///

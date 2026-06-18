@@ -1,13 +1,13 @@
 //! Authoritative Claude subscription state via Anthropic's OAuth usage endpoint.
 //!
 //! Reads Claude Code's OAuth credential (a `.credentials.json` file, or on
-//! macOS the login Keychain entry when no file exists — see `credentials`),
+//! macOS the login Keychain entry when no file exists - see `credentials`),
 //! calls `GET https://api.anthropic.com/api/oauth/usage` with the bearer token,
 //! and parses the response into a `ClaudeOAuthSnapshot`.
 //!
 //! **Secret discipline**: this is the only crate in the workspace that reads the
 //! credential. The access token, refresh token, and every other field under
-//! `claudeAiOauth` are treated as secrets — never logged, never echoed, never
+//! `claudeAiOauth` are treated as secrets - never logged, never echoed, never
 //! persisted by Balanze. Balanze refreshes + writes back only a file source it
 //! owns; the macOS Keychain entry is Claude Code's and is read-only. See
 //! AGENTS.md §3.4.
