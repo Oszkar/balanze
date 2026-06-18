@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use claude_parser::find_all_claude_projects_dirs;
 use claude_statusline::{FileIoError, read_snapshot};
-use codex_local::read_codex_quota;
+use codex_local::{ParseError, read_codex_quota};
 use state_coordinator::{
     ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg,
 };
@@ -167,30 +167,83 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             let codex = tokio::task::spawn_blocking(read_codex_quota).await;
 
             match codex {
-                Ok(Ok(Some(snap))) => {
-                    let _ = coord
-                        .send(StateMsg::Update(SourceUpdate {
-                            source: Source::CodexQuota,
-                            result: Ok(SourcePartial::CodexQuota(snap)),
-                        }))
-                        .await;
-                }
-                Ok(Ok(None)) => {
-                    // Codex installed but no quota data yet — keep prior value.
-                    tracing::debug!("watcher/safety: codex quota absent; skipping emit");
-                }
-                Ok(Err(e)) => {
-                    let _ = coord
-                        .send(StateMsg::Update(SourceUpdate {
-                            source: Source::CodexQuota,
-                            result: Err(format!("{e}")),
-                        }))
-                        .await;
-                }
+                Ok(res) => match codex_update(res) {
+                    Some(result) => {
+                        let _ = coord
+                            .send(StateMsg::Update(SourceUpdate {
+                                source: Source::CodexQuota,
+                                result,
+                            }))
+                            .await;
+                    }
+                    None => {
+                        tracing::debug!(
+                            "watcher/safety: codex not installed or no quota data; skipping emit"
+                        );
+                    }
+                },
                 Err(join_err) => {
                     tracing::error!("watcher/safety: codex read task panicked: {join_err}");
                 }
             }
         }
     })
+}
+
+/// Map a Codex quota read to an optional coordinator update.
+///
+/// `FileMissing` (the Codex CLI isn't installed - `~/.codex/sessions` is
+/// absent) is a quiet not-configured state, NOT an error: it must not set
+/// `codex_quota_error` or raise a degraded banner. Mirrors
+/// `balanze_cli::live_fetch_codex_quota` and the `codex_local` error contract
+/// (FileMissing => "not configured"; IoError / SchemaDrift => loud). Returns
+/// `None` to skip the emit (keeping any prior value); `Ok(None)` (installed but
+/// no quota data yet) is also a quiet skip.
+fn codex_update(
+    result: Result<Option<codex_local::CodexQuotaSnapshot>, ParseError>,
+) -> Option<Result<SourcePartial, String>> {
+    match result {
+        Ok(Some(snap)) => Some(Ok(SourcePartial::CodexQuota(snap))),
+        Ok(None) => None,
+        Err(ParseError::FileMissing(_)) => None,
+        Err(e) => Some(Err(format!("{e}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::codex_update;
+    use codex_local::ParseError;
+    use std::path::PathBuf;
+
+    #[test]
+    fn codex_not_installed_is_quiet_not_an_error() {
+        // FileMissing must NOT surface as a degraded error - it's the
+        // "Codex not installed" not-configured state.
+        let out = codex_update(Err(ParseError::FileMissing(PathBuf::from(
+            "/home/u/.codex/sessions",
+        ))));
+        assert!(
+            out.is_none(),
+            "FileMissing should skip the emit, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn codex_installed_no_data_is_quiet() {
+        assert!(codex_update(Ok(None)).is_none());
+    }
+
+    #[test]
+    fn codex_real_error_still_surfaces() {
+        // A genuine filesystem error must still reach the degraded banner.
+        let out = codex_update(Err(ParseError::IoError {
+            path: PathBuf::from("/home/u/.codex/sessions"),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+        }));
+        match out {
+            Some(Err(msg)) => assert!(!msg.is_empty()),
+            other => panic!("expected Some(Err(..)), got {other:?}"),
+        }
+    }
 }
