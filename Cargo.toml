@@ -44,7 +44,9 @@ directories = "6"
 # that. The store crates are pulled in per-target by the `keychain` crate.
 keyring-core = "1"
 windows-native-keyring-store = "1"
-apple-native-keyring-store = "1"
+# The `keychain` feature gates the macOS Keychain store (`keychain::Store`) we
+# use; it is not on by default, so request it explicitly.
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
 notify = "8"
 notify-debouncer-full = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
