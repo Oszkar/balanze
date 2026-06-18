@@ -69,7 +69,7 @@ OAuth keepalive + the v0.2 de-risk foundations (Tracks A + B), shipped in one ta
 
 ## [0.1.0] - 2026-05-15
 
-v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distribution is source-only (`cargo install --git … balanze_cli`).
+v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distribution is source-only (`cargo install --git ... balanze_cli`).
 
 ### Added
 - **`balanze-cli`** - `status` (4-quadrant compact view) / `setup` / `set-openai-key` / `clear-openai-key` / `settings`; `status` takes `--sections` / `--json` / `-v`.

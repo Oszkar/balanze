@@ -309,7 +309,7 @@ The data updates itself and the Anthropic API $ figure is made honest. Still CLI
 
 The Tauri surface - the hero artifact. The full UI scope (popover, settings, alerts, dashboard) ships as **bounded sub-milestones**, each shippable on its own, so the popover screenshot exists early. The biggest known risk - the `state_coordinator` `Sink` / `TauriSink` seam - is exercised live in the very first sub-milestone.
 
-**v0.3.0 - Popover (the hero). Shipped (#58, tagged `v0.3.0`).** The glanceable surface, and the thing that makes the whole backend legible.
+**v0.3.0 - Popover (the hero). Shipped.** The glanceable surface, and the thing that makes the whole backend legible.
 
 - Tauri 2 popover/tray UI: color-shifting gauge tray icon (RGBA ring rendered at runtime, repaint deduped by `(ColorBucket, title_text)`), hidden-on-launch popover (left-click toggles, blur hides) with one progress bar per Anthropic cadence + reset sublines, the burn number, the **pace view**, and the matrix tiles - in a transposed grid (providers as columns) plus a Cards density view.
 - **Pace view (replaces the retired predictor).** Per window (5h / 7-day), two measured facts side by side - *quota used %* and *window elapsed %* - plus a transparent **pace ratio** (used ÷ elapsed) rendered as a glanceable verdict ("on pace" / "burning ~2.0× faster than linear"). Pure division of two measured numbers, **not** a forecast: always defined, no warm-up, no post-reset lie. The 30-minute burn rate shows alongside as a number (the sparkline glyph + series ride with durable history in v0.3.3).
