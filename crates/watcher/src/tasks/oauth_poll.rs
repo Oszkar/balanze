@@ -13,8 +13,8 @@
 
 use anthropic_oauth::{
     CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, CredentialsClaudeAiOauth,
-    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage,
-    load_from as load_credentials_from, locate_credentials, refresh_access_token, write_back,
+    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage, load_from_source,
+    locate_credentials, refresh_access_token, write_back,
 };
 use chrono::{Duration, Utc};
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
@@ -51,16 +51,23 @@ pub(crate) fn spawn(
         // Startup gate: if Claude Code isn't installed (no credentials file),
         // exit cleanly with an info log rather than emit an OAuth error
         // every 5 minutes for the lifetime of the process. The user can
-        // install Claude Code + restart the watcher to pick it up — same
+        // install Claude Code + restart the watcher to pick it up - same
         // pattern as the JSONL task, which exits clean at startup if
         // `~/.claude/projects/` doesn't exist. Once we've seen credentials
         // here, transient `CredentialsMissing` errors during the loop
         // (e.g. user deletes the file mid-session) DO get reported as
-        // Update errors — the watcher noticed and surfacing them is
+        // Update errors - the watcher noticed and surfacing them is
         // helpful.
-        if let Err(OAuthError::CredentialsMissing { .. }) =
-            locate_credentials().and_then(|p| load_credentials_from(&p))
-        {
+        //
+        // Run on a blocking worker: locate+load is sync I/O (a file read, or a
+        // `security` subprocess on macOS that can block on a Keychain access
+        // prompt - this is the first credential touch and the likeliest to
+        // prompt), and must not stall a tokio runtime thread (AGENTS.md §2.1).
+        let startup_probe = tokio::task::spawn_blocking(|| {
+            locate_credentials().and_then(|src| load_from_source(&src))
+        })
+        .await;
+        if let Ok(Err(OAuthError::CredentialsMissing { .. })) = startup_probe {
             tracing::info!(
                 "watcher/oauth_poll: no Claude credentials at startup; task exits clean. \
                  Install Claude Code and restart `--watch` to enable OAuth polling."
@@ -133,17 +140,31 @@ async fn poll_once(
     client: &reqwest::Client,
 ) -> anyhow::Result<anthropic_oauth::ClaudeOAuthSnapshot> {
     // Re-locate and re-load credentials on every tick: Claude Code may have
-    // atomically rewritten `~/.claude/.credentials.json` between polls
-    // (e.g. its own token refresh). Re-loading ensures we always have the
-    // freshest on-disk token rather than a potentially stale in-memory copy.
-    let path = locate_credentials()?;
-    let creds = load_credentials_from(&path)?;
+    // atomically rewritten its credential between polls (e.g. its own token
+    // refresh). Re-loading ensures we always have the freshest token rather
+    // than a potentially stale in-memory copy.
+    //
+    // locate+load is sync I/O (a file read, or a `security` subprocess on
+    // macOS), so run it on a blocking worker to keep tokio runtime threads
+    // free (AGENTS.md §2.1; consistent with the other watcher tasks' sync I/O).
+    let (source, creds) = tokio::task::spawn_blocking(|| {
+        let source = locate_credentials()?;
+        let creds = load_from_source(&source)?;
+        Ok::<_, OAuthError>((source, creds))
+    })
+    .await??;
     let mut oauth = creds.claude_ai_oauth;
 
-    // Pre-flight: refresh if the access token is expired or near-expiry.
-    if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
-        tracing::info!("watcher/oauth_poll: token expired/near-expiry — refreshing pre-flight");
-        oauth = refresh_and_persist(client, &path, oauth).await?;
+    // Pre-flight refresh only for a source we own (a file). The macOS Keychain
+    // entry is Claude Code's - read-only (AGENTS.md §3.4): use the token while
+    // valid; if it has already expired, surface an actionable error.
+    if let Some(path) = source.writable_path() {
+        if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
+            tracing::info!("watcher/oauth_poll: token expired/near-expiry - refreshing pre-flight");
+            oauth = refresh_and_persist(client, path, oauth).await?;
+        }
+    } else if token_needs_refresh(oauth.expires_at, Utc::now(), Duration::zero()) {
+        return Err(OAuthError::CredentialExpiredReadOnly.into());
     }
 
     let policy = backoff::BackoffPolicy::standard();
@@ -160,11 +181,16 @@ async fn poll_once(
     {
         Ok(s) => Ok(s),
         Err(OAuthError::AuthExpired) => {
-            // Pre-flight refresh already happened but we still got 401.
-            // One more refresh + retry (bounded — the retry uses `?` so a
-            // second AuthExpired propagates rather than looping).
-            tracing::warn!("watcher/oauth_poll: 401 despite pre-flight — one refresh+retry");
-            let oauth = refresh_and_persist(client, &path, oauth).await?;
+            // Pre-flight refresh already happened but we still got 401. For a
+            // file source, one more refresh + retry (bounded - the retry uses
+            // `?` so a second AuthExpired propagates rather than looping). For
+            // the read-only Keychain source we can't refresh, so surface the
+            // actionable error.
+            let Some(path) = source.writable_path() else {
+                return Err(OAuthError::CredentialExpiredReadOnly.into());
+            };
+            tracing::warn!("watcher/oauth_poll: 401 despite pre-flight - one refresh+retry");
+            let oauth = refresh_and_persist(client, path, oauth).await?;
             let s = fetch_usage(
                 client,
                 ANTHROPIC_API_BASE,
