@@ -54,7 +54,7 @@ pub struct ModelPrices {
 /// table, update both the data filename and this line. The build script
 /// validates the filename pattern but cannot rewrite this `include_str!`
 /// because `include_str!` requires a string literal at parse time.
-const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-e58a561-20260514.json");
+const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-1ccc1e5-20260618.json");
 
 /// Load the compile-time-embedded vendored price table.
 ///

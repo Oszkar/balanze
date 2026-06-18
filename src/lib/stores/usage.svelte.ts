@@ -1,5 +1,5 @@
 import type { UnlistenFn } from '@tauri-apps/api/event';
-import { getSnapshot, refreshNow, onUsageUpdated, onDegraded } from '../ipc';
+import { getSnapshot, onUsageUpdated, onDegraded, onWindowShown } from '../ipc';
 import type { Snapshot } from '../types/snapshot';
 
 // The authoritative degraded state is the snapshot's per-source `*_error`
@@ -43,6 +43,11 @@ class UsageStore {
         // coordinator emits degraded_state without a usage_updated on error).
         this.degraded = { ...this.degraded, [d.source]: d.error };
       }));
+      // Re-pull on every popover open: fresh-on-open, and self-healing if the
+      // live event channel above ever dies (a webview reload orphans the
+      // listener; without this the UI would stay frozen until the next emit
+      // that happens to land on a live listener - which never comes).
+      this.#unlisten.push(await onWindowShown(() => void this.refresh()));
     } catch (e) {
       this.lastError = String(e);
     }
@@ -60,8 +65,20 @@ class UsageStore {
     }
   }
 
+  // Pull the current snapshot straight from the backend and update the store,
+  // rather than asking the backend to re-emit `usage_updated` (which the old
+  // path did via refresh_now - that only worked if the event listener was
+  // still live, and re-sent the *cached* snapshot anyway). `get_snapshot`
+  // returns the coordinator's current snapshot, kept fresh by the pollers, so
+  // this both repaints reliably and doesn't depend on the event channel.
   async refresh() {
-    try { await refreshNow(); } catch (e) { this.lastError = String(e); }
+    try {
+      const s = await getSnapshot();
+      this.snapshot = s;
+      this.degraded = degradedFromSnapshot(s);
+    } catch (e) {
+      this.lastError = String(e);
+    }
   }
 
   destroy() {
