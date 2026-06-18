@@ -495,10 +495,11 @@ fn prompt_for_openai_key() -> Result<String> {
 
 fn setup_statusline() {
     use claude_statusline::{
-        WireStatus, default_settings_path, locate_settings_path, read_wire_status, wire_statusline,
+        STATUSLINE_INVOCATION, WireStatus, default_settings_path, locate_settings_path,
+        read_wire_status, wire_statusline,
     };
-    // Bare `balanze-cli` assumes it is on PATH (true after `cargo install`).
-    let invocation = "balanze-cli statusline";
+    // Shared const so the CLI and the desktop Settings UI can't drift.
+    let invocation = STATUSLINE_INVOCATION;
 
     let path = match locate_settings_path() {
         Ok(p) => p,

@@ -21,6 +21,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::errors::StatuslineError;
 
+/// Canonical `statusLine.command` Balanze wires into Claude Code's
+/// `settings.json`. Bare `balanze-cli` assumes it is on PATH (true after
+/// `cargo install`). Shared by the CLI `setup` flow and the desktop Settings UI
+/// so the two can't drift.
+pub const STATUSLINE_INVOCATION: &str = "balanze-cli statusline";
+
 /// Whether the `statusLine` stanza is owned by Balanze, absent, or taken by
 /// something else.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,14 +193,67 @@ pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineEr
         }),
     );
 
+    atomic_write_json(path, &root)
+}
+
+/// Remove the `statusLine` stanza from `settings.json`, preserving every other
+/// key, via the same atomic tmp+fsync+rename as [`wire_statusline`]. No-op
+/// (returns `Ok`) if the file or the `statusLine` key is absent.
+///
+/// Like `wire_statusline`, this is unconditional at the crate level - the
+/// no-clobber policy (only unwire a stanza we own) belongs to the caller, which
+/// should check [`read_wire_status`] first so it never strips another tool's
+/// `statusLine`.
+pub fn unwire_statusline(path: &Path) -> Result<(), StatuslineError> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        // Nothing to remove.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(StatuslineError::SettingsIo {
+                path: path.to_path_buf(),
+                source: e,
+            });
+        }
+    };
+
+    let mut root: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| StatuslineError::SettingsMalformed {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| StatuslineError::SettingsMalformed {
+            path: path.to_path_buf(),
+            reason: "root is not a JSON object".to_string(),
+        })?;
+
+    // Key already absent → nothing to write.
+    if obj.remove("statusLine").is_none() {
+        return Ok(());
+    }
+
+    atomic_write_json(path, &root)
+}
+
+/// Atomically write `root` as pretty JSON to `path`: mkdir -p the parent,
+/// write a uniquely-named tmp, fsync, rename over the target, then fsync the
+/// dir (Unix). Shared by [`wire_statusline`] and [`unwire_statusline`].
+///
+/// Normalizes to pretty-printed JSON with object keys sorted (`serde_json::Value`
+/// is a `BTreeMap`; the workspace does not enable `preserve_order`). Semantically
+/// safe - Claude Code re-parses by key - but a hand-ordered settings.json will
+/// see keys sorted after the first write. Same accepted trade-off as
+/// `anthropic_oauth`'s credentials write-back. No 0o600 requirement -
+/// settings.json is not a secret file.
+fn atomic_write_json(path: &Path, root: &serde_json::Value) -> Result<(), StatuslineError> {
     let serialized =
-        serde_json::to_vec_pretty(&root).map_err(|e| StatuslineError::SettingsMalformed {
+        serde_json::to_vec_pretty(root).map_err(|e| StatuslineError::SettingsMalformed {
             path: path.to_path_buf(),
             reason: format!("re-serialize: {e}"),
         })?;
 
-    // Ensure parent directory exists (hoisted to a single derivation; also
-    // creates ~/.claude if it does not yet exist).
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir).map_err(|e| StatuslineError::SettingsIo {
         path: dir.to_path_buf(),
@@ -216,8 +275,6 @@ pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineEr
         seq,
     ));
 
-    // Write to tmp, fsync, then atomically rename over the final path.
-    // No 0o600 mode requirement — settings.json is not a secret file.
     let write_result = (|| -> std::io::Result<()> {
         let mut f = std::fs::File::create_new(&tmp)?;
         f.write_all(&serialized)?;
@@ -452,5 +509,57 @@ mod tests {
             Err(StatuslineError::SettingsMalformed { .. }) => {}
             other => panic!("expected SettingsMalformed, got {other:?}"),
         }
+    }
+
+    // ── unwire_statusline ─────────────────────────────────────────────────────
+
+    #[test]
+    fn unwire_removes_stanza_preserving_other_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        write_settings(
+            &path,
+            r#"{"theme":"dark","statusLine":{"type":"command","command":"balanze-cli statusline"}}"#,
+        );
+
+        unwire_statusline(&path).unwrap();
+
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v["theme"], "dark");
+        assert!(v.get("statusLine").is_none(), "statusLine should be gone");
+        assert_eq!(read_wire_status(&path).unwrap(), WireStatus::Unwired);
+    }
+
+    #[test]
+    fn unwire_missing_file_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        unwire_statusline(&path).unwrap();
+        assert!(!path.exists(), "must not create the file");
+    }
+
+    #[test]
+    fn unwire_absent_key_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        write_settings(&path, r#"{"theme":"dark"}"#);
+        unwire_statusline(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v["theme"], "dark");
+    }
+
+    #[test]
+    fn wire_then_unwire_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        write_settings(&path, r#"{"keep":true}"#);
+
+        wire_statusline(&path, INVOCATION).unwrap();
+        assert_eq!(read_wire_status(&path).unwrap(), WireStatus::WiredToBalanze);
+
+        unwire_statusline(&path).unwrap();
+        assert_eq!(read_wire_status(&path).unwrap(), WireStatus::Unwired);
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v["keep"], true, "unrelated keys survive the roundtrip");
     }
 }

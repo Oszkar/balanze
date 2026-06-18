@@ -9,6 +9,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 ### Added
 - Settings UI in the popover (gear icon): paste an OpenAI Admin API key (masked input) to save it straight to the OS keychain, toggle OpenAI / Anthropic polling, and return to the usage view. Backed by three new IPC commands - `set_api_key`, `get_settings`, `set_settings` - which are synchronous (so their keychain + settings.json I/O runs off the async runtime). The key is never echoed back to the frontend or logged (AGENTS.md §3.4); `set_api_key` accepts only the user-supplied OpenAI key, since Anthropic uses Claude Code's OAuth credential.
 - Degraded-state banner: when a source is stale or errored, the popover shows a visible warning listing the affected sources instead of silently blanking the cell.
+- Claude Code statusLine wiring in the Settings UI: a "Claude Code statusLine" section shows whether Balanze's status line is wired, with one-click Wire / Unwire (via new `get_statusline_status` / `set_statusline_wired` IPC commands that delegate to `claude_statusline`). No-clobber - Balanze won't overwrite or strip a `statusLine` set to another command. Brings the desktop app to parity with what `balanze-cli setup` already does headless.
 
 ### Changed
 - Toolchain unification: Rust pinned to 1.94.0 via `rust-toolchain.toml` (CI matches; MSRV stays 1.85), Bun pinned to 1.3.13 via `packageManager` + CI `bun-version-file`.

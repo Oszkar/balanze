@@ -26,5 +26,6 @@ pub use parse::parse;
 pub use payload::{SCHEMA_VERSION, StatuslineFilePayload};
 pub use types::{RateLimits, RateWindow, StatuslineSnapshot};
 pub use wiring::{
-    WireStatus, default_settings_path, locate_settings_path, read_wire_status, wire_statusline,
+    STATUSLINE_INVOCATION, WireStatus, default_settings_path, locate_settings_path,
+    read_wire_status, unwire_statusline, wire_statusline,
 };

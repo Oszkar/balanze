@@ -285,6 +285,7 @@ version = "0.3.0"
 dependencies = [
  "anthropic_oauth",
  "chrono",
+ "claude_statusline",
  "keychain",
  "serde",
  "serde_json",
