@@ -183,7 +183,15 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
                     }
                 },
                 Err(join_err) => {
+                    // A panic is a genuine fault (unlike FileMissing) - surface it
+                    // as degraded, consistent with the statusline panic path above.
                     tracing::error!("watcher/safety: codex read task panicked: {join_err}");
+                    let _ = coord
+                        .send(StateMsg::Update(SourceUpdate {
+                            source: Source::CodexQuota,
+                            result: Err(format!("codex read task panicked: {join_err}")),
+                        }))
+                        .await;
                 }
             }
         }
