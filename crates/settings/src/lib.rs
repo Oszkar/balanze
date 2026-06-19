@@ -52,6 +52,10 @@ pub struct ProviderSettings {
     /// removing the credential file.
     #[serde(default = "default_true")]
     pub anthropic_enabled: bool,
+    /// Codex (`~/.codex/sessions`) quota scanning. On by default; lets a user
+    /// who doesn't use Codex stop the scan (and its cell) without uninstalling.
+    #[serde(default = "default_true")]
+    pub codex_enabled: bool,
 }
 
 impl Default for ProviderSettings {
@@ -59,6 +63,7 @@ impl Default for ProviderSettings {
         Self {
             openai_enabled: false,
             anthropic_enabled: true,
+            codex_enabled: true,
         }
     }
 }
@@ -211,6 +216,25 @@ mod tests {
         assert_eq!(s.version, SCHEMA_VERSION);
         assert!(!s.providers.openai_enabled);
         assert!(s.providers.anthropic_enabled);
+        assert!(s.providers.codex_enabled);
+    }
+
+    #[test]
+    fn codex_enabled_defaults_true_when_absent() {
+        // Old settings.json written before codex_enabled existed must default
+        // it to true (no version bump - additive serde-default field).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"providers":{"openai_enabled":false,"anthropic_enabled":true}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert!(
+            s.providers.codex_enabled,
+            "absent codex_enabled must default true"
+        );
     }
 
     #[test]

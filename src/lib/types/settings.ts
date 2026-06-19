@@ -4,6 +4,7 @@
 export interface ProviderSettings {
   openai_enabled: boolean;
   anthropic_enabled: boolean;
+  codex_enabled: boolean;
 }
 
 export interface Settings {

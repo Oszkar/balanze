@@ -183,6 +183,38 @@ pub fn record_error(snapshot: &mut Snapshot, source: Source, error: &str) {
     *slot = Some(error.to_string());
 }
 
+/// Reset a source's value AND error to `None` ("not observed / not configured").
+/// Used when a provider is disabled via settings so its cell stops showing
+/// stale data, rather than lingering at its last-polled value.
+pub fn clear_source(snapshot: &mut Snapshot, source: Source) {
+    match source {
+        Source::ClaudeOAuth => {
+            snapshot.claude_oauth = None;
+            snapshot.claude_oauth_error = None;
+        }
+        Source::ClaudeJsonl => {
+            snapshot.claude_jsonl = None;
+            snapshot.claude_jsonl_error = None;
+        }
+        Source::AnthropicApiCost => {
+            snapshot.anthropic_api_cost = None;
+            snapshot.anthropic_api_cost_error = None;
+        }
+        Source::CodexQuota => {
+            snapshot.codex_quota = None;
+            snapshot.codex_quota_error = None;
+        }
+        Source::OpenAiCosts => {
+            snapshot.openai = None;
+            snapshot.openai_error = None;
+        }
+        Source::ClaudeStatusline => {
+            snapshot.claude_statusline = None;
+            snapshot.claude_statusline_error = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

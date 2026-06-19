@@ -54,12 +54,19 @@ pub fn get_settings() -> Result<Settings, String> {
     settings::load().map_err(|e| e.to_string())
 }
 
-/// Persist the non-secret settings atomically. Used for provider enable
-/// toggles and the poll cadence. The watcher's pollers clamp the cadence to
-/// the §3.1 floor regardless of what lands here, so a too-small value is safe.
+/// Persist the non-secret settings atomically and live-apply them: provider
+/// toggles and the poll cadence take effect without an app restart (see
+/// [`apply_settings_live`]). The watcher's pollers clamp the cadence to the
+/// §3.1 floor regardless of what lands here, so a too-small value is safe.
 #[tauri::command]
-pub fn set_settings(settings: Settings) -> Result<(), String> {
-    settings::save(&settings).map_err(|e| e.to_string())
+pub fn set_settings(
+    settings: Settings,
+    coord: State<'_, StateCoordinatorHandle>,
+    reload: State<'_, WatcherReload>,
+) -> Result<(), String> {
+    settings::save(&settings).map_err(|e| e.to_string())?;
+    apply_settings_live(&coord, &reload, settings);
+    Ok(())
 }
 
 /// Store a user-supplied API key in the OS keychain and mark its provider
@@ -69,15 +76,70 @@ pub fn set_settings(settings: Settings) -> Result<(), String> {
 /// Secret hygiene (§3.4): the key is validated, trimmed, written to the
 /// keychain, and immediately dropped. It is never logged, echoed, or returned.
 #[tauri::command]
-pub fn set_api_key(provider: String, key: String) -> Result<(), String> {
+pub fn set_api_key(
+    provider: String,
+    key: String,
+    coord: State<'_, StateCoordinatorHandle>,
+    reload: State<'_, WatcherReload>,
+) -> Result<(), String> {
     let key = prepare_api_key(&provider, &key)?;
     keychain::set(keychain::keys::OPENAI_API_KEY, key).map_err(|e| e.to_string())?;
     // Saving a key implies the user wants this provider polled. Flip the
-    // enable flag so the watcher/CLI pick it up without a second action.
+    // enable flag so the watcher picks it up, then live-apply.
     let mut s = settings::load().map_err(|e| e.to_string())?;
     s.providers.openai_enabled = true;
     settings::save(&s).map_err(|e| e.to_string())?;
+    apply_settings_live(&coord, &reload, s);
     Ok(())
+}
+
+/// Whether a user-supplied API key for `provider` exists in the OS keychain.
+/// Lets the settings UI show a "key configured" affordance without ever reading
+/// the key value. (Does not consider the `BALANZE_OPENAI_KEY` env override - the
+/// UI affordance manages the keychain-stored key.)
+#[tauri::command]
+pub fn has_api_key(provider: String) -> Result<bool, String> {
+    if provider != "openai" {
+        return Err(format!("unsupported provider: {provider}"));
+    }
+    keychain::exists(keychain::keys::OPENAI_API_KEY).map_err(|e| e.to_string())
+}
+
+/// Remove a user-supplied API key from the keychain and disable its provider,
+/// then live-apply (the cell clears). Idempotent - succeeds if no key existed.
+#[tauri::command]
+pub fn clear_api_key(
+    provider: String,
+    coord: State<'_, StateCoordinatorHandle>,
+    reload: State<'_, WatcherReload>,
+) -> Result<(), String> {
+    if provider != "openai" {
+        return Err(format!("unsupported provider: {provider}"));
+    }
+    keychain::delete(keychain::keys::OPENAI_API_KEY).map_err(|e| e.to_string())?;
+    let mut s = settings::load().map_err(|e| e.to_string())?;
+    s.providers.openai_enabled = false;
+    settings::save(&s).map_err(|e| e.to_string())?;
+    apply_settings_live(&coord, &reload, s);
+    Ok(())
+}
+
+/// Sender that asks the host's watcher supervisor to re-spawn its tasks with
+/// the latest settings. Managed in Tauri state by `boot_backend`.
+pub struct WatcherReload(pub tokio::sync::mpsc::Sender<()>);
+
+/// Live-apply a settings change without an app restart, in two parts:
+/// 1. Tell the coordinator (owner of the `Snapshot`) to reset the cells of any
+///    now-disabled provider via `StateMsg::SettingsChanged`.
+/// 2. Signal the watcher supervisor to re-spawn its tasks, so enabled providers
+///    start polling and disabled ones stop.
+///
+/// Both sends are non-blocking and best-effort: a full or closed channel just
+/// means the change applies on the next natural cycle / restart, never an error
+/// to the user (the settings are already persisted by the time we get here).
+fn apply_settings_live(coord: &StateCoordinatorHandle, reload: &WatcherReload, settings: Settings) {
+    let _ = coord.try_send(StateMsg::SettingsChanged(settings));
+    let _ = reload.0.try_send(());
 }
 
 /// Validate + normalize an inbound API key before it touches the keychain.

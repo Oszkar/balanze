@@ -26,19 +26,22 @@ impl Watcher {
     /// Default-enabled tasks (always spawned):
     /// 1. `jsonl` — notify-watches `~/.claude/projects/**/*.jsonl`; 300ms debounce.
     /// 2. `statusline` — notify-watches `<data_dir>/statusline.snapshot.json`; 100ms debounce.
-    /// 3. `openai_poll` — polls OpenAI org costs at `settings.oauth_poll_interval_secs` (min 300s); exits clean if no key configured.
-    /// 4. `safety` — 60s safety re-scan of JSONL + statusline + Codex (skips first tick).
+    /// 3. `safety` - 60s safety re-scan of JSONL + statusline + Codex (skips first tick).
+    ///    Its Codex scan is gated on `settings.providers.codex_enabled`.
     ///
-    /// Conditionally-spawned tasks:
-    /// 5. `oauth_poll` — only when `settings.providers.anthropic_enabled` is `true` (the default).
-    ///    The toggle is documented (`ProviderSettings::anthropic_enabled`) as
-    ///    a way to disable Anthropic OAuth polling without removing the
-    ///    credentials file. So a `false` value short-circuits before we spawn
-    ///    the task at all — no log spam, no API calls, the OAuth Snapshot
-    ///    cell stays `None` until the user re-enables and restarts.
+    /// Conditionally-spawned tasks (each gated on a `ProviderSettings` toggle so
+    /// a `false` value short-circuits before we spawn - no log spam, no API
+    /// calls; the cell stays `None` until re-enabled. The Tauri host re-spawns
+    /// the watcher on a settings change, so these apply live):
+    /// 4. `openai_poll` - only when `providers.openai_enabled` is `true` OR a
+    ///    non-empty `BALANZE_OPENAI_KEY` env override is set (that documented
+    ///    power-user path bypasses the keychain and must keep working).
+    /// 5. `oauth_poll` - only when `providers.anthropic_enabled` is `true` (the
+    ///    default); disables Anthropic OAuth polling without removing the
+    ///    credentials file.
     ///
-    /// The returned `Vec` therefore has length 4 or 5 depending on settings.
-    /// The caller (Task 6's `balanze-cli --watch` supervisor) runs whatever
+    /// The returned `Vec` therefore has length 3 to 5 depending on settings.
+    /// The caller (`balanze-cli --watch`, or the Tauri host) runs whatever
     /// handles come back under `tokio::select!`. A panic surfaces as
     /// `JoinError::is_panic() == true`; the supervisor's job is to log and
     /// (optionally) restart.
@@ -58,11 +61,19 @@ impl Watcher {
             ("jsonl", tasks::jsonl::spawn(handle.clone())),
             ("statusline", tasks::statusline::spawn(handle.clone())),
             (
+                "safety",
+                tasks::safety::spawn(handle.clone(), settings.providers.codex_enabled),
+            ),
+        ];
+        // OpenAI: gated on the toggle, OR on a present `BALANZE_OPENAI_KEY` env
+        // override (the documented power-user path must keep working even with
+        // the toggle off, since it bypasses the keychain entirely).
+        if settings.providers.openai_enabled || openai_env_key_present() {
+            tasks.push((
                 "openai_poll",
                 tasks::openai_poll::spawn(handle.clone(), settings.oauth_poll_interval_secs),
-            ),
-            ("safety", tasks::safety::spawn(handle.clone())),
-        ];
+            ));
+        }
         if settings.providers.anthropic_enabled {
             tasks.push((
                 "oauth_poll",
@@ -71,4 +82,9 @@ impl Watcher {
         }
         tasks
     }
+}
+
+/// True if a non-empty `BALANZE_OPENAI_KEY` env override is set.
+fn openai_env_key_present() -> bool {
+    std::env::var("BALANZE_OPENAI_KEY").is_ok_and(|v| !v.trim().is_empty())
 }
