@@ -1,29 +1,25 @@
-//! Safety poll task. Fires every 60 seconds (first tick skipped — the JSONL
-//! initial scan at startup already covered that window). On each tick it
-//! re-runs the full JSONL scan + statusline read + Codex quota read and emits
-//! updates to the coordinator.
+//! Safety poll task. Fires every 60 seconds (first tick skipped - startup reads
+//! already covered that window). On each tick it re-reads the statusline
+//! snapshot and the Codex quota and emits updates to the coordinator.
 //!
-//! Purpose: catch filesystem events that the notify-based tasks might miss
-//! (inotify exhaustion, atomic-rewrite detection lag, Codex session rollover).
-//! The OAuth and OpenAI cells are NOT re-fetched here — those have dedicated
-//! 5-minute pollers and re-hitting their endpoints on every 60s safety tick
-//! would burn API quota (AGENTS.md §3.1).
+//! Purpose: catch filesystem events the statusline notify task might miss, and
+//! poll Codex (which has no notify task of its own - its rollout dir isn't
+//! watched). JSONL is NOT scanned here: its own notify task carries a 60s
+//! incremental fallback, so there is one byte-cursor set and no periodic full
+//! reparse (AGENTS.md §3.1). The OAuth and OpenAI cells are NOT re-fetched here:
+//! they have dedicated 5-minute pollers, and re-hitting their endpoints on every
+//! 60s safety tick would burn API quota.
 //!
-//! All sync I/O (`scan_events`, `read_snapshot`, `read_codex_quota`) runs
-//! under `tokio::task::spawn_blocking` so it doesn't block tokio worker threads.
+//! All sync I/O (`read_snapshot`, `read_codex_quota`) runs under
+//! `tokio::task::spawn_blocking` so it doesn't block tokio worker threads.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use claude_parser::find_all_claude_projects_dirs;
 use claude_statusline::{FileIoError, read_snapshot};
 use codex_local::{ParseError, read_codex_quota};
-use state_coordinator::{
-    ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg,
-};
+use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
 use tokio::task::JoinHandle;
 
-use super::jsonl::{ScanResult, scan_events};
 use crate::errors::WatcherError;
 
 // Re-export of the statusline snapshot-path helper — mirrored here so the
@@ -43,9 +39,9 @@ fn statusline_snapshot_path() -> Option<PathBuf> {
 /// Spawn the 60-second safety poll task and return its `JoinHandle`.
 ///
 /// The first tick is intentionally skipped: `ticker.tick().await` is called
-/// once before the loop to consume the immediate fire so the JSONL task's
-/// initial scan at startup isn't duplicated by the safety poll within the
-/// first few milliseconds.
+/// once before the loop to consume the immediate fire so the statusline notify
+/// task's own startup read isn't duplicated within the first few milliseconds.
+/// Codex (which has no notify task) is first read on the next tick.
 ///
 /// `codex_enabled` gates the per-tick Codex scan: when `false`, Codex is not
 /// read or emitted (the Tauri host re-spawns the watcher on a settings change,
@@ -55,17 +51,6 @@ pub(crate) fn spawn(
     codex_enabled: bool,
 ) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
-        // Resolve ALL JSONL project roots once — they don't change at runtime.
-        // A dual-install machine can have both ~/.claude/projects and
-        // ~/.config/claude/projects; empty ⇒ Claude Code not installed.
-        let roots = find_all_claude_projects_dirs();
-        if roots.is_empty() {
-            tracing::warn!(
-                "watcher/safety: no Claude projects dir found; \
-                 JSONL/cost cells won't be safety-polled"
-            );
-        }
-
         let statusline_path = statusline_snapshot_path();
 
         // `Delay` (not default `Burst`) so a long-running scan (deep
@@ -74,55 +59,14 @@ pub(crate) fn spawn(
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        // Skip the first immediate tick — the JSONL task's startup scan
-        // already covers this window. Without this skip the safety poll
-        // would double-emit within milliseconds of app launch.
+        // Skip the first immediate tick - the statusline notify task's startup
+        // read already covers that source; without the skip the safety poll
+        // would double-emit statusline within milliseconds of app launch.
         ticker.tick().await;
 
         loop {
             ticker.tick().await;
             tracing::debug!("watcher/safety: tick");
-
-            // ── JSONL (window + cost are derived in the coordinator) ──────────
-            if !roots.is_empty() {
-                let roots_owned = roots.clone();
-                let scan = tokio::task::spawn_blocking(move || scan_events(&roots_owned)).await;
-
-                match scan {
-                    Ok(ScanResult::Ok {
-                        events,
-                        files_scanned,
-                    }) => {
-                        let _ = coord
-                            .send(StateMsg::Update(SourceUpdate {
-                                source: Source::ClaudeJsonl,
-                                result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
-                                    events: Arc::new(events),
-                                    files_scanned,
-                                })),
-                            }))
-                            .await;
-                    }
-                    Ok(ScanResult::Fatal { error }) => {
-                        tracing::warn!("watcher/safety: JSONL scan fatal: {error}");
-                        let _ = coord
-                            .send(StateMsg::Update(SourceUpdate {
-                                source: Source::ClaudeJsonl,
-                                result: Err(error),
-                            }))
-                            .await;
-                    }
-                    Err(join_err) => {
-                        tracing::error!("watcher/safety: JSONL scan task panicked: {join_err}");
-                        let _ = coord
-                            .send(StateMsg::Update(SourceUpdate {
-                                source: Source::ClaudeJsonl,
-                                result: Err(format!("scan task panicked: {join_err}")),
-                            }))
-                            .await;
-                    }
-                }
-            }
 
             // ── Statusline ────────────────────────────────────────────────────
             if let Some(ref path) = statusline_path {
