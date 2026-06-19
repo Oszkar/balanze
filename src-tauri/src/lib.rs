@@ -55,9 +55,14 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
         return;
     };
 
+    // TEMP DIAG (remove after macOS positioning is verified): eprintln so it's
+    // visible in the `tauri dev` terminal regardless of RUST_LOG.
+    eprintln!("BALANZE-DIAG: cursor=({:.0},{:.0})", cursor.x, cursor.y);
+
     let win = match window.outer_size() {
         Ok(s) => s,
         Err(e) => {
+            eprintln!("BALANZE-DIAG: FALLBACK outer_size failed ({e})");
             tracing::warn!("popover anchor: outer_size failed ({e}); showing unanchored");
             position_and_show(app);
             return;
@@ -69,11 +74,13 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     let monitor = match app.monitor_from_point(cursor.x, cursor.y) {
         Ok(Some(m)) => m,
         Ok(None) => {
+            eprintln!("BALANZE-DIAG: FALLBACK no monitor under cursor");
             tracing::warn!("popover anchor: no monitor under cursor; showing unanchored");
             position_and_show(app);
             return;
         }
         Err(e) => {
+            eprintln!("BALANZE-DIAG: FALLBACK monitor_from_point failed ({e})");
             tracing::warn!("popover anchor: monitor_from_point failed ({e}); showing unanchored");
             position_and_show(app);
             return;
@@ -111,7 +118,23 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     x = x.clamp(mon_left, max_x);
     y = y.clamp(mon_top, max_y);
 
+    // TEMP DIAG (remove after macOS positioning is verified).
+    eprintln!(
+        "BALANZE-DIAG: win={}x{} mon_pos=({},{}) mon_size={}x{} work_area_top={} scale={} -> set_position ({}, {})",
+        win.width,
+        win.height,
+        mon_pos.x,
+        mon_pos.y,
+        mon_size.width,
+        mon_size.height,
+        monitor.work_area().position.y,
+        monitor.scale_factor(),
+        x,
+        y,
+    );
+
     if let Err(e) = window.set_position(PhysicalPosition::new(x, y)) {
+        eprintln!("BALANZE-DIAG: FALLBACK set_position failed ({e})");
         tracing::warn!("popover anchor: set_position failed ({e}); showing unanchored");
         position_and_show(app);
         return;
