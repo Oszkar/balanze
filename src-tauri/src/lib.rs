@@ -91,11 +91,15 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     let mon_bottom = mon_pos.y + mon_size.height as i32;
 
     // Anchor differently per platform. macOS has a top menu bar (the tray icon
-    // lives there), so the popover drops DOWN from the bar - centered under the
-    // click, top edge just below it. Windows' tray is on a bottom taskbar, so
-    // the window's bottom-right corner anchors at the cursor (opens up-and-left).
+    // lives there), so the popover drops DOWN from the bar: centered under the
+    // click (~ the icon), top edge at the work-area top - i.e. just below the
+    // menu bar. `work_area` excludes the menu bar, so its top is the correct
+    // dock line regardless of bar height (notch displays) or DPI scaling, which
+    // a fixed pixel offset from the cursor got wrong. Windows' tray is on a
+    // bottom taskbar, so the window's bottom-right corner anchors at the cursor
+    // (opens up-and-left).
     #[cfg(target_os = "macos")]
-    let (mut x, mut y) = (cursor.x as i32 - win_w / 2, cursor.y as i32 + 8);
+    let (mut x, mut y) = (cursor.x as i32 - win_w / 2, monitor.work_area().position.y);
     #[cfg(not(target_os = "macos"))]
     let (mut x, mut y) = (cursor.x as i32 - win_w, cursor.y as i32 - win_h);
 
