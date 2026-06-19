@@ -179,22 +179,86 @@ fn boot_backend(app: &App, rt: &tokio::runtime::Handle) {
     let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<()>(8);
     app.manage(commands::WatcherReload(reload_tx));
 
-    rt.spawn(supervise_watcher(handle, reload_rx));
+    // The watcher supervisor is itself a long-running task (AGENTS.md §3.2). If it
+    // panics, the reload + self-heal machinery is gone and the surviving watcher
+    // tasks stop being supervised - the same silent death this PR closes, one level
+    // up. So monitor it like the coordinator below: a genuine panic is fatal; a
+    // clean return or a shutdown abort is benign.
+    let supervisor_join = rt.spawn(supervise_watcher(handle, reload_rx));
+    let supervisor_app = app.handle().clone();
+    rt.spawn(async move {
+        match supervisor_join.await {
+            Ok(()) => tracing::info!("watcher supervisor stopped (shutdown)"),
+            Err(je) if je.is_cancelled() => {
+                tracing::info!("watcher supervisor aborted (shutdown)")
+            }
+            Err(je) => {
+                tracing::error!("watcher supervisor panicked ({je}); exiting");
+                supervisor_app.exit(1);
+            }
+        }
+    });
+
+    // The coordinator is the actor that owns the Snapshot and the only tray/IPC
+    // sink, so its death is fatal: without it the app is a frozen zombie. A
+    // genuine panic exits the process (matching `balanze-cli --watch` and
+    // AGENTS.md §3.2) so the user - and the single-instance relaunch - can
+    // recover. A clean stop (Ok) or a cancellation (the runtime being torn down
+    // on app exit) is normal shutdown and must NOT trigger exit(1).
+    let coord_app = app.handle().clone();
     rt.spawn(async move {
         match coord_join.await {
-            Ok(()) => tracing::error!("state_coordinator task exited"),
-            Err(je) => tracing::error!("state_coordinator panicked/aborted: {je}"),
+            Ok(()) => {
+                tracing::info!("state_coordinator stopped (all handles dropped; shutdown)")
+            }
+            Err(je) if je.is_cancelled() => {
+                tracing::info!("state_coordinator aborted (shutdown)")
+            }
+            Err(je) => {
+                tracing::error!("state_coordinator panicked ({je}); exiting");
+                coord_app.exit(1);
+            }
         }
     });
 }
 
-/// Own the watcher's task lifecycle. Spawns its tasks, and on each reload signal
-/// aborts + re-spawns them with freshly-loaded settings. Returns (aborting the
-/// live tasks) when the reload sender drops at app shutdown.
+/// Re-spawn backoff after an unexpected watcher-task death: exponential from 1s,
+/// capped at 60s, by consecutive-failure count. Bounds a persistent failure
+/// (e.g. notify-exhaustion) to one retry per minute instead of a tight loop.
+fn respawn_backoff(consecutive_failures: u32) -> std::time::Duration {
+    let secs = 1u64
+        .checked_shl(consecutive_failures)
+        .unwrap_or(u64::MAX)
+        .min(60);
+    std::time::Duration::from_secs(secs)
+}
+
+/// If a task ran healthy at least this long before dying, treat the next death
+/// as a fresh streak (reset the backoff) rather than escalating from the last.
+const FAILURE_RESET_WINDOW: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Own the watcher's task lifecycle. Re-spawns the task set on two triggers:
+/// a settings reload (fresh settings, so provider toggles apply live) and an
+/// *unexpected* task death (an `Err` return or panic). On a death it surfaces a
+/// `degraded_state` for the affected source, then re-spawns with bounded backoff
+/// so a persistent failure self-heals (or stays visibly degraded) instead of
+/// silently freezing the source - the gap this closes. A clean `Ok(())` exit
+/// (e.g. no Claude dir / no OpenAI key) and our own reload abort (a
+/// cancellation) are NOT failures. Returns when the reload sender drops at app
+/// shutdown.
 async fn supervise_watcher(
     handle: state_coordinator::StateCoordinatorHandle,
     mut reload_rx: tokio::sync::mpsc::Receiver<()>,
 ) {
+    enum Wake {
+        Reload,
+        Death(&'static str),
+        Shutdown,
+    }
+
+    let mut consecutive_failures: u32 = 0;
+    let mut last_failure: Option<std::time::Instant> = None;
+
     loop {
         let settings = settings::load().unwrap_or_else(|e| {
             tracing::warn!("settings load failed ({e}); using defaults");
@@ -203,36 +267,84 @@ async fn supervise_watcher(
         let tasks = watcher::Watcher::spawn(handle.clone(), &settings);
         tracing::info!("watcher: spawned {} task(s)", tasks.len());
 
-        // Hold an abort handle per task and spawn a detached logger per task, so
-        // a task that dies on its own is still surfaced. Our reload abort is a
-        // cancellation - logged silently.
+        // Per-task watchdog: signal an *unexpected* completion (Err return or
+        // panic) of any task through one channel, so the select! below learns of
+        // a failure. Clean Ok(()) exits and our own reload aborts (cancellation)
+        // are NOT signalled. Mirrors balanze_cli::watch_cmd. `death_tx` stays in
+        // scope for the iteration, so `death_rx.recv()` only resolves on a real
+        // death, never spuriously on all-senders-dropped.
+        let (death_tx, mut death_rx) = tokio::sync::mpsc::unbounded_channel::<&'static str>();
         let mut aborts = Vec::with_capacity(tasks.len());
         for (label, h) in tasks {
             aborts.push(h.abort_handle());
+            let death_tx = death_tx.clone();
             tokio::spawn(async move {
                 match h.await {
                     Ok(Ok(())) => tracing::debug!("watcher/{label}: exited Ok(())"),
-                    Ok(Err(e)) => tracing::error!("watcher/{label}: returned error: {e}"),
+                    Ok(Err(e)) => {
+                        tracing::error!("watcher/{label}: returned error: {e}");
+                        let _ = death_tx.send(label);
+                    }
                     Err(je) if je.is_cancelled() => {}
-                    Err(je) => tracing::error!("watcher/{label}: panicked/aborted: {je}"),
+                    Err(je) => {
+                        tracing::error!("watcher/{label}: panicked/aborted: {je}");
+                        let _ = death_tx.send(label);
+                    }
                 }
             });
         }
 
-        // Wait for a reload request (or app shutdown when the sender drops).
-        if reload_rx.recv().await.is_none() {
-            for a in aborts {
-                a.abort();
-            }
-            tracing::info!("watcher supervisor: reload channel closed; stopping");
-            return;
-        }
-        // Coalesce a burst of reload ticks into a single re-spawn.
-        while reload_rx.try_recv().is_ok() {}
+        let wake = tokio::select! {
+            r = reload_rx.recv() => r.map_or(Wake::Shutdown, |()| Wake::Reload),
+            Some(label) = death_rx.recv() => Wake::Death(label),
+        };
+
+        // Tear down the current set before the next action. The reload abort
+        // shows up as a cancellation in each watchdog, which is ignored above.
         for a in aborts {
             a.abort();
         }
-        tracing::info!("watcher: settings changed; re-spawning tasks");
+
+        match wake {
+            Wake::Shutdown => {
+                tracing::info!("watcher supervisor: reload channel closed; stopping");
+                return;
+            }
+            Wake::Reload => {
+                while reload_rx.try_recv().is_ok() {} // coalesce a burst
+                consecutive_failures = 0; // user-initiated; not a failure streak
+                tracing::info!("watcher: settings changed; re-spawning tasks");
+            }
+            Wake::Death(label) => {
+                // Surface the affected cell as degraded so the UI shows a warning
+                // rather than silently-stale data. A successful re-spawn emits a
+                // fresh Ok update that clears the error slot.
+                if let Some(source) = watcher::source_for_label(label) {
+                    let _ = handle
+                        .send(state_coordinator::StateMsg::Update(
+                            state_coordinator::SourceUpdate {
+                                source,
+                                result: Err(format!(
+                                    "watcher task '{label}' stopped unexpectedly; retrying"
+                                )),
+                            },
+                        ))
+                        .await;
+                }
+                // Fresh streak if it ran healthy for a while; else escalate.
+                if last_failure.is_some_and(|t| t.elapsed() > FAILURE_RESET_WINDOW) {
+                    consecutive_failures = 0;
+                }
+                last_failure = Some(std::time::Instant::now());
+                let delay = respawn_backoff(consecutive_failures);
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                tracing::warn!(
+                    "watcher: task '{label}' died; re-spawning in {}s",
+                    delay.as_secs()
+                );
+                tokio::time::sleep(delay).await;
+            }
+        }
     }
 }
 
@@ -287,4 +399,20 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::respawn_backoff;
+
+    #[test]
+    fn respawn_backoff_is_exponential_capped_at_60s() {
+        assert_eq!(respawn_backoff(0).as_secs(), 1);
+        assert_eq!(respawn_backoff(1).as_secs(), 2);
+        assert_eq!(respawn_backoff(5).as_secs(), 32);
+        assert_eq!(respawn_backoff(6).as_secs(), 60);
+        // Large shifts must saturate to the cap, never panic on overflow.
+        assert_eq!(respawn_backoff(64).as_secs(), 60);
+        assert_eq!(respawn_backoff(u32::MAX).as_secs(), 60);
+    }
 }

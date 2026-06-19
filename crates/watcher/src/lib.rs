@@ -53,7 +53,7 @@ impl Watcher {
     /// `"openai_poll"`, `"safety"`, `"oauth_poll"`) so the supervisor's
     /// logs don't drift out of sync with the spawn order if a future
     /// refactor reshuffles which task is spawned first. The label is the
-    /// canonical name a maintainer would use to grep for the task — keep
+    /// canonical name a maintainer would use to grep for the task - keep
     /// the strings in lockstep with the module names under
     /// `crates/watcher/src/tasks/`.
     pub fn spawn(
@@ -90,4 +90,46 @@ impl Watcher {
 /// True if a non-empty `BALANZE_OPENAI_KEY` env override is set.
 fn openai_env_key_present() -> bool {
     std::env::var("BALANZE_OPENAI_KEY").is_ok_and(|v| !v.trim().is_empty())
+}
+
+/// Map a watcher task label (as returned by [`Watcher::spawn`]) to the
+/// `state_coordinator::Source` whose data that task feeds. The host supervisor
+/// uses this to surface a `degraded_state` for the right cell when a task dies
+/// unexpectedly. Keep in lockstep with the labels in [`Watcher::spawn`].
+///
+/// `safety` maps to `CodexQuota`: Codex has no notify task of its own, so the
+/// safety poll is its only feeder. The safety poll's other job (re-reading the
+/// statusline snapshot) is just a backstop for the `statusline` notify task,
+/// which keeps running, so statusline is not the cell left dark by a safety death.
+pub fn source_for_label(label: &str) -> Option<state_coordinator::Source> {
+    use state_coordinator::Source;
+    match label {
+        "jsonl" => Some(Source::ClaudeJsonl),
+        "statusline" => Some(Source::ClaudeStatusline),
+        "openai_poll" => Some(Source::OpenAiCosts),
+        "oauth_poll" => Some(Source::ClaudeOAuth),
+        "safety" => Some(Source::CodexQuota),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_for_label;
+    use state_coordinator::Source;
+
+    #[test]
+    fn source_for_label_maps_every_spawn_label() {
+        // Mirrors the labels in `Watcher::spawn`; a drift here means a dead task
+        // would surface no (or the wrong) degraded cell.
+        assert_eq!(source_for_label("jsonl"), Some(Source::ClaudeJsonl));
+        assert_eq!(
+            source_for_label("statusline"),
+            Some(Source::ClaudeStatusline)
+        );
+        assert_eq!(source_for_label("openai_poll"), Some(Source::OpenAiCosts));
+        assert_eq!(source_for_label("oauth_poll"), Some(Source::ClaudeOAuth));
+        assert_eq!(source_for_label("safety"), Some(Source::CodexQuota));
+        assert_eq!(source_for_label("nonexistent"), None);
+    }
 }
