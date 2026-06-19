@@ -24,10 +24,13 @@ impl Watcher {
     /// Spawn all watcher tasks. Returns one `JoinHandle` per task.
     ///
     /// Default-enabled tasks (always spawned):
-    /// 1. `jsonl` — notify-watches `~/.claude/projects/**/*.jsonl`; 300ms debounce.
-    /// 2. `statusline` — notify-watches `<data_dir>/statusline.snapshot.json`; 100ms debounce.
-    /// 3. `safety` - 60s safety re-scan of JSONL + statusline + Codex (skips first tick).
-    ///    Its Codex scan is gated on `settings.providers.codex_enabled`.
+    /// 1. `jsonl` - notify-watches `~/.claude/projects/**/*.jsonl`; 300ms debounce,
+    ///    plus a 60s incremental fallback. Reads via a per-file byte cursor
+    ///    (AGENTS.md §3.1), so neither path does a full reparse after launch.
+    /// 2. `statusline` - notify-watches `<data_dir>/statusline.snapshot.json`; 100ms debounce.
+    /// 3. `safety` - 60s safety re-read of statusline + Codex (skips first tick).
+    ///    Its Codex scan is gated on `settings.providers.codex_enabled`. JSONL is
+    ///    not re-scanned here - the `jsonl` task's 60s fallback covers that.
     ///
     /// Conditionally-spawned tasks (each gated on a `ProviderSettings` toggle so
     /// a `false` value short-circuits before we spawn - no log spam, no API
