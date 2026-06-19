@@ -55,33 +55,38 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
         return;
     };
 
-    // TEMP DIAG (remove after macOS positioning is verified): eprintln so it's
-    // visible in the `tauri dev` terminal regardless of RUST_LOG.
-    eprintln!("BALANZE-DIAG: cursor=({:.0},{:.0})", cursor.x, cursor.y);
-
     let win = match window.outer_size() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("BALANZE-DIAG: FALLBACK outer_size failed ({e})");
             tracing::warn!("popover anchor: outer_size failed ({e}); showing unanchored");
             position_and_show(app);
             return;
         }
     };
 
-    // Monitor under the cursor gives clamp bounds (full monitor, not work area
-    // — fine because we anchor ABOVE the cursor, above a bottom taskbar).
-    let monitor = match app.monitor_from_point(cursor.x, cursor.y) {
-        Ok(Some(m)) => m,
-        Ok(None) => {
-            eprintln!("BALANZE-DIAG: FALLBACK no monitor under cursor");
-            tracing::warn!("popover anchor: no monitor under cursor; showing unanchored");
-            position_and_show(app);
-            return;
-        }
-        Err(e) => {
-            eprintln!("BALANZE-DIAG: FALLBACK monitor_from_point failed ({e})");
-            tracing::warn!("popover anchor: monitor_from_point failed ({e}); showing unanchored");
+    // Find the monitor under the (physical) cursor by testing each monitor's
+    // physical bounds directly. We do NOT use `monitor_from_point`: on macOS it
+    // treats the point as logical, so a physical tray-click coordinate on a
+    // Retina display (e.g. 2222,32) lands off-screen and returns None, sending
+    // the popover to the unanchored fallback. Falls back to the primary monitor
+    // (where the macOS menu bar / tray lives) if no monitor contains the point.
+    let cx = cursor.x as i32;
+    let cy = cursor.y as i32;
+    let monitor = app
+        .available_monitors()
+        .ok()
+        .and_then(|mons| {
+            mons.into_iter().find(|m| {
+                let p = m.position();
+                let s = m.size();
+                cx >= p.x && cx < p.x + s.width as i32 && cy >= p.y && cy < p.y + s.height as i32
+            })
+        })
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let monitor = match monitor {
+        Some(m) => m,
+        None => {
+            tracing::warn!("popover anchor: no monitor found; showing unanchored");
             position_and_show(app);
             return;
         }
@@ -118,23 +123,7 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     x = x.clamp(mon_left, max_x);
     y = y.clamp(mon_top, max_y);
 
-    // TEMP DIAG (remove after macOS positioning is verified).
-    eprintln!(
-        "BALANZE-DIAG: win={}x{} mon_pos=({},{}) mon_size={}x{} work_area_top={} scale={} -> set_position ({}, {})",
-        win.width,
-        win.height,
-        mon_pos.x,
-        mon_pos.y,
-        mon_size.width,
-        mon_size.height,
-        monitor.work_area().position.y,
-        monitor.scale_factor(),
-        x,
-        y,
-    );
-
     if let Err(e) = window.set_position(PhysicalPosition::new(x, y)) {
-        eprintln!("BALANZE-DIAG: FALLBACK set_position failed ({e})");
         tracing::warn!("popover anchor: set_position failed ({e}); showing unanchored");
         position_and_show(app);
         return;
