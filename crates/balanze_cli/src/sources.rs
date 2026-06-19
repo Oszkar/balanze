@@ -311,8 +311,8 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
     {
         Ok(costs) => {
             info!(
-                "openai: fetched costs total_usd={} buckets={} truncated={}",
-                costs.total_usd,
+                "openai: fetched costs total_micro_usd={} buckets={} truncated={}",
+                costs.total_micro_usd,
                 costs.by_line_item.len(),
                 costs.truncated
             );

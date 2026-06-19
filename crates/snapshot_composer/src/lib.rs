@@ -134,6 +134,7 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
         .unwrap_or_default();
 
     Snapshot {
+        schema_version: state_coordinator::SNAPSHOT_SCHEMA_VERSION,
         fetched_at: now,
         claude_oauth,
         claude_oauth_error,

@@ -36,4 +36,6 @@ pub use coordinator::{StateCoordinatorHandle, spawn};
 pub use jsonl::{JsonlCells, summarize_jsonl};
 pub use messages::{ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateMsg};
 pub use sink::{LogSink, NullSink, Sink};
-pub use snapshot::{JsonlSnapshot, Snapshot, WindowPace, pace_for_oauth, record_error};
+pub use snapshot::{
+    JsonlSnapshot, SNAPSHOT_SCHEMA_VERSION, Snapshot, WindowPace, pace_for_oauth, record_error,
+};

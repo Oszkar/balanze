@@ -68,11 +68,11 @@ export interface CodexQuotaSnapshot {
   rate_limit_reached: boolean;
 }
 
-export interface LineItemCost { line_item: string; amount_usd: number; }
+export interface LineItemCost { line_item: string; amount_micro_usd: number; }
 export interface OpenAiCosts {
   start_time: string;
   end_time: string;
-  total_usd: number;
+  total_micro_usd: number;
   by_line_item: LineItemCost[];
   truncated: boolean;
   fetched_at: string;
@@ -99,6 +99,7 @@ export interface WindowPace {
 }
 
 export interface Snapshot {
+  schema_version: number;
   fetched_at: string;
   claude_oauth: ClaudeOAuthSnapshot | null;
   claude_oauth_error: string | null;

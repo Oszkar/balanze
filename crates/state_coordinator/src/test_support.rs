@@ -44,7 +44,7 @@ pub(crate) fn openai_costs() -> OpenAiCosts {
     OpenAiCosts {
         start_time: fixture_now(),
         end_time: fixture_now(),
-        total_usd: 0.42,
+        total_micro_usd: 420_000,
         by_line_item: vec![],
         truncated: false,
         fetched_at: fixture_now(),

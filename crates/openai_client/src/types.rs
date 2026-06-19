@@ -4,17 +4,17 @@ use thiserror::Error;
 
 /// Parsed result from `GET /v1/organization/costs`.
 ///
-/// All monetary fields are USD as f64 (the endpoint returns them as
-/// `amount.value` numbers with `amount.currency: "usd"`). We do not convert
-/// to micro-USD here — currency math against an external source's values
-/// is the caller's concern.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Monetary fields are `i64` micro-USD (AGENTS.md §2.1). The endpoint returns
+/// USD numbers (`amount.value`, `amount.currency: "usd"`); we convert each at
+/// the parse boundary so every money cell in the `Snapshot` is the same kind of
+/// integer and never has to be summed or threshold-compared as `f64`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenAiCosts {
     pub start_time: DateTime<Utc>,
     pub end_time: DateTime<Utc>,
-    /// Sum of every bucket's every result amount, in USD. The "headline" number.
-    pub total_usd: f64,
-    /// Per-line-item breakdown, sorted by `amount_usd` descending.
+    /// Sum of every bucket's every result amount, in micro-USD. The "headline" number.
+    pub total_micro_usd: i64,
+    /// Per-line-item breakdown, sorted by `amount_micro_usd` descending.
     /// Each entry aggregates across all time buckets returned.
     pub by_line_item: Vec<LineItemCost>,
     /// True if the API said it had more pages and we didn't follow them.
@@ -25,11 +25,11 @@ pub struct OpenAiCosts {
     pub fetched_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineItemCost {
     /// e.g. `"gpt-5"`, `"o1-mini"`, or `"unknown"` when the API returned null.
     pub line_item: String,
-    pub amount_usd: f64,
+    pub amount_micro_usd: i64,
 }
 
 #[derive(Debug, Error)]

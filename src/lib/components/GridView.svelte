@@ -58,7 +58,7 @@
   {/if}
   {#if hasOpenAI}
     {#if openai}
-      <BilledCell amount={microUsdToDollars(Math.round(openai.total_usd * 1_000_000))}
+      <BilledCell amount={microUsdToDollars(openai.total_micro_usd)}
         note="admin api · this cycle" title={PROV.openaiBilled.title} />
     {:else}
       <BilledCell hatch note={snapshot.openai_error ? '✗ fetch failed' : 'not configured'} title="OpenAI spend unavailable" />

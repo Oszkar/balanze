@@ -53,7 +53,7 @@
             elapsed: codexElapsedFraction(codex.primary) * 100, tone: quotaTone(codex.primary.used_percent), resetsAt: codex.primary.resets_at }]
         : []}
       billed={openai
-        ? { amount: microUsdToDollars(Math.round(openai.total_usd * 1_000_000)), note: 'this cycle', badge: 'real' }
+        ? { amount: microUsdToDollars(openai.total_micro_usd), note: 'this cycle', badge: 'real' }
         : { amount: null, note: snapshot.openai_error ? '✗ fetch failed' : 'spend - unavailable', badge: 'na' }} />
   {/if}
 </div>

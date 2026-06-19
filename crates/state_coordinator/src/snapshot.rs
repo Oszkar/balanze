@@ -81,8 +81,24 @@ pub fn pace_for_oauth(oauth: &ClaudeOAuthSnapshot, now: DateTime<Utc>) -> Vec<Wi
 // PartialEq is intentionally NOT derived: `ClaudeOAuthSnapshot` doesn't
 // implement it, and the upstream change to add it would force a float-equality
 // debate that doesn't pay off. Tests compare individual fields.
+/// Schema version of the in-memory + `get_snapshot` IPC `Snapshot` shape.
+/// Bumped when the payload changes in a way a consumer must notice. Mirrors the
+/// `settings` crate's `version` discipline. The `--json` presentation DTO
+/// carries its own version (see `balanze_cli::json_output`). Durable
+/// `UsageEvent` / history versioning is intentionally deferred to the SQLite
+/// persistence work, where the on-disk format is actually designed.
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+
+fn default_snapshot_schema_version() -> u32 {
+    SNAPSHOT_SCHEMA_VERSION
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// Schema version of this payload (`SNAPSHOT_SCHEMA_VERSION`). serde-default
+    /// so an older or partial document still deserializes.
+    #[serde(default = "default_snapshot_schema_version")]
+    pub schema_version: u32,
     /// Wall-clock time of the most recent coordinator-side merge. Updated on
     /// every successful `Update` message.
     pub fetched_at: DateTime<Utc>,
@@ -135,6 +151,7 @@ impl Snapshot {
     /// startup before any source has reported in.
     pub fn empty(now: DateTime<Utc>) -> Self {
         Self {
+            schema_version: SNAPSHOT_SCHEMA_VERSION,
             fetched_at: now,
             claude_oauth: None,
             claude_oauth_error: None,
