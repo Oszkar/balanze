@@ -54,7 +54,7 @@ use std::time::{Duration, Instant};
 use state_coordinator::{Sink, Snapshot, Source};
 
 use crate::json_output;
-use crate::write_compact;
+use crate::render::write_compact;
 
 /// How close two frames must arrive before the second is dropped.
 ///
