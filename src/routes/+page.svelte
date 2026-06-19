@@ -1,11 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { usage } from '$lib/stores/usage.svelte';
+  import { hideWindow } from '$lib/ipc';
   import Popover from '$lib/components/Popover.svelte';
 
   onMount(() => {
     usage.init();
-    return () => usage.destroy();
+    // ESC dismisses the popover (same as clicking away / blur-hide). Outside
+    // the Tauri runtime (browser dev) hide() rejects - swallow it.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') void hideWindow().catch(() => {});
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      usage.destroy();
+    };
   });
 </script>
 

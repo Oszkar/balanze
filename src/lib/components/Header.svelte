@@ -10,7 +10,7 @@
   });
 </script>
 <div class="hd">
-  <div><div class="name">balanze</div><div class="sub">{view === 'grid' ? 'measured usage' : 'by provider'} · ⟳ {ago}</div></div>
+  <div><div class="name">balanze</div><div class="sub">{view === 'grid' ? 'measured usage' : 'by provider'} · {ago} ago</div></div>
   <div class="right">
     <DensityToggle bind:view />
     <button class="icon" title="Refresh now" onclick={onRefresh}>↻</button>

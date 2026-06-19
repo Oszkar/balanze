@@ -16,7 +16,7 @@
   <div class="hd"><span class="name">{name}</span><span class="plan">{plan}</span></div>
   {#each windows as w (w.label)}
     <div class="brow">
-      <div class="blabel"><span class="bl">{w.label}</span><span class="br">{w.used.toFixed(0)}% · ↻ {relativeReset(w.resetsAt)}</span></div>
+      <div class="blabel"><span class="bl">{w.label}</span><span class="br">{w.used.toFixed(0)}% · {relativeReset(w.resetsAt)} left</span></div>
       <UsageBar used={w.used} elapsed={w.elapsed} tone={w.tone} />
     </div>
   {/each}

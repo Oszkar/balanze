@@ -7,6 +7,9 @@ import type { Settings, StatuslineWire } from './types/settings';
 export const getSnapshot = (): Promise<Snapshot> => invoke<Snapshot>('get_snapshot');
 export const refreshNow = (): Promise<void> => invoke<void>('refresh_now');
 
+// Hide the popover window (ESC-to-dismiss; mirrors the blur-hide behavior).
+export const hideWindow = (): Promise<void> => getCurrentWindow().hide();
+
 // Non-secret settings (settings.json shape). `get_settings` never returns any
 // API key; `set_api_key` writes the key to the OS keychain and flips the
 // provider's enable flag backend-side (AGENTS.md §3.4).

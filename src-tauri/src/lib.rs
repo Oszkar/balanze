@@ -90,9 +90,14 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     let mon_right = mon_pos.x + mon_size.width as i32;
     let mon_bottom = mon_pos.y + mon_size.height as i32;
 
-    // Bottom-right corner at the cursor.
-    let mut x = cursor.x as i32 - win_w;
-    let mut y = cursor.y as i32 - win_h;
+    // Anchor differently per platform. macOS has a top menu bar (the tray icon
+    // lives there), so the popover drops DOWN from the bar - centered under the
+    // click, top edge just below it. Windows' tray is on a bottom taskbar, so
+    // the window's bottom-right corner anchors at the cursor (opens up-and-left).
+    #[cfg(target_os = "macos")]
+    let (mut x, mut y) = (cursor.x as i32 - win_w / 2, cursor.y as i32 + 8);
+    #[cfg(not(target_os = "macos"))]
+    let (mut x, mut y) = (cursor.x as i32 - win_w, cursor.y as i32 - win_h);
 
     // Clamp fully on-monitor. `max_x`/`max_y` can fall below the monitor origin
     // if the window is wider/taller than the monitor; `max(left, …)` keeps the
