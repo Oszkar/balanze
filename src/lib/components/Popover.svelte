@@ -34,7 +34,10 @@
 </div>
 
 <style>
-  .pop { width: 100%; min-height: 100vh; background: var(--paper); border-radius: var(--radius); position: relative; overflow: hidden; }
+  /* 1px adaptive border so the window edges are visible even when the popover
+     opens over a same-colored background (white-on-white / dark-on-dark). */
+  .pop { width: 100%; min-height: 100vh; background: var(--paper); border-radius: var(--radius);
+         border: 1px solid var(--seg-border); position: relative; overflow: hidden; }
   .caret { position: absolute; top: -7px; left: 30px; width: 14px; height: 14px; background: var(--paper);
-           border-left: 1px solid var(--hair); border-top: 1px solid var(--hair); transform: rotate(45deg); }
+           border-left: 1px solid var(--seg-border); border-top: 1px solid var(--seg-border); transform: rotate(45deg); }
 </style>

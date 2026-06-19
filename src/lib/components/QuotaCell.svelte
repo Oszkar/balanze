@@ -14,7 +14,7 @@
   </div>
   <UsageBar {used} {elapsed} {tone} />
   <div class="meta">
-    <span class:warn={stale}>{stale ? `⚠ fallback` : `↻ ${relativeReset(resetsAt)}`}</span>
+    <span class:warn={stale}>{stale ? `⚠ fallback` : `${relativeReset(resetsAt)} left`}</span>
     <span>{secondary}</span>
   </div>
 </div>

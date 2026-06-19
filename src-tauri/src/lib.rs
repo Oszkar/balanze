@@ -64,17 +64,29 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
         }
     };
 
-    // Monitor under the cursor gives clamp bounds (full monitor, not work area
-    // — fine because we anchor ABOVE the cursor, above a bottom taskbar).
-    let monitor = match app.monitor_from_point(cursor.x, cursor.y) {
-        Ok(Some(m)) => m,
-        Ok(None) => {
-            tracing::warn!("popover anchor: no monitor under cursor; showing unanchored");
-            position_and_show(app);
-            return;
-        }
-        Err(e) => {
-            tracing::warn!("popover anchor: monitor_from_point failed ({e}); showing unanchored");
+    // Find the monitor under the (physical) cursor by testing each monitor's
+    // physical bounds directly. We do NOT use `monitor_from_point`: on macOS it
+    // treats the point as logical, so a physical tray-click coordinate on a
+    // Retina display (e.g. 2222,32) lands off-screen and returns None, sending
+    // the popover to the unanchored fallback. Falls back to the primary monitor
+    // (where the macOS menu bar / tray lives) if no monitor contains the point.
+    let cx = cursor.x as i32;
+    let cy = cursor.y as i32;
+    let monitor = app
+        .available_monitors()
+        .ok()
+        .and_then(|mons| {
+            mons.into_iter().find(|m| {
+                let p = m.position();
+                let s = m.size();
+                cx >= p.x && cx < p.x + s.width as i32 && cy >= p.y && cy < p.y + s.height as i32
+            })
+        })
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let monitor = match monitor {
+        Some(m) => m,
+        None => {
+            tracing::warn!("popover anchor: no monitor found; showing unanchored");
             position_and_show(app);
             return;
         }
@@ -90,9 +102,18 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     let mon_right = mon_pos.x + mon_size.width as i32;
     let mon_bottom = mon_pos.y + mon_size.height as i32;
 
-    // Bottom-right corner at the cursor.
-    let mut x = cursor.x as i32 - win_w;
-    let mut y = cursor.y as i32 - win_h;
+    // Anchor differently per platform. macOS has a top menu bar (the tray icon
+    // lives there), so the popover drops DOWN from the bar: centered under the
+    // click (~ the icon), top edge at the work-area top - i.e. just below the
+    // menu bar. `work_area` excludes the menu bar, so its top is the correct
+    // dock line regardless of bar height (notch displays) or DPI scaling, which
+    // a fixed pixel offset from the cursor got wrong. Windows' tray is on a
+    // bottom taskbar, so the window's bottom-right corner anchors at the cursor
+    // (opens up-and-left).
+    #[cfg(target_os = "macos")]
+    let (mut x, mut y) = (cursor.x as i32 - win_w / 2, monitor.work_area().position.y);
+    #[cfg(not(target_os = "macos"))]
+    let (mut x, mut y) = (cursor.x as i32 - win_w, cursor.y as i32 - win_h);
 
     // Clamp fully on-monitor. `max_x`/`max_y` can fall below the monitor origin
     // if the window is wider/taller than the monitor; `max(left, …)` keeps the
@@ -245,6 +266,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::refresh_now,
+            commands::hide_window,
             commands::get_settings,
             commands::set_settings,
             commands::set_api_key,
