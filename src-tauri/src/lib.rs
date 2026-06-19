@@ -179,7 +179,25 @@ fn boot_backend(app: &App, rt: &tokio::runtime::Handle) {
     let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<()>(8);
     app.manage(commands::WatcherReload(reload_tx));
 
-    rt.spawn(supervise_watcher(handle, reload_rx));
+    // The watcher supervisor is itself a long-running task (AGENTS.md §3.2). If it
+    // panics, the reload + self-heal machinery is gone and the surviving watcher
+    // tasks stop being supervised - the same silent death this PR closes, one level
+    // up. So monitor it like the coordinator below: a genuine panic is fatal; a
+    // clean return or a shutdown abort is benign.
+    let supervisor_join = rt.spawn(supervise_watcher(handle, reload_rx));
+    let supervisor_app = app.handle().clone();
+    rt.spawn(async move {
+        match supervisor_join.await {
+            Ok(()) => tracing::info!("watcher supervisor stopped (shutdown)"),
+            Err(je) if je.is_cancelled() => {
+                tracing::info!("watcher supervisor aborted (shutdown)")
+            }
+            Err(je) => {
+                tracing::error!("watcher supervisor panicked ({je}); exiting");
+                supervisor_app.exit(1);
+            }
+        }
+    });
 
     // The coordinator is the actor that owns the Snapshot and the only tray/IPC
     // sink, so its death is fatal: without it the app is a frozen zombie. A
