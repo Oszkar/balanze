@@ -11,13 +11,13 @@
 //! 1. **Normalizes every money cell** to `{ value_micro_usd, source,
 //!    confidence, details }`. A consumer reads `.anthropic_api_cost.value_micro_usd`,
 //!    `.openai.value_micro_usd`, and `.claude_oauth.extra_usage.value_micro_usd`
-//!    uniformly — no provider-specific keys for the headline number. Inner
+//!    uniformly - no provider-specific keys for the headline number. Inner
 //!    rich detail (per-model breakdown, by-line-item, currency, etc.) stays
 //!    under `details` so nothing is lost.
 //! 2. **Tags source + confidence on every money cell.** A JSONL × list-price
 //!    estimate (`jsonl_list_price` / `estimate`) cannot be confused with the
 //!    OpenAI Admin Costs API figure (`openai_admin_costs` / `real`) or with
-//!    the pay-as-you-go overage (`extra_usage_billed` / `real`) — the
+//!    the pay-as-you-go overage (`extra_usage_billed` / `real`) - the
 //!    distinction is explicit in the wire shape, not buried in a label.
 //! 3. **Redacts account-identifying fields by default.** `claude_oauth.org_uuid`
 //!    and `codex_quota.session_id` are nullified / replaced with `<redacted>`
@@ -51,7 +51,7 @@ pub fn render(snap: &Snapshot, verbose: bool) -> Result<String, serde_json::Erro
 /// Serialize `snap` as a single-line JSON document suitable for JSONL
 /// streams (e.g. `balanze-cli --watch --json | jq`). Same data shape +
 /// redaction rules as [`render`], but no embedded newlines so each
-/// snapshot is exactly one line — preserving the "one JSON object per
+/// snapshot is exactly one line - preserving the "one JSON object per
 /// line" invariant that line-oriented consumers depend on.
 pub fn render_jsonl(snap: &Snapshot, verbose: bool) -> Result<String, serde_json::Error> {
     let doc = JsonDoc::from_snapshot(snap, verbose);
@@ -124,7 +124,7 @@ struct JsonClaudeOAuth<'a> {
     subscription_type: Option<&'a str>,
     rate_limit_tier: Option<&'a str>,
     /// Identifies the user's Anthropic consumer subscription org. Set to
-    /// `None` (serialized as `null`) when not verbose — safe to paste publicly.
+    /// `None` (serialized as `null`) when not verbose - safe to paste publicly.
     org_uuid: Option<&'a str>,
     fetched_at: DateTime<Utc>,
 }
@@ -147,7 +147,7 @@ struct JsonExtraUsage<'a> {
     /// Headline number for downstream "how much is the user spending" reads:
     /// the spent amount (`used_credits`), in i64 micro-USD per AGENTS.md §2.1.
     value_micro_usd: i64,
-    /// The pay-as-you-go ceiling — preserved at the top level because both
+    /// The pay-as-you-go ceiling - preserved at the top level because both
     /// the limit and the spent figure are billed-real numbers a consumer
     /// might want without diving into details.
     monthly_limit_micro_usd: i64,
@@ -223,7 +223,7 @@ impl<'a> From<&'a Cost> for JsonAnthropicApiCost<'a> {
 struct JsonOpenAi<'a> {
     /// OpenAI's wire shape is `total_usd: f64`. We convert to i64 micro-USD
     /// at the JSON boundary (AGENTS.md §2.1: integer math everywhere
-    /// internally; f64 only at the display boundary — `--json` IS that
+    /// internally; f64 only at the display boundary - `--json` IS that
     /// boundary for scripts) so consumers can read the same
     /// `.value_micro_usd` they read on other cells.
     value_micro_usd: i64,
@@ -246,7 +246,7 @@ struct JsonOpenAiDetails<'a> {
 
 impl<'a> From<&'a OpenAiCosts> for JsonOpenAi<'a> {
     fn from(o: &'a OpenAiCosts) -> Self {
-        // Round on conversion — `*_usd * 1_000_000` then floor-as-i64 would
+        // Round on conversion - `*_usd * 1_000_000` then floor-as-i64 would
         // lose half a micro-USD on every cell.
         let value_micro_usd = (o.total_usd * 1_000_000.0).round() as i64;
         Self {
@@ -266,7 +266,7 @@ impl<'a> From<&'a OpenAiCosts> for JsonOpenAi<'a> {
 }
 
 // ----------------------------------------------------------------------------
-// codex_quota (rate-limit % — not a money cell, but redaction applies)
+// codex_quota (rate-limit % - not a money cell, but redaction applies)
 // ----------------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -301,7 +301,7 @@ impl<'a> JsonCodexQuota<'a> {
 }
 
 // ----------------------------------------------------------------------------
-// claude_statusline (statusLine file payload — session cost + rate windows)
+// claude_statusline (statusLine file payload - session cost + rate windows)
 // ----------------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -311,7 +311,7 @@ struct JsonClaudeStatusline {
     five_hour: Option<JsonRateWindow>,
     seven_day: Option<JsonRateWindow>,
     /// Session cost converted from i64 micro-USD to f64 dollars at the JSON
-    /// boundary (AGENTS.md §2.1 — f64 only at display).
+    /// boundary (AGENTS.md §2.1 - f64 only at display).
     session_cost_usd: Option<f64>,
     claude_code_version: Option<String>,
     source: &'static str,
@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn claude_jsonl_passes_through_without_tagging() {
-        // Tokens aren't money — claude_jsonl is rendered as-is, no
+        // Tokens aren't money - claude_jsonl is rendered as-is, no
         // value_micro_usd injection.
         let v = render_to_value(&populated_snapshot(), false);
         assert_eq!(v["claude_jsonl"]["files_scanned"], 3);

@@ -84,7 +84,7 @@ fn full_pipeline_populates_anthropic_api_cost_in_snapshot() {
         "a fresh snapshot has no error slot set"
     );
 
-    // Spot-check structure: the fixture has 4 raw JSONL lines — 3 distinct
+    // Spot-check structure: the fixture has 4 raw JSONL lines - 3 distinct
     // assistant messages (sonnet-4-6 ×2, haiku-4-5 ×1) plus 1 line that
     // duplicates msg_fixture_001's (message_id, request_id) with inflated
     // tokens. `load_fixture_events` runs `dedup_events`, so the pipeline
@@ -185,7 +185,7 @@ fn full_pipeline_populates_codex_quota_in_snapshot() {
 #[test]
 fn snapshot_serializes_with_new_cost_and_codex_fields() {
     // Pins the in-memory `Snapshot` serde shape (used by the future Tauri
-    // IPC `get_snapshot` command — AGENTS.md §4 #9). The CLI's `--json`
+    // IPC `get_snapshot` command - AGENTS.md §4 #9). The CLI's `--json`
     // output goes through `balanze_cli::json_output` instead of raw Snapshot
     // serde and has its own dedicated tests; this test guards the underlying
     // type so a missing Serialize derive on a transitive type like
@@ -206,7 +206,7 @@ fn snapshot_serializes_with_new_cost_and_codex_fields() {
 
     let json = serde_json::to_string_pretty(&snapshot).expect("snapshot serializes");
 
-    // Spot-check the wire shape — these field names are the public
+    // Spot-check the wire shape - these field names are the public
     // JSON contract for `balanze status --json`. Renaming any of them
     // is a breaking change for downstream consumers (none yet, but
     // pinning the contract now prevents accidental future drift).
@@ -284,7 +284,7 @@ impl SnapshotSources for FixtureSources {
 }
 
 // NOTE: despite the name, this currently exercises only the CLI's `compose()`
-// path — it does NOT assert CLI ≡ watcher parity. The watcher builds snapshots
+// path - it does NOT assert CLI ≡ watcher parity. The watcher builds snapshots
 // through its own `scan_and_compute` pipeline (crates/watcher/src/tasks/jsonl.rs)
 // and notably passes `window_anchor: None` where `compose()` anchors to the
 // OAuth 5h reset, so the two paths can diverge on the JSONL rolling window.
@@ -326,7 +326,7 @@ async fn compose_parity_against_fixtures() {
 
     // PARITY GUARD (AGENTS.md §4 #8): `compose()` must produce exactly what the
     // shared `state_coordinator::summarize_jsonl` helper produces for the same
-    // events/now/anchor — and that is the SAME helper the live coordinator runs
+    // events/now/anchor - and that is the SAME helper the live coordinator runs
     // on the watcher path. This is what actually prevents the CLI and watcher
     // composition paths from drifting (the earlier version of this test only
     // checked that compose populated cells, which is why a `window_anchor: None`

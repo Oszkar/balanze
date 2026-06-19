@@ -15,7 +15,7 @@ pub(crate) fn cmd_statusline() -> Result<()> {
         let _ = writeln!(stdout, "bal (statusline: stdin unreadable)");
         return Ok(());
     }
-    // Parse once — both the human formatter and the snapshot writer need the
+    // Parse once - both the human formatter and the snapshot writer need the
     // result. Parse error → print the error line and skip the write (no good
     // payload to persist for the watcher).
     let snap = match claude_statusline::parse(&buf) {
@@ -43,10 +43,10 @@ pub(crate) fn cmd_statusline() -> Result<()> {
 fn format_statusline_from_snapshot(snap: &claude_statusline::StatuslineSnapshot) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(rl) = &snap.rate_limits {
-        // {:.0}: a statusline is a glance — sub-1% truncation is acceptable
+        // {:.0}: a statusline is a glance - sub-1% truncation is acceptable
         // here. compact_anthropic_quota uses {:.1} to avoid the "0%" == "no
         // usage" ambiguity in the full terminal view; that concern does not
-        // apply to a terse one-liner. Intentional inconsistency — do not
+        // apply to a terse one-liner. Intentional inconsistency - do not
         // "align" these without re-reading both rationales.
         if let Some(w) = &rl.five_hour {
             parts.push(format!("5h {:.0}%", w.used_percent));
@@ -57,7 +57,7 @@ fn format_statusline_from_snapshot(snap: &claude_statusline::StatuslineSnapshot)
     }
     if let Some(c) = snap.session_cost_micro_usd {
         // `sess-est`, not `sess`: this is a Claude-side session estimate
-        // (claude_statusline/types.rs:22) — a distinct cost tier from the
+        // (claude_statusline/types.rs:22) - a distinct cost tier from the
         // JSONL list-price estimate and the real `extra_usage` overage.
         // The qualifier mirrors compact_anthropic_quota's `est-leverage`
         // discipline so a statusline glance can't be mistaken for billed $.
@@ -84,11 +84,10 @@ fn format_statusline(payload: &str) -> String {
 }
 
 /// Writes the parsed statusline snapshot to `<data_dir>/statusline.snapshot.json`
-/// — where `<data_dir>` is `directories::ProjectDirs.data_dir()`, which
-/// already includes the per-OS Balanze subpath — for the watcher
-/// to notify-watch.
+/// (where `<data_dir>` is `directories::ProjectDirs.data_dir()`, which already
+/// includes the per-OS Balanze subpath) for the watcher to notify-watch.
 ///
-/// Write failures log at `warn!` and are swallowed — Claude Code's statusLine
+/// Write failures log at `warn!` and are swallowed - Claude Code's statusLine
 /// call must not fail because Balanze's IPC file failed (which would cause the
 /// user's statusLine to disappear from their terminal).
 fn write_statusline_snapshot(snap: &claude_statusline::StatuslineSnapshot) {
@@ -105,7 +104,7 @@ fn write_statusline_snapshot(snap: &claude_statusline::StatuslineSnapshot) {
 /// Resolves the path to the watcher IPC file.
 ///
 /// When `BALANZE_DATA_DIR_OVERRIDE` is set, the snapshot file lands at
-/// `<override>/statusline.snapshot.json` — intended for tests only.
+/// `<override>/statusline.snapshot.json` - intended for tests only.
 /// In normal operation, the path follows `directories::ProjectDirs` so all
 /// persistent locations go through the same crate (AGENTS.md §2.1 convention).
 fn statusline_snapshot_path() -> Option<std::path::PathBuf> {
@@ -122,7 +121,7 @@ mod statusline_tests {
 
     /// Process-wide lock for tests that mutate a shared environment variable.
     /// Cargo test parallelizes per-crate by default; two tests that both
-    /// `set_var(BALANZE_DATA_DIR_OVERRIDE, …)` with different values would
+    /// `set_var(BALANZE_DATA_DIR_OVERRIDE, ...)` with different values would
     /// otherwise race and read each other's values. The lock serializes them.
     /// (We avoid adding `serial_test` as a dev-dep just for this one
     /// crate-internal need.)
@@ -134,7 +133,7 @@ mod statusline_tests {
     /// duration so no concurrent test can observe a half-set state.
     ///
     /// Field-drop order is declaration order, and `Drop::drop` runs before
-    /// any field drops — so the restore happens first, then `_lock` releases
+    /// any field drops - so the restore happens first, then `_lock` releases
     /// last. A poisoned lock (from a panicked predecessor) is recovered via
     /// `into_inner()`: we still want a consistent env-var state for this
     /// test, and the predecessor's `Drop` has already restored its part.
@@ -156,7 +155,7 @@ mod statusline_tests {
     }
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            // SAFETY: see `EnvGuard::set` — ENV_LOCK is still held here, so the
+            // SAFETY: see `EnvGuard::set` - ENV_LOCK is still held here, so the
             // restore is serialized against all other env-touching tests.
             // set_var/remove_var are unsafe as of edition 2024.
             unsafe {

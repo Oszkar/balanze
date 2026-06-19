@@ -25,7 +25,7 @@ use tracing::{info, warn};
 // The source-orchestration policy now lives in `snapshot_composer::compose`
 // (AGENTS.md §4 #8): the CLI runs it via `LiveSources`, the future watcher
 // will run it via its own `SnapshotSources` impl, and `integration_4quadrant`
-// runs it via `FixtureSources` — one policy, no silent divergence.
+// runs it via `FixtureSources` - one policy, no silent divergence.
 pub(crate) async fn build_snapshot() -> Snapshot {
     snapshot_composer::compose(&LiveSources, Utc::now()).await
 }
@@ -39,10 +39,12 @@ impl snapshot_composer::SnapshotSources for LiveSources {
         live_fetch_oauth().await
     }
     async fn load_claude_events(&self) -> Result<(Vec<UsageEvent>, usize)> {
-        live_load_claude_events()
+        // Sync filesystem walk + parse; keep it off the runtime worker, mirroring
+        // fetch_oauth below (AGENTS.md §2.1 - never block the async runtime).
+        tokio::task::spawn_blocking(live_load_claude_events).await?
     }
     async fn fetch_codex_quota(&self) -> Result<Option<codex_local::CodexQuotaSnapshot>> {
-        live_fetch_codex_quota()
+        tokio::task::spawn_blocking(live_fetch_codex_quota).await?
     }
     async fn fetch_openai(&self) -> Result<Option<OpenAiCosts>> {
         live_fetch_openai().await
@@ -50,11 +52,11 @@ impl snapshot_composer::SnapshotSources for LiveSources {
 }
 
 /// Load + dedup all UsageEvents from `~/.claude/projects/`. Shared input
-/// for both the window summary and the claude_cost synthesis — we don't
+/// for both the window summary and the claude_cost synthesis - we don't
 /// want to walk + parse 491 JSONL files twice per `balanze-cli` invocation.
 ///
 /// Returns `(events, files_scanned)`. Files that fail to read or parse
-/// are logged (warn level) but don't fail the whole call — matches the
+/// are logged (warn level) but don't fail the whole call - matches the
 /// existing tolerant policy.
 fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
     // Union ALL existing project roots: a dual-install machine can have both
@@ -63,7 +65,7 @@ fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
     // any session that appears under more than one root.
     let roots = find_all_claude_projects_dirs();
     if roots.is_empty() {
-        // No projects dir anywhere — surface the canonical FileMissing error
+        // No projects dir anywhere - surface the canonical FileMissing error
         // (compose maps it to claude_jsonl_error), preserving the prior
         // single-root "JSONL source failed" behavior rather than an empty-Ok.
         find_claude_projects_dir()?;
@@ -82,10 +84,10 @@ fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
     }
     // No files collected from ANY root AND at least one root failed to walk
     // (e.g. permission denied) ⇒ surface that error rather than reporting an
-    // empty window that may be wrong — the unreadable root could hold events.
+    // empty window that may be wrong - the unreadable root could hold events.
     // (This also fires when another root walked successfully but was empty:
     // an unreadable root must not masquerade as an empty-but-fine result.)
-    // A partial success — ≥1 file found on any root — keeps what walked and
+    // A partial success - ≥1 file found on any root - keeps what walked and
     // only warns about the failed roots, above.
     if files.is_empty() {
         if let Some(e) = walk_err {
@@ -129,7 +131,7 @@ fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
 }
 
 /// Read the latest Codex rate-limit snapshot. Treats "Codex not installed"
-/// as `Ok(None)` (not a failure — just an unconfigured source); only
+/// as `Ok(None)` (not a failure - just an unconfigured source); only
 /// surfaces actual errors (permission denied, schema drift, etc.).
 fn live_fetch_codex_quota() -> Result<Option<codex_local::CodexQuotaSnapshot>> {
     match codex_local::read_codex_quota() {
@@ -208,6 +210,9 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
     let mut oauth = creds.claude_ai_oauth;
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
+        // Bound a single stalled request - fail_fast() stops retries, not a hung
+        // connection (AGENTS.md §3.1).
+        .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
     // Refresh only a source we own (a file). The macOS Keychain entry is Claude
@@ -293,6 +298,7 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
     };
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
+        .timeout(std::time::Duration::from_secs(30))
         .build()?;
     // One-shot CLI must not block on provider backoff; watcher passes standard().
     match costs_this_month(
@@ -313,10 +319,10 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
             Ok(Some(costs))
         }
         Err(OpenAiError::AuthInvalid { .. }) => Err(anyhow!(
-            "OpenAI admin key rejected (HTTP 401). Run `balanze-cli set-openai-key` with a fresh `sk-admin-…` key."
+            "OpenAI admin key rejected (HTTP 401). Run `balanze-cli set-openai-key` with a fresh `sk-admin-...` key."
         )),
         Err(OpenAiError::InsufficientScope { .. }) => Err(anyhow!(
-            "OpenAI returned 403. organization/costs requires an admin API key (`sk-admin-…`), not a project or service-account key. Generate one at https://platform.openai.com/settings/organization/admin-keys."
+            "OpenAI returned 403. organization/costs requires an admin API key (`sk-admin-...`), not a project or service-account key. Generate one at https://platform.openai.com/settings/organization/admin-keys."
         )),
         Err(e) => Err(e.into()),
     }

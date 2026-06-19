@@ -23,7 +23,7 @@ use crate::sinks::{JsonlSink, StdoutSink};
 /// Entry-point called by `cmd_status` (and the `--watch` top-level alias)
 /// when `--watch` is present.
 ///
-/// * `json` — if `true`, uses [`JsonlSink`]; otherwise uses [`StdoutSink`].
+/// * `json` - if `true`, uses [`JsonlSink`]; otherwise uses [`StdoutSink`].
 pub(crate) fn run_watch_mode(json: bool) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -55,9 +55,9 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
     // *unexpected* completion (Err return OR panic) through a single mpsc,
     // so the top-level `select!` learns about any task failure without
     // needing `futures::select_all` or `JoinSet` (neither is a workspace
-    // dep today). Clean `Ok(Ok(()))` exits — e.g. `openai_poll` when no
+    // dep today). Clean `Ok(Ok(()))` exits - e.g. `openai_poll` when no
     // key is configured, `jsonl` when no Claude projects dir exists,
-    // `oauth_poll` when credentials are absent at startup — are NOT
+    // `oauth_poll` when credentials are absent at startup - are NOT
     // signalled. Each of those tasks is designed to exit clean when its
     // upstream isn't present; treating that as fatal would break
     // `--watch` for any user missing one of the providers (which is the
@@ -91,7 +91,7 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
 
     tokio::select! {
         res = tokio::signal::ctrl_c() => {
-            // `ctrl_c()` returns io::Result<()> — installing the OS signal
+            // `ctrl_c()` returns io::Result<()> - installing the OS signal
             // handler can theoretically fail (process signal mask trouble
             // on exotic platforms). Surface that as an explicit error
             // rather than silently treating it like a real Ctrl-C.
