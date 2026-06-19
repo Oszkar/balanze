@@ -6,28 +6,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+## [0.3.1] - Settings & trust - 2026-06-20
+
+The Settings UI lands - keys, live provider toggles, statusLine wiring - alongside the trust pass: real keychain persistence on Windows, the macOS Keychain OAuth read, and honest Codex staleness.
+
 ### Added
-- Settings UI in the popover (gear icon): paste an OpenAI Admin API key (masked input) to save it straight to the OS keychain, toggle OpenAI / Anthropic polling, and return to the usage view. Backed by three new IPC commands - `set_api_key`, `get_settings`, `set_settings` - which are synchronous (so their keychain + settings.json I/O runs off the async runtime). The key is never echoed back to the frontend or logged (AGENTS.md §3.4); `set_api_key` accepts only the user-supplied OpenAI key, since Anthropic uses Claude Code's OAuth credential.
-- Degraded-state banner: when a source is stale or errored, the popover shows a visible warning listing the affected sources instead of silently blanking the cell.
-- Claude Code statusLine wiring in the Settings UI: a "Claude Code statusLine" section shows whether Balanze's status line is wired, with one-click Wire / Unwire (via new `get_statusline_status` / `set_statusline_wired` IPC commands that delegate to `claude_statusline`). No-clobber - Balanze won't overwrite or strip a `statusLine` set to another command. Brings the desktop app to parity with what `balanze-cli setup` already does headless.
-- Live, consistent provider controls in Settings. Every provider toggle now actually gates its polling and applies **without an app restart**: a settings change re-spawns the watcher (enabled providers start, disabled ones stop) and the coordinator clears a disabled provider's cell so it stops showing stale data. Adds a **Codex quota scanning** toggle (new `codex_enabled` setting, defaulted on) so users who don't use Codex can mute it; fixes the previously-inert OpenAI toggle (it now gates `openai_poll`, while a `BALANZE_OPENAI_KEY` env override still always works). The OpenAI key field gains a configured-state affordance (Replace / Remove, backed by new `has_api_key` / `clear_api_key` commands) instead of always showing an empty input.
+- **Settings UI in the popover** (gear icon).
+  - Manage OpenAI Admin key straight on the UI (Set / Replace / Remove)
+  - Toggle each provider live - a disabled provider's cell clears instead of going stale
+  - Wire/unwire Claude Code's `statusLine` on the UI, bringing the desktop app to parity with `balanze-cli setup`.
+- **Degraded-state banner** - a stale or errored source shows a visible warning naming the affected sources instead of silently blanking the cell.
 
 ### Changed
-- Toolchain unification: Rust pinned to 1.94.0 via `rust-toolchain.toml` (CI matches; MSRV stays 1.85), Bun pinned to 1.3.13 via `packageManager` + CI `bun-version-file`.
-- PR titles are now CI-validated as Conventional Commits (`pr-title.yml`), matching the local `commit-msg` hook.
-- CI installs Rust via `actions-rust-lang/setup-rust-toolchain@v1`, which reads `rust-toolchain.toml` - the toml is now the single pin source, and dependabot no longer proposes toolchain releases as action-tag bumps (the dtolnay action encoded the version in its ref).
-- Vendored Claude price table refreshed to LiteLLM `1ccc1e5` (2026-06-18); adds `claude-opus-4-8` and `claude-fable-5` so the subscription-leverage estimate prices current-default-model usage instead of dropping it into `skipped_models`.
+- **Toolchain pinned to a single source** - Rust 1.94.0 via `rust-toolchain.toml`, Bun 1.3.13 via `packageManager`.
+- **OpenAI money is `i64` micro-USD end to end**, with snapshot schema versioning and uniform serde-error redaction at the JSON-parse boundaries.
+- **Watcher reads Claude JSONL incrementally** (per-file byte cursor) instead of full-reparsing on every change - no CPU spike during an active Claude session.
+- **Vendored Claude price table** refreshed to LiteLLM `1ccc1e5` (2026-06-18); adds `claude-opus-4-8` and `claude-fable-5` so the subscription-leverage estimate prices current-default-model usage instead of dropping it into `skipped_models`.
 
 ### Fixed
-- Popover UI cleanup: a single refresh control in the header (the repeated `↻`/`⟳` glyphs on the freshness line and every quota cell were time indicators, now relabeled "Xago" / "X left"); a 1px adaptive border so the window edges are visible when it opens over a same-colored background; ESC dismisses the popover; and on macOS the popover now drops down from the menu bar (centered under the tray icon) instead of floating below the click.
-- Codex "not installed" is no longer reported as an error in the watcher: when `~/.codex/sessions` is absent (the Codex CLI isn't installed), the safety task now treats it as a quiet not-configured state instead of emitting `codex_quota_error` on every 60s tick. This matches how the CLI already handles it and how Anthropic's "Claude Code not installed" exits clean - so users without Codex no longer see a constant "file or directory not found" warning. Genuine Codex errors (permission denied, schema drift) still surface.
-- macOS Anthropic quota parity: recent Claude Code on macOS stores its OAuth credential in the login Keychain (service `"Claude Code-credentials"`) instead of a file, which left the subscription-quota / overage cells empty (`✗ oauth fetch failed`) on those machines. Balanze now reads the Keychain entry as a read-only credential source when no credentials file exists. It never refreshes or writes a credential it doesn't own (Claude Code keeps sole ownership of token rotation); an expired Keychain token surfaces an actionable "re-run `claude login`" message rather than a refresh attempt. Windows + file-based installs are unchanged.
-- Windows keychain persistence: migrated from the monolithic `keyring 3.x` (which silently no-op'd on Windows - `set_password` returned `Ok` but the credential never landed in Credential Manager) to `keyring-core` plus the OS-native store crates (`windows-native-keyring-store` / `apple-native-keyring-store`). Each binary registers the platform store once at startup via the new `keychain::init_default_store`. The real-keychain roundtrip smoke now passes on Windows.
-- Codex quota cell is honest about staleness: when the rollout's primary window has already reset (`now > resets_at`), the compact view degrades the `✓` to a `⚠ ... stale` marker and the popover flags the cell, instead of showing a confidently-wrong used %. The compact window label also renders human units (a 5-hour window now reads `5h`, not `0d` - `300 / 1440` floored to zero).
-- Popover re-pulls the snapshot on every open (on window-show) and the refresh button now fetches via `get_snapshot` directly, instead of depending on the `usage_updated` event. The popover is fresh on open and self-heals if the event listener is ever orphaned (e.g. a dev-server reload leaving usage frozen while the window clock kept ticking).
-- Statusline windows with an out-of-range `resets_at` are dropped with a warning instead of being silently rewritten to the Unix epoch.
-- Statusline parser tolerates partial window-shape drift: a present-but-incomplete `rate_limits.{five_hour,seven_day}` window (missing `used_percentage`/`resets_at`, e.g. a future field rename) degrades that one window to `None` - logged at `warn!` so the drift stays visible - instead of erroring the whole payload; the other window and the session cost survive. A present `null` or wrong-type field still surfaces as `SchemaDrift`.
-- Watcher pollers survive a `reqwest` client-build failure: `openai_poll` / `oauth_poll` built the HTTP client once before the loop and exited cleanly on failure - silently freezing that cell until restart. They now build the client per tick, emit the error, and retry, so the degraded state stays visible and self-heals.
+- **Windows keychain persistence** - migrated to `keyring-core` plus the OS-native store crates, registered once at startup via `keychain::init_default_store`. Closes the v0.1 known issue.
+- **macOS Anthropic quota** - recent Claude Code on macOS keeps its OAuth credential in the login Keychain. Balanze now reads it as a read-only source; an expired token surfaces "re-run `claude login`" rather than a refresh attempt (Claude Code keeps sole ownership of token rotation).
+- **Codex quota honesty** - when the rollout's window has already reset, the cell degrades `✓` to a `⚠ stale` marker instead of a confidently-wrong used %; short windows now render human units (a 5-hour window reads `5h`, not `0d`). An absent `~/.codex/sessions` (Codex not installed) is treated as a quiet not-configured state, not a `codex_quota_error` on every tick.
+- **Popover** - a single refresh control in the header, a 1px adaptive border so edges show over a same-colored background, ESC to dismiss. It re-pulls the snapshot via `get_snapshot` on every open, so it self-heals if the `usage_updated` listener is ever orphaned.
+- **Watcher reliability** - pollers build the HTTP client per tick and retry instead of freezing a cell on a one-time build failure; dead watcher tasks self-heal and a coordinator panic exits the Tauri host cleanly; request timeouts are bounded.
+- **Statusline drift tolerance** - a partial/incomplete `rate_limits` window degrades to `None` instead of erroring the whole payload; an out-of-range `resets_at` window is dropped with a warning instead of being rewritten to the Unix epoch.
 
 ## [0.3.0] - UI: the popover PoC - 2026-06-10
 
@@ -99,8 +101,9 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Oszkar/balanze/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Oszkar/balanze/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Oszkar/balanze/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Oszkar/balanze/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Oszkar/balanze/releases/tag/v0.1.0
-[0.2.0]: https://github.com/Oszkar/balanze/releases/tag/v0.2.0
-[0.3.0]: https://github.com/Oszkar/balanze/releases/tag/v0.3.0

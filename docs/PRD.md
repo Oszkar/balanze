@@ -2,15 +2,13 @@
 
 ## Overview
 
-Balanze is a local-first desktop utility for tracking personal AI usage across multiple providers in one place. The initial target is a tray-first desktop app built with Tauri 2 and Rust for Windows 11 and macOS 15+, with Ubuntu 24.04 LTS+ on GNOME added in a later phase and a future path to Android and a hosted web dashboard.
+Balanze is a desktop utility for tracking personal AI usage across multiple providers in one place. The initial target is a tray-first desktop app built with Tauri 2 and Rust for Windows 11 and macOS 15+, with Ubuntu 24.04 LTS+ on GNOME added in a later phase.
 
-The product goal is simple: reduce the friction of checking multiple tools, tabs, billing pages and account surfaces to answer a few recurring questions - How much of Claude has been used today? How much OpenAI API credit remains? When does a limit reset? How close is the current account to budget or cap?
+The goal is simple: reduce the friction of checking multiple tools, tabs, billing pages and account surfaces to answer a few recurring questions - How much of Claude has been used today? How much OpenAI API credit remains? When does a limit reset? How close is the current account to budget or cap?
 
-This is a side project, so the product should optimize for usefulness, low maintenance, and tight scope rather than maximum provider coverage on day one.
+This is a side project, so the product should optimize for usefulness, low maintenance, and tight scope.
 
 ## Project intent
-
-Balanze is a side project held to a high engineering bar - the kind of tool the author wants to use daily and keep polishing. That framing, more than any user-acquisition goal, drives the prioritization in this document:
 
 - **Quality over reach.** Effort goes into a clean, honest, well-tested core and a credible UI rather than maximizing user count. Distribution stays deliberately lightweight (a runnable release, not an app-store presence).
 - **Narrow but deep.** Two providers done honestly beats six done shabbily. Broad provider coverage is a "someday," not a near-term goal.
@@ -49,15 +47,6 @@ A small team or technically inclined individual who wants a local dashboard and 
 - Preserve a clean path to later add Android and a hosted dashboard without rewriting the core architecture.
 - Be glanceable, simple, colorful.
 
-### MVP goals
-
-The MVP is the eventual smallest-viable end-state described in the rest of this document. The Phasing section below splits delivery into v0.x stages plus an uncommitted Vision tier (themes: Data → Liveness → UI → Distribution & Legibility → Vision). Each increment is shippable on its own.
-
-- Ship the desktop story on Windows 11 and macOS 15+ (CLI in v0.1 → tray UI across the v0.3 sub-milestones); Ubuntu 24.04 LTS+ GNOME is Vision-tier - see the Supported platforms table and Phasing for the per-stage rollout.
-- Support at least OpenAI and Anthropic as the first two providers.
-- Show current usage snapshot, reset timing where available, spend or credits where available, and lightweight recent history.
-- Allow threshold alerts for spend, quota, or estimated remaining usage.
-
 ### Non-goals
 
 - Full enterprise cost allocation or multi-seat observability.
@@ -70,9 +59,8 @@ The MVP is the eventual smallest-viable end-state described in the rest of this 
 
 ## Product principles
 
-- Local-first by default.
 - Honest about data quality and source provenance.
-- **Show measured status, not forecasts.** Present what *is* - how much is used and how far through the window you are - and let the user judge what comes next. Applies to money (the measured-only matrix) and to time (pace, not a "you'll run out at..." prediction).
+- **Show measured status, not forecasts.** Present what *is* - how much is used and how far through the window you are - and let the user judge what comes next. Applies to money (the measured-only matrix) and to time.
 - Fast glanceability before deep dashboards.
 - One shared core with thin platform shells.
 - Narrow support matrix over broad but unreliable compatibility.
@@ -118,7 +106,6 @@ The MVP is the eventual smallest-viable end-state described in the rest of this 
 - Check OpenAI API spend and remaining credits quickly.
 - Get notified when nearing a usage limit or spending threshold.
 - Compare current billing-cycle usage across providers.
-- Open a deeper dashboard for trends and account details.
 
 ## Core user experience
 
@@ -159,7 +146,6 @@ The system should normalize data into a common schema:
 - Account type: subscription, API, team, or other.
 - Metrics: spend, credits remaining, usage consumed, reset time, billing-cycle window, request or token counts where available.
 - Data source type: official API, official dashboard, imported file, manual input, inferred.
-- Confidence level: exact, partial, estimated.
 
 ### The usage matrix (presentation contract)
 
@@ -202,10 +188,6 @@ Users should be able to define alerts for:
 - Store settings and recent history locally.
 - No mandatory cloud backend.
 
-### Transparency
-
-Every provider metric should expose its source and precision. For example, an exact API credit balance should not be displayed in the same way as an estimated subscription remaining value.
-
 ## UX requirements
 
 - The compact popup should open fast and be glanceable in under 5 seconds.
@@ -245,15 +227,7 @@ This architecture keeps the desktop product as the first-class surface while mak
 - Treat unsupported subscription data as optional, not foundational.
 - Keep the platform matrix narrow and explicit.
 
-## Competitive landscape
-
-Current open-source tools validate demand but do not fully cover the proposed product shape. Existing examples include Claude-specific taskbar or menu-bar apps, local usage monitors, and CLI analyzers such as CodeZeno's Claude Code Usage Monitor, IgniteStudiosLtd's claude-usage-tool, usage-monitor-for-claude, and ccusage.
-
-The main market gap appears to be a local-first, open-source, multi-provider desktop utility that combines subscription visibility and API billing or credit visibility in one normalized experience.
-
 ## Success criteria
-
-For a personal, engineering-quality-first side project, success is mostly qualitative, with a few lightweight checks. Some criteria are about daily usefulness; some are about the bar the build is held to (see Project intent).
 
 Usefulness:
 
@@ -354,7 +328,6 @@ Genuinely uncommitted ideas, picked up as a bounded phase only if desire or a re
 - Cross-device sync via a small relay (GitHub Gist / Cloudflare KV / iCloud Drive) - one Balanze identity reading/writing the same numbers across devices; sets up Android + hosted dashboard cleanly.
 - Export / snapshot reporting; broader provider coverage as repeated personal need surfaces.
 - Android companion app - read-only feed of the desktop's state via the sync layer.
-- Hosted web dashboard for wallboard / TV use, reusing the normalized backend contracts.
 
 ## Open questions
 

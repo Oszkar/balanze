@@ -11,7 +11,7 @@ A local-first utility that consolidates personal AI usage into one normalized vi
 
 ## What it does
 
-A **complete, honest data layer** surfaced two ways — the `balanze-cli` CLI and a **tray popover** (v0.3.0: a color-shifting gauge tray icon + a glanceable grid/cards view). Both render the same normalized snapshot. The matrix holds **measured reality only** — server-reported quota % and real billed $ — so cells in a column are always the same *kind* of number:
+A **complete, honest data layer** surfaced two ways — the `balanze-cli` CLI and a **tray popover** (a color-shifting gauge tray icon, a glanceable grid/cards view, and a settings panel for keys + provider toggles). Both render the same normalized snapshot. The matrix holds **measured reality only** — server-reported quota % and real billed $ — so cells in a column are always the same *kind* of number:
 
 |               | Quota %                              | API $ (real billed)                                 |
 |---------------|--------------------------------------|-----------------------------------------------------|
@@ -102,7 +102,7 @@ balanze-cli            # 4-quadrant status
 
 **The CLI has zero system-library dependencies** — Windows 11, macOS 15+, and Linux build with just the Rust toolchain (Linux also needs a C compiler for the `ring` TLS dependency). No GTK/GLib/Cairo/WebKit — that native stack belongs to the desktop app, not the CLI.
 
-The Claude side reads Claude Code's OAuth credential directly - no setup needed if Claude Code is already configured. It uses `~/.claude/.credentials.json` (or `~/.config/claude/.credentials.json`) where present, and on recent macOS falls back to Claude Code's login Keychain entry (read-only; macOS may prompt once to allow access). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, or the `BALANZE_OPENAI_KEY` env var.
+The Claude side reads Claude Code's OAuth credential directly - no setup needed if Claude Code is already configured. It uses `~/.claude/.credentials.json` (or `~/.config/claude/.credentials.json`) where present, and on recent macOS falls back to Claude Code's login Keychain entry (read-only; macOS may prompt once to allow access). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, the popover's settings panel, or the `BALANZE_OPENAI_KEY` env var.
 
 ## Develop
 
