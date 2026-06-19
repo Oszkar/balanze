@@ -11,22 +11,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 The Settings UI lands - keys, live provider toggles, statusLine wiring - alongside the trust pass: real keychain persistence on Windows, the macOS Keychain OAuth read, and honest Codex staleness.
 
 ### Added
-- **Settings UI in the popover** (gear icon). Paste an OpenAI Admin key (masked) straight to the OS keychain (Replace / Remove once one is set); toggle each provider live - the change re-spawns the watcher with no app restart, and a disabled provider's cell clears instead of going stale; wire/unwire Claude Code's `statusLine` (no-clobber - won't overwrite one pointing elsewhere), bringing the desktop app to parity with `balanze-cli setup`. New IPC: `set_api_key` / `get_settings` / `set_settings`, plus `has_api_key` / `clear_api_key` and `get_statusline_status` / `set_statusline_wired`. The key is never echoed back to the frontend or logged (§3.4).
+- **Settings UI in the popover** (gear icon).
+  - Manage OpenAI Admin key straight on the UI (Set / Replace / Remove)
+  - Toggle each provider live - a disabled provider's cell clears instead of going stale
+  - Wire/unwire Claude Code's `statusLine` on the UI, bringing the desktop app to parity with `balanze-cli setup`.
 - **Degraded-state banner** - a stale or errored source shows a visible warning naming the affected sources instead of silently blanking the cell.
 
 ### Changed
-- **Toolchain pinned to a single source** - Rust 1.94.0 via `rust-toolchain.toml` (CI reads it through `setup-rust-toolchain`; MSRV stays 1.85), Bun 1.3.13 via `packageManager`. PR titles are now CI-validated as Conventional Commits, matching the local `commit-msg` hook.
-- **OpenAI money is `i64` micro-USD end to end**, with snapshot schema versioning and uniform serde-error redaction at the JSON-parse boundaries - a type-confused provider 200 can't leak a key-shaped value into an error string.
+- **Toolchain pinned to a single source** - Rust 1.94.0 via `rust-toolchain.toml`, Bun 1.3.13 via `packageManager`.
+- **OpenAI money is `i64` micro-USD end to end**, with snapshot schema versioning and uniform serde-error redaction at the JSON-parse boundaries.
 - **Watcher reads Claude JSONL incrementally** (per-file byte cursor) instead of full-reparsing on every change - no CPU spike during an active Claude session.
 - **Vendored Claude price table** refreshed to LiteLLM `1ccc1e5` (2026-06-18); adds `claude-opus-4-8` and `claude-fable-5` so the subscription-leverage estimate prices current-default-model usage instead of dropping it into `skipped_models`.
 
 ### Fixed
-- **Windows keychain persistence** - migrated `keyring 3.x` (which silently no-op'd on Windows: `set_password` returned `Ok` but nothing reached Credential Manager) to `keyring-core` plus the OS-native store crates, registered once at startup via `keychain::init_default_store`. Closes the v0.1 known issue.
-- **macOS Anthropic quota** - recent Claude Code on macOS keeps its OAuth credential in the login Keychain (service `"Claude Code-credentials"`) rather than a file, which left the quota/overage cells empty there. Balanze now reads it as a read-only source; an expired token surfaces "re-run `claude login`" rather than a refresh attempt (Claude Code keeps sole ownership of token rotation). Windows + file-based installs are unchanged.
-- **Codex quota honesty** - when the rollout's window has already reset (`now > resets_at`), the cell degrades `✓` to a `⚠ stale` marker instead of a confidently-wrong used %; short windows now render human units (a 5-hour window reads `5h`, not `0d`). An absent `~/.codex/sessions` (Codex not installed) is treated as a quiet not-configured state, not a `codex_quota_error` on every tick.
-- **Popover** - a single refresh control in the header, a 1px adaptive border so edges show over a same-colored background, ESC to dismiss, and on macOS the popover drops from the menu bar under the tray icon. It re-pulls the snapshot via `get_snapshot` on every open, so it self-heals if the `usage_updated` listener is ever orphaned.
+- **Windows keychain persistence** - migrated to `keyring-core` plus the OS-native store crates, registered once at startup via `keychain::init_default_store`. Closes the v0.1 known issue.
+- **macOS Anthropic quota** - recent Claude Code on macOS keeps its OAuth credential in the login Keychain. Balanze now reads it as a read-only source; an expired token surfaces "re-run `claude login`" rather than a refresh attempt (Claude Code keeps sole ownership of token rotation).
+- **Codex quota honesty** - when the rollout's window has already reset, the cell degrades `✓` to a `⚠ stale` marker instead of a confidently-wrong used %; short windows now render human units (a 5-hour window reads `5h`, not `0d`). An absent `~/.codex/sessions` (Codex not installed) is treated as a quiet not-configured state, not a `codex_quota_error` on every tick.
+- **Popover** - a single refresh control in the header, a 1px adaptive border so edges show over a same-colored background, ESC to dismiss. It re-pulls the snapshot via `get_snapshot` on every open, so it self-heals if the `usage_updated` listener is ever orphaned.
 - **Watcher reliability** - pollers build the HTTP client per tick and retry instead of freezing a cell on a one-time build failure; dead watcher tasks self-heal and a coordinator panic exits the Tauri host cleanly; request timeouts are bounded.
-- **Statusline drift tolerance** - a partial/incomplete `rate_limits` window degrades to `None` (logged `warn`) instead of erroring the whole payload; an out-of-range `resets_at` window is dropped with a warning instead of being rewritten to the Unix epoch.
+- **Statusline drift tolerance** - a partial/incomplete `rate_limits` window degrades to `None` instead of erroring the whole payload; an out-of-range `resets_at` window is dropped with a warning instead of being rewritten to the Unix epoch.
 
 ## [0.3.0] - UI: the popover PoC - 2026-06-10
 
