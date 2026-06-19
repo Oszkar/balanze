@@ -15,14 +15,16 @@ const base: Snapshot = {
 };
 
 describe('quota', () => {
-  it('tone buckets at 50/75/90', () => {
+  it('tone folds to warn at 50 and bad at 90 (the tray orange band at 75 folds into warn)', () => {
     expect(quotaTone(20)).toBe('ok');
-    expect(quotaTone(60)).toBe('warn');
-    expect(quotaTone(95)).toBe('bad');
     expect(quotaTone(49)).toBe('ok');
     expect(quotaTone(50)).toBe('warn');
+    expect(quotaTone(60)).toBe('warn');
+    // 75 is the tray's yellow->orange boundary; this 3-tone palette keeps it 'warn'.
+    expect(quotaTone(75)).toBe('warn');
     expect(quotaTone(89)).toBe('warn');
     expect(quotaTone(90)).toBe('bad');
+    expect(quotaTone(95)).toBe('bad');
   });
   it('prefers statusline over oauth', () => {
     const s: Snapshot = { ...base,
@@ -36,16 +38,16 @@ describe('quota', () => {
     expect(q.secondary?.pct).toBe(48);
   });
   it('codex elapsed fraction', () => {
-    const f = codexElapsedFraction({ resets_at: '2026-06-03T13:00:00Z', window_duration_minutes: 120 }, new Date('2026-06-03T12:00:00Z'));
+    const f = codexElapsedFraction({ resets_at: '2026-06-03T13:00:00Z', window_duration_minutes: 120 }, '2026-06-03T12:00:00Z');
     expect(f).toBeCloseTo(0.5, 5);
   });
-  it('codex window expired when now is past resets_at', () => {
-    const now = new Date('2026-06-03T12:00:00Z');
-    // resets_at one hour in the past -> the rollout outlived its window.
-    expect(codexWindowExpired({ resets_at: '2026-06-03T11:00:00Z' }, now)).toBe(true);
-    // resets_at in the future -> still live.
-    expect(codexWindowExpired({ resets_at: '2026-06-03T13:00:00Z' }, now)).toBe(false);
+  it('codex window expired when fetched_at is past resets_at', () => {
+    const fetchedAt = '2026-06-03T12:00:00Z';
+    // resets_at one hour before fetched_at -> the rollout outlived its window.
+    expect(codexWindowExpired({ resets_at: '2026-06-03T11:00:00Z' }, fetchedAt)).toBe(true);
+    // resets_at after fetched_at -> still live.
+    expect(codexWindowExpired({ resets_at: '2026-06-03T13:00:00Z' }, fetchedAt)).toBe(false);
     // Unparseable timestamp must not be reported as expired (no false stale).
-    expect(codexWindowExpired({ resets_at: 'not-a-date' }, now)).toBe(false);
+    expect(codexWindowExpired({ resets_at: 'not-a-date' }, fetchedAt)).toBe(false);
   });
 });

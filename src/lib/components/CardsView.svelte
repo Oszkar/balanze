@@ -50,7 +50,7 @@
     <ProviderCard name="OpenAI" plan="API + Codex"
       windows={codex
         ? [{ label: `Codex · ${codex.plan_type}`, used: codex.primary.used_percent,
-            elapsed: codexElapsedFraction(codex.primary) * 100, tone: quotaTone(codex.primary.used_percent), resetsAt: codex.primary.resets_at }]
+            elapsed: codexElapsedFraction(codex.primary, snapshot.fetched_at) * 100, tone: quotaTone(codex.primary.used_percent), resetsAt: codex.primary.resets_at }]
         : []}
       billed={openai
         ? { amount: microUsdToDollars(openai.total_micro_usd), note: 'this cycle', badge: 'real' }
