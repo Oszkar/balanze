@@ -4,6 +4,8 @@
     getSettings,
     setSettings,
     setApiKey,
+    hasApiKey,
+    clearApiKey,
     getStatuslineStatus,
     setStatuslineWired,
   } from '$lib/ipc';
@@ -13,6 +15,8 @@
 
   let settings = $state<Settings | null>(null);
   let wire = $state<StatuslineWire | null>(null);
+  let keyPresent = $state(false);
+  let editingKey = $state(false);
   let keyInput = $state('');
   let status = $state<string | null>(null);
   let busy = $state(false);
@@ -22,6 +26,11 @@
       settings = await getSettings();
     } catch (e) {
       status = `Couldn't load settings: ${e}`;
+    }
+    try {
+      keyPresent = await hasApiKey('openai');
+    } catch {
+      keyPresent = false;
     }
     // statusLine status is independent - a read failure here shouldn't block
     // the rest of the panel, so just leave the section hidden.
@@ -63,6 +72,7 @@
       // The key goes straight to the keychain backend-side; we never keep it.
       await setApiKey('openai', k);
       keyInput = '';
+      editingKey = false;
       status = 'OpenAI key saved.';
       await load();
     } catch (e) {
@@ -72,12 +82,27 @@
     }
   }
 
-  async function toggle(provider: 'openai' | 'anthropic', value: boolean) {
+  async function removeKey() {
+    busy = true;
+    status = null;
+    try {
+      await clearApiKey('openai');
+      status = 'OpenAI key removed.';
+      await load();
+    } catch (e) {
+      status = `Remove failed: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function toggle(provider: 'openai' | 'anthropic' | 'codex', value: boolean) {
     const current = settings;
     if (!current) return;
     const providers = { ...current.providers };
     if (provider === 'openai') providers.openai_enabled = value;
-    else providers.anthropic_enabled = value;
+    else if (provider === 'anthropic') providers.anthropic_enabled = value;
+    else providers.codex_enabled = value;
     const next: Settings = { ...current, providers };
     busy = true;
     status = null;
@@ -106,21 +131,35 @@
   {#if settings}
     <section>
       <div class="label">OpenAI Admin API key</div>
-      <div class="hint">
-        Stored in the OS keychain, never in a config file. {settings.providers.openai_enabled
-          ? 'A key is configured.'
-          : 'No key configured yet.'}
-      </div>
-      <div class="row">
-        <input
-          type="password"
-          placeholder="sk-admin-..."
-          autocomplete="off"
-          bind:value={keyInput}
-          disabled={busy}
-        />
-        <button class="save" onclick={saveKey} disabled={busy}>Save</button>
-      </div>
+      <div class="hint">Stored in the OS keychain, never in a config file.</div>
+      {#if keyPresent && !editingKey}
+        <div class="hint">✓ A key is configured.</div>
+        <div class="row">
+          <button class="save" onclick={() => (editingKey = true)} disabled={busy}>Replace</button>
+          <button class="save" onclick={removeKey} disabled={busy}>Remove</button>
+        </div>
+      {:else}
+        <div class="row">
+          <input
+            type="password"
+            placeholder="sk-admin-..."
+            autocomplete="off"
+            bind:value={keyInput}
+            disabled={busy}
+          />
+          <button class="save" onclick={saveKey} disabled={busy}>Save</button>
+          {#if keyPresent}
+            <button
+              class="save"
+              onclick={() => {
+                editingKey = false;
+                keyInput = '';
+              }}
+              disabled={busy}>Cancel</button
+            >
+          {/if}
+        </div>
+      {/if}
     </section>
 
     <section>
@@ -142,6 +181,15 @@
           onchange={(e) => toggle('anthropic', e.currentTarget.checked)}
         />
         <span>Anthropic OAuth polling</span>
+      </label>
+      <label class="toggle">
+        <input
+          type="checkbox"
+          checked={settings.providers.codex_enabled}
+          disabled={busy}
+          onchange={(e) => toggle('codex', e.currentTarget.checked)}
+        />
+        <span>Codex quota scanning</span>
       </label>
     </section>
 

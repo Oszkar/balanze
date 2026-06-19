@@ -15,6 +15,10 @@ export const setSettings = (settings: Settings): Promise<void> =>
   invoke<void>('set_settings', { settings });
 export const setApiKey = (provider: string, key: string): Promise<void> =>
   invoke<void>('set_api_key', { provider, key });
+export const hasApiKey = (provider: string): Promise<boolean> =>
+  invoke<boolean>('has_api_key', { provider });
+export const clearApiKey = (provider: string): Promise<void> =>
+  invoke<void>('clear_api_key', { provider });
 
 // Claude Code statusLine wiring (delegates to claude_statusline backend-side;
 // no-clobber - won't overwrite another tool's statusLine).

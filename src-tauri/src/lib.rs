@@ -147,32 +147,72 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
 fn boot_backend(app: &App, rt: &tokio::runtime::Handle) {
     let _enter = rt.enter();
 
-    let settings = settings::load().unwrap_or_else(|e| {
-        tracing::warn!("settings load failed ({e}); using defaults");
-        settings::Settings::default()
-    });
-
     let sink = TauriSink::new(app.handle().clone());
     let (handle, coord_join) = state_coordinator::spawn(sink);
     app.manage(handle.clone());
 
-    let watcher_handles = watcher::Watcher::spawn(handle, &settings);
+    // Live settings-apply: settings/key commands signal a reload; the
+    // supervisor re-spawns the watcher with fresh settings so provider toggles
+    // take effect without an app restart (the coordinator clears disabled
+    // cells; this starts/stops the actual polling).
+    let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<()>(8);
+    app.manage(commands::WatcherReload(reload_tx));
 
+    rt.spawn(supervise_watcher(handle, reload_rx));
     rt.spawn(async move {
-        for (label, h) in watcher_handles {
-            tokio::spawn(async move {
-                match h.await {
-                    Ok(Ok(())) => tracing::debug!("watcher/{label}: exited Ok(())"),
-                    Ok(Err(e)) => tracing::error!("watcher/{label}: returned error: {e}"),
-                    Err(je) => tracing::error!("watcher/{label}: panicked/aborted: {je}"),
-                }
-            });
-        }
         match coord_join.await {
             Ok(()) => tracing::error!("state_coordinator task exited"),
             Err(je) => tracing::error!("state_coordinator panicked/aborted: {je}"),
         }
     });
+}
+
+/// Own the watcher's task lifecycle. Spawns its tasks, and on each reload signal
+/// aborts + re-spawns them with freshly-loaded settings. Returns (aborting the
+/// live tasks) when the reload sender drops at app shutdown.
+async fn supervise_watcher(
+    handle: state_coordinator::StateCoordinatorHandle,
+    mut reload_rx: tokio::sync::mpsc::Receiver<()>,
+) {
+    loop {
+        let settings = settings::load().unwrap_or_else(|e| {
+            tracing::warn!("settings load failed ({e}); using defaults");
+            settings::Settings::default()
+        });
+        let tasks = watcher::Watcher::spawn(handle.clone(), &settings);
+        tracing::info!("watcher: spawned {} task(s)", tasks.len());
+
+        // Hold an abort handle per task and spawn a detached logger per task, so
+        // a task that dies on its own is still surfaced. Our reload abort is a
+        // cancellation - logged silently.
+        let mut aborts = Vec::with_capacity(tasks.len());
+        for (label, h) in tasks {
+            aborts.push(h.abort_handle());
+            tokio::spawn(async move {
+                match h.await {
+                    Ok(Ok(())) => tracing::debug!("watcher/{label}: exited Ok(())"),
+                    Ok(Err(e)) => tracing::error!("watcher/{label}: returned error: {e}"),
+                    Err(je) if je.is_cancelled() => {}
+                    Err(je) => tracing::error!("watcher/{label}: panicked/aborted: {je}"),
+                }
+            });
+        }
+
+        // Wait for a reload request (or app shutdown when the sender drops).
+        if reload_rx.recv().await.is_none() {
+            for a in aborts {
+                a.abort();
+            }
+            tracing::info!("watcher supervisor: reload channel closed; stopping");
+            return;
+        }
+        // Coalesce a burst of reload ticks into a single re-spawn.
+        while reload_rx.try_recv().is_ok() {}
+        for a in aborts {
+            a.abort();
+        }
+        tracing::info!("watcher: settings changed; re-spawning tasks");
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -208,6 +248,8 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::set_api_key,
+            commands::has_api_key,
+            commands::clear_api_key,
             commands::get_statusline_status,
             commands::set_statusline_wired
         ])

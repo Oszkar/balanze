@@ -46,7 +46,14 @@ fn statusline_snapshot_path() -> Option<PathBuf> {
 /// once before the loop to consume the immediate fire so the JSONL task's
 /// initial scan at startup isn't duplicated by the safety poll within the
 /// first few milliseconds.
-pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), WatcherError>> {
+///
+/// `codex_enabled` gates the per-tick Codex scan: when `false`, Codex is not
+/// read or emitted (the Tauri host re-spawns the watcher on a settings change,
+/// so the toggle applies live).
+pub(crate) fn spawn(
+    coord: StateCoordinatorHandle,
+    codex_enabled: bool,
+) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
         // Resolve ALL JSONL project roots once — they don't change at runtime.
         // A dual-install machine can have both ~/.claude/projects and
@@ -163,35 +170,37 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
                 }
             }
 
-            // ── Codex quota ───────────────────────────────────────────────────
-            let codex = tokio::task::spawn_blocking(read_codex_quota).await;
+            // ── Codex quota (gated on the toggle) ─────────────────────────────
+            if codex_enabled {
+                let codex = tokio::task::spawn_blocking(read_codex_quota).await;
 
-            match codex {
-                Ok(res) => match codex_update(res) {
-                    Some(result) => {
+                match codex {
+                    Ok(res) => match codex_update(res) {
+                        Some(result) => {
+                            let _ = coord
+                                .send(StateMsg::Update(SourceUpdate {
+                                    source: Source::CodexQuota,
+                                    result,
+                                }))
+                                .await;
+                        }
+                        None => {
+                            tracing::debug!(
+                                "watcher/safety: codex not installed or no quota data; skipping emit"
+                            );
+                        }
+                    },
+                    Err(join_err) => {
+                        // A panic is a genuine fault (unlike FileMissing) - surface it
+                        // as degraded, consistent with the statusline panic path above.
+                        tracing::error!("watcher/safety: codex read task panicked: {join_err}");
                         let _ = coord
                             .send(StateMsg::Update(SourceUpdate {
                                 source: Source::CodexQuota,
-                                result,
+                                result: Err(format!("codex read task panicked: {join_err}")),
                             }))
                             .await;
                     }
-                    None => {
-                        tracing::debug!(
-                            "watcher/safety: codex not installed or no quota data; skipping emit"
-                        );
-                    }
-                },
-                Err(join_err) => {
-                    // A panic is a genuine fault (unlike FileMissing) - surface it
-                    // as degraded, consistent with the statusline panic path above.
-                    tracing::error!("watcher/safety: codex read task panicked: {join_err}");
-                    let _ = coord
-                        .send(StateMsg::Update(SourceUpdate {
-                            source: Source::CodexQuota,
-                            result: Err(format!("codex read task panicked: {join_err}")),
-                        }))
-                        .await;
                 }
             }
         }

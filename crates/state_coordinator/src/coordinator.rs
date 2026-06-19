@@ -15,7 +15,7 @@ use tokio::task::JoinHandle;
 use crate::jsonl::summarize_jsonl;
 use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg};
 use crate::sink::Sink;
-use crate::snapshot::{Snapshot, pace_for_oauth, record_error};
+use crate::snapshot::{Snapshot, clear_source, pace_for_oauth, record_error};
 
 /// Mutable state owned by the coordinator's single tokio task. Grouped
 /// into one struct so `handle_msg` takes one `&mut` instead of threading
@@ -178,11 +178,35 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             sink.on_snapshot(&state.snapshot);
         }
         StateMsg::SettingsChanged(s) => {
-            // Scaffold: just remember it. Future work wires this to pollers
-            // via a settings-change broadcast.
+            // Live-apply the provider toggles. The watcher is re-spawned by the
+            // host (it decides which pollers run); here we own the Snapshot, so
+            // we reset the cell of any now-disabled provider and repaint. A
+            // re-enabled provider isn't touched - its poller repopulates it.
+            let p = &s.providers;
+            if !p.anthropic_enabled {
+                clear_source(&mut state.snapshot, Source::ClaudeOAuth);
+                state.snapshot.pace.clear();
+            }
+            // OpenAI keeps polling under a `BALANZE_OPENAI_KEY` env override even
+            // with the toggle off, so don't clear a cell that's about to
+            // repopulate - mirror the watcher's spawn gate.
+            if !p.openai_enabled && !openai_env_key_present() {
+                clear_source(&mut state.snapshot, Source::OpenAiCosts);
+            }
+            if !p.codex_enabled {
+                clear_source(&mut state.snapshot, Source::CodexQuota);
+            }
             state.last_settings = Some(s);
+            sink.on_snapshot(&state.snapshot);
         }
     }
+}
+
+/// True if a non-empty `BALANZE_OPENAI_KEY` env override is set. Mirrors the
+/// watcher's spawn gate so cell-clearing and polling agree on whether OpenAI is
+/// active despite the toggle.
+fn openai_env_key_present() -> bool {
+    std::env::var("BALANZE_OPENAI_KEY").is_ok_and(|v| !v.trim().is_empty())
 }
 
 /// Apply one successful source partial to the snapshot. The coordinator is the
@@ -577,6 +601,54 @@ mod tests {
         handle.send(StateMsg::SettingsChanged(s)).await.unwrap();
         // Followed by a Query to confirm the actor is still alive and processing:
         let _ = handle.query().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn settings_change_clears_disabled_provider_cells() {
+        let (handle, _join) = spawn(NullSink);
+        // Seed OAuth (also populates `pace`) and OpenAI costs.
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+            }))
+            .await
+            .unwrap();
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::OpenAiCosts,
+                result: Ok(SourcePartial::OpenAiCosts(openai_costs())),
+            }))
+            .await
+            .unwrap();
+
+        let before = handle.query().await.unwrap();
+        assert!(before.claude_oauth.is_some());
+        assert!(before.openai.is_some());
+        assert!(!before.pace.is_empty(), "oauth seeded pace");
+
+        // Disable Anthropic (clears its cell + pace); keep OpenAI enabled so its
+        // cell is preserved - proving per-provider isolation of the clear.
+        let s = Settings {
+            providers: settings::ProviderSettings {
+                anthropic_enabled: false,
+                openai_enabled: true,
+                codex_enabled: true,
+            },
+            ..Settings::default()
+        };
+        handle.send(StateMsg::SettingsChanged(s)).await.unwrap();
+
+        let after = handle.query().await.unwrap();
+        assert!(
+            after.claude_oauth.is_none(),
+            "disabled Anthropic cell must be cleared"
+        );
+        assert!(after.pace.is_empty(), "pace cleared alongside oauth");
+        assert!(
+            after.openai.is_some(),
+            "still-enabled OpenAI cell preserved"
+        );
     }
 
     #[tokio::test]
