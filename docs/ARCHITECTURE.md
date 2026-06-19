@@ -36,13 +36,13 @@ The statusLine push is the v0.2 live backbone for Anthropic quota when the user 
 balanze/
 ├── Cargo.toml, package.json, svelte.config.js, vite.config.js, tsconfig.json
 ├── docs/PRD.md                 product spec
-├── src/                        Svelte 5 frontend — popover (grid/cards views, IPC store, presentation helpers); v0.3.0
-├── src-tauri/                  Tauri 2 app — gauge tray + live popover + single-instance + filled TauriSink; v0.3.0
+├── src/                        Svelte 5 frontend - popover (grid/cards + settings views, IPC store, presentation helpers); v0.3.1
+├── src-tauri/                  Tauri 2 app - gauge tray + live popover + settings + single-instance + filled TauriSink; v0.3.1
 ├── crates/
 │   ├── claude_parser/          JSONL wire format: parse, walker, dedup, IncrementalParser, find_claude_projects_dir
 │   ├── claude_cost/            pure JSONL → estimated $ vs vendored LiteLLM prices; infallible
 │   ├── claude_statusline/      Claude Code statusLine payload + settings.json statusLine stanza (read/atomic-write)
-│   ├── anthropic_oauth/        only HTTP client for /api/oauth/usage; only reader/writer of ~/.claude/.credentials.json
+│   ├── anthropic_oauth/        only HTTP client for /api/oauth/usage; reader/writer of ~/.claude/.credentials.json (+ read-only macOS login-Keychain credential)
 │   ├── window/                 pure rolling-window math (5h + 30m burn + per-model) and pace (used vs elapsed)
 │   ├── openai_client/          only HTTP client for /v1/organization/costs
 │   ├── codex_local/            only reader of ~/.codex/; latest rate_limits.primary
@@ -62,7 +62,7 @@ Strict layering — agents must respect these.
 
 1. **`claude_parser` owns the JSONL wire format.** Other crates consume `UsageEvent` only; field names and line-format quirks do not leak.
 2. **`window`, `claude_cost` are pure functions.** No I/O, no `tokio::spawn`, no logging above `debug`. `claude_cost` is infallible — unknown models route to `skipped_models`.
-3. **`anthropic_oauth` + `openai_client` are the only HTTP clients.** Other crates do not issue HTTP requests; the glue crates (`balanze_cli`, `watcher`) may construct a `reqwest::Client` to inject into these two, but all request/retry/redaction logic lives here. `anthropic_oauth` is additionally the only reader and writer of `~/.claude/.credentials.json` (atomic tmp+fsync+rename, perms-preserving, OAuth fields only, never regresses a concurrently-newer on-disk token).
+3. **`anthropic_oauth` + `openai_client` are the only HTTP clients.** Other crates do not issue HTTP requests; the glue crates (`balanze_cli`, `watcher`) may construct a `reqwest::Client` to inject into these two, but all request/retry/redaction logic lives here. `anthropic_oauth` is additionally the only reader and writer of `~/.claude/.credentials.json` (atomic tmp+fsync+rename, perms-preserving, OAuth fields only, never regresses a concurrently-newer on-disk token). On recent macOS, where Claude Code keeps that credential in the login Keychain rather than a file, `anthropic_oauth` reads that entry **read-only** (via `/usr/bin/security`, not `keyring`, so boundary #5 holds) and never refreshes or writes a credential it does not own; an expired Keychain token surfaces `CredentialExpiredReadOnly` (re-run `claude login`).
 4. **`watcher` owns `notify` + the debounce + the 60 s safety poll.** Other crates do not import `notify`. `Watcher::spawn(handle, &Settings) -> Vec<(&'static str, JoinHandle<...>)>` returns one labeled handle per task; default-spawned (3): `jsonl` (notify + 300 ms debounce + a 60 s fallback; reads new bytes only via a per-file byte cursor, `claude_parser::IncrementalParser`, so neither path full-reparses after launch per §3.1), `statusline`, `safety` (a 60 s re-read of statusline + Codex - it no longer scans JSONL, the `jsonl` task's 60 s fallback covers that; its Codex scan gated on `providers.codex_enabled`); conditionally (2): `openai_poll` when `providers.openai_enabled` or a `BALANZE_OPENAI_KEY` env override is set, and `oauth_poll` when `providers.anthropic_enabled`. The caller (`balanze-cli --watch`, or the Tauri host) supervises under `tokio::select!`. `Ok(Ok(()))` is graceful (e.g. no OpenAI key) and must not trigger teardown. The CLI treats an `Ok(Err(_))` / panic from any task as fatal and exits with a restart hint. The Tauri host self-heals instead: it re-spawns the whole set on a settings change (provider toggles apply live) AND on an unexpected task death, where it also emits a `degraded_state` for the affected source (mapped by `watcher::source_for_label`) and backs off (exponential, 1 s to a 60 s cap) so a persistent failure stays visibly degraded rather than silently frozen. Tasks feed the coordinator directly via `StateCoordinatorHandle::send(StateMsg::Update(...))`.
 5. **`keychain` is the only caller of `keyring-core` (plus the OS-native store crates).** All secret reads/writes route through this crate.
 6. **`settings` owns `settings.json`.** Atomic writes (tmp + rename). No other crate reads or writes this file.
