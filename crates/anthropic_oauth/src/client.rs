@@ -197,8 +197,15 @@ fn parse_response(
     rate_limit_tier: Option<String>,
     fetched_at: DateTime<Utc>,
 ) -> Result<ClaudeOAuthSnapshot, OAuthError> {
-    let json: Value = serde_json::from_str(body)
-        .map_err(|e| OAuthError::ResponseShape(format!("invalid JSON: {e}")))?;
+    let json: Value = serde_json::from_str(body).map_err(|e| {
+        // Redact for symmetry with the openai client: serde's Display can quote
+        // an offending value on a type mismatch, and this error reaches logs +
+        // the UI `degraded_state` (AGENTS.md §3.4).
+        OAuthError::ResponseShape(format!(
+            "invalid JSON: {}",
+            redact_for_display(&e.to_string())
+        ))
+    })?;
     let obj = json
         .as_object()
         .ok_or_else(|| OAuthError::ResponseShape("response root is not an object".into()))?;
@@ -252,7 +259,13 @@ fn parse_response(
                 });
             }
             Err(e) => {
-                debug!("oauth/usage: ignoring unexpected-shape field {key}: {e}");
+                // Log only serde's error category, not its Display: a type
+                // mismatch can quote the offending value (mirrors the
+                // extra_usage branch above; AGENTS.md §3.4).
+                debug!(
+                    "oauth/usage: ignoring unexpected-shape field {key} (serde category: {:?})",
+                    e.classify()
+                );
             }
         }
     }

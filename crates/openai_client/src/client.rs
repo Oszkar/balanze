@@ -223,8 +223,16 @@ fn parse_response(
     end_time: DateTime<Utc>,
     fetched_at: DateTime<Utc>,
 ) -> Result<OpenAiCosts, OpenAiError> {
-    let page: RawPage = serde_json::from_str(body)
-        .map_err(|e| OpenAiError::ResponseShape(format!("invalid JSON: {e}")))?;
+    let page: RawPage = serde_json::from_str(body).map_err(|e| {
+        // Redact: a type-confused 200 (e.g. `data` arriving as a string) makes
+        // serde quote the offending value in its Display, which could carry an
+        // `sk-…`-shaped token. This error string reaches WARN logs + the
+        // user-facing `degraded_state` (AGENTS.md §3.4).
+        OpenAiError::ResponseShape(format!(
+            "invalid JSON: {}",
+            redact_for_display(&e.to_string())
+        ))
+    })?;
 
     let mut total_usd = 0.0f64;
     let mut by_line: HashMap<String, f64> = HashMap::new();
@@ -343,6 +351,29 @@ mod tests {
         assert_eq!(parsed.by_line_item[0].line_item, "gpt-5");
         assert!((parsed.by_line_item[0].amount_usd - 1.65).abs() < 1e-9);
         assert_eq!(parsed.by_line_item[1].line_item, "o1-mini");
+    }
+
+    #[test]
+    fn response_shape_error_redacts_sk_keys_from_serde_message() {
+        // A type-confused 200 (`data` arriving as a string) makes serde quote the
+        // offending value in its Display. An sk-…-shaped value must NOT survive
+        // into the error string, which reaches WARN logs + the UI (AGENTS.md §3.4).
+        // Built at runtime so the source carries no key-shaped literal (the
+        // pre-commit secret scanner flags those, rightly). Still sk-…-shaped at
+        // runtime, so `redact_for_display` treats it as a key.
+        let leak = format!("sk-admin-{}", "A".repeat(36));
+        let body = format!(r#"{{"object":"page","data":"{leak}","has_more":false}}"#);
+        let (start, end) = fixed_window();
+        let err = parse_response(&body, start, end, Utc::now()).expect_err("type mismatch");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains(&leak),
+            "raw sk- key must not appear in the error string: {msg}"
+        );
+        assert!(
+            msg.contains("REDACTED"),
+            "redaction marker expected in: {msg}"
+        );
     }
 
     #[test]
