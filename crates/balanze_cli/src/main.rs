@@ -1,4 +1,4 @@
-//! Balanze CLI — composes the backend crates into a single status view.
+//! Balanze CLI - composes the backend crates into a single status view.
 //!
 //! Subcommands:
 //!   balanze-cli                      Print pretty status (default)
@@ -53,7 +53,7 @@ fn main() -> ExitCode {
         // modes, the compact view's footer + the README advertise the
         // bare form, and cmd_status already inspects the full argv (and
         // applies the documented --json-wins precedence) regardless of
-        // which token routed here. `-v` is intentionally NOT an alias —
+        // which token routed here. `-v` is intentionally NOT an alias -
         // it's a modifier on a mode, never advertised standalone.
         // `--watch` is a top-level alias for `status --watch`, mirroring the
         // `--json` and `--sections` aliases. Both `balanze-cli --watch` and
@@ -93,7 +93,7 @@ fn cmd_status(args: &[String]) -> Result<()> {
     if watch_mode {
         // --sections describes the per-source breakdown, which isn't a TUI
         // concept; the watch mode always uses the compact view. Warn but don't
-        // error — the --watch behavior is well-defined regardless.
+        // error - the --watch behavior is well-defined regardless.
         if sections {
             eprintln!(
                 "warning: --sections has no effect with --watch \
@@ -123,7 +123,7 @@ fn cmd_status(args: &[String]) -> Result<()> {
     // Precedence (documented in `balanze-cli help`): --json wins over
     // --sections if both are passed. --json is the scripting/machine
     // path; if a caller asked for it, honor it even alongside a stray
-    // --sections. Not an error — silently ignoring --sections here is
+    // --sections. Not an error - silently ignoring --sections here is
     // the least-surprising behavior for `balanze-cli status --json --sections`.
     if json_mode {
         // `--json` goes through json_output::render, not raw Snapshot serde:
@@ -132,7 +132,7 @@ fn cmd_status(args: &[String]) -> Result<()> {
         // redacted unless `-v`/`--verbose` is also set.
         println!("{}", json_output::render(&snapshot, verbose)?);
     } else if sections {
-        // Per-source detailed view — useful for debugging, dev work, and
+        // Per-source detailed view - useful for debugging, dev work, and
         // anyone who wants the full window math + cadence bars in one go.
         render::print_sections(&snapshot, verbose)?;
     } else {
@@ -153,7 +153,7 @@ fn cmd_settings() -> Result<()> {
 }
 
 fn print_help() {
-    eprintln!("Balanze — local-first AI usage tracker.");
+    eprintln!("Balanze - local-first AI usage tracker.");
     eprintln!();
     eprintln!("Subcommands:");
     eprintln!("  balanze-cli                      Print 4-quadrant compact status (default)");
@@ -170,7 +170,7 @@ fn print_help() {
     eprintln!(
         "                                               (org_uuid, codex session_id) to both"
     );
-    eprintln!("                                               --sections and --json output —");
+    eprintln!("                                               --sections and --json output -");
     eprintln!("                                               safe at home, dox-y in public.");
     eprintln!("  balanze-cli setup                 Interactive wizard. Checks Anthropic OAuth,");
     eprintln!(
@@ -191,7 +191,7 @@ fn print_help() {
     eprintln!("  balanze-cli settings              Print current settings.json contents");
     eprintln!("  balanze-cli statusline            Read Claude Code's statusLine JSON on stdin,");
     eprintln!("                                print a one-line status (used as Claude Code's");
-    eprintln!("                                statusLine command — see `balanze-cli setup`).");
+    eprintln!("                                statusLine command - see `balanze-cli setup`).");
     eprintln!("  balanze-cli help                  This help");
     eprintln!();
     eprintln!("Environment overrides:");

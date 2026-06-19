@@ -66,7 +66,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             )?;
         }
         // Extra-usage = pay-as-you-go overage. The raw ints are cents; this is
-        // the claude.ai "Extra usage" meter — REAL billed money, distinct from
+        // the claude.ai "Extra usage" meter - REAL billed money, distinct from
         // the estimated API-rate figure below. Only meaningful when the user
         // enabled it.
         if let Some(eu) = &oauth.extra_usage {
@@ -74,7 +74,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
                 writeln!(w)?;
                 writeln!(
                     w,
-                    "EXTRA USAGE (pay-as-you-go overage — REAL billed spend, from Anthropic OAuth):"
+                    "EXTRA USAGE (pay-as-you-go overage - REAL billed spend, from Anthropic OAuth):"
                 )?;
                 writeln!(
                     w,
@@ -85,7 +85,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
                 )?;
                 writeln!(
                     w,
-                    "  Real money billed beyond your subscription — NOT the estimate below."
+                    "  Real money billed beyond your subscription - NOT the estimate below."
                 )?;
             } else {
                 writeln!(w)?;
@@ -96,7 +96,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             }
         }
     } else if let Some(err) = &snapshot.claude_oauth_error {
-        writeln!(w, "CADENCE BARS: unavailable — {err}")?;
+        writeln!(w, "CADENCE BARS: unavailable - {err}")?;
     }
 
     // OpenAI monthly costs (from Admin API)
@@ -121,22 +121,18 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
                 writeln!(w, "    {:36}  ${:>10.4}", item.line_item, item.amount_usd)?;
             }
             if costs.by_line_item.len() > 10 {
-                writeln!(w, "    … ({} more)", costs.by_line_item.len() - 10)?;
+                writeln!(w, "    ... ({} more)", costs.by_line_item.len() - 10)?;
             }
         }
     } else if let Some(err) = &snapshot.openai_error {
-        writeln!(w, "OPENAI SPEND: unavailable — {err}")?;
+        writeln!(w, "OPENAI SPEND: unavailable - {err}")?;
     } else {
         writeln!(w, "OPENAI SPEND: not configured")?;
         writeln!(
             w,
-            "  Set the BALANZE_OPENAI_KEY env var to a `sk-admin-…` admin key, or run"
+            "  Run `balanze-cli set-openai-key` to store an `sk-admin-...` admin key, or set"
         )?;
-        writeln!(
-            w,
-            "  `balanze-cli set-openai-key` (note: keychain backend currently unreliable on"
-        )?;
-        writeln!(w, "  Windows; env var is the recommended path).")?;
+        writeln!(w, "  the BALANZE_OPENAI_KEY env var.")?;
         writeln!(
             w,
             "  Create an admin key at https://platform.openai.com/settings/organization/admin-keys"
@@ -180,7 +176,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             }
         }
     } else if let Some(err) = &snapshot.claude_jsonl_error {
-        writeln!(w, "CLAUDE CODE ACTIVITY: unavailable — {err}")?;
+        writeln!(w, "CLAUDE CODE ACTIVITY: unavailable - {err}")?;
     }
 
     // Anthropic API cost (estimated, JSONL-derived via claude_cost).
@@ -188,13 +184,13 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
     if let Some(cost) = &snapshot.anthropic_api_cost {
         writeln!(
             w,
-            "ANTHROPIC API COST — ESTIMATE ONLY (JSONL × LiteLLM list-price @ {} / {}):",
+            "ANTHROPIC API COST - ESTIMATE ONLY (JSONL × LiteLLM list-price @ {} / {}):",
             claude_cost::PRICE_TABLE_COMMIT,
             claude_cost::PRICE_TABLE_DATE,
         )?;
         writeln!(
             w,
-            "  Est. list-price:   {} — subscription leverage, NOT money billed",
+            "  Est. list-price:   {} - subscription leverage, NOT money billed",
             micro_usd_to_display_dollars(cost.total_micro_usd)
         )?;
         writeln!(
@@ -222,7 +218,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
                 )?;
             }
             if cost.per_model.len() > 10 {
-                writeln!(w, "    … ({} more)", cost.per_model.len() - 10)?;
+                writeln!(w, "    ... ({} more)", cost.per_model.len() - 10)?;
             }
         }
         if !cost.skipped_models.is_empty() {
@@ -236,13 +232,13 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             }
         }
     } else if let Some(err) = &snapshot.anthropic_api_cost_error {
-        writeln!(w, "ANTHROPIC API COST: unavailable — {err}")?;
+        writeln!(w, "ANTHROPIC API COST: unavailable - {err}")?;
     } else if snapshot.claude_jsonl_error.is_some() {
         // No separate cost error; the underlying JSONL load failed
         // (already reported above).
         writeln!(
             w,
-            "ANTHROPIC API COST: unavailable — JSONL load failed (see above)."
+            "ANTHROPIC API COST: unavailable - JSONL load failed (see above)."
         )?;
     }
 
@@ -250,11 +246,11 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
     writeln!(w)?;
     if let Some(q) = &snapshot.codex_quota {
         // observed_at is the Codex CLI's own timestamp on the rate-limit
-        // event. The "age" here is `fetched_at - observed_at` — how stale
+        // event. The "age" here is `fetched_at - observed_at` - how stale
         // the snapshot is relative to right-now. `codex_local::walker`
         // always returns the newest-mtime file regardless of how old it
         // is (see its docs), so a user who hasn't run Codex in a week
-        // still sees data — surfacing the age lets them judge for
+        // still sees data - surfacing the age lets them judge for
         // themselves whether to trust it.
         let age_tag = format_codex_age(q.observed_at, snapshot.fetched_at)
             .map(|s| format!(", {s} old"))
@@ -291,14 +287,14 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
         if q.rate_limit_reached {
             writeln!(
                 w,
-                "  ⚠  Rate-limit reached — Codex CLI is currently throttling requests."
+                "  ⚠  Rate-limit reached - Codex CLI is currently throttling requests."
             )?;
         }
         if verbose {
             writeln!(w, "  Session ID:        {}", q.session_id)?;
         }
     } else if let Some(err) = &snapshot.codex_quota_error {
-        writeln!(w, "OPENAI CODEX QUOTA: unavailable — {err}")?;
+        writeln!(w, "OPENAI CODEX QUOTA: unavailable - {err}")?;
     } else {
         writeln!(
             w,
@@ -308,7 +304,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
     Ok(())
 }
 
-/// Compact 4-quadrant matrix renderer — the default `balanze-cli` output.
+/// Compact 4-quadrant matrix renderer - the default `balanze-cli` output.
 ///
 /// One screen, no scrolling. The layout maps directly onto the design
 /// doc's 4-quadrant matrix: rows are providers (Anthropic, OpenAI),
@@ -360,7 +356,7 @@ pub(crate) fn write_compact<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Res
     }
     writeln!(w)?;
 
-    // The matrix holds measured reality only — server-reported quota % and
+    // The matrix holds measured reality only - server-reported quota % and
     // real billed $. The list-price estimate is the separate "Subscription
     // leverage" line above, never a matrix cell, so a ~$4,000 estimate is
     // never mistaken for ~$4,000 of real spend.
@@ -388,9 +384,9 @@ fn compact_anthropic_quota(s: &Snapshot) -> String {
                 "✓ ready (no cadence bars reported)".to_string()
             } else {
                 // First two cadences. `anthropic_oauth` pre-sorts by
-                // cadence_sort_key (five_hour=0, seven_day=1, …), so the
+                // cadence_sort_key (five_hour=0, seven_day=1, ...), so the
                 // common case is "5h + 7d". {:.1} (not {:.0}) so a
-                // genuine 0.4% doesn't render as "0%" — indistinguishable
+                // genuine 0.4% doesn't render as "0%" - indistinguishable
                 // from the no-usage case.
                 let parts: Vec<String> = oauth
                     .cadences
@@ -408,7 +404,7 @@ fn compact_anthropic_quota(s: &Snapshot) -> String {
 
 fn compact_anthropic_cost(s: &Snapshot) -> String {
     // Measured-only matrix cell: real billed money or nothing. The list-price
-    // estimate is NOT here — it renders on the separate "Subscription leverage"
+    // estimate is NOT here - it renders on the separate "Subscription leverage"
     // line (see compact_subscription_leverage).
     match s
         .claude_oauth
@@ -421,12 +417,12 @@ fn compact_anthropic_cost(s: &Snapshot) -> String {
             micro_usd_to_display_dollars(eu.used_credits_micro_usd),
             micro_usd_to_display_dollars(eu.monthly_limit_micro_usd)
         ),
-        None => "— not available".to_string(),
+        None => "- not available".to_string(),
     }
 }
 
 /// The JSONL list-price estimate, rendered as a clearly-secondary insight
-/// OUTSIDE the matrix — what the local Claude Code usage would cost at API
+/// OUTSIDE the matrix - what the local Claude Code usage would cost at API
 /// list prices. Subscription leverage, never billed. Also surfaces JSONL /
 /// cost-synthesis failures here: the measured-only matrix cell can't show them
 /// (it's real-billed-$ only), so without this line those errors would be
@@ -436,7 +432,7 @@ fn compact_subscription_leverage(s: &Snapshot) -> Option<String> {
     if let Some(cost) = &s.anthropic_api_cost {
         if cost.total_event_count > 0 {
             return Some(format!(
-                "Subscription leverage: ~{} of Claude Code usage at API list prices (leverage — NOT billed)",
+                "Subscription leverage: ~{} of Claude Code usage at API list prices (leverage - NOT billed)",
                 micro_usd_to_display_dollars(cost.total_micro_usd)
             ));
         }
@@ -462,7 +458,7 @@ fn compact_pace_line(s: &Snapshot) -> Option<String> {
         .map(|p| {
             let ratio = match p.ratio {
                 Some(r) => format!("{r:.1}×"),
-                None => "—".to_string(),
+                None => "-".to_string(),
             };
             format!(
                 "{} {:.0}% used / {:.0}% elapsed ({ratio})",
@@ -480,14 +476,14 @@ fn compact_codex_quota(s: &Snapshot) -> String {
         (Some(q), _) => {
             let window = format_codex_window(q.primary.window_duration_minutes);
             // Honesty: a rollout whose primary window has already reset is
-            // stale — the used% it carries describes an elapsed window. Degrade
+            // stale - the used% it carries describes an elapsed window. Degrade
             // the ✓ to a ⚠ + "stale" marker rather than show a confident figure
             // behind a green check.
             let expired = s.fetched_at > q.primary.resets_at;
             // Append snapshot age when meaningfully stale (≥1 min). The
             // walker returns the newest-mtime rollout file regardless of
             // age, so a 7-day-old session and a 2-min-old session look
-            // identical without this tag — see `format_codex_age` doc.
+            // identical without this tag - see `format_codex_age` doc.
             let age_tag = format_codex_age(q.observed_at, s.fetched_at)
                 .map(|s| format!(", {s} old"))
                 .unwrap_or_default();
@@ -496,7 +492,7 @@ fn compact_codex_quota(s: &Snapshot) -> String {
             } else {
                 ("✓", "")
             };
-            // {:.1} for the same reason as the anthropic quota cell — a
+            // {:.1} for the same reason as the anthropic quota cell - a
             // genuine 0.4% must not collapse to "0%".
             format!(
                 "{marker} {:.1}% {window} (codex {}{stale_tag}{age_tag})",
@@ -534,7 +530,7 @@ mod tests {
     // -----------------------------------------------------------------------
     // Label-discipline goldens for the compact + sections views. These pin
     // the four-tier confidence vocabulary the product depends on:
-    //   1. ESTIMATE (JSONL × LiteLLM list price — subscription leverage)
+    //   1. ESTIMATE (JSONL × LiteLLM list price - subscription leverage)
     //   2. REAL pay-as-you-go overage (Anthropic extra_usage block)
     //   3. Server quota % (OAuth cadences + Codex rate-limit)
     //   4. Real billed spend (OpenAI Admin Costs)
@@ -547,7 +543,7 @@ mod tests {
     }
 
     /// Construct a Snapshot with every quadrant populated. Numbers chosen so
-    /// the estimate ($4.20) and the real overage ($20.92) are distinct — i.e.
+    /// the estimate ($4.20) and the real overage ($20.92) are distinct - i.e.
     /// the kind of layout where a careless reader could confuse the two.
     fn fully_populated_snapshot() -> Snapshot {
         let now = fixture_fetched_at();
@@ -679,14 +675,14 @@ mod tests {
             "compact Anthropic-cost cell must carry 'overage (real)' when extra_usage enabled:\n{out}"
         );
 
-        // R1: the JSONL estimate must NOT appear in the matrix — it lives on
+        // R1: the JSONL estimate must NOT appear in the matrix - it lives on
         // the separate Subscription leverage line.
         assert!(
             !out.contains("est-leverage"),
-            "the matrix must not contain 'est-leverage' — it belongs on the leverage line:\n{out}"
+            "the matrix must not contain 'est-leverage' - it belongs on the leverage line:\n{out}"
         );
 
-        // Subscription leverage line — shows the JSONL estimate outside the matrix.
+        // Subscription leverage line - shows the JSONL estimate outside the matrix.
         assert!(
             out.contains("Subscription leverage:"),
             "compact must have a 'Subscription leverage:' line:\n{out}"
@@ -696,7 +692,7 @@ mod tests {
             "Subscription leverage line must carry 'NOT billed' qualifier:\n{out}"
         );
 
-        // Pace line — must show used% / elapsed% and ratio.
+        // Pace line - must show used% / elapsed% and ratio.
         assert!(
             out.contains("Pace:"),
             "compact must have a 'Pace:' line when pace is non-empty:\n{out}"
@@ -706,20 +702,20 @@ mod tests {
             "Pace line must show the short cadence key '5h':\n{out}"
         );
 
-        // Tier 3a — Anthropic server quota. The "(oauth)" suffix is the
+        // Tier 3a - Anthropic server quota. The "(oauth)" suffix is the
         // wire-source tag.
         assert!(
             out.contains("(oauth)"),
             "compact Anthropic-quota cell must carry the (oauth) source tag\n{out}"
         );
 
-        // Tier 3b — Codex server quota. "(codex …" carries the source.
+        // Tier 3b - Codex server quota. "(codex ..." carries the source.
         assert!(
             out.contains("(codex go"),
-            "compact OpenAI-quota cell must carry the (codex …) source tag\n{out}"
+            "compact OpenAI-quota cell must carry the (codex ...) source tag\n{out}"
         );
 
-        // Tier 4 — OpenAI real billed spend, from the Admin Costs endpoint.
+        // Tier 4 - OpenAI real billed spend, from the Admin Costs endpoint.
         assert!(
             out.contains("(admin costs)"),
             "compact OpenAI-cost cell must carry the (admin costs) source tag\n{out}"
@@ -739,7 +735,7 @@ mod tests {
             "legend must say estimate is 'never charged':\n{out}"
         );
 
-        // Codex age tag — observed_at is 5min behind fetched_at, so the
+        // Codex age tag - observed_at is 5min behind fetched_at, so the
         // ", 5m old" suffix must appear. Pins the new freshness signal.
         assert!(
             out.contains(", 5m old"),
@@ -792,15 +788,15 @@ mod tests {
     #[test]
     fn compact_anthropic_cost_absent_extra_usage_shows_not_available() {
         // When extra_usage is absent or disabled, the Anthropic API $ cell
-        // must show "— not available", never the JSONL estimate.
+        // must show "- not available", never the JSONL estimate.
         let mut snap = fully_populated_snapshot();
         if let Some(oauth) = snap.claude_oauth.as_mut() {
             oauth.extra_usage = None;
         }
         let out = render_compact(&snap);
         assert!(
-            out.contains("— not available"),
-            "Anthropic cost cell must show '— not available' when extra_usage is absent:\n{out}"
+            out.contains("- not available"),
+            "Anthropic cost cell must show '- not available' when extra_usage is absent:\n{out}"
         );
         // The JSONL estimate must still appear on the leverage line, not in the matrix.
         assert!(
@@ -836,8 +832,8 @@ mod tests {
         let out = render_compact(&snap);
         assert!(out.contains("Pace:"), "Pace: line must appear:\n{out}");
         assert!(
-            out.contains("(—)"),
-            "ratio: None must render as (—):\n{out}"
+            out.contains("(-)"),
+            "ratio: None must render as (-):\n{out}"
         );
     }
 
@@ -907,14 +903,14 @@ mod tests {
         // The EXTRA USAGE block header MUST carry the "REAL billed spend"
         // qualifier. This is the single most important label in the file.
         assert!(
-            out.contains("EXTRA USAGE (pay-as-you-go overage — REAL billed spend"),
+            out.contains("EXTRA USAGE (pay-as-you-go overage - REAL billed spend"),
             "EXTRA USAGE section must carry the REAL billed spend qualifier:\n{out}"
         );
 
         // The estimate block MUST carry "ESTIMATE ONLY" and the leverage
         // disclaimer on the value line.
         assert!(
-            out.contains("ANTHROPIC API COST — ESTIMATE ONLY"),
+            out.contains("ANTHROPIC API COST - ESTIMATE ONLY"),
             "ANTHROPIC API COST section header must carry the ESTIMATE ONLY tag:\n{out}"
         );
         assert!(
@@ -922,7 +918,7 @@ mod tests {
             "estimate value line must carry the leverage-not-billed qualifier:\n{out}"
         );
 
-        // Cross-link from estimate block back to extra-usage block — keeps
+        // Cross-link from estimate block back to extra-usage block - keeps
         // a reader who lands on the estimate first oriented to where the
         // real money is.
         assert!(
@@ -941,7 +937,7 @@ mod tests {
             "OpenAI spend must never be tagged as an estimate:\n{out}"
         );
 
-        // Codex header — plan + age. The plan_type "go" + observed_at 5min
+        // Codex header - plan + age. The plan_type "go" + observed_at 5min
         // behind fetched_at means the age suffix must render.
         assert!(
             out.contains("OPENAI CODEX QUOTA (plan: go,"),
@@ -956,7 +952,7 @@ mod tests {
     #[test]
     fn sections_handles_disabled_extra_usage_without_dropping_estimate_qualifier() {
         // When extra_usage is None / disabled, the EXTRA USAGE block goes
-        // away — but the estimate block MUST still carry its qualifier
+        // away - but the estimate block MUST still carry its qualifier
         // (otherwise a Pro user sees a bare "$4.20" and might assume real
         // spend). This is the regression the labeling discipline exists to
         // prevent.
@@ -971,7 +967,7 @@ mod tests {
             "EXTRA USAGE block must be hidden when extra_usage is None:\n{out}"
         );
         assert!(
-            out.contains("ANTHROPIC API COST — ESTIMATE ONLY"),
+            out.contains("ANTHROPIC API COST - ESTIMATE ONLY"),
             "estimate block qualifier must survive extra_usage going away:\n{out}"
         );
         assert!(

@@ -11,7 +11,7 @@ use claude_parser::find_all_claude_projects_dirs;
 use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiError, costs_this_month};
 
 // ────────────────────────────────────────────────────────────────────
-// `balanze-cli setup` — interactive auth wizard.
+// `balanze-cli setup` - interactive auth wizard.
 //
 // Flow:
 //   [1/5] Check Anthropic OAuth credentials file presence.
@@ -36,7 +36,7 @@ use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiError, costs_this
 //     (don't re-prompt). User can answer 'y' to replace.
 // ────────────────────────────────────────────────────────────────────
 
-// Status enums only carry the discriminants — paths and error messages
+// Status enums only carry the discriminants - paths and error messages
 // are already eprintln'd at the moment they're known. If a future step
 // (balanze_cli wiring) needs to thread the paths into a Snapshot, add
 // the payload then. YAGNI for now.
@@ -179,7 +179,7 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
         }
     }
 
-    // Single `keychain::get` instead of `exists` + `get` — `exists` is
+    // Single `keychain::get` instead of `exists` + `get` - `exists` is
     // implemented as `get(...).is_ok_or_not_found()` under the hood
     // (see `keychain::exists`), so an `exists`+`get` sequence is two
     // keychain reads. On macOS that's two ACL prompts.
@@ -248,7 +248,7 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
     // settings.json shouldn't block the setup wizard), but save errors
     // propagate loudly. A silent save failure here would leave
     // `settings.providers.openai_enabled = false` while the key IS in
-    // the keychain — exactly the kind of desync that makes "why doesn't
+    // the keychain - exactly the kind of desync that makes "why doesn't
     // it show up in `balanze-cli status`?" debugging painful.
     let mut s = settings::load().unwrap_or_default();
     s.providers.openai_enabled = true;
@@ -324,7 +324,7 @@ fn setup_statusline() {
     let mut answer = String::new();
     // read_line returns Ok(0) on EOF (not Err); an IO error is also non-fatal
     // here (advisory step). Either way `answer` stays empty and falls through
-    // to the "Skipped" else branch below — never writes settings.json.
+    // to the "Skipped" else branch below - never writes settings.json.
     let _ = std::io::stdin().read_line(&mut answer);
     if answer.trim().eq_ignore_ascii_case("y") {
         match wire_statusline(&path, invocation) {
@@ -343,6 +343,7 @@ fn validate_openai_key_blocking(key: &str) -> Result<()> {
     rt.block_on(async {
         let client = reqwest::Client::builder()
             .user_agent("balanze-cli/0.1.0")
+            .timeout(std::time::Duration::from_secs(30))
             .build()?;
         // One-shot CLI must not block on provider backoff; watcher passes standard().
         match costs_this_month(
@@ -358,7 +359,7 @@ fn validate_openai_key_blocking(key: &str) -> Result<()> {
                 Err(anyhow!("OpenAI rejected the key (HTTP 401). Body: {body}"))
             }
             Err(OpenAiError::InsufficientScope { .. }) => Err(anyhow!(
-                "OpenAI returned 403 — this key lacks admin scope. \
+                "OpenAI returned 403 - this key lacks admin scope. \
                  Generate an admin key at \
                  https://platform.openai.com/settings/organization/admin-keys"
             )),
@@ -374,17 +375,17 @@ fn print_readiness(
 ) {
     let anthropic_quota = match anthropic {
         AnthropicOAuthStatus::Found => "✓ ready (anthropic_oauth)",
-        AnthropicOAuthStatus::NotFound => "✗ not configured — run `claude login`",
+        AnthropicOAuthStatus::NotFound => "✗ not configured - run `claude login`",
     };
     // Anthropic API $ derivation only needs JSONL files; OAuth isn't required.
     let claude_cost = if !find_all_claude_projects_dirs().is_empty() {
-        "✓ ready (claude_cost — estimated from JSONL)"
+        "✓ ready (claude_cost - estimated from JSONL)"
     } else {
         "✗ no Claude Code JSONL found"
     };
     let codex_str = match codex {
         CodexStatus::HasSessions => "✓ ready (codex_local)",
-        CodexStatus::InstalledNoSessions => "○ installed, no sessions yet — run `codex` once",
+        CodexStatus::InstalledNoSessions => "○ installed, no sessions yet - run `codex` once",
         CodexStatus::NotInstalled => "✗ Codex CLI not installed",
         CodexStatus::Error => "✗ error reading Codex sessions (see message above)",
     };
@@ -393,8 +394,8 @@ fn print_readiness(
             "✓ ready (openai_client)"
         }
         OpenAiKeyStatus::EnvVarOverride => "✓ ready (via BALANZE_OPENAI_KEY env var)",
-        OpenAiKeyStatus::ValidationFailed => "✗ key validation failed — re-run setup",
-        OpenAiKeyStatus::KeychainBroken => "✗ keychain broken — use BALANZE_OPENAI_KEY env var",
+        OpenAiKeyStatus::ValidationFailed => "✗ key validation failed - re-run setup",
+        OpenAiKeyStatus::KeychainBroken => "✗ keychain broken - use BALANZE_OPENAI_KEY env var",
     };
 
     eprintln!();

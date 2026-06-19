@@ -1,17 +1,17 @@
 //! Stdout and JSONL sinks for `--watch` mode.
 //!
 //! The `Sink` trait is synchronous; the coordinator's actor calls these from
-//! its tokio task. Each sink owns whatever state it needs — no shared mutable
+//! its tokio task. Each sink owns whatever state it needs - no shared mutable
 //! state.
 //!
 //! # Sink choices
 //!
-//! * [`StdoutSink`] — the default. On a TTY it reprints the compact 4-quadrant
+//! * [`StdoutSink`] - the default. On a TTY it reprints the compact 4-quadrant
 //!   view with an ANSI clear-screen before each frame. On non-TTY (pipes, log
 //!   files) it prepends `---` so output is parseable. Both paths are debounced
 //!   at 200 ms.
 //!
-//! * [`JsonlSink`] — activated by `--watch --json`. Emits one JSON object per
+//! * [`JsonlSink`] - activated by `--watch --json`. Emits one JSON object per
 //!   line with no debounce (every event is a discrete data point for the
 //!   consumer).
 //!
@@ -23,7 +23,7 @@
 //! * macOS Terminal / iTerm2
 //! * Linux on any modern terminal emulator
 //! * Windows 11 in **Windows Terminal** and **PowerShell 7+** (both enable
-//!   Virtual Terminal Processing by default — see `ENABLE_VIRTUAL_TERMINAL_PROCESSING`)
+//!   Virtual Terminal Processing by default - see `ENABLE_VIRTUAL_TERMINAL_PROCESSING`)
 //!
 //! It does NOT work in legacy Windows `cmd.exe` without `EnableVirtualTerminalProcessing`
 //! turned on first; in that case the user will see literal `␛[2J␛[H` characters
@@ -37,10 +37,10 @@
 //!
 //! `StdoutSink` tracks a `broken_pipe` flag: once a write to stdout returns
 //! `ErrorKind::BrokenPipe` (e.g., `balanze-cli --watch | head -n 5` closes
-//! the pipe after 5 frames), the sink stops attempting further writes — but
+//! the pipe after 5 frames), the sink stops attempting further writes - but
 //! the coordinator's loop keeps running. This is a deliberate trade-off:
 //! returning an error from the sync `Sink::on_snapshot` boundary would require
-//! a trait extension, while the broken-pipe condition itself isn't fatal —
+//! a trait extension, while the broken-pipe condition itself isn't fatal -
 //! the coordinator stays alive and `Ctrl-C` still exits cleanly. The leftover
 //! tokio runtime (CPU-idle, just spinning on intervals) is bounded; if you
 //! want strict broken-pipe-exits-process behavior, run `--watch --json | head`
@@ -76,9 +76,9 @@ const ANSI_CLEAR_HOME: &[u8] = b"\x1b[2J\x1b[H";
 
 /// A [`Sink`] that redraws the compact 4-quadrant view on stdout.
 ///
-/// * **TTY** — emits `\x1b[2J\x1b[H` (ANSI clear-screen + cursor-home) before
+/// * **TTY** - emits `\x1b[2J\x1b[H` (ANSI clear-screen + cursor-home) before
 ///   each frame, giving an in-place refresh effect.
-/// * **Non-TTY** — prepends `---\n` before each frame so the stream is
+/// * **Non-TTY** - prepends `---\n` before each frame so the stream is
 ///   parseable as a series of separator-delimited blocks.
 ///
 /// Frames arriving sooner than [`DEBOUNCE`] after the previous painted frame
@@ -89,7 +89,7 @@ pub struct StdoutSink {
     is_tty: bool,
     last_render: Option<Instant>,
     /// Set to true on the first write that returns `ErrorKind::BrokenPipe`.
-    /// Subsequent `on_snapshot` calls become no-ops — see module doc.
+    /// Subsequent `on_snapshot` calls become no-ops - see module doc.
     broken_pipe: bool,
 }
 
@@ -151,7 +151,7 @@ impl Sink for StdoutSink {
         }
         // NB: `last_render` is set AFTER a successful write below, not
         // here. If the write fails with a non-broken-pipe I/O error
-        // (rare — e.g., transient stdout EAGAIN), the next snapshot
+        // (rare - e.g., transient stdout EAGAIN), the next snapshot
         // arriving within DEBOUNCE should still attempt a paint rather
         // than being dropped on top of the missed one. Broken-pipe
         // failures latch via `self.broken_pipe` and become permanent.
@@ -171,7 +171,7 @@ impl Sink for StdoutSink {
             return;
         }
         let _ = self.out.flush();
-        // Successful paint — record the timestamp so subsequent calls
+        // Successful paint - record the timestamp so subsequent calls
         // within DEBOUNCE are dropped.
         self.last_render = Some(now);
     }
@@ -201,7 +201,7 @@ pub struct JsonlSink;
 impl Sink for JsonlSink {
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
         // Use `render_jsonl` (single-line `to_string`), NOT `render`
-        // (`to_string_pretty` — multi-line with embedded newlines).
+        // (`to_string_pretty` - multi-line with embedded newlines).
         // `--watch --json` must produce exactly one JSON object per
         // line so `jq` and other line-oriented consumers work.
         // verbose=false: machine consumers don't need org_uuid /
@@ -214,7 +214,7 @@ impl Sink for JsonlSink {
     }
 
     fn on_degraded(&mut self, _source: Source, _error: &str) {
-        // Intentional no-op — see module doc.
+        // Intentional no-op - see module doc.
     }
 }
 
@@ -292,7 +292,7 @@ mod tests {
         );
     }
 
-    /// `Write` impl that returns `BrokenPipe` on every `write` call — used
+    /// `Write` impl that returns `BrokenPipe` on every `write` call - used
     /// to verify `StdoutSink` latches into broken-pipe state and stops
     /// trying to write.
     struct BrokenPipeWriter {
@@ -346,7 +346,7 @@ mod tests {
         let len_after_first = buf.lock().unwrap().len();
         assert!(len_after_first > 0, "first frame should have written bytes");
 
-        // Second call immediately after — should be dropped by the debounce.
+        // Second call immediately after - should be dropped by the debounce.
         sink.on_snapshot(&fixture_snapshot());
         let len_after_second = buf.lock().unwrap().len();
         assert_eq!(

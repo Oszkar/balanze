@@ -29,7 +29,7 @@ pub(crate) fn format_codex_window(minutes: u64) -> String {
 /// noise-free; otherwise returns a tight "Nm" / "Nh" / "Nd" tag.
 ///
 /// Negative durations (observed_at in the future, e.g. clock skew) clamp
-/// to `None` — we don't want to show "−2m old" or panic on subtraction.
+/// to `None` - we don't want to show "−2m old" or panic on subtraction.
 pub(crate) fn format_codex_age(
     observed_at: DateTime<Utc>,
     fetched_at: DateTime<Utc>,
@@ -57,7 +57,7 @@ pub(crate) fn format_codex_age(
 /// Each 7-day sub-variant gets a distinct suffix so a user on a
 /// Sonnet-only or Opus-only flow doesn't see two indistinguishable
 /// "7d" cells (e.g. "19% 7d, 84% 7d-son"). Unknown / internal-codename
-/// cadences render "?" here on purpose — the full label is visible in
+/// cadences render "?" here on purpose - the full label is visible in
 /// `--sections`; the compact row is a glance, not the source of truth.
 pub(crate) fn short_cadence(key: &str) -> &'static str {
     match key {
@@ -108,7 +108,7 @@ mod tests {
     use chrono::TimeZone;
 
     // -----------------------------------------------------------------------
-    // format_codex_age — the freshness tag wired into compact + sections
+    // format_codex_age - the freshness tag wired into compact + sections
     // views. The walker returns the newest-mtime rollout file regardless of
     // age (intentional, see crate doc); the renderer surfaces age so a 7d
     // stale snapshot can be distinguished from a 2-min-old one.
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn format_codex_window_renders_human_units() {
-        // 5-hour Codex primary window (300 min) must read "5h", not "0d" —
+        // 5-hour Codex primary window (300 min) must read "5h", not "0d" -
         // 300 / 1440 floored to zero was the bug.
         assert_eq!(format_codex_window(300), "5h");
         // 7-day window (10080 min) reads "7d".

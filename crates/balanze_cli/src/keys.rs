@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use std::io;
 
 pub(crate) fn cmd_set_openai_key() -> Result<()> {
-    // Two input paths, by TTY status — never argv. A positional `sk-…` would
+    // Two input paths, by TTY status - never argv. A positional `sk-...` would
     // land in shell history / `ps`, which is the exact thing this command
     // exists to avoid:
     //   - Interactive TTY → masked input via rpassword (same pattern as
@@ -37,13 +37,13 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
             "key doesn't look like an OpenAI key (expected to start with `sk-`)"
         ));
     }
-    // Warn about non-admin keys but don't block — the API will reject them
+    // Warn about non-admin keys but don't block - the API will reject them
     // and the user will see the specific error in the next status fetch.
     let is_admin_key = key.starts_with("sk-admin-");
     if !is_admin_key {
         eprintln!("Heads up: this doesn't look like an admin key. The organization/costs");
-        eprintln!("endpoint Balanze uses requires an admin key (`sk-admin-…`); project keys");
-        eprintln!("(`sk-proj-…`) and service-account keys will return 403 here. Create an");
+        eprintln!("endpoint Balanze uses requires an admin key (`sk-admin-...`); project keys");
+        eprintln!("(`sk-proj-...`) and service-account keys will return 403 here. Create an");
         eprintln!("admin key at https://platform.openai.com/settings/organization/admin-keys");
         eprintln!("and replace this one if the next `balanze-cli` run shows an error.");
     }

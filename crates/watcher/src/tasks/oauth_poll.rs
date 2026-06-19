@@ -94,6 +94,7 @@ pub(crate) fn spawn(
             // shows a persistent degraded state and the next tick retries.
             let client = match reqwest::Client::builder()
                 .user_agent("balanze-watcher/0.1.0")
+                .timeout(std::time::Duration::from_secs(30))
                 .build()
             {
                 Ok(c) => c,
