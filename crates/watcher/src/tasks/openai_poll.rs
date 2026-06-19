@@ -91,8 +91,8 @@ pub(crate) fn spawn(
             {
                 Ok(costs) => {
                     tracing::info!(
-                        "watcher/openai_poll: fetched costs total_usd={} buckets={} truncated={}",
-                        costs.total_usd,
+                        "watcher/openai_poll: fetched costs total_micro_usd={} buckets={} truncated={}",
+                        costs.total_micro_usd,
                         costs.by_line_item.len(),
                         costs.truncated
                     );

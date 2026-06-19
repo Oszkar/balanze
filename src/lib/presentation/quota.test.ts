@@ -3,6 +3,7 @@ import { quotaTone, anthropicQuota, codexElapsedFraction, codexWindowExpired } f
 import type { Snapshot } from '../types/snapshot';
 
 const base: Snapshot = {
+  schema_version: 1,
   fetched_at: '2026-06-03T12:00:00Z',
   claude_oauth: null, claude_oauth_error: null,
   claude_jsonl: null, claude_jsonl_error: null,

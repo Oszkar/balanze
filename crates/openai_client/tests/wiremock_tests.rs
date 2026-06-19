@@ -68,7 +68,7 @@ async fn happy_path_parses_response_and_sends_expected_query() {
     .await
     .expect("should succeed");
 
-    assert!((costs.total_usd - 1.73).abs() < 1e-9);
+    assert_eq!(costs.total_micro_usd, 1_730_000);
     assert_eq!(costs.by_line_item.len(), 2);
     assert!(!costs.truncated);
     // gpt-5 has the higher amount, comes first.

@@ -223,11 +223,19 @@ fn parse_response(
     end_time: DateTime<Utc>,
     fetched_at: DateTime<Utc>,
 ) -> Result<OpenAiCosts, OpenAiError> {
-    let page: RawPage = serde_json::from_str(body)
-        .map_err(|e| OpenAiError::ResponseShape(format!("invalid JSON: {e}")))?;
+    let page: RawPage = serde_json::from_str(body).map_err(|e| {
+        // Redact: a type-confused 200 (e.g. `data` arriving as a string) makes
+        // serde quote the offending value in its Display, which could carry an
+        // `sk-…`-shaped token. This error string reaches WARN logs + the
+        // user-facing `degraded_state` (AGENTS.md §3.4).
+        OpenAiError::ResponseShape(format!(
+            "invalid JSON: {}",
+            redact_for_display(&e.to_string())
+        ))
+    })?;
 
-    let mut total_usd = 0.0f64;
-    let mut by_line: HashMap<String, f64> = HashMap::new();
+    let mut total_micro_usd: i64 = 0;
+    let mut by_line: HashMap<String, i64> = HashMap::new();
 
     for bucket in &page.data {
         for result in &bucket.results {
@@ -240,28 +248,33 @@ fn parse_response(
                 .filter(|s| !s.is_empty())
                 .unwrap_or("unknown")
                 .to_string();
-            total_usd += amount.value;
-            *by_line.entry(label).or_insert(0.0) += amount.value;
+            // Convert each amount to i64 micro-USD at the boundary, then sum as
+            // integers (AGENTS.md §2.1). Per-item round avoids the f64-sum drift
+            // we'd get summing dollars first. saturating_* is defensive; real
+            // monthly spend is nowhere near i64::MAX micro-USD.
+            let micro = (amount.value * 1_000_000.0).round() as i64;
+            total_micro_usd = total_micro_usd.saturating_add(micro);
+            let entry = by_line.entry(label).or_insert(0);
+            *entry = entry.saturating_add(micro);
         }
     }
 
     let mut by_line_item: Vec<LineItemCost> = by_line
         .into_iter()
-        .map(|(line_item, amount_usd)| LineItemCost {
+        .map(|(line_item, amount_micro_usd)| LineItemCost {
             line_item,
-            amount_usd,
+            amount_micro_usd,
         })
         .collect();
     by_line_item.sort_by(|a, b| {
-        b.amount_usd
-            .partial_cmp(&a.amount_usd)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        b.amount_micro_usd
+            .cmp(&a.amount_micro_usd)
             .then_with(|| a.line_item.cmp(&b.line_item))
     });
 
     debug!(
         buckets = page.data.len(),
-        total_usd,
+        total_micro_usd,
         has_more = page.has_more,
         "costs: parsed"
     );
@@ -269,7 +282,7 @@ fn parse_response(
     Ok(OpenAiCosts {
         start_time,
         end_time,
-        total_usd,
+        total_micro_usd,
         by_line_item,
         truncated: page.has_more,
         fetched_at,
@@ -336,13 +349,36 @@ mod tests {
         }"#;
         let (start, end) = fixed_window();
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
-        assert!((parsed.total_usd - 1.73).abs() < 1e-9);
+        assert_eq!(parsed.total_micro_usd, 1_730_000);
         assert!(!parsed.truncated);
         // Two distinct line items, sorted by amount desc: gpt-5 (1.65), o1-mini (0.08)
         assert_eq!(parsed.by_line_item.len(), 2);
         assert_eq!(parsed.by_line_item[0].line_item, "gpt-5");
-        assert!((parsed.by_line_item[0].amount_usd - 1.65).abs() < 1e-9);
+        assert_eq!(parsed.by_line_item[0].amount_micro_usd, 1_650_000);
         assert_eq!(parsed.by_line_item[1].line_item, "o1-mini");
+    }
+
+    #[test]
+    fn response_shape_error_redacts_sk_keys_from_serde_message() {
+        // A type-confused 200 (`data` arriving as a string) makes serde quote the
+        // offending value in its Display. An sk-…-shaped value must NOT survive
+        // into the error string, which reaches WARN logs + the UI (AGENTS.md §3.4).
+        // Built at runtime so the source carries no key-shaped literal (the
+        // pre-commit secret scanner flags those, rightly). Still sk-…-shaped at
+        // runtime, so `redact_for_display` treats it as a key.
+        let leak = format!("sk-admin-{}", "A".repeat(36));
+        let body = format!(r#"{{"object":"page","data":"{leak}","has_more":false}}"#);
+        let (start, end) = fixed_window();
+        let err = parse_response(&body, start, end, Utc::now()).expect_err("type mismatch");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains(&leak),
+            "raw sk- key must not appear in the error string: {msg}"
+        );
+        assert!(
+            msg.contains("REDACTED"),
+            "redaction marker expected in: {msg}"
+        );
     }
 
     #[test]
@@ -350,7 +386,7 @@ mod tests {
         let body = r#"{"object":"page","data":[],"has_more":false}"#;
         let (start, end) = fixed_window();
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
-        assert_eq!(parsed.total_usd, 0.0);
+        assert_eq!(parsed.total_micro_usd, 0);
         assert!(parsed.by_line_item.is_empty());
         assert!(!parsed.truncated);
     }
@@ -364,7 +400,7 @@ mod tests {
         }"#;
         let (start, end) = fixed_window();
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
-        assert_eq!(parsed.total_usd, 0.0);
+        assert_eq!(parsed.total_micro_usd, 0);
     }
 
     #[test]
@@ -380,7 +416,7 @@ mod tests {
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
         assert_eq!(parsed.by_line_item.len(), 1);
         assert_eq!(parsed.by_line_item[0].line_item, "unknown");
-        assert!((parsed.by_line_item[0].amount_usd - 0.5).abs() < 1e-9);
+        assert_eq!(parsed.by_line_item[0].amount_micro_usd, 500_000);
     }
 
     #[test]
@@ -398,7 +434,7 @@ mod tests {
         let (start, end) = fixed_window();
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
         assert_eq!(parsed.by_line_item.len(), 1);
-        assert!((parsed.by_line_item[0].amount_usd - 0.1).abs() < 1e-9);
+        assert_eq!(parsed.by_line_item[0].amount_micro_usd, 100_000);
     }
 
     #[test]
@@ -423,8 +459,8 @@ mod tests {
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
         assert_eq!(parsed.by_line_item.len(), 1);
         assert_eq!(parsed.by_line_item[0].line_item, "gpt-5");
-        assert!((parsed.by_line_item[0].amount_usd - 0.35).abs() < 1e-9);
-        assert!((parsed.total_usd - 0.35).abs() < 1e-9);
+        assert_eq!(parsed.by_line_item[0].amount_micro_usd, 350_000);
+        assert_eq!(parsed.total_micro_usd, 350_000);
     }
 
     #[test]
@@ -441,7 +477,7 @@ mod tests {
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
         assert!(parsed.truncated);
         // Total is still computed from what we did get — it's just flagged partial.
-        assert!((parsed.total_usd - 1.0).abs() < 1e-9);
+        assert_eq!(parsed.total_micro_usd, 1_000_000);
     }
 
     #[test]
@@ -460,18 +496,18 @@ mod tests {
         }"#;
         let (start, end) = fixed_window();
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
-        // 0.021 + 1.5 = 1.521; check within float epsilon.
-        assert!(
-            (parsed.total_usd - 1.521).abs() < 1e-9,
+        // 0.021 + 1.5 = 1.521; per-item round-to-micro then i64 sum is exact.
+        assert_eq!(
+            parsed.total_micro_usd, 1_521_000,
             "got {}",
-            parsed.total_usd
+            parsed.total_micro_usd
         );
         assert_eq!(parsed.by_line_item.len(), 2);
         // o1-mini has the higher amount (1.50), comes first.
         assert_eq!(parsed.by_line_item[0].line_item, "o1-mini");
-        assert!((parsed.by_line_item[0].amount_usd - 1.5).abs() < 1e-9);
+        assert_eq!(parsed.by_line_item[0].amount_micro_usd, 1_500_000);
         assert_eq!(parsed.by_line_item[1].line_item, "gpt-5");
-        assert!((parsed.by_line_item[1].amount_usd - 0.021).abs() < 1e-9);
+        assert_eq!(parsed.by_line_item[1].amount_micro_usd, 21_000);
     }
 
     #[test]

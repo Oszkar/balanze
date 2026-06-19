@@ -662,7 +662,7 @@ mod tests {
         const N: usize = 32;
         for i in 0..N {
             let mut openai = openai_costs();
-            openai.total_usd = i as f64;
+            openai.total_micro_usd = i as i64;
             handle
                 .send(StateMsg::Update(SourceUpdate {
                     source: Source::OpenAiCosts,
@@ -674,8 +674,8 @@ mod tests {
 
         let snap = handle.query().await.unwrap();
         assert_eq!(
-            snap.openai.as_ref().unwrap().total_usd,
-            (N - 1) as f64,
+            snap.openai.as_ref().unwrap().total_micro_usd,
+            (N - 1) as i64,
             "last update wins; no message was dropped"
         );
         assert_eq!(sink.snapshot_count(), N, "every update reached the sink");

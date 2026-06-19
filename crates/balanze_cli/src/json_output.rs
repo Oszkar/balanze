@@ -40,6 +40,14 @@ use state_coordinator::{JsonlSnapshot, Snapshot, WindowPace};
 /// Sentinel inserted in place of `codex_quota.session_id` when `verbose=false`.
 const SESSION_ID_REDACTED: &str = "<redacted>";
 
+/// Schema version of the `--json` presentation DTO (this module's shape). Bump
+/// when the wire shape changes so machine consumers can detect a break; keep the
+/// AGENTS.md §2.1 `--json` row and the README example in lockstep. Independent
+/// of `state_coordinator::SNAPSHOT_SCHEMA_VERSION` (the IPC `Snapshot` is a
+/// different surface). Version 1 is the first explicitly-versioned schema and
+/// carries the i64-micro-USD OpenAI cell shape.
+const SCHEMA_VERSION: u32 = 1;
+
 /// Serialize `snap` as pretty-printed JSON suitable for `balanze-cli status
 /// --json`. When `verbose=false`, account identifiers (`org_uuid`,
 /// `session_id`) are redacted.
@@ -64,6 +72,7 @@ pub fn render_jsonl(snap: &Snapshot, verbose: bool) -> Result<String, serde_json
 
 #[derive(Serialize)]
 struct JsonDoc<'a> {
+    schema_version: u32,
     fetched_at: DateTime<Utc>,
     claude_oauth: Option<JsonClaudeOAuth<'a>>,
     claude_oauth_error: Option<&'a str>,
@@ -83,6 +92,7 @@ struct JsonDoc<'a> {
 impl<'a> JsonDoc<'a> {
     fn from_snapshot(snap: &'a Snapshot, verbose: bool) -> Self {
         Self {
+            schema_version: SCHEMA_VERSION,
             fetched_at: snap.fetched_at,
             claude_oauth: snap
                 .claude_oauth
@@ -221,11 +231,10 @@ impl<'a> From<&'a Cost> for JsonAnthropicApiCost<'a> {
 
 #[derive(Serialize)]
 struct JsonOpenAi<'a> {
-    /// OpenAI's wire shape is `total_usd: f64`. We convert to i64 micro-USD
-    /// at the JSON boundary (AGENTS.md §2.1: integer math everywhere
-    /// internally; f64 only at the display boundary - `--json` IS that
-    /// boundary for scripts) so consumers can read the same
-    /// `.value_micro_usd` they read on other cells.
+    /// Headline OpenAI spend in i64 micro-USD (AGENTS.md §2.1). `OpenAiCosts`
+    /// is already micro-USD - converted at the parse boundary in
+    /// `openai_client` - so this is a straight read, uniform with the other
+    /// money cells' `value_micro_usd`.
     value_micro_usd: i64,
     source: &'static str,
     confidence: &'static str,
@@ -236,9 +245,7 @@ struct JsonOpenAi<'a> {
 struct JsonOpenAiDetails<'a> {
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
-    /// Preserved for provenance (OpenAI's wire field). Reads should prefer
-    /// the top-level `value_micro_usd`.
-    total_usd: f64,
+    /// Per-line-item breakdown; each `amount_micro_usd` is i64 micro-USD.
     by_line_item: &'a [LineItemCost],
     truncated: bool,
     fetched_at: DateTime<Utc>,
@@ -246,17 +253,15 @@ struct JsonOpenAiDetails<'a> {
 
 impl<'a> From<&'a OpenAiCosts> for JsonOpenAi<'a> {
     fn from(o: &'a OpenAiCosts) -> Self {
-        // Round on conversion - `*_usd * 1_000_000` then floor-as-i64 would
-        // lose half a micro-USD on every cell.
-        let value_micro_usd = (o.total_usd * 1_000_000.0).round() as i64;
+        // `OpenAiCosts` is already i64 micro-USD (converted at the parse
+        // boundary), so the headline value is a straight read - no f64 here.
         Self {
-            value_micro_usd,
+            value_micro_usd: o.total_micro_usd,
             source: "openai_admin_costs",
             confidence: "real",
             details: JsonOpenAiDetails {
                 start_time: o.start_time,
                 end_time: o.end_time,
-                total_usd: o.total_usd,
                 by_line_item: &o.by_line_item,
                 truncated: o.truncated,
                 fetched_at: o.fetched_at,
@@ -418,7 +423,7 @@ mod tests {
         OpenAiCosts {
             start_time: fixed_now() - chrono::Duration::days(20),
             end_time: fixed_now(),
-            total_usd: 4.20,
+            total_micro_usd: 4_200_000,
             by_line_item: vec![],
             truncated: false,
             fetched_at: fixed_now(),
@@ -493,6 +498,8 @@ mod tests {
     fn empty_snapshot_serializes_with_null_money_cells() {
         let s = Snapshot::empty(fixed_now());
         let v = render_to_value(&s, false);
+        // The DTO carries an explicit, top-level schema version for consumers.
+        assert_eq!(v["schema_version"], 1);
         assert!(v["anthropic_api_cost"].is_null());
         assert!(v["openai"].is_null());
         assert!(v["claude_oauth"].is_null());
@@ -523,8 +530,10 @@ mod tests {
         assert_eq!(cell["value_micro_usd"], 4_200_000);
         assert_eq!(cell["source"], "openai_admin_costs");
         assert_eq!(cell["confidence"], "real");
-        // Provenance preserved: original f64 is still under details.
-        assert!((cell["details"]["total_usd"].as_f64().unwrap() - 4.20).abs() < 1e-9);
+        // OpenAiCosts is i64 micro-USD now, so the old f64 `details.total_usd`
+        // provenance field is gone; the per-line-item breakdown remains.
+        assert!(cell["details"]["total_usd"].is_null());
+        assert!(cell["details"]["by_line_item"].is_array());
     }
 
     #[test]

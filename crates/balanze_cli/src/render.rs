@@ -113,12 +113,21 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
         } else {
             ""
         };
-        writeln!(w, "  Total: ${:.2}{suffix}", costs.total_usd)?;
+        writeln!(
+            w,
+            "  Total: {}{suffix}",
+            micro_usd_to_display_dollars(costs.total_micro_usd)
+        )?;
         if !costs.by_line_item.is_empty() {
             writeln!(w)?;
             writeln!(w, "  By line item:")?;
             for item in costs.by_line_item.iter().take(10) {
-                writeln!(w, "    {:36}  ${:>10.4}", item.line_item, item.amount_usd)?;
+                writeln!(
+                    w,
+                    "    {:36}  ${:>10.4}",
+                    item.line_item,
+                    item.amount_micro_usd as f64 / 1_000_000.0
+                )?;
             }
             if costs.by_line_item.len() > 10 {
                 writeln!(w, "    ... ({} more)", costs.by_line_item.len() - 10)?;
@@ -506,7 +515,10 @@ fn compact_codex_quota(s: &Snapshot) -> String {
 
 fn compact_openai_cost(s: &Snapshot) -> String {
     match (&s.openai, &s.openai_error) {
-        (Some(costs), _) => format!("${:.2} (admin costs)", costs.total_usd),
+        (Some(costs), _) => format!(
+            "{} (admin costs)",
+            micro_usd_to_display_dollars(costs.total_micro_usd)
+        ),
         (None, Some(_)) => "✗ admin costs fetch failed".to_string(),
         (None, None) => "○ not configured (run `balanze-cli setup`)".to_string(),
     }
@@ -626,10 +638,10 @@ mod tests {
         snap.openai = Some(OpenAiCosts {
             start_time: t(2026, 5, 1, 0, 0),
             end_time: now,
-            total_usd: 123.45,
+            total_micro_usd: 123_450_000,
             by_line_item: vec![LineItemCost {
                 line_item: "gpt-5".to_string(),
-                amount_usd: 123.45,
+                amount_micro_usd: 123_450_000,
             }],
             truncated: false,
             fetched_at: now,
