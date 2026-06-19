@@ -487,7 +487,10 @@ fn compact_codex_quota(s: &Snapshot) -> String {
             // Honesty: a rollout whose primary window has already reset is
             // stale - the used% it carries describes an elapsed window. Degrade
             // the ✓ to a ⚠ + "stale" marker rather than show a confident figure
-            // behind a green check.
+            // behind a green check. Compared against the snapshot's `fetched_at`
+            // (not wall-clock now) so it's deterministic/testable; the popover's
+            // `codexWindowExpired` in src/lib/presentation/quota.ts uses the same
+            // basis - keep the two in lockstep.
             let expired = s.fetched_at > q.primary.resets_at;
             // Append snapshot age when meaningfully stale (≥1 min). The
             // walker returns the newest-mtime rollout file regardless of

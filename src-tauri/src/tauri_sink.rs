@@ -18,13 +18,22 @@ pub(crate) enum ColorBucket {
     Warn,
 }
 
+/// Canonical quota-color thresholds (percent utilization). The popover mirrors
+/// the WARN and BAD boundaries in `src/lib/presentation/quota.ts` (`quotaTone`);
+/// that surface uses a coarser 3-tone palette and folds this ORANGE band into
+/// "warn". Keep the shared boundary values (50, 90) in lockstep across the two
+/// files.
+const QUOTA_WARN_PCT: f32 = 50.0;
+const QUOTA_ORANGE_PCT: f32 = 75.0;
+const QUOTA_BAD_PCT: f32 = 90.0;
+
 impl ColorBucket {
     pub(crate) fn from_util(util_percent: f32) -> Self {
-        if util_percent >= 90.0 {
+        if util_percent >= QUOTA_BAD_PCT {
             ColorBucket::Red
-        } else if util_percent >= 75.0 {
+        } else if util_percent >= QUOTA_ORANGE_PCT {
             ColorBucket::Orange
-        } else if util_percent >= 50.0 {
+        } else if util_percent >= QUOTA_WARN_PCT {
             ColorBucket::Yellow
         } else {
             ColorBucket::Green

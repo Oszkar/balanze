@@ -42,9 +42,9 @@
   {#if hasOpenAI}
     {#if codex}
       <QuotaCell pct={codex.primary.used_percent} used={codex.primary.used_percent}
-        elapsed={codexElapsedFraction(codex.primary) * 100} tone={quotaTone(codex.primary.used_percent)}
+        elapsed={codexElapsedFraction(codex.primary, snapshot.fetched_at) * 100} tone={quotaTone(codex.primary.used_percent)}
         resetsAt={codex.primary.resets_at} secondary={`codex ${codex.plan_type}`}
-        stale={!!degraded['codex_quota'] || codexWindowExpired(codex.primary)} title={PROV.codexQuota.title} />
+        stale={!!degraded['codex_quota'] || codexWindowExpired(codex.primary, snapshot.fetched_at)} title={PROV.codexQuota.title} />
     {:else}
       <BilledCell note="not connected" title="OpenAI Codex not configured" />
     {/if}
