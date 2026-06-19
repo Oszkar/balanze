@@ -20,7 +20,7 @@
 </script>
 
 {#if usage.loading}
-  <div class="state">Loading…</div>
+  <div class="state">Loading...</div>
 {:else if usage.snapshot}
   <Popover snapshot={usage.snapshot} degraded={usage.degraded} onRefresh={() => usage.refresh()} />
 {:else}

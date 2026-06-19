@@ -1,11 +1,15 @@
 <script lang="ts">
-  import type { Tone } from '$lib/presentation/pace';
+  import { paceVerdict, type Tone } from '$lib/presentation/pace';
   let { used, elapsed = null, tone = 'ok', height = 11 }:
     { used: number; elapsed?: number | null; tone?: Tone; height?: number } = $props();
   const clamp = (n: number) => Math.min(100, Math.max(0, n));
+  // Pace verdict (quota used vs window elapsed) shown as a hover tooltip
+  // whenever the elapsed tick is present. Raw (unclamped) fractions so an
+  // over-cap window still reads honestly. Mirrors the CLI pace line.
+  const verdict = $derived(elapsed == null ? null : paceVerdict(used / 100, elapsed / 100));
 </script>
 
-<div class="track" style="height:{height}px">
+<div class="track" style="height:{height}px" title={verdict ? `Pace: ${verdict.text}` : undefined}>
   <div class="fill" style="width:{clamp(used)}%; background:var(--{tone})"></div>
   {#if elapsed != null}
     <div class="tick" style="left:{clamp(elapsed)}%"></div>

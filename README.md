@@ -61,9 +61,8 @@ balanze-cli statusline            Claude Code statusLine command: reads the
                                   — the IPC bridge the v0.2 watcher reads.
 balanze-cli help                  This help
 
-Env override: BALANZE_OPENAI_KEY=sk-admin-…  (takes precedence over the
-keychain; recommended on Windows until the keyring-v4 migration — see
-Known issues).
+Env override: BALANZE_OPENAI_KEY=sk-admin-...  (takes precedence over the
+keychain; handy for CI/headless or a locked keychain).
 ```
 
 `balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) — shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit.
@@ -132,10 +131,6 @@ bun run tauri dev
 - **Debian/Ubuntu:** `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev build-essential libssl-dev libglib2.0-dev pkg-config`
 
 **Not needed for the CLI** — if you only want the CLI on Linux, never run a `--workspace` build and you'll never see a `gdk-3.0`/`pango`/`cairo` error. Test discipline and the per-crate validation matrix live in `AGENTS.md` §6–§7; the crate map and boundaries live in `docs/ARCHITECTURE.md`.
-
-## Known issues
-
-- **Keychain backend broken on Windows.** `keyring 3.6.3` silently no-ops: `set_password` returns `Ok` but the credential never lands in Credential Manager. Workaround: set `BALANZE_OPENAI_KEY`. Fix is scheduled to ride with the settings UI (`keyring` → `keyring-core` v4 migration). Detail: `AGENTS.md` §10a.
 
 ## Contributing
 

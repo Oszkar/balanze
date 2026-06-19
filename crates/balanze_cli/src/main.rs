@@ -899,13 +899,10 @@ fn print_help() {
     eprintln!("  balanze-cli help                  This help");
     eprintln!();
     eprintln!("Environment overrides:");
+    eprintln!("  BALANZE_OPENAI_KEY            sk-admin-... admin key. Takes precedence over the");
     eprintln!(
-        "  BALANZE_OPENAI_KEY            sk-admin-… admin key. Takes precedence over keychain."
+        "                                keychain (handy for CI/headless or a locked keychain)."
     );
-    eprintln!(
-        "                                Recommended on Windows until the keychain backend is"
-    );
-    eprintln!("                                fixed (it currently no-ops there).");
     eprintln!();
     eprintln!("Tip: run via `cargo run --release -p balanze_cli -- <subcommand>` (note the `--`).");
 }
