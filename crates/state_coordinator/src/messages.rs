@@ -114,7 +114,7 @@ pub enum StateMsg {
     Update(SourceUpdate),
     /// Tauri command (or test): read the current Snapshot via the oneshot reply.
     Query(oneshot::Sender<Snapshot>),
-    /// 30s tray ticker or manual refresh: re-notify the Sink with current state
+    /// Popover open or manual refresh: re-notify the Sink with current state
     /// so it can repaint. The coordinator itself does NOT fetch — refreshes are
     /// re-paints, not re-fetches. Pollers run on their own cadence.
     Refresh,

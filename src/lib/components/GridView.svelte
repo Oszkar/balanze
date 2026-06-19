@@ -34,10 +34,10 @@
       title={aq.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title} />
   {:else if anthErr}
     <BilledCell hatch placeholder="unavailable" note="quota fetch failed"
-      title={`Anthropic quota unavailable — ${anthErr}`} />
+      title={`Anthropic quota unavailable - ${anthErr}`} />
   {:else}
-    <BilledCell placeholder="connecting…" note="fetching quota…"
-      title="Waiting for the first quota fetch — the OAuth usage endpoint backs off on the 429s it returns during active Claude Code use. Wire Balanze as your Claude statusLine for instant live quota." />
+    <BilledCell placeholder="connecting..." note="fetching quota..."
+      title="Waiting for the first quota fetch - the OAuth usage endpoint backs off on the 429s it returns during active Claude Code use. Wire Balanze as your Claude statusLine for instant live quota." />
   {/if}
   {#if hasOpenAI}
     {#if codex}

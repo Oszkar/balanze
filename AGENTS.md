@@ -62,7 +62,7 @@ There is no internal rate-limit gate — the only thing being rate-limited is *u
 - OpenAI billing endpoints: poll at most every 5 minutes.
 - Anthropic Console cookie-paste (demoted 2026-05-19 to opt-in): if/when it lands, poll at most every 5 minutes; back off on 429 with exponential backoff (start 30s, cap 10 min).
 - Claude JSONL: local file I/O — read **incrementally** via per-file byte cursor (`HashMap<PathBuf, FileCursor { byte_pos, mtime, size }>`). Full reparse only on launch or `refresh_now()`. Detect atomic rewrites (size unchanged but mtime changed) and truncations (size < cursor).
-- Tray icon repaint: 30s cadence, **deduped** by `(ColorBucket, title_text)`. Never call `tray.set_icon` if the bucket and title haven't changed.
+- Tray icon repaint: driven by coordinator snapshot updates (the 60s safety poll is the idle floor - there is no separate fixed-cadence ticker), **deduped** by `(ColorBucket, title_text)` in the sink (`TauriSink`). Never call `tray.set_icon`/`set_title` if the bucket and title haven't changed.
 - HTTP retry/backoff: implemented in `anthropic_oauth` + `openai_client` via the `backoff` crate. Idempotent GETs retry on 429 + 5xx + transport; the token-rotating `refresh_access_token` POST retries 429-only. CLI passes `BackoffPolicy::fail_fast()` (0 retries); the watcher passes `BackoffPolicy::standard()` (30s start, 10-min cap).
 
 ### 3.2 Error handling & logging
@@ -170,6 +170,8 @@ Before claiming work is done:
 
 `cargo clippy -D warnings` is **strict**. CI enforces it. Don't add `#[allow]` to silence lints unless there's a documented technical reason in a comment immediately above.
 
+**CI coverage split (deliberate, not an oversight).** The always-on per-PR gate is the `linux` job: rustfmt, clippy, nextest, and svelte-check for the workspace **minus `src-tauri`** (which needs GTK/WebKit deps the fast path doesn't install). `src-tauri` clippy and the full Windows/macOS test runs (keychain, IncrementalParser mtime quirks) fire only on the weekly schedule and on manual `workflow_dispatch`. So a green PR does **not** by itself certify `src-tauri` lints or platform-specific behavior - run the local validation matrix, or fire `cross-platform` from the Actions UI, before tagging a release. Required status checks on `main`: `linux`, `cargo-deny`, `conventional-commit title`.
+
 **If unable to run:** state the exact command and request output from a human. Don't claim the work is done.
 
 ## 7. Test Discipline
@@ -185,7 +187,7 @@ Before claiming work is done:
 - **Unit tests:** inline `#[cfg(test)] mod tests` in each crate's `src/`. `cargo nextest run --workspace` is the gate (plain `cargo test --workspace` works too).
 - **Integration:** `crates/<crate>/tests/` — `anthropic_oauth` / `openai_client` use `wiremock`; `balanze_cli/tests/integration_4quadrant.rs` is the end-to-end composition test against committed fixtures with a fixed `now`.
 - **Real-data smokes:** `cargo run -p <crate> --example <name>` against the developer's actual `~/.claude` / `~/.codex` — not run in CI; maintainer runs them before tagging.
-- **`#[ignore]`'d:** the real-keychain smoke (CI keychain is unreliable; run manually per §6).
+- **`#[ignore]`'d:** the real-resource smokes - the real-keychain smoke (`keychain`), the macOS Keychain credential read (`anthropic_oauth`), and the live Anthropic refresh endpoint (`anthropic_oauth`, gated on `BALANZE_SMOKE_REFRESH_TOKEN`). CI keychain/network is unreliable; run these manually per §6.
 
 ## 8. Change Control
 
@@ -218,7 +220,7 @@ Before claiming work is done:
 
 ## 10a. Known issues
 
-- **Keychain backend on Windows (fixed in v0.3.1):** `keyring = "3.6.3"` silently no-op'd on Windows - `set_password` returned `Ok` but the credential never landed in Credential Manager. Fixed by migrating to `keyring-core` plus the OS-native store crates, registered at startup via `keychain::init_default_store`. The real-keychain smoke (`cargo test -p keychain -- --ignored`) passes on Windows; run it manually per-OS before tagging (§6). `BALANZE_OPENAI_KEY` remains a documented env override, no longer a workaround for a broken backend.
+- **Keychain backend on Windows (fixed in v0.3.0):** `keyring = "3.6.3"` silently no-op'd on Windows - `set_password` returned `Ok` but the credential never landed in Credential Manager. Fixed by migrating to `keyring-core` plus the OS-native store crates, registered at startup via `keychain::init_default_store`. The real-keychain smoke (`cargo test -p keychain -- --ignored`) passes on Windows; run it manually per-OS before tagging (§6). `BALANZE_OPENAI_KEY` remains a documented env override, no longer a workaround for a broken backend.
 
 ## 10. Troubleshooting
 
@@ -240,9 +242,9 @@ The incremental-read cursor isn't working — the parser is doing a full re-pars
 
 `tauri-plugin-single-instance` was either not registered, registered out of order, or its target attribute is wrong. The plugin must be registered **first** on the `tauri::Builder`, gated `#[cfg(any(target_os = "windows", target_os = "macos"))]`. The scaffold wires this correctly in `src-tauri/src/lib.rs::run`.
 
-### "Tray icon flickers every 30 seconds"
+### "Tray icon flickers"
 
-Tray repaint isn't deduped. The 30s ticker should send `StateMsg::Refresh` to the coordinator; the coordinator should only call `tray.set_icon`/`tray.set_title` if the `(ColorBucket, title_text)` tuple differs from `last_painted`. If you see flicker during idle, the dedup check is missing or comparing the wrong fields.
+Tray repaint isn't deduped. The coordinator notifies the `Sink` on every snapshot update (and on a `StateMsg::Refresh` from popover-open / `refresh_now`); the production `TauriSink` should only call `tray.set_icon`/`tray.set_title` when the `(ColorBucket, title_text)` tuple differs from its `last_painted`. If you see flicker during idle, that dedup check is missing or comparing the wrong fields.
 
 ### "`cargo check` fails after bumping a Tauri dep"
 

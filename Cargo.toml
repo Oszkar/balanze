@@ -48,7 +48,6 @@ windows-native-keyring-store = "1"
 # use; it is not on by default, so request it explicitly.
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
 notify = "8"
-notify-debouncer-full = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Criterion benches. Dev-only; not pulled into release
