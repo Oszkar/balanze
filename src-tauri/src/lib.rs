@@ -250,6 +250,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::refresh_now,
+            commands::hide_window,
             commands::get_settings,
             commands::set_settings,
             commands::set_api_key,

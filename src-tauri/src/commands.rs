@@ -47,6 +47,15 @@ pub async fn refresh_now(handle: State<'_, StateCoordinatorHandle>) -> Result<()
         .map_err(|e| e.to_string())
 }
 
+/// Hide the popover window (ESC-to-dismiss). Window manipulation lives in Rust
+/// (like the blur-hide, tray, and positioning), so the frontend asks via IPC
+/// rather than holding a `core:window:allow-hide` capability - the webview gets
+/// no window-mutation permission, only this one narrow action.
+#[tauri::command]
+pub fn hide_window(window: tauri::Window) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())
+}
+
 /// Return the non-secret settings (`settings.json` shape). Never includes any
 /// API key - secrets live in the OS keychain, not here (AGENTS.md §3.4).
 #[tauri::command]

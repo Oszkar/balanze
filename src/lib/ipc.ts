@@ -8,7 +8,9 @@ export const getSnapshot = (): Promise<Snapshot> => invoke<Snapshot>('get_snapsh
 export const refreshNow = (): Promise<void> => invoke<void>('refresh_now');
 
 // Hide the popover window (ESC-to-dismiss; mirrors the blur-hide behavior).
-export const hideWindow = (): Promise<void> => getCurrentWindow().hide();
+// Goes through an app command rather than `getCurrentWindow().hide()` so it
+// needs no `core:window` capability - Rust owns window manipulation.
+export const hideWindow = (): Promise<void> => invoke<void>('hide_window');
 
 // Non-secret settings (settings.json shape). `get_settings` never returns any
 // API key; `set_api_key` writes the key to the OS keychain and flips the
