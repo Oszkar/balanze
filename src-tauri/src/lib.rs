@@ -133,14 +133,50 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     refresh_state_on_open(app);
 }
 
-/// Re-anchor the popover after a content resize. macOS drops down from the menu
-/// bar (top edge fixed); Windows opens up from the taskbar (bottom edge fixed).
-/// Derives the fixed edge from current geometry, then clamps fully on-monitor.
+/// Pure geometry for the post-resize re-anchor: given the window's top-left, its
+/// pre-resize outer height, the new outer size, and the monitor bounds, return
+/// the clamped new top-left. Split out from [`reanchor_after_resize`] so both the
+/// platform branch and the on-monitor clamp are unit-testable without a live
+/// window (AGENTS.md §6/§7).
 ///
-/// On Windows the window grows upward: the bottom edge stays pinned by moving
-/// the top up by the height delta, so a taller popover does not push its bottom
-/// down past the taskbar. On macOS the top stays where the menu-bar drop placed
-/// it. Either way the final position is clamped fully on-monitor.
+/// `pin_bottom` selects the fixed edge. `true` (Windows/Linux, popover opens up
+/// from the taskbar) pins the OLD bottom edge - the pre-resize top (`pos_y`,
+/// unchanged by `set_size`) plus the OLD height - and derives the new top from
+/// the new height, so the window grows upward instead of pushing its bottom
+/// off-screen. `false` (macOS, popover drops from the menu bar) keeps the top
+/// edge where the drop placed it. Either way the result is clamped fully
+/// on-monitor.
+#[allow(clippy::too_many_arguments)]
+fn reanchored_position(
+    pin_bottom: bool,
+    pos_x: i32,
+    pos_y: i32,
+    old_outer_h: u32,
+    win_w: i32,
+    win_h: i32,
+    mon_left: i32,
+    mon_top: i32,
+    mon_right: i32,
+    mon_bottom: i32,
+) -> (i32, i32) {
+    let x = pos_x;
+    let y = if pin_bottom {
+        (pos_y + old_outer_h as i32) - win_h
+    } else {
+        pos_y
+    };
+
+    // Clamp fully on-monitor. `max_x`/`max_y` can fall below the monitor origin
+    // if the window is wider/taller than the monitor; `max(left/top, ...)` keeps
+    // the top-left corner on-screen in that degenerate case.
+    let max_x = (mon_right - win_w).max(mon_left);
+    let max_y = (mon_bottom - win_h).max(mon_top);
+    (x.clamp(mon_left, max_x), y.clamp(mon_top, max_y))
+}
+
+/// Re-anchor the popover after a content resize, reading live window/monitor
+/// geometry and applying [`reanchored_position`]. macOS keeps the top edge fixed
+/// (menu-bar drop); Windows/Linux keep the bottom edge fixed (taskbar pop-up).
 fn reanchor_after_resize(window: &tauri::WebviewWindow, old_outer_h: u32) -> tauri::Result<()> {
     let pos = window.outer_position()?; // top-left unchanged by set_size
     let size = window.outer_size()?; // NEW outer size (post-resize)
@@ -149,34 +185,18 @@ fn reanchor_after_resize(window: &tauri::WebviewWindow, old_outer_h: u32) -> tau
     };
     let mp = monitor.position();
     let ms = monitor.size();
-    let (mon_left, mon_top) = (mp.x, mp.y);
-    let mon_right = mp.x + ms.width as i32;
-    let mon_bottom = mp.y + ms.height as i32;
-    let win_w = size.width as i32;
-    let win_h = size.height as i32;
-
-    // macOS keeps the top edge fixed (popover drops from the menu bar), so the
-    // current `pos.y` is already the anchor. Windows keeps the bottom edge fixed
-    // (popover opens up from the taskbar): pin the OLD bottom edge - the
-    // pre-resize top (`pos.y`, unchanged by set_size) plus the OLD height - and
-    // derive the new top from the new height, so the window grows upward instead
-    // of pushing its bottom off-screen.
-    let x = pos.x;
-    #[cfg(target_os = "macos")]
-    let y = {
-        let _ = old_outer_h; // bottom-pin is Windows/Linux only; unused here
-        pos.y
-    };
-    #[cfg(not(target_os = "macos"))]
-    let y = (pos.y + old_outer_h as i32) - win_h;
-
-    // Clamp fully on-monitor. `max_x`/`max_y` can fall below the monitor origin
-    // if the window is wider/taller than the monitor; `max(left, ...)` keeps the
-    // top-left corner on-screen in that degenerate case.
-    let max_x = (mon_right - win_w).max(mon_left);
-    let max_y = (mon_bottom - win_h).max(mon_top);
-    let x = x.clamp(mon_left, max_x);
-    let y = y.clamp(mon_top, max_y);
+    let (x, y) = reanchored_position(
+        !cfg!(target_os = "macos"),
+        pos.x,
+        pos.y,
+        old_outer_h,
+        size.width as i32,
+        size.height as i32,
+        mp.x,
+        mp.y,
+        mp.x + ms.width as i32,
+        mp.y + ms.height as i32,
+    );
     window.set_position(tauri::PhysicalPosition::new(x, y))?;
     Ok(())
 }
@@ -452,7 +472,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::respawn_backoff;
+    use super::{reanchored_position, respawn_backoff};
 
     #[test]
     fn respawn_backoff_is_exponential_capped_at_60s() {
@@ -463,5 +483,50 @@ mod tests {
         // Large shifts must saturate to the cap, never panic on overflow.
         assert_eq!(respawn_backoff(64).as_secs(), 60);
         assert_eq!(respawn_backoff(u32::MAX).as_secs(), 60);
+    }
+
+    // A roomy 1920x1080 monitor at the origin, so the clamp is a no-op and these
+    // cases isolate the platform branch. Window at (100, 50), old height 560.
+    #[test]
+    fn reanchor_macos_pins_top_edge() {
+        // pin_bottom = false: y stays at the menu-bar drop position regardless of
+        // the height delta; x is unchanged.
+        let (x, y) = reanchored_position(false, 100, 50, 560, 360, 600, 0, 0, 1920, 1080);
+        assert_eq!((x, y), (100, 50));
+    }
+
+    #[test]
+    fn reanchor_windows_pins_bottom_edge() {
+        // pin_bottom = true: the OLD bottom (pos_y + old_h = 50 + 560 = 610) stays
+        // put. Growing 560 -> 600 lifts the top to 610 - 600 = 10.
+        let (_, y_grow) = reanchored_position(true, 100, 50, 560, 360, 600, 0, 0, 1920, 1080);
+        assert_eq!(y_grow, 10);
+        // Shrinking 560 -> 400 drops the top back to 610 - 400 = 210.
+        let (_, y_shrink) = reanchored_position(true, 100, 50, 560, 360, 400, 0, 0, 1920, 1080);
+        assert_eq!(y_shrink, 210);
+    }
+
+    #[test]
+    fn reanchor_clamps_top_into_monitor() {
+        // A bottom-pin tall enough to push the top above the monitor origin
+        // (610 - 900 = -290) is clamped to mon_top.
+        let (_, y) = reanchored_position(true, 100, 50, 560, 360, 900, 0, 0, 1920, 1080);
+        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn reanchor_clamps_x_to_right_edge() {
+        // x past the right edge is pulled back so the window stays fully
+        // on-monitor: max_x = 1920 - 360 = 1560.
+        let (x, _) = reanchored_position(false, 1800, 50, 560, 360, 600, 0, 0, 1920, 1080);
+        assert_eq!(x, 1560);
+    }
+
+    #[test]
+    fn reanchor_oversized_window_keeps_top_left_on_screen() {
+        // A window larger than the monitor has no fully-on-screen placement;
+        // max_x/max_y fall back to the origin so the top-left stays visible.
+        let (x, y) = reanchored_position(false, 5000, 5000, 560, 4000, 4000, 0, 0, 1920, 1080);
+        assert_eq!((x, y), (0, 0));
     }
 }

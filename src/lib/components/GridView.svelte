@@ -43,7 +43,7 @@
     <div class="colhead">
       <span class="p">OpenAI</span><span class="plan">API + Codex</span>
       {#if colState.kind === 'data' || colState.kind === 'connect' || colState.kind === 'error'}
-        <button class="dismiss" title="Hide OpenAI - re-add in Settings" onclick={() => onDismissOpenai?.()}>×</button>
+        <button class="dismiss" type="button" aria-label="Hide OpenAI column" title="Hide OpenAI - re-add in Settings" onclick={() => onDismissOpenai?.()}>×</button>
       {/if}
     </div>
   {/if}
@@ -69,7 +69,7 @@
     {#if colState.kind === 'connect'}
       <div class="cell connect">
         <span class="connect-label">not connected</span>
-        <button class="connect-btn" onclick={() => onSettings?.()}>Connect -&gt;</button>
+        <button class="connect-btn" type="button" onclick={() => onSettings?.()}>Connect -&gt;</button>
         <span class="connect-hint">paste admin key</span>
       </div>
     {:else if colState.kind === 'error'}
