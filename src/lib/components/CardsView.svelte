@@ -4,10 +4,10 @@
   import { microUsdToDollars } from '$lib/presentation/format';
   import ProviderCard, { type CardWindow } from './ProviderCard.svelte';
 
-  let { snapshot }: { snapshot: Snapshot } = $props();
+  let { snapshot, openaiEnabled = true }: { snapshot: Snapshot; openaiEnabled?: boolean } = $props();
 
   // Anthropic windows: prefer OAuth cadences (one bar each, with the pace tick);
-  // fall back to the live statusline 5h/7d when OAuth is absent — so Cards shows
+  // fall back to the live statusline 5h/7d when OAuth is absent - so Cards shows
   // the same Anthropic quota Grid does (which uses the statusline-preferred
   // helper) instead of dropping the provider card.
   const anthWindows = $derived.by<CardWindow[]>(() => {
@@ -36,8 +36,10 @@
   const codex = $derived(snapshot.codex_quota);
   const openai = $derived(snapshot.openai);
   const anthPlan = $derived(snapshot.claude_oauth?.subscription_type ?? 'Claude');
-  // Match GridView: OpenAI is present if Codex quota, billed spend, or an error exists.
-  const hasOpenAI = $derived(!!codex || !!openai || !!snapshot.openai_error);
+  // Match GridView: the OpenAI card shows when the provider is enabled and there
+  // is something to show (Codex quota, billed spend, or an error). When the
+  // provider is disabled (dismissed / toggled off), collapse to single-provider.
+  const hasOpenAI = $derived(openaiEnabled && (!!codex || !!openai || !!snapshot.openai_error));
 </script>
 
 <div class="cards">
@@ -54,7 +56,7 @@
         : []}
       billed={openai
         ? { amount: microUsdToDollars(openai.total_micro_usd), note: 'this cycle', badge: 'real' }
-        : { amount: null, note: snapshot.openai_error ? '✗ fetch failed' : 'spend - unavailable', badge: 'na' }} />
+        : { amount: null, note: snapshot.openai_error ? 'fetch failed' : 'spend - unavailable', badge: 'na' }} />
   {/if}
 </div>
 
