@@ -6,7 +6,7 @@ import type { Snapshot } from '../types/snapshot';
 // slots (the coordinator sets them on failure and clears them on a source's
 // next success). Deriving the map from each snapshot means a recovered source
 // clears its marker, and a snapshot fetched with pre-existing errors is
-// reflected — rather than only ever appending `degraded_state` events, which
+// reflected - rather than only ever appending `degraded_state` events, which
 // never clear (the bug Codex flagged).
 function degradedFromSnapshot(s: Snapshot): Record<string, string> {
   const d: Record<string, string> = {};
@@ -31,7 +31,7 @@ class UsageStore {
     // can't be lost (the OpenAI-only startup race: a `usage_updated` fired
     // between fetch and listen would be missed). Guarded separately: outside
     // the Tauri runtime (e.g. the page opened in a plain browser), `listen()`
-    // rejects — record it rather than throwing an uncaught promise rejection.
+    // rejects - record it rather than throwing an uncaught promise rejection.
     try {
       this.#unlisten.push(await onUsageUpdated((s) => {
         this.snapshot = s;

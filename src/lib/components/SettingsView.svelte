@@ -129,41 +129,88 @@
   </div>
 
   {#if settings}
-    <section>
-      <div class="label">OpenAI Admin API key</div>
-      <div class="hint">Stored in the OS keychain, never in a config file.</div>
-      {#if keyPresent && !editingKey}
-        <div class="hint">✓ A key is configured.</div>
-        <div class="row">
-          <button class="save" onclick={() => (editingKey = true)} disabled={busy}>Replace</button>
-          <button class="save" onclick={removeKey} disabled={busy}>Remove</button>
-        </div>
-      {:else}
-        <div class="row">
-          <input
-            type="password"
-            placeholder="sk-admin-..."
-            autocomplete="off"
-            bind:value={keyInput}
-            disabled={busy}
-          />
-          <button class="save" onclick={saveKey} disabled={busy}>Save</button>
-          {#if keyPresent}
-            <button
-              class="save"
-              onclick={() => {
-                editingKey = false;
-                keyInput = '';
-              }}
-              disabled={busy}>Cancel</button
-            >
-          {/if}
-        </div>
-      {/if}
-    </section>
+    <div class="connector">
+      <div class="chd">
+        <span
+          class="dot"
+          style:background={settings.providers.anthropic_enabled ? 'var(--ok)' : 'var(--warn)'}
+        ></span>
+        <span class="title">Anthropic / Claude</span>
+      </div>
 
-    <section>
-      <div class="label">Providers</div>
+      {#if wire}
+        <section>
+          <div class="label">Claude Code statusLine</div>
+          {#if wire.status === 'wired'}
+            <div class="hint">✓ Wired to Balanze. Restart Claude Code to apply changes.</div>
+            <div class="row">
+              <button class="save" onclick={() => setWire(false)} disabled={busy}>Unwire</button>
+            </div>
+          {:else if wire.status === 'unwired'}
+            <div class="hint">Show live 5h / 7d quota directly in Claude Code's status line.</div>
+            <div class="row">
+              <button class="save" onclick={() => setWire(true)} disabled={busy}>Wire</button>
+            </div>
+          {:else}
+            <div class="hint">Set to another command - Balanze won't overwrite it:</div>
+            <div class="occupied">{wire.command}</div>
+          {/if}
+        </section>
+      {/if}
+
+      <label class="toggle">
+        <input
+          type="checkbox"
+          checked={settings.providers.anthropic_enabled}
+          disabled={busy}
+          onchange={(e) => toggle('anthropic', e.currentTarget.checked)}
+        />
+        <span>Anthropic OAuth polling</span>
+      </label>
+    </div>
+
+    <div class="connector">
+      <div class="chd">
+        <span
+          class="dot"
+          style:background={keyPresent ? 'var(--ok)' : 'var(--warn)'}
+        ></span>
+        <span class="title">OpenAI</span>
+      </div>
+
+      <section>
+        <div class="label">OpenAI Admin API key</div>
+        <div class="hint">Stored in the OS keychain, never in a config file.</div>
+        {#if keyPresent && !editingKey}
+          <div class="hint">✓ A key is configured.</div>
+          <div class="row">
+            <button class="save" onclick={() => (editingKey = true)} disabled={busy}>Replace</button>
+            <button class="save" onclick={removeKey} disabled={busy}>Remove</button>
+          </div>
+        {:else}
+          <div class="row">
+            <input
+              type="password"
+              placeholder="sk-admin-..."
+              autocomplete="off"
+              bind:value={keyInput}
+              disabled={busy}
+            />
+            <button class="save" onclick={saveKey} disabled={busy}>Save</button>
+            {#if keyPresent}
+              <button
+                class="save"
+                onclick={() => {
+                  editingKey = false;
+                  keyInput = '';
+                }}
+                disabled={busy}>Cancel</button
+              >
+            {/if}
+          </div>
+        {/if}
+      </section>
+
       <label class="toggle">
         <input
           type="checkbox"
@@ -176,42 +223,13 @@
       <label class="toggle">
         <input
           type="checkbox"
-          checked={settings.providers.anthropic_enabled}
-          disabled={busy}
-          onchange={(e) => toggle('anthropic', e.currentTarget.checked)}
-        />
-        <span>Anthropic OAuth polling</span>
-      </label>
-      <label class="toggle">
-        <input
-          type="checkbox"
           checked={settings.providers.codex_enabled}
           disabled={busy}
           onchange={(e) => toggle('codex', e.currentTarget.checked)}
         />
         <span>Codex quota scanning</span>
       </label>
-    </section>
-
-    {#if wire}
-      <section>
-        <div class="label">Claude Code statusLine</div>
-        {#if wire.status === 'wired'}
-          <div class="hint">✓ Wired to Balanze. Restart Claude Code to apply changes.</div>
-          <div class="row">
-            <button class="save" onclick={() => setWire(false)} disabled={busy}>Unwire</button>
-          </div>
-        {:else if wire.status === 'unwired'}
-          <div class="hint">Show live 5h / 7d quota directly in Claude Code's status line.</div>
-          <div class="row">
-            <button class="save" onclick={() => setWire(true)} disabled={busy}>Wire</button>
-          </div>
-        {:else}
-          <div class="hint">Set to another command - Balanze won't overwrite it:</div>
-          <div class="occupied">{wire.command}</div>
-        {/if}
-      </section>
-    {/if}
+    </div>
   {:else}
     <div class="loading">Loading settings...</div>
   {/if}
@@ -222,23 +240,28 @@
 </div>
 
 <style>
-  .settings { padding: 15px 16px 16px; display: flex; flex-direction: column; gap: 16px; }
-  .hd { display: flex; align-items: center; gap: 8px; }
-  .back { background: none; border: none; color: var(--faint); cursor: pointer; font-size: 16px; padding: 2px 4px; }
-  .name { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+  .settings { padding: var(--sp-4) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
+  .hd { display: flex; align-items: center; gap: var(--sp-2); }
+  .back { background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-md); padding: 2px var(--sp-1); }
+  .name { font-size: var(--text-lg); font-weight: 700; letter-spacing: -.01em; }
+  .connector { border: 1.4px solid var(--tile-border); border-radius: 12px; background: var(--tile-bg);
+    padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
+  .chd { display: flex; align-items: center; gap: var(--sp-2); }
+  .dot { width: var(--sp-2); height: var(--sp-2); border-radius: 50%; flex: none; }
+  .title { font-size: var(--text-base); font-weight: 600; }
   section { display: flex; flex-direction: column; gap: 6px; }
-  .label { font-size: 12px; font-weight: 600; }
-  .hint { font-size: 11px; color: var(--faint); line-height: 1.35; }
-  .row { display: flex; gap: 8px; margin-top: 2px; }
-  input[type='password'] { flex: 1; min-width: 0; font-size: 12px; padding: 6px 8px; border-radius: 6px;
+  .label { font-size: var(--text-sm); font-weight: 600; }
+  .hint { font-size: var(--text-xs); color: var(--faint); line-height: 1.35; }
+  .row { display: flex; gap: var(--sp-2); margin-top: 2px; }
+  input[type='password'] { flex: 1; min-width: 0; font-size: var(--text-sm); padding: 6px var(--sp-2); border-radius: 6px;
     border: 1px solid var(--hair); background: var(--paper); color: inherit; font-family: inherit; }
-  .save { font-size: 12px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--hair);
+  .save { font-size: var(--text-sm); padding: 6px var(--sp-3); border-radius: 6px; border: 1px solid var(--hair);
     background: var(--paper); color: inherit; cursor: pointer; }
   .save:disabled { opacity: .5; cursor: default; }
-  .toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; }
+  .toggle { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--text-sm); cursor: pointer; }
   .toggle input { cursor: pointer; }
-  .occupied { font-size: 11px; font-family: ui-monospace, monospace; color: var(--faint);
-    word-break: break-all; padding: 4px 0; }
-  .loading { font-size: 12px; color: var(--faint); }
-  .status { font-size: 11px; color: var(--faint); }
+  .occupied { font-size: var(--text-xs); font-family: ui-monospace, monospace; color: var(--faint);
+    word-break: break-all; padding: var(--sp-1) 0; }
+  .loading { font-size: var(--text-sm); color: var(--faint); }
+  .status { font-size: var(--text-xs); color: var(--faint); }
 </style>

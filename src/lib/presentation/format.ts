@@ -11,7 +11,7 @@ export function relativeReset(isoResetsAt: string, now: Date = new Date()): stri
 }
 
 export function formatBurn(tokensPerMin: number | null): string {
-  if (tokensPerMin == null) return '—';
+  if (tokensPerMin == null) return '-';
   if (tokensPerMin >= 1000) return `~${(tokensPerMin / 1000).toFixed(1)}k/min`;
   return `~${Math.round(tokensPerMin)}/min`;
 }
