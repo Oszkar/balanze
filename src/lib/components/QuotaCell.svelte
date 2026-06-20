@@ -4,9 +4,9 @@
   import Badge from './Badge.svelte';
   import UsageBar from './UsageBar.svelte';
   import { relativeReset } from '$lib/presentation/format';
-  let { pct, used, elapsed, tone, resetsAt, secondary, title, stale = false, badge = null }:
+  let { pct, used, elapsed, tone, resetsAt, secondary, title, stale = false, staleLabel = 'fallback', badge = null }:
     { pct: number; used: number; elapsed: number | null; tone: Tone;
-      resetsAt: string; secondary: string; title: string; stale?: boolean; badge?: BadgeKind | null } = $props();
+      resetsAt: string; secondary: string; title: string; stale?: boolean; staleLabel?: string; badge?: BadgeKind | null } = $props();
 </script>
 
 <div class="cell qcell" class:stale {title}>
@@ -17,7 +17,7 @@
   </div>
   <UsageBar {used} {elapsed} {tone} />
   <div class="meta">
-    <span class:warn={stale}>{stale ? `⚠ fallback` : `${relativeReset(resetsAt)} left`}</span>
+    <span class:warn={stale}>{stale ? `⚠ ${staleLabel}` : `${relativeReset(resetsAt)} left`}</span>
     <span>{secondary}</span>
   </div>
 </div>
