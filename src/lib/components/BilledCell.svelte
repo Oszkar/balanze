@@ -13,6 +13,6 @@
           padding: 9px 11px; display: flex; flex-direction: column; gap: 3px; justify-content: center; min-height: 54px; }
   .hatch { background-image: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--hatch) 5px, var(--hatch) 6px); }
   .amt { font-size: 20px; font-weight: 700; line-height: 1; }
-  .na { font-size: 13px; color: var(--faint); }
-  .note { font-size: 10px; color: var(--faint); }
+  .na { font-size: var(--text-base); color: var(--faint); }
+  .note { font-size: var(--text-2xs); color: var(--faint); }
 </style>

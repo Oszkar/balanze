@@ -23,8 +23,8 @@
   .cell { border: 1.4px solid var(--tile-border); border-radius: 11px; background: var(--tile-bg); cursor: help; }
   .qcell { padding: 9px 11px; display: flex; flex-direction: column; gap: 7px; justify-content: center; min-height: 84px; }
   .top { display: flex; align-items: center; gap: 6px; }
-  .pct { font-size: 24px; font-weight: 700; line-height: 1; }
-  .meta { display: flex; justify-content: space-between; font-size: 10px; color: var(--faint); }
+  .pct { font-size: var(--text-2xl); font-weight: 700; line-height: 1; }
+  .meta { display: flex; justify-content: space-between; font-size: var(--text-2xs); color: var(--faint); }
   .meta .warn { color: var(--warn); }
   .stale { border-color: var(--warn); }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
