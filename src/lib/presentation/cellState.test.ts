@@ -14,16 +14,19 @@ describe('anthropicQuotaState', () => {
 });
 
 describe('openaiColumnState', () => {
-  it('is hidden when the provider is disabled', () => {
-    expect(openaiColumnState({ enabled: false, hasData: false, error: null }).kind).toBe('hidden');
+  it('is hidden when no data and billing not opted in', () => {
+    expect(openaiColumnState({ billingEnabled: false, hasData: false, error: null }).kind).toBe('hidden');
   });
-  it('is data when enabled and data is present', () => {
-    expect(openaiColumnState({ enabled: true, hasData: true, error: null }).kind).toBe('data');
+  it('is data when data is present even if billing is not opted in (Codex-only)', () => {
+    expect(openaiColumnState({ billingEnabled: false, hasData: true, error: null }).kind).toBe('data');
   });
-  it('is error when enabled and an error is set', () => {
-    expect(openaiColumnState({ enabled: true, hasData: false, error: 'x' })).toEqual({ kind: 'error', message: 'x' });
+  it('is data when billing is opted in and data is present', () => {
+    expect(openaiColumnState({ billingEnabled: true, hasData: true, error: null }).kind).toBe('data');
   });
-  it('is connect when enabled, configured-but-empty (no data, no error)', () => {
-    expect(openaiColumnState({ enabled: true, hasData: false, error: null }).kind).toBe('connect');
+  it('is error when billing opted in, no data, error set', () => {
+    expect(openaiColumnState({ billingEnabled: true, hasData: false, error: 'x' })).toEqual({ kind: 'error', message: 'x' });
+  });
+  it('is connect when billing opted in, no data, no error', () => {
+    expect(openaiColumnState({ billingEnabled: true, hasData: false, error: null }).kind).toBe('connect');
   });
 });

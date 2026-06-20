@@ -7,7 +7,10 @@
   import QuotaCell from './QuotaCell.svelte';
   import BilledCell from './BilledCell.svelte';
 
-  let { snapshot, degraded, openaiEnabled = true, onDismissOpenai, onSettings }:
+  // `openaiEnabled` is the OpenAI *billing* opt-in (the `openai_enabled` setting),
+  // not a column-visibility flag - see openaiColumnState. Default false (the
+  // settings default); the column still shows whenever the snapshot carries data.
+  let { snapshot, degraded, openaiEnabled = false, onDismissOpenai, onSettings }:
     { snapshot: Snapshot; degraded: Record<string, string>; openaiEnabled?: boolean;
       onDismissOpenai?: () => void; onSettings?: () => void } = $props();
 
@@ -29,7 +32,7 @@
   // shows data, a connect CTA, an error, or collapses to single-provider.
   const anthState = $derived(anthropicQuotaState({ hasQuota: !!aq, error: anthErr }));
   const colState = $derived(
-    openaiColumnState({ enabled: openaiEnabled, hasData: !!codex || !!openai, error: openaiErr }),
+    openaiColumnState({ billingEnabled: openaiEnabled, hasData: !!codex || !!openai, error: openaiErr }),
   );
   const showOpenAI = $derived(colState.kind !== 'hidden');
 </script>
@@ -100,7 +103,8 @@
       <BilledCell amount={microUsdToDollars(openai.total_micro_usd)}
         note="admin api · this cycle" badge={PROV.openaiBilled.badge} title={PROV.openaiBilled.title} />
     {:else}
-      <BilledCell hatch note="not configured" badge="na" title="OpenAI spend unavailable" />
+      <BilledCell hatch note={openaiErr ? 'fetch failed' : 'not configured'} badge="na"
+        title={openaiErr ? `OpenAI spend unavailable - ${openaiErr}` : 'OpenAI spend unavailable'} />
     {/if}
   {/if}
 </div>

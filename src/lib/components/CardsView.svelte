@@ -4,7 +4,8 @@
   import { microUsdToDollars } from '$lib/presentation/format';
   import ProviderCard, { type CardWindow } from './ProviderCard.svelte';
 
-  let { snapshot, openaiEnabled = true }: { snapshot: Snapshot; openaiEnabled?: boolean } = $props();
+  // `openaiEnabled` = the OpenAI billing opt-in (`openai_enabled`); default false.
+  let { snapshot, openaiEnabled = false }: { snapshot: Snapshot; openaiEnabled?: boolean } = $props();
 
   // Anthropic windows: prefer OAuth cadences (one bar each, with the pace tick);
   // fall back to the live statusline 5h/7d when OAuth is absent - so Cards shows
@@ -36,10 +37,12 @@
   const codex = $derived(snapshot.codex_quota);
   const openai = $derived(snapshot.openai);
   const anthPlan = $derived(snapshot.claude_oauth?.subscription_type ?? 'Claude');
-  // Match GridView: the OpenAI card shows when the provider is enabled and there
-  // is something to show (Codex quota, billed spend, or an error). When the
-  // provider is disabled (dismissed / toggled off), collapse to single-provider.
-  const hasOpenAI = $derived(openaiEnabled && (!!codex || !!openai || !!snapshot.openai_error));
+  // Match GridView's column-visibility rule: show the OpenAI card when there is
+  // actual data (Codex quota or OpenAI spend) OR billing is explicitly opted in
+  // (`openaiEnabled` = the `openai_enabled` setting). Codex on by default does not
+  // force the card for an Anthropic-only user; dismiss disables both providers so
+  // the data clears and the card collapses.
+  const hasOpenAI = $derived(openaiEnabled || !!codex || !!openai);
 </script>
 
 <div class="cards">

@@ -16,23 +16,23 @@
   let mode = $state<'usage' | 'settings'>('usage');
   const cost = $derived(snapshot.anthropic_api_cost);
 
-  // The OpenAI column is shown when either OpenAI billing or Codex quota is
-  // enabled. Both flags reuse the existing settings schema - no new field.
-  // Default to visible (true) so a settings read failure never hides a column
-  // that the snapshot may carry data for.
-  let openaiEnabled = $state(true);
+  // `openaiEnabled` mirrors the OpenAI *billing* opt-in (the `openai_enabled`
+  // setting). It gates the "paste admin key" connect CTA, NOT column visibility:
+  // the column shows whenever the snapshot carries data (Codex quota or OpenAI
+  // spend), so Codex scanning being on by default never forces a key CTA for an
+  // Anthropic-only user. Default false (the settings default).
+  let openaiEnabled = $state(false);
 
-  // Re-read the OpenAI-side provider toggles from settings. Called on mount and
-  // again on the Settings -> usage transition so re-enabling either toggle
-  // un-hides the column without closing and reopening the popover. Fail-open:
-  // a read failure leaves the column visible (the snapshot is the source of
-  // truth for what data exists; this flag only gates the CTA vs the collapse).
+  // Re-read the billing opt-in from settings. Called on mount and on the
+  // Settings -> usage transition so toggling `openai_enabled` takes effect
+  // without reopening the popover. Fail-open: a read failure leaves the flag
+  // as-is; snapshot data still surfaces the column downstream.
   async function refreshOpenaiEnabled() {
     try {
       const s = await getSettings();
-      openaiEnabled = s.providers.openai_enabled || s.providers.codex_enabled;
+      openaiEnabled = s.providers.openai_enabled;
     } catch {
-      // Leave the column visible on a settings read failure.
+      // Leave the billing opt-in as-is on a settings read failure.
     }
   }
 
