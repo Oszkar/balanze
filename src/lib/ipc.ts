@@ -12,6 +12,12 @@ export const refreshNow = (): Promise<void> => invoke<void>('refresh_now');
 // needs no `core:window` capability - Rust owns window manipulation.
 export const hideWindow = (): Promise<void> => invoke<void>('hide_window');
 
+// Ask the host to resize the popover window to `height` logical px and re-anchor
+// it. Like `hide_window`, this goes through an app command so the webview needs
+// no `core:window` capability.
+export const resizePopover = (height: number): Promise<void> =>
+  invoke<void>('resize_popover', { height });
+
 // Non-secret settings (settings.json shape). `get_settings` never returns any
 // API key; `set_api_key` writes the key to the OS keychain and flips the
 // provider's enable flag backend-side (AGENTS.md §3.4).

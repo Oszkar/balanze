@@ -1,6 +1,6 @@
 <script module lang="ts">
   import type { Tone } from '$lib/presentation/pace';
-  export interface CardWindow { label: string; used: number; elapsed: number | null; tone: Tone; resetsAt: string; }
+  export interface CardWindow { label: string; used: number; elapsed: number | null; tone: Tone; resetsAt: string; stale?: boolean; }
 </script>
 
 <script lang="ts">
@@ -16,7 +16,7 @@
   <div class="hd"><span class="name">{name}</span><span class="plan">{plan}</span></div>
   {#each windows as w (w.label)}
     <div class="brow">
-      <div class="blabel"><span class="bl">{w.label}</span><span class="br">{w.used.toFixed(0)}% · {relativeReset(w.resetsAt)} left</span></div>
+      <div class="blabel"><span class="bl">{w.label}</span><span class="br">{w.used.toFixed(0)}% · {#if w.stale}<span class="sfb">⚠ stale</span>{:else}{relativeReset(w.resetsAt)} left{/if}</span></div>
       <UsageBar used={w.used} elapsed={w.elapsed} tone={w.tone} />
     </div>
   {/each}
@@ -34,6 +34,7 @@
   .brow { display: flex; flex-direction: column; gap: 3px; }
   .blabel { display: flex; justify-content: space-between; font-size: 11px; gap: 8px; }
   .bl { color: var(--ink2); } .br { color: var(--faint); white-space: nowrap; }
+  .br .sfb { color: var(--warn); }
   .billed { display: flex; justify-content: space-between; align-items: center; padding-top: 2px; }
   .amt { font-size: 14px; font-weight: 600; } .cy { font-size: 10px; color: var(--faint); font-weight: 400; }
   .note { font-size: 12px; color: var(--faint); }

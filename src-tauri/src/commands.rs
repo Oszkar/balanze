@@ -56,6 +56,40 @@ pub fn hide_window(window: tauri::Window) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
 }
 
+/// Min/max popover window heights (logical px). The popover hugs content within
+/// these bounds, so a one-provider view is shorter than a two-provider one.
+pub const POPOVER_MIN_H: u32 = 220;
+pub const POPOVER_MAX_H: u32 = 720;
+
+/// Pure clamp so the bounds are unit-testable without a window.
+pub fn clamp_popover_height(requested: u32) -> u32 {
+    requested.clamp(POPOVER_MIN_H, POPOVER_MAX_H)
+}
+
+/// Resize the popover to hug its content height, then re-anchor it to the
+/// tray/dock. Window manipulation lives in Rust (like `hide_window`), so the
+/// webview holds no window capability. The width is preserved (only the height
+/// follows content); the new height is clamped to the [`POPOVER_MIN_H`,
+/// `POPOVER_MAX_H`] bounds before it is applied.
+#[tauri::command]
+pub fn resize_popover(window: tauri::WebviewWindow, height: u32) -> Result<(), String> {
+    let h = clamp_popover_height(height);
+    let size = window.inner_size().map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    // Capture the OLD outer height before resizing: `reanchor_after_resize`
+    // needs it to pin the pre-resize bottom edge on Windows/Linux (set_size
+    // leaves the top-left fixed, so the bottom would otherwise drift down).
+    let old_outer_h = window.outer_size().map_err(|e| e.to_string())?.height;
+    window
+        .set_size(tauri::LogicalSize::new(
+            (size.width as f64 / scale).round(),
+            h as f64,
+        ))
+        .map_err(|e| e.to_string())?;
+    crate::reanchor_after_resize(&window, old_outer_h).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Return the non-secret settings (`settings.json` shape). Never includes any
 /// API key - secrets live in the OS keychain, not here (AGENTS.md §3.4).
 #[tauri::command]
@@ -242,6 +276,15 @@ fn plan_statusline_action(wired: bool, status: &WireStatus) -> StatuslineAction 
 mod tests {
     use super::{StatuslineAction, plan_statusline_action, prepare_api_key};
     use claude_statusline::WireStatus;
+
+    #[test]
+    fn clamp_popover_height_bounds() {
+        use super::{POPOVER_MAX_H, POPOVER_MIN_H, clamp_popover_height};
+        assert_eq!(clamp_popover_height(10), POPOVER_MIN_H);
+        assert_eq!(clamp_popover_height(99_999), POPOVER_MAX_H);
+        let mid = (POPOVER_MIN_H + POPOVER_MAX_H) / 2;
+        assert_eq!(clamp_popover_height(mid), mid);
+    }
 
     #[test]
     fn prepare_api_key_rejects_unknown_provider() {

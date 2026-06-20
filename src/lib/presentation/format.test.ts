@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { microUsdToDollars, relativeReset, formatBurn } from './format';
 
 describe('format', () => {
-  it('micro-usd → dollars', () => expect(microUsdToDollars(12_740_000)).toBe('$12.74'));
+  it('micro-usd -> dollars', () => expect(microUsdToDollars(12_740_000)).toBe('$12.74'));
   it('burn formats', () => {
-    expect(formatBurn(null)).toBe('—');
+    expect(formatBurn(null)).toBe('-');
     expect(formatBurn(3200)).toBe('~3.2k/min');
     expect(formatBurn(840)).toBe('~840/min');
     expect(formatBurn(1000)).toBe('~1.0k/min');
