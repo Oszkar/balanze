@@ -22,16 +22,21 @@
   // that the snapshot may carry data for.
   let openaiEnabled = $state(true);
 
-  onMount(async () => {
+  // Re-read the OpenAI-side provider toggles from settings. Called on mount and
+  // again on the Settings -> usage transition so re-enabling either toggle
+  // un-hides the column without closing and reopening the popover. Fail-open:
+  // a read failure leaves the column visible (the snapshot is the source of
+  // truth for what data exists; this flag only gates the CTA vs the collapse).
+  async function refreshOpenaiEnabled() {
     try {
       const s = await getSettings();
       openaiEnabled = s.providers.openai_enabled || s.providers.codex_enabled;
     } catch {
-      // Leave the column visible on a settings read failure - the snapshot is
-      // the source of truth for what data exists; this flag only gates the
-      // empty-state CTA vs the single-provider collapse.
+      // Leave the column visible on a settings read failure.
     }
-  });
+  }
+
+  onMount(refreshOpenaiEnabled);
 
   // Dismiss-to-hide: disable both OpenAI-side providers via the existing
   // settings IPC, then collapse to the single-provider view. Re-enabling either
@@ -53,7 +58,7 @@
 <div class="pop">
   <div class="caret"></div>
   {#if mode === 'settings'}
-    <SettingsView onBack={() => (mode = 'usage')} />
+    <SettingsView onBack={() => { mode = 'usage'; refreshOpenaiEnabled(); }} />
   {:else}
     <Header bind:view fetchedAt={snapshot.fetched_at} {onRefresh} onSettings={() => (mode = 'settings')} />
     <DegradedBanner {degraded} />

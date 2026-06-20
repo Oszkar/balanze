@@ -39,7 +39,7 @@
   {#if showOpenAI}
     <div class="colhead">
       <span class="p">OpenAI</span><span class="plan">API + Codex</span>
-      {#if colState.kind === 'data' || colState.kind === 'connect'}
+      {#if colState.kind === 'data' || colState.kind === 'connect' || colState.kind === 'error'}
         <button class="dismiss" title="Hide OpenAI - re-add in Settings" onclick={() => onDismissOpenai?.()}>×</button>
       {/if}
     </div>
@@ -70,8 +70,12 @@
         <span class="connect-hint">paste admin key</span>
       </div>
     {:else if colState.kind === 'error'}
-      <BilledCell hatch placeholder="unavailable" note="fetch failed"
-        title={`OpenAI unavailable - ${colState.message}`} />
+      <!-- Span both OpenAI metric rows so col 2 stays symmetric with the
+           Anthropic quota + billed cells (mirrors the connect-state placement). -->
+      <div class="span2">
+        <BilledCell hatch placeholder="unavailable" note="fetch failed"
+          title={`OpenAI unavailable - ${colState.message}`} />
+      </div>
     {:else if codex}
       <QuotaCell pct={codex.primary.used_percent} used={codex.primary.used_percent}
         elapsed={codexElapsedFraction(codex.primary, snapshot.fetched_at) * 100} tone={quotaTone(codex.primary.used_percent)}
@@ -121,4 +125,9 @@
   .connect-btn { font-size: var(--text-sm); font-weight: 600; padding: 5px 12px; border-radius: 8px;
     border: 1px solid var(--seg-border); background: var(--seg-on); color: var(--seg-on-text); cursor: pointer; }
   .connect-hint { font-size: var(--text-2xs); color: var(--faint); }
+  /* Error cell: span the OpenAI column's two metric rows, same as connect.
+     The wrapper carries the grid placement; :global stretches the BilledCell
+     it wraps to fill the full two-row height. */
+  .span2 { grid-column: 2; grid-row: span 2; display: flex; }
+  .span2 :global(.cell) { flex: 1; }
 </style>
