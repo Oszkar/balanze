@@ -1,0 +1,47 @@
+{
+  "planPath": "docs/superpowers/plans/2026-06-20-v0.4.0-ui-polish.md",
+  "tasks": [
+    {
+      "id": 6,
+      "subject": "Task 1: Token layer (spacing + type + tabular nums)",
+      "status": "pending",
+      "description": "**Goal:** Add a small spacing and type-scale token set to theme.css and migrate the shared cell primitives onto it.\n\n**Verify:** bun run check passes; visual diff in bun run tauri dev\n\n```json:metadata\n{\"files\":[\"src/lib/theme.css\",\"src/lib/components/Badge.svelte\",\"src/lib/components/QuotaCell.svelte\",\"src/lib/components/BilledCell.svelte\",\"src/lib/components/UsageBar.svelte\"],\"verifyCommand\":\"bun run check\",\"acceptanceCriteria\":[\"--sp-1..--sp-8 and --text-2xs..--text-2xl defined\",\"tabular numerals on\",\"primitives tokenized\",\"no visual regression\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 2: Render provenance badges in grid cells",
+      "status": "pending",
+      "blockedBy": [6],
+      "description": "**Goal:** Surface the existing 4-kind Badge (REAL $ / QUOTA % / EST / N/A) visibly inside the grid QuotaCell and BilledCell, not just as a hover title.\n\n**Verify:** bun run check passes; visual check that every grid cell carries the correct badge\n\n```json:metadata\n{\"files\":[\"src/lib/components/QuotaCell.svelte\",\"src/lib/components/BilledCell.svelte\",\"src/lib/components/GridView.svelte\"],\"verifyCommand\":\"bun run check\",\"acceptanceCriteria\":[\"quota cells show QUOTA % badge\",\"billed cells show REAL $ or N/A\",\"badge kind matches PROV\",\"cards unchanged\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 3: Cell states (loading/connect/error/dismiss)",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "**Goal:** Replace ad-hoc state strings with a tested state model: cold-start loading, a Connect CTA for enabled-but-unconfigured OpenAI, a consistent error/stale cell, and a dismiss control that hides a provider via the existing settings IPC.\n\n**Verify:** bunx vitest run src/lib/presentation/cellState.test.ts passes; bun run check; manual state walk in bun run tauri dev\n\n```json:metadata\n{\"files\":[\"src/lib/presentation/cellState.ts\",\"src/lib/presentation/cellState.test.ts\",\"src/lib/components/GridView.svelte\",\"src/lib/components/Popover.svelte\",\"src/lib/components/CardsView.svelte\"],\"verifyCommand\":\"bunx vitest run src/lib/presentation/cellState.test.ts && bun run check\",\"acceptanceCriteria\":[\"pure state functions unit-tested\",\"loading affordance on cold start\",\"Connect CTA when enabled+unconfigured\",\"dismiss disables via setSettings, no schema change\"]}\n```"
+    },
+    {
+      "id": 9,
+      "subject": "Task 4: Row-label gutter in the grid",
+      "status": "pending",
+      "blockedBy": [8],
+      "description": "**Goal:** Add a left label column (Quota % / Billed $) so the matrix is self-explanatory, matching the wf-states layout.\n\n**Verify:** bun run check; visual check in bun run tauri dev (one + two providers)\n\n```json:metadata\n{\"files\":[\"src/lib/components/GridView.svelte\"],\"verifyCommand\":\"bun run check\",\"acceptanceCriteria\":[\"46px gutter w/ Quota %/Billed $ labels\",\"headers align over data columns\",\"single-provider collapse works\"]}\n```"
+    },
+    {
+      "id": 11,
+      "subject": "Task 5: Settings polish + em-dash sweep",
+      "status": "pending",
+      "blockedBy": [9],
+      "description": "**Goal:** Regroup SettingsView into per-provider connector cards (status dot + inline masked key field + toggles), tokenized; sweep remaining em-dashes/ellipses repo-wide under src/.\n\n**Verify:** bun run check; git grep for em-dash/ellipsis under src/ returns nothing; manual settings walk in bun run tauri dev\n\n```json:metadata\n{\"files\":[\"src/lib/components/SettingsView.svelte\",\"src/lib/components/GridView.svelte\"],\"verifyCommand\":\"bun run check\",\"acceptanceCriteria\":[\"connector-card settings layout\",\"IPC/behavior unchanged\",\"no em-dash/ellipsis under src/\",\"tokenized\"]}\n```"
+    },
+    {
+      "id": 10,
+      "subject": "Task 6: Content-hugging height (resize_popover IPC)",
+      "status": "pending",
+      "blockedBy": [11],
+      "description": "**Goal:** Size the popover window to its content via a new additive resize_popover IPC command, re-anchoring to the tray/dock so a one-provider popover is shorter than a two-provider one.\n\n**Verify:** cargo nextest run -p balanze clamp_popover_height_bounds; cargo clippy --workspace --all-targets -- -D warnings; cargo fmt --all -- --check; bun run check; manual multi-monitor + DPI pass\n\n```json:metadata\n{\"files\":[\"src-tauri/src/commands.rs\",\"src-tauri/src/lib.rs\",\"src/lib/ipc.ts\",\"src/lib/components/Popover.svelte\",\"docs/ARCHITECTURE.md\"],\"verifyCommand\":\"cargo nextest run -p balanze clamp_popover_height_bounds && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check && bun run check\",\"acceptanceCriteria\":[\"pure clamp unit-tested\",\"resize_popover sets size + re-anchors\",\"no webview window capability\",\"single-provider shorter, no clipping\",\"ARCHITECTURE IPC table updated\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-06-20"
+}
