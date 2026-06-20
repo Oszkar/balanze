@@ -45,9 +45,16 @@
   // and re-anchors; errors are swallowed (a resize failure must not crash the
   // popover, and the window keeps its last good size).
   let popEl: HTMLDivElement;
+  let lastSentH = 0;
   onMount(() => {
     const ro = new ResizeObserver(() => {
-      resizePopover(Math.ceil(popEl.getBoundingClientRect().height)).catch(() => {});
+      // Only call the host when the measured height actually changes, so a
+      // reflow burst (e.g. the usage <-> settings transition) does not spray
+      // redundant resize IPC calls at the backend.
+      const h = Math.ceil(popEl.getBoundingClientRect().height);
+      if (h === lastSentH) return;
+      lastSentH = h;
+      resizePopover(h).catch(() => {});
     });
     ro.observe(popEl);
     return () => ro.disconnect();
