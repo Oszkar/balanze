@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
   import GalleryFrame from '$lib/gallery/GalleryFrame.svelte';
   import { GALLERY_STATES, DEMO_SETTINGS, DEMO_STATUSLINE } from '$lib/gallery/fixtures';
@@ -10,8 +10,12 @@
   const dev = import.meta.env.DEV;
   let theme = $state<'light' | 'dark'>('light');
 
-  onMount(() => {
-    if (!dev) return;
+  // Install the stub during component init, NOT in onMount: a child's onMount
+  // (SettingsView's `load`) runs before the parent's, so an onMount setup would
+  // race and the first `get_settings` would hit the absent Tauri runtime
+  // (window.__TAURI_INTERNALS__ undefined). Running here puts the mock in place
+  // before any child mounts. Browser-only (ssr=false), guarded for safety.
+  if (dev && typeof window !== 'undefined') {
     mockIPC((cmd) => {
       switch (cmd) {
         case 'get_settings':
@@ -24,8 +28,8 @@
           return undefined; // writes (set_settings, set_api_key, ...) no-op resolve
       }
     });
-    return () => clearMocks();
-  });
+    onDestroy(clearMocks);
+  }
 </script>
 
 {#if dev}
@@ -53,13 +57,13 @@
 {/if}
 
 <style>
-  .canvas { min-height: 100vh; padding: 24px 28px 48px;
+  .canvas { min-height: 100vh; padding: 40px 32px 56px;
     font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--ink); }
-  .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
   h1 { font-size: 16px; font-weight: 700; margin: 0; }
   .bar button { font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 8px;
     border: 1px solid var(--seg-border); background: var(--seg-on); color: var(--seg-on-text); cursor: pointer; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, 360px); gap: 36px 28px; align-items: start; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, 360px); gap: 44px 28px; align-items: start; }
   .prod { font-family: system-ui, sans-serif; padding: 40px; color: #888; }
 
   /* Force a theme independent of the OS `prefers-color-scheme`. theme.css only
