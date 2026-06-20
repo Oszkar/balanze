@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Snapshot } from '$lib/types/snapshot';
-  import { getSettings, setSettings } from '$lib/ipc';
+  import { getSettings, setSettings, resizePopover } from '$lib/ipc';
   import Header from './Header.svelte';
   import GridView from './GridView.svelte';
   import CardsView from './CardsView.svelte';
@@ -38,6 +38,21 @@
 
   onMount(refreshOpenaiEnabled);
 
+  // Size the popover window to its content. The window opens at a fixed initial
+  // height (tauri.conf.json); this corrects it to hug the rendered content on
+  // first paint and on every reflow (e.g. collapsing the OpenAI column), so a
+  // one-provider popover is shorter than a two-provider one. The host clamps
+  // and re-anchors; errors are swallowed (a resize failure must not crash the
+  // popover, and the window keeps its last good size).
+  let popEl: HTMLDivElement;
+  onMount(() => {
+    const ro = new ResizeObserver(() => {
+      resizePopover(Math.ceil(popEl.getBoundingClientRect().height)).catch(() => {});
+    });
+    ro.observe(popEl);
+    return () => ro.disconnect();
+  });
+
   // Dismiss-to-hide: disable both OpenAI-side providers via the existing
   // settings IPC, then collapse to the single-provider view. Re-enabling either
   // toggle in Settings brings the column back. No schema change.
@@ -55,7 +70,7 @@
   }
 </script>
 
-<div class="pop">
+<div class="pop" bind:this={popEl}>
   <div class="caret"></div>
   {#if mode === 'settings'}
     <SettingsView onBack={() => { mode = 'usage'; refreshOpenaiEnabled(); }} />
@@ -76,7 +91,7 @@
 <style>
   /* 1px adaptive border so the window edges are visible even when the popover
      opens over a same-colored background (white-on-white / dark-on-dark). */
-  .pop { width: 100%; min-height: 100vh; background: var(--paper); border-radius: var(--radius);
+  .pop { width: 100%; background: var(--paper); border-radius: var(--radius);
          border: 1px solid var(--seg-border); position: relative; overflow: hidden; }
   .caret { position: absolute; top: -7px; left: 30px; width: 14px; height: 14px; background: var(--paper);
            border-left: 1px solid var(--seg-border); border-top: 1px solid var(--seg-border); transform: rotate(45deg); }

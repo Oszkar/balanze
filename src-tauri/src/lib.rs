@@ -133,6 +133,50 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     refresh_state_on_open(app);
 }
 
+/// Re-anchor the popover after a content resize. macOS drops down from the menu
+/// bar (top edge fixed); Windows opens up from the taskbar (bottom edge fixed).
+/// Derives the fixed edge from current geometry, then clamps fully on-monitor.
+///
+/// On Windows the window grows upward: the bottom edge stays pinned by moving
+/// the top up by the height delta, so a taller popover does not push its bottom
+/// down past the taskbar. On macOS the top stays where the menu-bar drop placed
+/// it. Either way the final position is clamped fully on-monitor.
+fn reanchor_after_resize(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    let pos = window.outer_position()?;
+    let size = window.outer_size()?;
+    let Some(monitor) = window.current_monitor()? else {
+        return Ok(());
+    };
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let (mon_left, mon_top) = (mp.x, mp.y);
+    let mon_right = mp.x + ms.width as i32;
+    let mon_bottom = mp.y + ms.height as i32;
+    let win_w = size.width as i32;
+    let win_h = size.height as i32;
+
+    // macOS keeps the top edge fixed (popover drops from the menu bar), so the
+    // current `pos.y` is already the anchor. Windows keeps the bottom edge fixed
+    // (popover opens up from the taskbar): pin the bottom at where it currently
+    // sits and derive the new top from the new height, so the window grows
+    // upward instead of pushing its bottom off-screen.
+    let x = pos.x;
+    #[cfg(target_os = "macos")]
+    let y = pos.y;
+    #[cfg(not(target_os = "macos"))]
+    let y = (pos.y + size.height as i32) - win_h;
+
+    // Clamp fully on-monitor. `max_x`/`max_y` can fall below the monitor origin
+    // if the window is wider/taller than the monitor; `max(left, …)` keeps the
+    // top-left corner on-screen in that degenerate case.
+    let max_x = (mon_right - win_w).max(mon_left);
+    let max_y = (mon_bottom - win_h).max(mon_top);
+    let x = x.clamp(mon_left, max_x);
+    let y = y.clamp(mon_top, max_y);
+    window.set_position(tauri::PhysicalPosition::new(x, y))?;
+    Ok(())
+}
+
 fn setup_tray(app: &mut App) -> tauri::Result<()> {
     let open = MenuItemBuilder::with_id("open", "Open Balanze").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -379,6 +423,7 @@ pub fn run() {
             commands::get_snapshot,
             commands::refresh_now,
             commands::hide_window,
+            commands::resize_popover,
             commands::get_settings,
             commands::set_settings,
             commands::set_api_key,
