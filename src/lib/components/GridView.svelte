@@ -30,7 +30,7 @@
     <QuotaCell pct={aq.headline.pct} used={(fivePace?.used_fraction ?? aq.headline.pct / 100) * 100}
       elapsed={fivePace ? fivePace.elapsed_fraction * 100 : null} tone={aq.tone}
       resetsAt={aq.headline.resetsAt} secondary={aq.secondary ? `7-day ${aq.secondary.pct.toFixed(0)}%` : ''}
-      stale={anthStale}
+      stale={anthStale} badge="quota"
       title={aq.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title} />
   {:else if anthErr}
     <BilledCell hatch placeholder="unavailable" note="quota fetch failed"
@@ -44,7 +44,7 @@
       <QuotaCell pct={codex.primary.used_percent} used={codex.primary.used_percent}
         elapsed={codexElapsedFraction(codex.primary, snapshot.fetched_at) * 100} tone={quotaTone(codex.primary.used_percent)}
         resetsAt={codex.primary.resets_at} secondary={`codex ${codex.plan_type}`}
-        stale={!!degraded['codex_quota'] || codexWindowExpired(codex.primary, snapshot.fetched_at)} title={PROV.codexQuota.title} />
+        stale={!!degraded['codex_quota'] || codexWindowExpired(codex.primary, snapshot.fetched_at)} badge="quota" title={PROV.codexQuota.title} />
     {:else}
       <BilledCell note="not connected" title="OpenAI Codex not configured" />
     {/if}
@@ -52,16 +52,16 @@
 
   {#if eu?.is_enabled}
     <BilledCell amount={`${microUsdToDollars(eu.used_credits_micro_usd)}/${microUsdToDollars(eu.monthly_limit_micro_usd)}`}
-      note="overage · this cycle" title={PROV.anthropicBilledOverage.title} />
+      note="overage · this cycle" badge={PROV.anthropicBilledOverage.badge} title={PROV.anthropicBilledOverage.title} />
   {:else}
-    <BilledCell hatch note="no per-user API spend" title={PROV.anthropicBilledNa.title} />
+    <BilledCell hatch note="no per-user API spend" badge={PROV.anthropicBilledNa.badge} title={PROV.anthropicBilledNa.title} />
   {/if}
   {#if hasOpenAI}
     {#if openai}
       <BilledCell amount={microUsdToDollars(openai.total_micro_usd)}
-        note="admin api · this cycle" title={PROV.openaiBilled.title} />
+        note="admin api · this cycle" badge={PROV.openaiBilled.badge} title={PROV.openaiBilled.title} />
     {:else}
-      <BilledCell hatch note={snapshot.openai_error ? '✗ fetch failed' : 'not configured'} title="OpenAI spend unavailable" />
+      <BilledCell hatch note={snapshot.openai_error ? '✗ fetch failed' : 'not configured'} badge="na" title="OpenAI spend unavailable" />
     {/if}
   {/if}
 </div>
