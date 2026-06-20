@@ -35,6 +35,7 @@
 </script>
 
 <div class="grid" class:single={!showOpenAI}>
+  <div class="corner"></div>
   <div class="colhead"><span class="p">Anthropic</span><span class="plan">Claude · {snapshot.claude_oauth?.subscription_type ?? '-'}</span></div>
   {#if showOpenAI}
     <div class="colhead">
@@ -45,6 +46,7 @@
     </div>
   {/if}
 
+  <div class="rowlabel">Quota %</div>
   {#if anthState.kind === 'data' && aq}
     <QuotaCell pct={aq.headline.pct} used={(fivePace?.used_fraction ?? aq.headline.pct / 100) * 100}
       elapsed={fivePace ? fivePace.elapsed_fraction * 100 : null} tone={aq.tone}
@@ -70,7 +72,7 @@
         <span class="connect-hint">paste admin key</span>
       </div>
     {:else if colState.kind === 'error'}
-      <!-- Span both OpenAI metric rows so col 2 stays symmetric with the
+      <!-- Span both OpenAI metric rows (col 3) so it stays symmetric with the
            Anthropic quota + billed cells (mirrors the connect-state placement). -->
       <div class="span2">
         <BilledCell hatch placeholder="unavailable" note="fetch failed"
@@ -86,6 +88,7 @@
     {/if}
   {/if}
 
+  <div class="rowlabel">Billed $</div>
   {#if eu?.is_enabled}
     <BilledCell amount={`${microUsdToDollars(eu.used_credits_micro_usd)}/${microUsdToDollars(eu.monthly_limit_micro_usd)}`}
       note="overage · this cycle" badge={PROV.anthropicBilledOverage.badge} title={PROV.anthropicBilledOverage.title} />
@@ -103,8 +106,10 @@
 </div>
 
 <style>
-  .grid { padding: 2px 16px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: stretch; }
-  .grid.single { grid-template-columns: 1fr; }
+  .grid { padding: 2px 16px 0; display: grid; grid-template-columns: 46px 1fr 1fr; gap: 8px; align-items: stretch; }
+  .grid.single { grid-template-columns: 46px 1fr; }
+  .rowlabel { display: flex; align-items: center; font-size: var(--text-2xs); color: var(--faint);
+    text-transform: uppercase; letter-spacing: .06em; }
   .colhead { position: relative; display: flex; flex-direction: column; align-items: center; padding-bottom: 3px; }
   .colhead .p { font-size: var(--text-base); font-weight: 600; }
   .colhead .plan { font-size: var(--text-2xs); color: var(--faint); }
@@ -118,8 +123,9 @@
   .skelbar { height: 14px; border-radius: 7px; background: var(--track); animation: pulse 1.4s ease-in-out infinite; }
   .skelcap { font-size: var(--text-2xs); color: var(--faint); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-  /* Connect CTA: spans the OpenAI column's two metric rows. */
-  .connect { grid-column: 2; grid-row: span 2; padding: var(--sp-3) var(--sp-2); display: flex; flex-direction: column;
+  /* Connect CTA: spans the OpenAI column's two metric rows.
+     With the row-label gutter (column 1), OpenAI is column 3. */
+  .connect { grid-column: 3; grid-row: span 2; padding: var(--sp-3) var(--sp-2); display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 6px; border-style: dashed; }
   .connect-label { font-size: var(--text-sm); color: var(--faint); }
   .connect-btn { font-size: var(--text-sm); font-weight: 600; padding: 5px 12px; border-radius: 8px;
@@ -128,6 +134,6 @@
   /* Error cell: span the OpenAI column's two metric rows, same as connect.
      The wrapper carries the grid placement; :global stretches the BilledCell
      it wraps to fill the full two-row height. */
-  .span2 { grid-column: 2; grid-row: span 2; display: flex; }
+  .span2 { grid-column: 3; grid-row: span 2; display: flex; }
   .span2 :global(.cell) { flex: 1; }
 </style>
