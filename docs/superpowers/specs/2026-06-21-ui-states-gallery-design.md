@@ -20,11 +20,11 @@ Rejected alternatives: Storybook/Histoire (heavyweight dev dep + parallel build,
 
 ### Why sub-views, not the full `Popover`
 
-`Popover` owns `view` (grid/cards) as internal `$state`, so it cannot be forced to a given view from outside. Rendering the sub-views directly lets the gallery show grid and cards states deterministically and side by side, each fed pure props. `GridView` and `CardsView` make no IPC calls, so they render anywhere. The frame composes them exactly as `Popover` does (grid: `GridView` + `BurnIndicator` + `LeverageBox`; cards: `CardsView` + `LeverageBox`).
+`Popover` owns `view` (grid/cards) as internal `$state`, so it cannot be forced to a given view from outside. Rendering the sub-views directly lets the gallery show grid and cards states deterministically and side by side, each fed pure props. `GridView` and `CardsView` make no IPC calls, so they render anywhere. The frame composes them exactly as `Popover` does (grid: `GridView` + `BurnIndicator` + `LeverageBox`; cards: `CardsView` + `LeverageBox`), and includes the real `Header` with a local `view` seeded from the descriptor - so the segmented picker is a live, safe grid/cards toggle per frame. All interactive callbacks (refresh, settings, dismiss) are no-ops.
 
 ### IPC
 
-`SettingsView` is the only sub-view that calls IPC (`get_settings`, `has_api_key`, `get_statusline_status`). The gallery installs `mockIPC` (from `@tauri-apps/api/mocks`) in `onMount` to return canned values so the one Settings frame renders in a plain browser with no Tauri host. The mock is a single global handler; the Settings frame is shown in its configured state only (its sub-states are interaction-driven and low-risk). Mock setup is gated behind `import.meta.env.DEV`.
+`SettingsView` is the only sub-view that calls IPC (`get_settings`, `has_api_key`, `get_statusline_status`). The gallery installs `mockIPC` (from `@tauri-apps/api/mocks`) to return canned values so the one Settings frame renders in a plain browser with no Tauri host. It is installed during the route's component init (not `onMount`): a child's `onMount` runs before the parent's, so an `onMount` setup would let `SettingsView`'s first `get_settings` race ahead of the mock and hit the absent runtime. `mockIPC` replaces the whole `invoke` transport, so writes (`set_settings`, `set_api_key`, `clear_api_key`, `set_statusline_wired`, ...) are intercepted too - each is an explicit, logged no-op, so clicking Remove/Save/toggle in the Settings frame can never touch the real keychain or settings file. Mock setup is gated behind `import.meta.env.DEV`.
 
 ### Theming
 

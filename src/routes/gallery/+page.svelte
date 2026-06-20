@@ -18,14 +18,30 @@
   if (dev && typeof window !== 'undefined') {
     mockIPC((cmd) => {
       switch (cmd) {
+        // Reads -> canned data so the Settings frame renders.
         case 'get_settings':
           return DEMO_SETTINGS;
         case 'has_api_key':
           return true;
         case 'get_statusline_status':
           return DEMO_STATUSLINE;
+        // Writes -> swallowed. mockIPC replaces the whole invoke transport, so a
+        // mutating command (Remove key, Save, toggle a provider, Wire) never
+        // reaches the real keychain or settings file - even if this route is
+        // opened inside the Tauri app. Each is an explicit, logged no-op so the
+        // safety is intentional, not an accident of the default branch.
+        case 'set_settings':
+        case 'set_api_key':
+        case 'clear_api_key':
+        case 'set_statusline_wired':
+        case 'refresh_now':
+        case 'hide_window':
+        case 'resize_popover':
+          console.debug(`[gallery] mocked no-op write: ${cmd}`);
+          return undefined;
         default:
-          return undefined; // writes (set_settings, set_api_key, ...) no-op resolve
+          console.debug(`[gallery] unhandled mocked command: ${cmd}`);
+          return undefined;
       }
     });
     onDestroy(clearMocks);

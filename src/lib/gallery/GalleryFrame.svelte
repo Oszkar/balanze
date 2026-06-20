@@ -1,13 +1,15 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { Snapshot } from '$lib/types/snapshot';
+  import Header from '$lib/components/Header.svelte';
   import GridView from '$lib/components/GridView.svelte';
   import CardsView from '$lib/components/CardsView.svelte';
   import SettingsView from '$lib/components/SettingsView.svelte';
   import BurnIndicator from '$lib/components/BurnIndicator.svelte';
   import LeverageBox from '$lib/components/LeverageBox.svelte';
 
-  // One gallery frame: a caption plus the real sub-view, wrapped in the popover's
-  // `.pop` chrome at the fixed 360px width. Grid/cards are composed exactly as
+  // One gallery frame: a caption plus the real popover chrome (Header + view),
+  // wrapped in the `.pop` shell at the fixed 360px width. Composed exactly as
   // Popover.svelte does so each frame matches the shipped layout.
   let { label, view, snapshot, degraded = {}, openaiEnabled = false }: {
     label: string;
@@ -17,6 +19,15 @@
     openaiEnabled?: boolean;
   } = $props();
 
+  // The Header's segmented picker flips this local view, so each grid/cards frame
+  // is a live mini-popover. The toggle only swaps the local render - no IPC, no
+  // shared state. Seeded once from the descriptor's view (props are fixed per
+  // frame, so `untrack` makes the initial-value-only read explicit).
+  let activeView = $state<'grid' | 'cards'>(untrack(() => (view === 'cards' ? 'cards' : 'grid')));
+
+  // Every interactive callback is inert in the gallery: refresh, settings, and
+  // dismiss do nothing (and Settings writes are neutralized by the route's
+  // mockIPC), so clicking around can never touch real data.
   const noop = () => {};
 </script>
 
@@ -26,21 +37,24 @@
     <div class="caret"></div>
     {#if view === 'settings'}
       <SettingsView onBack={noop} />
-    {:else if snapshot && view === 'cards'}
-      <CardsView {snapshot} {openaiEnabled} {degraded} />
-      <LeverageBox
-        totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
-        eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
-        error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
-      />
     {:else if snapshot}
-      <GridView {snapshot} {degraded} {openaiEnabled} onDismissOpenai={noop} onSettings={noop} />
-      <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} />
-      <LeverageBox
-        totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
-        eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
-        error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
-      />
+      <Header bind:view={activeView} fetchedAt={snapshot.fetched_at} onRefresh={noop} onSettings={noop} />
+      {#if activeView === 'cards'}
+        <CardsView {snapshot} {openaiEnabled} {degraded} />
+        <LeverageBox
+          totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
+          eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
+          error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
+        />
+      {:else}
+        <GridView {snapshot} {degraded} {openaiEnabled} onDismissOpenai={noop} onSettings={noop} />
+        <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} />
+        <LeverageBox
+          totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
+          eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
+          error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
+        />
+      {/if}
     {/if}
   </div>
 </figure>
