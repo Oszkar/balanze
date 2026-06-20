@@ -76,13 +76,17 @@ pub fn resize_popover(window: tauri::WebviewWindow, height: u32) -> Result<(), S
     let h = clamp_popover_height(height);
     let size = window.inner_size().map_err(|e| e.to_string())?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    // Capture the OLD outer height before resizing: `reanchor_after_resize`
+    // needs it to pin the pre-resize bottom edge on Windows/Linux (set_size
+    // leaves the top-left fixed, so the bottom would otherwise drift down).
+    let old_outer_h = window.outer_size().map_err(|e| e.to_string())?.height;
     window
         .set_size(tauri::LogicalSize::new(
             (size.width as f64 / scale).round(),
             h as f64,
         ))
         .map_err(|e| e.to_string())?;
-    crate::reanchor_after_resize(&window).map_err(|e| e.to_string())?;
+    crate::reanchor_after_resize(&window, old_outer_h).map_err(|e| e.to_string())?;
     Ok(())
 }
 

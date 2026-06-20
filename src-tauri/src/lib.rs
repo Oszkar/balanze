@@ -116,7 +116,7 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
     let (mut x, mut y) = (cursor.x as i32 - win_w, cursor.y as i32 - win_h);
 
     // Clamp fully on-monitor. `max_x`/`max_y` can fall below the monitor origin
-    // if the window is wider/taller than the monitor; `max(left, …)` keeps the
+    // if the window is wider/taller than the monitor; `max(left, ...)` keeps the
     // top-left corner on-screen in that degenerate case.
     let max_x = (mon_right - win_w).max(mon_left);
     let max_y = (mon_bottom - win_h).max(mon_top);
@@ -141,9 +141,9 @@ fn show_popover_anchored(app: &tauri::AppHandle, cursor: PhysicalPosition<f64>) 
 /// the top up by the height delta, so a taller popover does not push its bottom
 /// down past the taskbar. On macOS the top stays where the menu-bar drop placed
 /// it. Either way the final position is clamped fully on-monitor.
-fn reanchor_after_resize(window: &tauri::WebviewWindow) -> tauri::Result<()> {
-    let pos = window.outer_position()?;
-    let size = window.outer_size()?;
+fn reanchor_after_resize(window: &tauri::WebviewWindow, old_outer_h: u32) -> tauri::Result<()> {
+    let pos = window.outer_position()?; // top-left unchanged by set_size
+    let size = window.outer_size()?; // NEW outer size (post-resize)
     let Some(monitor) = window.current_monitor()? else {
         return Ok(());
     };
@@ -157,17 +157,21 @@ fn reanchor_after_resize(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 
     // macOS keeps the top edge fixed (popover drops from the menu bar), so the
     // current `pos.y` is already the anchor. Windows keeps the bottom edge fixed
-    // (popover opens up from the taskbar): pin the bottom at where it currently
-    // sits and derive the new top from the new height, so the window grows
-    // upward instead of pushing its bottom off-screen.
+    // (popover opens up from the taskbar): pin the OLD bottom edge - the
+    // pre-resize top (`pos.y`, unchanged by set_size) plus the OLD height - and
+    // derive the new top from the new height, so the window grows upward instead
+    // of pushing its bottom off-screen.
     let x = pos.x;
     #[cfg(target_os = "macos")]
-    let y = pos.y;
+    let y = {
+        let _ = old_outer_h; // bottom-pin is Windows/Linux only; unused here
+        pos.y
+    };
     #[cfg(not(target_os = "macos"))]
-    let y = (pos.y + size.height as i32) - win_h;
+    let y = (pos.y + old_outer_h as i32) - win_h;
 
     // Clamp fully on-monitor. `max_x`/`max_y` can fall below the monitor origin
-    // if the window is wider/taller than the monitor; `max(left, …)` keeps the
+    // if the window is wider/taller than the monitor; `max(left, ...)` keeps the
     // top-left corner on-screen in that degenerate case.
     let max_x = (mon_right - win_w).max(mon_left);
     let max_y = (mon_bottom - win_h).max(mon_top);
