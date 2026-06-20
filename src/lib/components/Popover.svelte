@@ -88,7 +88,7 @@
       <GridView {snapshot} {degraded} {openaiEnabled} {onDismissOpenai} onSettings={() => (mode = 'settings')} />
       <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} />
     {:else}
-      <CardsView {snapshot} {openaiEnabled} />
+      <CardsView {snapshot} {openaiEnabled} {degraded} />
     {/if}
     <LeverageBox totalMicroUsd={cost?.total_micro_usd ?? 0} eventCount={cost?.total_event_count ?? 0}
       error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error} />

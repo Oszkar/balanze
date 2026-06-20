@@ -107,12 +107,12 @@
 </div>
 
 <style>
-  .grid { padding: 2px 16px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: stretch; }
+  .grid { padding: 2px 16px 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: stretch; }
   .grid.single { grid-template-columns: 1fr; }
   .colhead { position: relative; display: flex; flex-direction: column; align-items: center; padding-bottom: 3px; }
   .colhead .p { font-size: var(--text-base); font-weight: 600; }
   .colhead .plan { font-size: var(--text-2xs); color: var(--faint); }
-  .dismiss { position: absolute; top: -2px; right: 0; background: none; border: none; color: var(--faint);
+  .dismiss { position: absolute; top: 0; right: 1px; background: none; border: none; color: var(--faint);
     cursor: pointer; font-size: var(--text-base); line-height: 1; padding: 0 2px; }
   .dismiss:hover { color: var(--ink); }
   .cell { border: 1.4px solid var(--tile-border); border-radius: 11px; background: var(--tile-bg); }

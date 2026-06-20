@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { quotaTone, codexElapsedFraction } from '$lib/presentation/quota';
+  import { quotaTone, codexElapsedFraction, codexWindowExpired } from '$lib/presentation/quota';
   import { microUsdToDollars } from '$lib/presentation/format';
   import ProviderCard, { type CardWindow } from './ProviderCard.svelte';
 
   // `openaiEnabled` = the OpenAI billing opt-in (`openai_enabled`); default false.
-  let { snapshot, openaiEnabled = false }: { snapshot: Snapshot; openaiEnabled?: boolean } = $props();
+  let { snapshot, openaiEnabled = false, degraded = {} }:
+    { snapshot: Snapshot; openaiEnabled?: boolean; degraded?: Record<string, string> } = $props();
 
   // Anthropic windows: prefer OAuth cadences (one bar each, with the pace tick);
   // fall back to the live statusline 5h/7d when OAuth is absent - so Cards shows
@@ -55,7 +56,8 @@
     <ProviderCard name="OpenAI" plan="API + Codex"
       windows={codex
         ? [{ label: `Codex · ${codex.plan_type}`, used: codex.primary.used_percent,
-            elapsed: codexElapsedFraction(codex.primary, snapshot.fetched_at) * 100, tone: quotaTone(codex.primary.used_percent), resetsAt: codex.primary.resets_at }]
+            elapsed: codexElapsedFraction(codex.primary, snapshot.fetched_at) * 100, tone: quotaTone(codex.primary.used_percent),
+            resetsAt: codex.primary.resets_at, stale: codexWindowExpired(codex.primary, snapshot.fetched_at) || !!degraded['codex_quota'] }]
         : []}
       billed={openai
         ? { amount: microUsdToDollars(openai.total_micro_usd), note: 'this cycle', badge: 'real' }
