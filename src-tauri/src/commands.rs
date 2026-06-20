@@ -39,8 +39,8 @@ pub async fn refresh_now(handle: State<'_, StateCoordinatorHandle>) -> Result<()
     // state and catches up any missed live event. It does NOT trigger an
     // immediate provider re-poll or JSONL reparse - pollers run on their own
     // cadence. A true on-demand re-fetch (a refresh channel into the watcher
-    // tasks) is the deferred "refresh_now mechanism" open sub-decision in
-    // docs/superpowers/specs/2026-06-03-v0.3.0-popover-design.md (§12).
+    // tasks) is a deferred "refresh_now mechanism" open sub-decision (a
+    // refresh channel into the watcher tasks), not yet built.
     handle
         .send(StateMsg::Refresh)
         .await
