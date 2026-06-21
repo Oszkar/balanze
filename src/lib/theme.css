@@ -33,6 +33,7 @@
   /* Type scale - matches values already in use across components */
   --text-2xs: 9.5px; --text-xs: 11px; --text-sm: 12px; --text-base: 13px;
   --text-md: 15px; --text-lg: 18px; --text-xl: 21px; --text-2xl: 24px;
+
   font-family: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
   color-scheme: light;
 }

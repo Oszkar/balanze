@@ -29,8 +29,11 @@
     animation: rise .42s var(--ease-out) both; transition: box-shadow .18s var(--ease-out);
   }
   .qcell:hover { box-shadow: var(--tile-elev-hover); }
-  /* Warn ring stacks on the machined elevation (replaces the old border-color cue). */
+  /* Warn ring stacks on the machined elevation (replaces the old border-color cue).
+     The :hover variant keeps the ring above the hover lift - .qcell:hover on its own
+     would override box-shadow and drop the stale cue while hovered. */
   .stale { box-shadow: var(--tile-elev), 0 0 0 1.5px color-mix(in srgb, var(--warn) 72%, transparent); }
+  .stale:hover { box-shadow: var(--tile-elev-hover), 0 0 0 1.5px color-mix(in srgb, var(--warn) 72%, transparent); }
   .top { display: flex; align-items: center; gap: 6px; }
   .pct {
     font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
