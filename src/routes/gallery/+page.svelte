@@ -79,6 +79,8 @@
   h1 { font-size: 16px; font-weight: 700; margin: 0; }
   .bar button { font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 8px;
     border: 1px solid var(--seg-border); background: var(--seg-on); color: var(--seg-on-text); cursor: pointer; }
+  .bar button:hover { opacity: .88; }
+  .bar button:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, 360px); gap: 44px 28px; align-items: start; }
   .prod { font-family: system-ui, sans-serif; padding: 40px; color: #888; }
 

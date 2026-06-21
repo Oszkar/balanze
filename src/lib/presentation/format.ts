@@ -1,4 +1,9 @@
-export const microUsdToDollars = (micro: number): string => `$${(micro / 1_000_000).toFixed(2)}`;
+// USD display formatter (display boundary only - see AGENTS.md currency rule).
+// Intl.NumberFormat over a hand-rolled `$` + toFixed gives thousands separators
+// and correct symbol/negative handling. Locale pinned to en-US so output stays
+// deterministic; the app's amounts are provider-billed in USD.
+const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+export const microUsdToDollars = (micro: number): string => USD.format(micro / 1_000_000);
 
 export function relativeReset(isoResetsAt: string, now: Date = new Date()): string {
   const ms = new Date(isoResetsAt).getTime() - now.getTime();

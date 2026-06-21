@@ -13,8 +13,8 @@
   <div><div class="name">balanze</div><div class="sub">{view === 'grid' ? 'measured usage' : 'by provider'} · {ago} ago</div></div>
   <div class="right">
     <DensityToggle bind:view />
-    <button class="icon" title="Refresh now" onclick={onRefresh}>↻</button>
-    <button class="icon" title="Settings" onclick={onSettings}>⚙</button>
+    <button class="icon" type="button" aria-label="Refresh now" title="Refresh now" onclick={onRefresh}><span aria-hidden="true">↻</span></button>
+    <button class="icon" type="button" aria-label="Settings" title="Settings" onclick={onSettings}><span aria-hidden="true">⚙</span></button>
   </div>
 </div>
 <style>
@@ -22,6 +22,8 @@
   .name { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
   .sub { font-size: 11px; color: var(--faint); margin-top: 1px; }
   .right { display: flex; align-items: center; gap: 8px; }
-  .icon { background: none; border: none; color: var(--faint); cursor: pointer; font-size: 14px; padding: 2px; }
+  .icon { background: none; border: none; color: var(--faint); cursor: pointer; font-size: 14px; padding: 2px; border-radius: 4px; }
+  .icon:hover { color: var(--ink); }
+  .icon:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .icon:disabled { opacity: .5; cursor: default; }
 </style>

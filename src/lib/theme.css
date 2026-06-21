@@ -14,9 +14,11 @@
   --text-2xs: 9.5px; --text-xs: 11px; --text-sm: 12px; --text-base: 13px;
   --text-md: 15px; --text-lg: 18px; --text-xl: 21px; --text-2xl: 24px;
   font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
+    color-scheme: dark;
     --paper: #171a20; --ink: #e9ecf1; --ink2: #aab2bd; --faint: #6f7886;
     --ok: #57c98a; --warn: #e6a24a; --bad: #e3685a; --real: #6ea3e6;
     --hair: rgba(255,255,255,.10); --tile-bg: rgba(255,255,255,.035); --tile-border: rgba(255,255,255,.08);

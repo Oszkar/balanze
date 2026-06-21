@@ -9,7 +9,13 @@
   const verdict = $derived(elapsed == null ? null : paceVerdict(used / 100, elapsed / 100));
 </script>
 
-<div class="track" style="height:{height}px" title={verdict ? `Pace: ${verdict.text}` : undefined}>
+<div
+  class="track"
+  style="height:{height}px"
+  role={verdict ? 'img' : undefined}
+  aria-label={verdict ? `Pace: ${verdict.text}` : undefined}
+  title={verdict ? `Pace: ${verdict.text}` : undefined}
+>
   <div class="fill" style="width:{clamp(used)}%; background:var(--{tone})"></div>
   {#if elapsed != null}
     <div class="tick" style="left:{clamp(elapsed)}%"></div>

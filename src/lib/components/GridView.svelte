@@ -115,6 +115,7 @@
   .dismiss { position: absolute; top: 0; right: 1px; background: none; border: none; color: var(--faint);
     cursor: pointer; font-size: var(--text-base); line-height: 1; padding: 0 2px; }
   .dismiss:hover { color: var(--ink); }
+  .dismiss:focus-visible { outline: 2px solid var(--ink2); outline-offset: 1px; border-radius: 4px; }
   .cell { border: 1.4px solid var(--tile-border); border-radius: 11px; background: var(--tile-bg); }
   /* Cold-start skeleton: a muted pulsing bar so the first-fetch window reads as
      "loading", not a bare string. */
@@ -122,12 +123,15 @@
   .skelbar { height: 14px; border-radius: 7px; background: var(--track); animation: pulse 1.4s ease-in-out infinite; }
   .skelcap { font-size: var(--text-2xs); color: var(--faint); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+  @media (prefers-reduced-motion: reduce) { .skelbar { animation: none; } }
   /* Connect CTA: spans the OpenAI column's two metric rows (column 2). */
   .connect { grid-column: 2; grid-row: span 2; padding: var(--sp-3) var(--sp-2); display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 6px; border-style: dashed; }
   .connect-label { font-size: var(--text-sm); color: var(--faint); }
   .connect-btn { font-size: var(--text-sm); font-weight: 600; padding: 5px 12px; border-radius: 8px;
     border: 1px solid var(--seg-border); background: var(--seg-on); color: var(--seg-on-text); cursor: pointer; }
+  .connect-btn:hover { opacity: .88; }
+  .connect-btn:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .connect-hint { font-size: var(--text-2xs); color: var(--faint); }
   /* Error cell: span the OpenAI column's two metric rows, same as connect.
      The wrapper carries the grid placement; :global stretches the BilledCell

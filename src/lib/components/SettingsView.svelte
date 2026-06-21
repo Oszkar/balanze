@@ -124,7 +124,7 @@
 
 <div class="settings">
   <div class="hd">
-    <button class="back" title="Back" onclick={onBack}>←</button>
+    <button class="back" type="button" aria-label="Back" title="Back" onclick={onBack}><span aria-hidden="true">←</span></button>
     <div class="name">Settings</div>
   </div>
 
@@ -191,6 +191,7 @@
           <div class="row">
             <input
               type="password"
+              aria-label="OpenAI Admin API key"
               placeholder="sk-admin-..."
               autocomplete="off"
               bind:value={keyInput}
@@ -235,14 +236,16 @@
   {/if}
 
   {#if status}
-    <div class="status">{status}</div>
+    <div class="status" role="status" aria-live="polite">{status}</div>
   {/if}
 </div>
 
 <style>
   .settings { padding: var(--sp-4) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
   .hd { display: flex; align-items: center; gap: var(--sp-2); }
-  .back { background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-md); padding: 2px var(--sp-1); }
+  .back { background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-md); padding: 2px var(--sp-1); border-radius: 4px; }
+  .back:hover { color: var(--ink); }
+  .back:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .name { font-size: var(--text-lg); font-weight: 700; letter-spacing: -.01em; }
   .connector { border: 1.4px solid var(--tile-border); border-radius: 12px; background: var(--tile-bg);
     padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
@@ -255,8 +258,11 @@
   .row { display: flex; gap: var(--sp-2); margin-top: 2px; }
   input[type='password'] { flex: 1; min-width: 0; font-size: var(--text-sm); padding: 6px var(--sp-2); border-radius: 6px;
     border: 1px solid var(--hair); background: var(--paper); color: inherit; font-family: inherit; }
+  input[type='password']:focus-visible { outline: 2px solid var(--ink2); outline-offset: 1px; }
   .save { font-size: var(--text-sm); padding: 6px var(--sp-3); border-radius: 6px; border: 1px solid var(--hair);
     background: var(--paper); color: inherit; cursor: pointer; }
+  .save:hover:not(:disabled) { border-color: var(--ink2); }
+  .save:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .save:disabled { opacity: .5; cursor: default; }
   .toggle { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--text-sm); cursor: pointer; }
   .toggle input { cursor: pointer; }
