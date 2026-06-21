@@ -3,6 +3,8 @@ import { microUsdToDollars, relativeReset, formatBurn } from './format';
 
 describe('format', () => {
   it('micro-usd -> dollars', () => expect(microUsdToDollars(12_740_000)).toBe('$12.74'));
+  it('micro-usd -> dollars groups thousands', () => expect(microUsdToDollars(1_234_560_000)).toBe('$1,234.56'));
+  it('micro-usd -> dollars zero', () => expect(microUsdToDollars(0)).toBe('$0.00'));
   it('burn formats', () => {
     expect(formatBurn(null)).toBe('-');
     expect(formatBurn(3200)).toBe('~3.2k/min');

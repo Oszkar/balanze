@@ -17,7 +17,7 @@
   </div>
   <UsageBar {used} {elapsed} {tone} />
   <div class="meta">
-    <span class:warn={stale}>{stale ? `⚠ ${staleLabel}` : `${relativeReset(resetsAt)} left`}</span>
+    <span class:warn={stale}>{#if stale}<span aria-hidden="true">⚠</span> {staleLabel}{:else}{relativeReset(resetsAt)} left{/if}</span>
     <span>{secondary}</span>
   </div>
 </div>
