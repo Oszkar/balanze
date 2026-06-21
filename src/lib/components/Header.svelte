@@ -19,10 +19,10 @@
 </div>
 <style>
   .hd { display: flex; justify-content: space-between; align-items: flex-end; padding: 15px 16px 11px; }
-  .name { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+  .name { font-size: 18px; font-weight: 600; letter-spacing: -.02em; }
   .sub { font-size: 11px; color: var(--faint); margin-top: 1px; }
   .right { display: flex; align-items: center; gap: 8px; }
-  .icon { background: none; border: none; color: var(--faint); cursor: pointer; font-size: 14px; padding: 2px; border-radius: 4px; }
+  .icon { background: none; border: none; color: var(--faint); cursor: pointer; font-size: 14px; padding: 2px; border-radius: 4px; transition: color .15s var(--ease-out); }
   .icon:hover { color: var(--ink); }
   .icon:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .icon:disabled { opacity: .5; cursor: default; }

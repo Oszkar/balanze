@@ -247,7 +247,7 @@
   .back:hover { color: var(--ink); }
   .back:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .name { font-size: var(--text-lg); font-weight: 700; letter-spacing: -.01em; }
-  .connector { border: 1.4px solid var(--tile-border); border-radius: 12px; background: var(--tile-bg);
+  .connector { border-radius: 12px; background: var(--tile-face); box-shadow: var(--tile-elev);
     padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
   .chd { display: flex; align-items: center; gap: var(--sp-2); }
   .dot { width: var(--sp-2); height: var(--sp-2); border-radius: 50%; flex: none; }
@@ -266,7 +266,7 @@
   .save:disabled { opacity: .5; cursor: default; }
   .toggle { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--text-sm); cursor: pointer; }
   .toggle input { cursor: pointer; }
-  .occupied { font-size: var(--text-xs); font-family: ui-monospace, monospace; color: var(--faint);
+  .occupied { font-size: var(--text-xs); font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--faint);
     word-break: break-all; padding: var(--sp-1) 0; }
   .loading { font-size: var(--text-sm); color: var(--faint); }
   .status { font-size: var(--text-xs); color: var(--faint); }

@@ -16,6 +16,6 @@
   .lev { margin: 11px 16px 15px; border: 1.4px dashed var(--lev-border); border-radius: 10px; padding: 9px 12px; background: var(--lev-bg); }
   .row { display: flex; justify-content: space-between; align-items: center; }
   .cap { font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
-  .val { font-size: 16px; font-weight: 700; }
+  .val { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; font-size: 15px; font-weight: 560; font-variant-numeric: tabular-nums; }
   .note { font-size: 9.5px; color: var(--faint); margin-top: 2px; }
 </style>

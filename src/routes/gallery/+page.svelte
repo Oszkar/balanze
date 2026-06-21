@@ -74,7 +74,7 @@
 
 <style>
   .canvas { min-height: 100vh; padding: 40px 32px 56px;
-    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--ink); }
+    font-family: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--ink); }
   .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
   h1 { font-size: 16px; font-weight: 700; margin: 0; }
   .bar button { font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 8px;
@@ -97,6 +97,11 @@
     --lev-border: #d9d4cc; --lev-bg: #faf8f4;
     --tip-bg: #26292e; --tip-ink: #f2f3f5; --tip-faint: #aab2bd;
     --shadow: 0 16px 44px rgba(40, 36, 28, .18);
+    --tile-face: linear-gradient(180deg, #ffffff 0%, var(--tile-bg) 72%);
+    --tile-elev: inset 0 1px 0 rgba(255,255,255,.8), 0 0 0 1px rgba(40,36,28,.06), 0 1px 2px rgba(40,36,28,.05), 0 6px 16px -8px rgba(40,36,28,.16);
+    --tile-elev-hover: inset 0 1px 0 rgba(255,255,255,.85), 0 0 0 1px rgba(40,36,28,.09), 0 2px 4px rgba(40,36,28,.06), 0 12px 26px -10px rgba(40,36,28,.22);
+    --channel: inset 0 1px 2px rgba(40,36,28,.10);
+    --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
     background: #efede8;
   }
   .canvas.dark {
@@ -108,6 +113,11 @@
     --lev-border: rgba(255, 255, 255, .18); --lev-bg: rgba(255, 255, 255, .02);
     --tip-bg: #0d0f13; --tip-ink: #e9ecf1; --tip-faint: #8a93a0;
     --shadow: 0 18px 50px rgba(0, 0, 0, .55);
+    --tile-face: linear-gradient(180deg, rgba(255,255,255,.05) 0%, var(--tile-bg) 72%);
+    --tile-elev: inset 0 1px 0 rgba(255,255,255,.06), 0 0 0 1px rgba(255,255,255,.07), 0 1px 2px rgba(0,0,0,.35), 0 8px 20px -8px rgba(0,0,0,.5);
+    --tile-elev-hover: inset 0 1px 0 rgba(255,255,255,.09), 0 0 0 1px rgba(255,255,255,.11), 0 2px 4px rgba(0,0,0,.4), 0 14px 30px -10px rgba(0,0,0,.62);
+    --channel: inset 0 1px 2px rgba(0,0,0,.4);
+    --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
     background: #0b0d11;
   }
 </style>

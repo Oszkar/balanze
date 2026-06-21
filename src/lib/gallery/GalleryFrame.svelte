@@ -61,7 +61,7 @@
 
 <style>
   .frame { margin: 0; display: flex; flex-direction: column; gap: 8px; width: 360px; }
-  figcaption { font-size: 12px; font-weight: 600; color: var(--faint); font-family: 'Inter', system-ui, sans-serif; }
+  figcaption { font-size: 12px; font-weight: 600; color: var(--faint); }
   /* Mirrors Popover.svelte's .pop / .caret so each frame reads as the real window. */
   .pop { width: 360px; background: var(--paper); border-radius: var(--radius);
          border: 1px solid var(--seg-border); position: relative; }

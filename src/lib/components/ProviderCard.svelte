@@ -28,14 +28,22 @@
 </div>
 
 <style>
-  .pcard { border: 1.4px solid var(--tile-border); border-radius: 12px; background: var(--tile-bg); padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; }
+  .pcard {
+    border-radius: 14px; background: var(--tile-face); box-shadow: var(--tile-elev);
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
+    animation: rise .42s var(--ease-out) both; transition: box-shadow .18s var(--ease-out);
+  }
+  .pcard:hover { box-shadow: var(--tile-elev-hover); }
   .hd { display: flex; justify-content: space-between; align-items: baseline; }
   .name { font-size: 14px; font-weight: 600; } .plan { font-size: 10.5px; color: var(--faint); }
-  .brow { display: flex; flex-direction: column; gap: 3px; }
+  .brow { display: flex; flex-direction: column; gap: 4px; }
   .blabel { display: flex; justify-content: space-between; font-size: 11px; gap: 8px; }
-  .bl { color: var(--ink2); } .br { color: var(--faint); white-space: nowrap; }
+  .bl { color: var(--ink2); } .br { color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .br .sfb { color: var(--warn); }
   .billed { display: flex; justify-content: space-between; align-items: center; padding-top: 2px; }
-  .amt { font-size: 14px; font-weight: 600; } .cy { font-size: 10px; color: var(--faint); font-weight: 400; }
+  .amt { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; font-size: 14px; font-weight: 560; font-variant-numeric: tabular-nums; }
+  .cy { font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif; font-size: 10px; color: var(--faint); font-weight: 400; }
   .note { font-size: 12px; color: var(--faint); }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) { .pcard { animation: none; } }
 </style>
