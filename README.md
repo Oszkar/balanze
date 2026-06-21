@@ -120,7 +120,12 @@ bun run check                                  # svelte-check + tsc
 # Desktop app — gauge tray icon + live popover (v0.3.0):
 bun install                                    # also installs git hooks (see below)
 bun run tauri dev
+
+# States gallery (dev-only) - every screen and cell state on one canvas:
+bun run dev                                    # then open http://localhost:1420/gallery
 ```
+
+**States gallery (dev-only).** `bun run dev` and open <http://localhost:1420/gallery> to see every popover screen and cell state on one page - cold-start loading, the OpenAI connect CTA, fetch errors, stale windows, single vs two providers, billed overage, and the settings panel - in both light and dark, rendered with the real Svelte components and `theme.css` tokens. It runs in a plain browser with no Tauri host (IPC is stubbed and every write is a no-op, so it can't touch your keychain or settings) and is stripped from production builds. Handy for visual QA and screenshots without reproducing provider failures live. Source: `src/routes/gallery/` + `src/lib/gallery/`.
 
 `bun install` runs `lefthook install` (skipped without `.git/`), wiring `commit-msg` (Conventional Commits — blocking), `pre-commit` (rustfmt + svelte-check) and `pre-push` (clippy + tests) so the gates CI enforces fail locally first. Bypass one commit with `git commit --no-verify`, or `LEFTHOOK=0` for a session.
 
