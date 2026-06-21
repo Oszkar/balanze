@@ -1,7 +1,7 @@
 // Hand-built fixtures for the dev-only states gallery (`/gallery`). Each entry is
 // a real `Snapshot` shaped to drive one popover state through the real components
-// and presentation logic - no IPC, no live data. See
-// docs/superpowers/specs/2026-06-21-ui-states-gallery-design.md.
+// and presentation logic - no IPC, no live data. See the "States gallery" note
+// in README.md.
 
 import type { Snapshot } from '$lib/types/snapshot';
 import type { Settings, StatuslineWire } from '$lib/types/settings';
