@@ -1,3 +1,16 @@
+/* Self-hosted variable woff2 (OFL-1.1, licenses in static/fonts/). Local-first:
+   no CDN, no runtime fetch. One file per family spans the whole 100-900 weight
+   axis. Space Grotesk is the global chrome face (set on :root below); JetBrains
+   Mono is applied to the hero %/$ numerals at each numeric display. */
+@font-face {
+  font-family: 'Space Grotesk'; src: url('/fonts/SpaceGrotesk-Variable.woff2') format('woff2');
+  font-weight: 100 900; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono'; src: url('/fonts/JetBrainsMono-Variable.woff2') format('woff2');
+  font-weight: 100 900; font-style: normal; font-display: swap;
+}
+
 :root {
   --paper: #ffffff; --ink: #1f2227; --ink2: #5a5f68; --faint: #9aa0aa;
   --ok: #3f8f5f; --warn: #cf8a2a; --bad: #c0493a; --real: #3667a6;
@@ -7,13 +20,21 @@
   --lev-border: #d9d4cc; --lev-bg: #faf8f4;
   --tip-bg: #26292e; --tip-ink: #f2f3f5; --tip-faint: #aab2bd;
   --shadow: 0 16px 44px rgba(40,36,28,.18);
+  /* Machined-tile depth (prototype): top inset highlight + hairline ring + contact
+     shadow + soft ambient lift - replaces the heavy 1.4px tile border. */
+  --tile-face: linear-gradient(180deg, #ffffff 0%, var(--tile-bg) 72%);
+  --tile-elev: inset 0 1px 0 rgba(255,255,255,.8), 0 0 0 1px rgba(40,36,28,.06), 0 1px 2px rgba(40,36,28,.05), 0 6px 16px -8px rgba(40,36,28,.16);
+  --tile-elev-hover: inset 0 1px 0 rgba(255,255,255,.85), 0 0 0 1px rgba(40,36,28,.09), 0 2px 4px rgba(40,36,28,.06), 0 12px 26px -10px rgba(40,36,28,.22);
+  --channel: inset 0 1px 2px rgba(40,36,28,.10);
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
   --radius: 15px;
   /* Spacing - 4px rhythm */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
   /* Type scale - matches values already in use across components */
   --text-2xs: 9.5px; --text-xs: 11px; --text-sm: 12px; --text-base: 13px;
   --text-md: 15px; --text-lg: 18px; --text-xl: 21px; --text-2xl: 24px;
-  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  font-family: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -27,6 +48,10 @@
     --lev-border: rgba(255,255,255,.18); --lev-bg: rgba(255,255,255,.02);
     --tip-bg: #0d0f13; --tip-ink: #e9ecf1; --tip-faint: #8a93a0;
     --shadow: 0 18px 50px rgba(0,0,0,.55);
+    --tile-face: linear-gradient(180deg, rgba(255,255,255,.05) 0%, var(--tile-bg) 72%);
+    --tile-elev: inset 0 1px 0 rgba(255,255,255,.06), 0 0 0 1px rgba(255,255,255,.07), 0 1px 2px rgba(0,0,0,.35), 0 8px 20px -8px rgba(0,0,0,.5);
+    --tile-elev-hover: inset 0 1px 0 rgba(255,255,255,.09), 0 0 0 1px rgba(255,255,255,.11), 0 2px 4px rgba(0,0,0,.4), 0 14px 30px -10px rgba(0,0,0,.62);
+    --channel: inset 0 1px 2px rgba(0,0,0,.4);
   }
 }
 html, body { margin: 0; background: transparent; color: var(--ink); font-variant-numeric: tabular-nums; }

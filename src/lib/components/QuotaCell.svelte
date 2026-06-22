@@ -12,7 +12,7 @@
 <div class="cell qcell" class:stale {title}>
   <div class="top">
     {#if stale}<span class="dot"></span>{/if}
-    <span class="pct" style="color:var(--{tone})">{pct.toFixed(0)}%</span>
+    <span class="pct" style="color:var(--{tone})">{pct.toFixed(0)}<span class="unit">%</span></span>
     {#if badge}<span class="badge-slot"><Badge kind={badge} /></span>{/if}
   </div>
   <UsageBar {used} {elapsed} {tone} />
@@ -23,13 +23,32 @@
 </div>
 
 <style>
-  .cell { border: 1.4px solid var(--tile-border); border-radius: 11px; background: var(--tile-bg); cursor: help; }
-  .qcell { padding: 9px 11px; display: flex; flex-direction: column; gap: 7px; justify-content: center; min-height: 84px; }
+  .cell { border-radius: 12px; background: var(--tile-face); box-shadow: var(--tile-elev); cursor: help; }
+  .qcell {
+    padding: 11px 12px; display: flex; flex-direction: column; gap: 8px; justify-content: center; min-height: 84px;
+    animation: rise .42s var(--ease-out) both; transition: box-shadow .18s var(--ease-out);
+  }
+  .qcell:hover { box-shadow: var(--tile-elev-hover); }
+  /* Warn ring stacks on the machined elevation (replaces the old border-color cue).
+     The :hover variant keeps the ring above the hover lift - .qcell:hover on its own
+     would override box-shadow and drop the stale cue while hovered. */
+  .stale { box-shadow: var(--tile-elev), 0 0 0 1.5px color-mix(in srgb, var(--warn) 72%, transparent); }
+  .stale:hover { box-shadow: var(--tile-elev-hover), 0 0 0 1.5px color-mix(in srgb, var(--warn) 72%, transparent); }
   .top { display: flex; align-items: center; gap: 6px; }
+  .pct {
+    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-size: 29px; font-weight: 560; line-height: 1; letter-spacing: -.01em;
+    font-variant-numeric: tabular-nums;
+    /* Trim leading so the box hugs cap-to-baseline - keeps the badge optically centred. */
+    text-box-trim: trim-both; text-box-edge: cap alphabetic;
+  }
+  .unit { font-size: 15px; font-weight: 460; opacity: .5; margin-left: 1px; }
   .badge-slot { margin-left: auto; }
-  .pct { font-size: var(--text-2xl); font-weight: 700; line-height: 1; }
-  .meta { display: flex; justify-content: space-between; font-size: var(--text-2xs); color: var(--faint); }
+  /* Fallback for engines without text-box-trim: nudge the badge to where the trim would centre it. */
+  @supports not (text-box-trim: trim-both) { .badge-slot { transform: translateY(-2px); } }
+  .meta { display: flex; justify-content: space-between; font-size: var(--text-2xs); color: var(--faint); font-variant-numeric: tabular-nums; }
   .meta .warn { color: var(--warn); }
-  .stale { border-color: var(--warn); }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) { .qcell { animation: none; } }
 </style>

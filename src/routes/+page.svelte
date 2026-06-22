@@ -28,5 +28,5 @@
 {/if}
 
 <style>
-  .state { display: flex; align-items: center; justify-content: center; min-height: 100vh; color: var(--faint); font-size: 13px; font-family: 'Inter', system-ui, sans-serif; }
+  .state { display: flex; align-items: center; justify-content: center; min-height: 100vh; color: var(--faint); font-size: 13px; }
 </style>
