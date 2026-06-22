@@ -103,10 +103,16 @@ pub fn get_settings() -> Result<Settings, String> {
 /// §3.1 floor regardless of what lands here, so a too-small value is safe.
 #[tauri::command]
 pub fn set_settings(
-    settings: Settings,
+    mut settings: Settings,
     coord: State<'_, StateCoordinatorHandle>,
     reload: State<'_, WatcherReload>,
 ) -> Result<(), String> {
+    // `seen_welcome` is backend-owned first-run state, not a user setting; never
+    // let a frontend settings write (provider toggles) reset it and re-trigger
+    // the first-run welcome. Preserve the on-disk value over the inbound one.
+    if let Ok(current) = settings::load() {
+        settings.seen_welcome = current.seen_welcome;
+    }
     settings::save(&settings).map_err(|e| e.to_string())?;
     apply_settings_live(&coord, &reload, settings);
     Ok(())
