@@ -30,7 +30,7 @@
   // Pure state selection (unit-tested in cellState.test.ts). The quota state
   // drives the Anthropic cell; the column state drives whether the OpenAI column
   // shows data, a connect CTA, an error, or collapses to single-provider.
-  const anthState = $derived(anthropicQuotaState({ hasQuota: !!aq, error: anthErr }));
+  const anthState = $derived(anthropicQuotaState({ hasQuota: !!aq, error: anthErr, unavailable: snapshot.claude_oauth_unavailable }));
   const colState = $derived(
     openaiColumnState({ billingEnabled: openaiEnabled, hasData: !!codex || !!openai, error: openaiErr }),
   );
@@ -57,6 +57,12 @@
   {:else if anthState.kind === 'error'}
     <BilledCell hatch placeholder="unavailable" note="quota fetch failed"
       title={`Anthropic quota unavailable - ${anthState.message}`} />
+  {:else if anthState.kind === 'notConfigured'}
+    <div class="cell notconf"
+      title="Claude Code not detected. Balanze reads your local Claude usage at ~/.claude; install Claude Code (or restart Balanze after installing) to track quota.">
+      <span class="notconf-title">{anthState.message}</span>
+      <span class="notconf-hint">Balanze reads your local Claude usage</span>
+    </div>
   {:else}
     <div class="cell skel"
       title="Waiting for the first quota fetch - the OAuth usage endpoint backs off on the 429s it returns during active Claude Code use. Wire Balanze as your Claude statusLine for instant live quota.">
@@ -106,6 +112,12 @@
   {/if}
 </div>
 
+{#if !showOpenAI}
+  <div class="add-openai-row">
+    <button class="add-openai" type="button" onclick={() => onSettings?.()}>+ Add OpenAI</button>
+  </div>
+{/if}
+
 <style>
   .grid { padding: 2px 16px 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: stretch; }
   .grid.single { grid-template-columns: 1fr; }
@@ -141,4 +153,12 @@
      it wraps to fill the full two-row height. */
   .span2 { grid-column: 2; grid-row: span 2; display: flex; }
   .span2 :global(.cell) { flex: 1; }
+  .notconf { padding: 11px 12px; display: flex; flex-direction: column; gap: 4px; justify-content: center; min-height: 84px; cursor: help; }
+  .notconf-title { font-size: var(--text-sm); font-weight: 600; color: var(--ink); }
+  .notconf-hint { font-size: var(--text-2xs); color: var(--faint); }
+  .add-openai-row { display: flex; justify-content: center; padding: 2px 16px 4px; }
+  .add-openai { font-size: var(--text-2xs); font-weight: 600; color: var(--faint); background: none; border: none;
+    cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+  .add-openai:hover { color: var(--ink); }
+  .add-openai:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
 </style>

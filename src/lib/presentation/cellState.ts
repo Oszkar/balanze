@@ -4,6 +4,7 @@
 export type QuotaState =
   | { kind: 'data' }
   | { kind: 'loading' }
+  | { kind: 'notConfigured'; message: string }
   | { kind: 'error'; message: string };
 
 export type ColumnState =
@@ -12,9 +13,19 @@ export type ColumnState =
   | { kind: 'error'; message: string }
   | { kind: 'hidden' };
 
-export function anthropicQuotaState(i: { hasQuota: boolean; error: string | null }): QuotaState {
+// `unavailable` is the neutral "not configured" marker
+// (Snapshot.claude_oauth_unavailable): Claude Code isn't installed, so the quota
+// will never load. Distinct from a cold-start `loading` (which keeps the
+// skeleton) and from an `error` (a failed fetch). Precedence: real data > error
+// > not-configured > still-loading.
+export function anthropicQuotaState(i: {
+  hasQuota: boolean;
+  error: string | null;
+  unavailable: string | null;
+}): QuotaState {
   if (i.hasQuota) return { kind: 'data' };
   if (i.error) return { kind: 'error', message: i.error };
+  if (i.unavailable) return { kind: 'notConfigured', message: i.unavailable };
   return { kind: 'loading' };
 }
 
