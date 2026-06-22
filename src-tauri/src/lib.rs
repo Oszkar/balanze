@@ -201,6 +201,15 @@ fn reanchor_after_resize(window: &tauri::WebviewWindow, old_outer_h: u32) -> tau
     Ok(())
 }
 
+/// Suppresses the blur-to-hide auto-hide for a short window after the first-run
+/// welcome auto-opens the popover. At startup (especially a slow dev launch) the
+/// OS often moves foreground focus off the just-shown window, firing
+/// `WindowEvent::Focused(false)` and hiding the popover before the user sees it.
+/// Holds the `Instant` the welcome was shown; the blur-hide handler ignores the
+/// hide while that is recent. Tray-click opens never set it, so normal
+/// click-away dismiss is unaffected.
+struct WelcomeGrace(std::sync::Mutex<Option<std::time::Instant>>);
+
 /// On the very first launch (per the persisted `seen_welcome` flag), make the
 /// app's presence obvious: open the popover once and fire an OS notification.
 /// Without this the app starts as just a tray icon, easy to miss - especially in
@@ -219,6 +228,13 @@ fn maybe_first_run_welcome(app: &App) {
     }
     tracing::info!("first-run: showing welcome (popover + notification)");
 
+    // Arm the blur-hide grace BEFORE showing: the startup focus race that
+    // immediately follows show() must not hide the popover before it is seen.
+    if let Some(grace) = app.try_state::<WelcomeGrace>() {
+        if let Ok(mut shown) = grace.0.lock() {
+            *shown = Some(std::time::Instant::now());
+        }
+    }
     // Open the popover unanchored - there is no tray click to anchor to at
     // startup. It shows the loading/empty state until the first poll lands.
     position_and_show(app.handle());
@@ -502,6 +518,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .manage(rt)
+        .manage(WelcomeGrace(std::sync::Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::refresh_now,
@@ -517,6 +534,18 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Focused(false) = event {
+                // Ignore the blur-to-hide during the first-run welcome grace
+                // window: at startup the OS often moves focus off the just-shown
+                // popover, firing Focused(false) before the user sees it. Normal
+                // tray opens never arm WelcomeGrace, so click-away dismiss is
+                // unaffected.
+                let in_grace = window
+                    .try_state::<WelcomeGrace>()
+                    .and_then(|g| g.0.lock().ok().and_then(|shown| *shown))
+                    .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(5));
+                if in_grace {
+                    return;
+                }
                 let _ = window.hide();
             }
         })
