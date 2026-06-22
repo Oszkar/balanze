@@ -16,7 +16,7 @@ const iso = (offsetMs: number) => new Date(NOW + offsetMs).toISOString();
 /** A fully-populated two-provider snapshot. Every state clones this and overrides. */
 export function baseSnapshot(): Snapshot {
   return {
-    schema_version: 1,
+    schema_version: 2,
     fetched_at: iso(0),
     claude_oauth: {
       cadences: [
@@ -218,6 +218,7 @@ export const DEMO_SETTINGS: Settings = {
   version: 1,
   providers: { openai_enabled: true, anthropic_enabled: true, codex_enabled: true },
   oauth_poll_interval_secs: 300,
+  seen_welcome: true,
 };
 
 export const DEMO_STATUSLINE: StatuslineWire = { status: 'unwired', command: null };

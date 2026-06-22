@@ -210,12 +210,17 @@ fn reanchor_after_resize(window: &tauri::WebviewWindow, old_outer_h: u32) -> tau
 /// click-away dismiss is unaffected.
 struct WelcomeGrace(std::sync::Mutex<Option<std::time::Instant>>);
 
+/// How long the first-run welcome keeps the popover up despite blur: long enough
+/// to survive the startup focus race, short enough that an un-engaged popover
+/// does not linger. Shared by the blur-hide grace and the delayed auto-hide.
+const FIRST_RUN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// On the very first launch (per the persisted `seen_welcome` flag), make the
 /// app's presence obvious: open the popover once and fire an OS notification.
 /// Without this the app starts as just a tray icon, easy to miss - especially in
 /// the Windows hidden-overflow tray. Best-effort: every failure is logged, never
 /// fatal, and the flag is persisted so the welcome shows exactly once.
-fn maybe_first_run_welcome(app: &App) {
+fn maybe_first_run_welcome(app: &App, rt: &tokio::runtime::Handle) {
     let mut settings = match settings::load() {
         Ok(s) => s,
         Err(e) => {
@@ -227,6 +232,15 @@ fn maybe_first_run_welcome(app: &App) {
         return;
     }
     tracing::info!("first-run: showing welcome (popover + notification)");
+
+    // Persist the flag FIRST, before showing. Saving the loaded struct after the
+    // popover is up could clobber a settings write the just-opened popover makes
+    // in between; nothing here mutates settings further, so writing it up front
+    // is both safe and race-free.
+    settings.seen_welcome = true;
+    if let Err(e) = settings::save(&settings) {
+        tracing::warn!("first-run: settings save failed ({e}); welcome may repeat next launch");
+    }
 
     // Arm the blur-hide grace BEFORE showing: the startup focus race that
     // immediately follows show() must not hide the popover before it is seen.
@@ -240,11 +254,18 @@ fn maybe_first_run_welcome(app: &App) {
     position_and_show(app.handle());
     notify_first_run(app);
 
-    // Persist so the welcome never repeats. `commands::set_settings` preserves
-    // this flag across frontend settings writes.
-    settings.seen_welcome = true;
-    if let Err(e) = settings::save(&settings) {
-        tracing::warn!("first-run: settings save failed ({e}); welcome may repeat next launch");
+    // After the grace window, auto-hide IF the popover never gained focus (the
+    // race left it visible-but-unfocused, or the user never engaged). If it has
+    // focus the user is looking at it - leave it, and the now-expired grace lets
+    // normal click-away dismiss take over. Without this the popover could linger
+    // until an explicit ESC/tray interaction. One-shot, not a supervised task.
+    if let Some(window) = app.get_webview_window("main") {
+        rt.spawn(async move {
+            tokio::time::sleep(FIRST_RUN_GRACE).await;
+            if !window.is_focused().unwrap_or(false) {
+                let _ = window.hide();
+            }
+        });
     }
 }
 
@@ -542,7 +563,7 @@ pub fn run() {
                 let in_grace = window
                     .try_state::<WelcomeGrace>()
                     .and_then(|g| g.0.lock().ok().and_then(|shown| *shown))
-                    .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(5));
+                    .is_some_and(|t| t.elapsed() < FIRST_RUN_GRACE);
                 if in_grace {
                     return;
                 }
@@ -552,7 +573,7 @@ pub fn run() {
         .setup(move |app| {
             setup_tray(app)?;
             boot_backend(app, &rt_handle);
-            maybe_first_run_welcome(app);
+            maybe_first_run_welcome(app, &rt_handle);
             Ok(())
         })
         .run(tauri::generate_context!())
