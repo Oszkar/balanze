@@ -121,4 +121,11 @@ pub enum StateMsg {
     /// Settings file changed. Scaffold stores the value; future pollers will
     /// subscribe to a settings-change broadcast and reconfigure themselves.
     SettingsChanged(Settings),
+    /// A source reports it is intentionally unavailable / not configured - e.g.
+    /// Claude Code isn't installed, so the OAuth poller has no credential to
+    /// read. A NEUTRAL state, distinct from `Update(Err(..))`: the cell reads
+    /// "not configured" rather than degraded, and the tray stays on the neutral
+    /// bucket (no `on_degraded`, no red). Only `ClaudeOAuth` carries a slot for
+    /// it today; other sources are logged and ignored.
+    SourceUnavailable { source: Source, reason: String },
 }
