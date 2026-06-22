@@ -11,8 +11,10 @@
 
 mod errors;
 mod tasks;
+mod validate;
 
 pub use errors::WatcherError;
+pub use validate::{KeyProbe, validate_openai_key};
 
 use settings::Settings;
 use state_coordinator::StateCoordinatorHandle;

@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import type { Snapshot, DegradedPayload } from './types/snapshot';
 import type { Settings, StatuslineWire } from './types/settings';
 
@@ -30,6 +31,22 @@ export const hasApiKey = (provider: string): Promise<boolean> =>
   invoke<boolean>('has_api_key', { provider });
 export const clearApiKey = (provider: string): Promise<void> =>
   invoke<void>('clear_api_key', { provider });
+
+// Probe a key against the provider WITHOUT storing it (so Settings can give
+// immediate feedback instead of waiting a poll interval). `ok` = authenticated;
+// `retryable` = the check failed transiently (network / rate limit) so the UI
+// may offer "save anyway"; a non-retryable failure means the key is wrong.
+export interface ApiKeyValidation {
+  ok: boolean;
+  retryable: boolean;
+  message: string | null;
+}
+export const validateApiKey = (provider: string, key: string): Promise<ApiKeyValidation> =>
+  invoke<ApiKeyValidation>('validate_api_key', { provider, key });
+
+// Open an external URL in the user's default browser via the opener plugin
+// (the `opener:default` capability is already granted to the main window).
+export const openExternal = (url: string): Promise<void> => openUrl(url);
 
 // Claude Code statusLine wiring (delegates to claude_statusline backend-side;
 // no-clobber - won't overwrite another tool's statusLine).

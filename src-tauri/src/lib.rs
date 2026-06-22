@@ -548,6 +548,7 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::set_api_key,
+            commands::validate_api_key,
             commands::has_api_key,
             commands::clear_api_key,
             commands::get_statusline_status,
