@@ -138,6 +138,10 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
         fetched_at: now,
         claude_oauth,
         claude_oauth_error,
+        // The "not configured" marker is set only by the watcher's oauth_poll
+        // (live path); the one-shot CLI leaves it None (no loading state to
+        // disambiguate).
+        claude_oauth_unavailable: None,
         claude_jsonl,
         claude_jsonl_error,
         anthropic_api_cost,

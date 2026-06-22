@@ -108,6 +108,14 @@ pub struct Snapshot {
     /// Most recent failure from the Anthropic OAuth poller. Coexists with
     /// `claude_oauth` when a previously-good fetch is now stale.
     pub claude_oauth_error: Option<String>,
+    /// Set when Claude OAuth is intentionally unavailable / not configured -
+    /// Claude Code isn't installed, so there's no credential to read. A NEUTRAL
+    /// "not configured" marker, distinct from `claude_oauth_error` (a failed
+    /// fetch). Mutually exclusive with `claude_oauth` data: a successful fetch
+    /// clears it. serde-default so an older or partial document still
+    /// deserializes.
+    #[serde(default)]
+    pub claude_oauth_unavailable: Option<String>,
     /// Most recent JSONL parse + window summary.
     pub claude_jsonl: Option<JsonlSnapshot>,
     /// Most recent JSONL parse failure (filesystem error, schema drift).
@@ -155,6 +163,7 @@ impl Snapshot {
             fetched_at: now,
             claude_oauth: None,
             claude_oauth_error: None,
+            claude_oauth_unavailable: None,
             claude_jsonl: None,
             claude_jsonl_error: None,
             anthropic_api_cost: None,
@@ -200,6 +209,17 @@ pub fn record_error(snapshot: &mut Snapshot, source: Source, error: &str) {
     *slot = Some(error.to_string());
 }
 
+/// Mark Claude OAuth as intentionally unavailable / not configured (Claude Code
+/// not detected) - a NEUTRAL state, distinct from `record_error`'s failed-fetch.
+/// Clears any stale data and error for the source so its quota cell reads "not
+/// configured" rather than a perpetual loading state. A later successful OAuth
+/// `Update` clears the marker (see the coordinator's `apply_partial`).
+pub fn record_oauth_unavailable(snapshot: &mut Snapshot, reason: &str) {
+    snapshot.claude_oauth = None;
+    snapshot.claude_oauth_error = None;
+    snapshot.claude_oauth_unavailable = Some(reason.to_string());
+}
+
 /// Reset a source's value AND error to `None` ("not observed / not configured").
 /// Used when a provider is disabled via settings so its cell stops showing
 /// stale data, rather than lingering at its last-polled value.
@@ -208,6 +228,7 @@ pub fn clear_source(snapshot: &mut Snapshot, source: Source) {
         Source::ClaudeOAuth => {
             snapshot.claude_oauth = None;
             snapshot.claude_oauth_error = None;
+            snapshot.claude_oauth_unavailable = None;
         }
         Source::ClaudeJsonl => {
             snapshot.claude_jsonl = None;
@@ -281,6 +302,31 @@ mod tests {
             Some("schema drift v2")
         );
         assert!(s.claude_statusline.is_none());
+    }
+
+    #[test]
+    fn record_oauth_unavailable_sets_marker_and_clears_data_error() {
+        let mut s = Snapshot::empty(fixture_now());
+        s.claude_oauth = Some(oauth_snapshot());
+        record_error(&mut s, Source::ClaudeOAuth, "stale fetch");
+        record_oauth_unavailable(&mut s, "Claude Code not detected");
+        assert_eq!(
+            s.claude_oauth_unavailable.as_deref(),
+            Some("Claude Code not detected")
+        );
+        assert!(s.claude_oauth.is_none(), "unavailable clears stale data");
+        assert!(
+            s.claude_oauth_error.is_none(),
+            "unavailable is not an error - the error slot is cleared"
+        );
+    }
+
+    #[test]
+    fn clear_source_clears_oauth_unavailable_marker() {
+        let mut s = Snapshot::empty(fixture_now());
+        record_oauth_unavailable(&mut s, "Claude Code not detected");
+        clear_source(&mut s, Source::ClaudeOAuth);
+        assert!(s.claude_oauth_unavailable.is_none());
     }
 
     // --- pace_for_oauth ---

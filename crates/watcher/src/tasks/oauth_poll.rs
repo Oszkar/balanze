@@ -72,6 +72,15 @@ pub(crate) fn spawn(
                 "watcher/oauth_poll: no Claude credentials at startup; task exits clean. \
                  Install Claude Code and restart `--watch` to enable OAuth polling."
             );
+            // Report a NEUTRAL "not configured" state (not an error) so the UI
+            // shows "Claude Code not detected" instead of a perpetual loading
+            // skeleton. A later restart with credentials clears it on first poll.
+            let _ = coord
+                .send(StateMsg::SourceUnavailable {
+                    source: Source::ClaudeOAuth,
+                    reason: "Claude Code not detected".to_string(),
+                })
+                .await;
             return Ok(());
         }
 

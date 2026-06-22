@@ -15,7 +15,9 @@ use tokio::task::JoinHandle;
 use crate::jsonl::summarize_jsonl;
 use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg};
 use crate::sink::Sink;
-use crate::snapshot::{Snapshot, clear_source, pace_for_oauth, record_error};
+use crate::snapshot::{
+    Snapshot, clear_source, pace_for_oauth, record_error, record_oauth_unavailable,
+};
 
 /// Mutable state owned by the coordinator's single tokio task. Grouped
 /// into one struct so `handle_msg` takes one `&mut` instead of threading
@@ -199,6 +201,21 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             state.last_settings = Some(s);
             sink.on_snapshot(&state.snapshot);
         }
+        StateMsg::SourceUnavailable { source, reason } => match source {
+            Source::ClaudeOAuth => {
+                // Neutral "not configured" state, NOT an error: set the marker,
+                // drop any stale data/error + pace, and repaint via on_snapshot
+                // (never on_degraded, which would redden the tray).
+                record_oauth_unavailable(&mut state.snapshot, &reason);
+                state.snapshot.pace.clear();
+                sink.on_snapshot(&state.snapshot);
+            }
+            other => {
+                tracing::debug!(
+                    "state_coordinator: SourceUnavailable for {other:?} not modeled; ignoring"
+                );
+            }
+        },
     }
 }
 
@@ -227,6 +244,9 @@ fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) -> Option
         SourcePartial::ClaudeOAuth(o) => {
             state.snapshot.claude_oauth = Some(o);
             state.snapshot.claude_oauth_error = None;
+            // A successful fetch means Claude Code is present after all - clear
+            // any "not configured" marker a prior startup probe set.
+            state.snapshot.claude_oauth_unavailable = None;
             // The OAuth feed carries the authoritative 5h reset; re-anchor the
             // cached JSONL window so the live path matches the one-shot CLI.
             recompute_jsonl_cells(state)
@@ -548,6 +568,62 @@ mod tests {
             snap.openai_error.as_deref(),
             Some("openai 500"),
             "an unrelated source's error must be left untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn source_unavailable_sets_neutral_marker_not_error() {
+        let sink = RecordingSink::default();
+        let (handle, _join) = spawn(sink.clone());
+
+        handle
+            .send(StateMsg::SourceUnavailable {
+                source: Source::ClaudeOAuth,
+                reason: "Claude Code not detected".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        assert_eq!(
+            snap.claude_oauth_unavailable.as_deref(),
+            Some("Claude Code not detected")
+        );
+        assert!(snap.claude_oauth.is_none());
+        assert!(
+            snap.claude_oauth_error.is_none(),
+            "unavailable is neutral, not an error"
+        );
+        // Repaints via on_snapshot (tray recomputes to Neutral); must NOT fire
+        // on_degraded (which would redden the tray and emit degraded_state).
+        assert_eq!(sink.snapshot_count(), 1);
+        assert_eq!(sink.error_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn successful_oauth_update_clears_unavailable_marker() {
+        let (handle, _join) = spawn(NullSink);
+        handle
+            .send(StateMsg::SourceUnavailable {
+                source: Source::ClaudeOAuth,
+                reason: "Claude Code not detected".to_string(),
+            })
+            .await
+            .unwrap();
+        // Claude Code present after all: a successful poll clears the marker.
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+            }))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        assert!(snap.claude_oauth.is_some());
+        assert!(
+            snap.claude_oauth_unavailable.is_none(),
+            "a successful fetch clears the not-configured marker"
         );
     }
 
