@@ -201,6 +201,64 @@ fn reanchor_after_resize(window: &tauri::WebviewWindow, old_outer_h: u32) -> tau
     Ok(())
 }
 
+/// On the very first launch (per the persisted `seen_welcome` flag), make the
+/// app's presence obvious: open the popover once and fire an OS notification.
+/// Without this the app starts as just a tray icon, easy to miss - especially in
+/// the Windows hidden-overflow tray. Best-effort: every failure is logged, never
+/// fatal, and the flag is persisted so the welcome shows exactly once.
+fn maybe_first_run_welcome(app: &App) {
+    let mut settings = match settings::load() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("first-run: settings load failed ({e}); skipping welcome");
+            return;
+        }
+    };
+    if settings.seen_welcome {
+        return;
+    }
+    tracing::info!("first-run: showing welcome (popover + notification)");
+
+    // Open the popover unanchored - there is no tray click to anchor to at
+    // startup. It shows the loading/empty state until the first poll lands.
+    position_and_show(app.handle());
+    notify_first_run(app);
+
+    // Persist so the welcome never repeats. `commands::set_settings` preserves
+    // this flag across frontend settings writes.
+    settings.seen_welcome = true;
+    if let Err(e) = settings::save(&settings) {
+        tracing::warn!("first-run: settings save failed ({e}); welcome may repeat next launch");
+    }
+}
+
+/// Fire the one-time "Balanze is running" OS notification, requesting the OS
+/// notification permission first (macOS prompts; Windows is typically granted).
+/// Fired from Rust, so it needs no webview capability (PoLP). Windows toasts
+/// only surface for the installed app, not `tauri dev`.
+fn notify_first_run(app: &App) {
+    use tauri_plugin_notification::{NotificationExt, PermissionState};
+
+    let notifier = app.notification();
+    // Show only with permission: use the current grant, otherwise request it
+    // once (macOS prompts; Windows is typically granted). request_permission is
+    // only called when we don't already hold the grant.
+    let granted = matches!(notifier.permission_state(), Ok(PermissionState::Granted))
+        || matches!(notifier.request_permission(), Ok(PermissionState::Granted));
+    if !granted {
+        tracing::info!("first-run: notification permission not granted; skipping toast");
+        return;
+    }
+    if let Err(e) = notifier
+        .builder()
+        .title("Balanze is running")
+        .body("Balanze lives in your tray. Click the icon to see your Claude and OpenAI usage.")
+        .show()
+    {
+        tracing::warn!("first-run: notification show failed ({e})");
+    }
+}
+
 fn setup_tray(app: &mut App) -> tauri::Result<()> {
     let open = MenuItemBuilder::with_id("open", "Open Balanze").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -442,6 +500,7 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(rt)
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
@@ -464,6 +523,7 @@ pub fn run() {
         .setup(move |app| {
             setup_tray(app)?;
             boot_backend(app, &rt_handle);
+            maybe_first_run_welcome(app);
             Ok(())
         })
         .run(tauri::generate_context!())

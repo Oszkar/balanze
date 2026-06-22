@@ -39,6 +39,13 @@ pub struct Settings {
     /// here. Higher values are honored as-is.
     #[serde(default = "default_poll_interval")]
     pub oauth_poll_interval_secs: u32,
+    /// True once the first-run welcome (auto-open popover + OS notification) has
+    /// been shown. Backend-owned first-run state, not a user setting: the Tauri
+    /// host sets it on first launch, and `set_settings` preserves it across
+    /// frontend writes so a provider toggle never re-triggers the welcome.
+    /// serde-default false so a fresh install (and older files) get it once.
+    #[serde(default)]
+    pub seen_welcome: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +81,7 @@ impl Default for Settings {
             version: SCHEMA_VERSION,
             providers: ProviderSettings::default(),
             oauth_poll_interval_secs: default_poll_interval(),
+            seen_welcome: false,
         }
     }
 }
@@ -388,5 +396,32 @@ mod tests {
         save_to(&s, &path).expect("save");
         let loaded = load_from(&path).expect("load");
         assert_eq!(loaded.oauth_poll_interval_secs, 600);
+    }
+
+    #[test]
+    fn seen_welcome_defaults_false_and_roundtrips() {
+        // Fresh install + older files (absent field) must default false so the
+        // first-run welcome shows exactly once.
+        assert!(!Settings::default().seen_welcome);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"providers":{"openai_enabled":false}}"#,
+        )
+        .unwrap();
+        assert!(
+            !load_from(&path).unwrap().seen_welcome,
+            "absent seen_welcome must default false"
+        );
+        let s = Settings {
+            seen_welcome: true,
+            ..Default::default()
+        };
+        save_to(&s, &path).unwrap();
+        assert!(
+            load_from(&path).unwrap().seen_welcome,
+            "true must roundtrip"
+        );
     }
 }
