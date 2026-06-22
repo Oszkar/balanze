@@ -8,6 +8,9 @@
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
+    "gallery": "vite --config vite.gallery.config.ts --open /gallery.html",
+    "gallery:serve": "vite --config vite.gallery.config.ts",
+    "gallery:snap": "playwright test --config playwright.config.ts",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "test": "vitest run",
@@ -22,6 +25,7 @@
     "@tauri-apps/plugin-opener": "^2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@sveltejs/adapter-static": "^3.0.6",
     "@sveltejs/kit": "^2.9.0",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
