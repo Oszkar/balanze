@@ -62,6 +62,15 @@ balanze.log*
 # Playwright MCP output (ad-hoc browser verification)
 .playwright-mcp/
 
+# Playwright visual-regression run output (baselines under tests/visual/ ARE committed)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Standalone gallery build output
+/build-gallery/
+
 # Network captures — frequently contain live session cookies and PII
 *.har
 
