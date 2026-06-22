@@ -4,10 +4,12 @@
     getSettings,
     setSettings,
     setApiKey,
+    validateApiKey,
     hasApiKey,
     clearApiKey,
     getStatuslineStatus,
     setStatuslineWired,
+    openExternal,
   } from '$lib/ipc';
   import type { Settings, StatuslineWire } from '$lib/types/settings';
 
@@ -20,6 +22,7 @@
   let keyInput = $state('');
   let status = $state<string | null>(null);
   let busy = $state(false);
+  let canSaveAnyway = $state(false);
 
   async function load() {
     try {
@@ -60,6 +63,22 @@
     }
   }
 
+  // Persist a validated (or save-anyway) key. Handles its own errors so the
+  // caller stays focused on the validate flow. The key goes straight to the
+  // keychain backend-side; we never keep it.
+  async function persistKey(k: string) {
+    try {
+      await setApiKey('openai', k);
+      keyInput = '';
+      editingKey = false;
+      canSaveAnyway = false;
+      status = 'OpenAI key saved.';
+      await load();
+    } catch (e) {
+      status = `Save failed: ${e}`;
+    }
+  }
+
   async function saveKey() {
     const k = keyInput.trim();
     if (!k) {
@@ -68,15 +87,36 @@
     }
     busy = true;
     status = null;
+    canSaveAnyway = false;
     try {
-      // The key goes straight to the keychain backend-side; we never keep it.
-      await setApiKey('openai', k);
-      keyInput = '';
-      editingKey = false;
-      status = 'OpenAI key saved.';
-      await load();
+      // Probe the key before storing it, so a wrong key is caught now instead
+      // of a poll interval later.
+      const v = await validateApiKey('openai', k);
+      if (v.ok) {
+        await persistKey(k);
+      } else if (v.retryable) {
+        // Transient (network / rate limit): the key may be fine. Offer to store
+        // it anyway and let the poller retry.
+        status = v.message ?? 'Could not verify the key right now.';
+        canSaveAnyway = true;
+      } else {
+        // Definitive (invalid key / wrong scope): do not store it.
+        status = v.message ?? 'OpenAI rejected that key.';
+      }
     } catch (e) {
-      status = `Save failed: ${e}`;
+      status = `Couldn't check the key: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function saveAnyway() {
+    const k = keyInput.trim();
+    if (!k) return;
+    busy = true;
+    status = null;
+    try {
+      await persistKey(k);
     } finally {
       busy = false;
     }
@@ -188,6 +228,17 @@
             <button class="save" onclick={removeKey} disabled={busy}>Remove</button>
           </div>
         {:else}
+          <div class="hint">
+            Needs an <strong>admin</strong> key (<code>sk-admin-...</code>). Project and
+            service-account keys can't read organization billing.
+            <button
+              type="button"
+              class="link"
+              onclick={() =>
+                openExternal('https://platform.openai.com/settings/organization/admin-keys')}
+              >Get an admin key</button
+            >
+          </div>
           <div class="row">
             <input
               type="password"
@@ -195,6 +246,7 @@
               placeholder="sk-admin-..."
               autocomplete="off"
               bind:value={keyInput}
+              oninput={() => (canSaveAnyway = false)}
               disabled={busy}
             />
             <button class="save" onclick={saveKey} disabled={busy}>Save</button>
@@ -204,11 +256,17 @@
                 onclick={() => {
                   editingKey = false;
                   keyInput = '';
+                  canSaveAnyway = false;
                 }}
                 disabled={busy}>Cancel</button
               >
             {/if}
           </div>
+          {#if canSaveAnyway}
+            <div class="row">
+              <button class="save" onclick={saveAnyway} disabled={busy}>Save anyway</button>
+            </div>
+          {/if}
         {/if}
       </section>
 
@@ -255,6 +313,11 @@
   section { display: flex; flex-direction: column; gap: 6px; }
   .label { font-size: var(--text-sm); font-weight: 600; }
   .hint { font-size: var(--text-xs); color: var(--faint); line-height: 1.35; }
+  .link { background: none; border: none; padding: 0; font: inherit; color: var(--ink2);
+    text-decoration: underline; cursor: pointer; }
+  .link:hover { color: var(--ink); }
+  .link:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; border-radius: 2px; }
+  code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .92em; }
   .row { display: flex; gap: var(--sp-2); margin-top: 2px; }
   input[type='password'] { flex: 1; min-width: 0; font-size: var(--text-sm); padding: 6px var(--sp-2); border-radius: 6px;
     border: 1px solid var(--hair); background: var(--paper); color: inherit; font-family: inherit; }

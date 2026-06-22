@@ -142,6 +142,46 @@ pub fn set_api_key(
     Ok(())
 }
 
+/// Outcome of probing a user-supplied API key against the provider WITHOUT
+/// storing it, so the settings UI can give immediate feedback instead of the
+/// user waiting up to a full poll interval to learn a key is wrong.
+/// `ok` = the key authenticated. `retryable` = the check failed transiently
+/// (network / rate limit), so the UI may offer "save anyway"; a non-retryable
+/// failure means the key is definitively wrong and should not be stored.
+#[derive(serde::Serialize)]
+pub struct ApiKeyValidation {
+    pub ok: bool,
+    pub retryable: bool,
+    pub message: Option<String>,
+}
+
+/// Probe a user-supplied API key against the provider without storing it. Async
+/// (unlike the other key commands): it makes one fail-fast network request, the
+/// same month-to-date costs call the poller uses, so a key that validates here
+/// works for the real poll. Secret hygiene (§3.4): the key is never logged,
+/// echoed, or persisted by this command.
+#[tauri::command]
+pub async fn validate_api_key(provider: String, key: String) -> Result<ApiKeyValidation, String> {
+    let key = prepare_api_key(&provider, &key)?.to_string();
+    Ok(match watcher::validate_openai_key(&key).await {
+        watcher::KeyProbe::Valid => ApiKeyValidation {
+            ok: true,
+            retryable: false,
+            message: None,
+        },
+        watcher::KeyProbe::Rejected(msg) => ApiKeyValidation {
+            ok: false,
+            retryable: false,
+            message: Some(msg),
+        },
+        watcher::KeyProbe::Unreachable(msg) => ApiKeyValidation {
+            ok: false,
+            retryable: true,
+            message: Some(msg),
+        },
+    })
+}
+
 /// Whether a user-supplied API key for `provider` exists in the OS keychain.
 /// Lets the settings UI show a "key configured" affordance without ever reading
 /// the key value. (Does not consider the `BALANZE_OPENAI_KEY` env override - the
