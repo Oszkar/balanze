@@ -65,9 +65,12 @@
     </div>
   {:else}
     <div class="cell skel"
-      title="Waiting for the first quota fetch - the OAuth usage endpoint backs off on the 429s it returns during active Claude Code use. Wire Balanze as your Claude statusLine for instant live quota.">
+      title="Balanze is fetching your Claude usage for the first time. Wire Balanze as your Claude statusLine in Settings for instant live quota.">
       <div class="skelbar"></div>
-      <span class="skelcap">fetching quota...</span>
+      <div class="skeltext">
+        <span class="skelcap">Connecting to Claude...</span>
+        <span class="skelsub">first check can take a minute</span>
+      </div>
     </div>
   {/if}
 
@@ -133,7 +136,9 @@
      "loading", not a bare string. */
   .skel { padding: 11px 12px; display: flex; flex-direction: column; gap: 8px; justify-content: center; min-height: 84px; cursor: help; }
   .skelbar { height: 14px; border-radius: 7px; background: var(--track); box-shadow: var(--channel); animation: pulse 1.4s ease-in-out infinite; }
-  .skelcap { font-size: var(--text-2xs); color: var(--faint); }
+  .skeltext { display: flex; flex-direction: column; gap: 2px; align-items: center; }
+  .skelcap { font-size: var(--text-sm); color: var(--faint); }
+  .skelsub { font-size: var(--text-2xs); color: var(--faint); opacity: .8; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
   @media (prefers-reduced-motion: reduce) { .skelbar { animation: none; } }
   /* Connect CTA: spans the OpenAI column's two metric rows (column 2). */
