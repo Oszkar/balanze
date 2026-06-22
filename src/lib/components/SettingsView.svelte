@@ -122,6 +122,17 @@
     }
   }
 
+  // Open the admin-keys page in the system browser. Awaited in a try/catch so a
+  // failed open (OS / capability error) surfaces on the status line instead of
+  // a silent unhandled rejection.
+  async function openAdminKeyPage() {
+    try {
+      await openExternal('https://platform.openai.com/settings/organization/admin-keys');
+    } catch (e) {
+      status = `Could not open the admin key page: ${e}`;
+    }
+  }
+
   async function removeKey() {
     busy = true;
     status = null;
@@ -231,11 +242,7 @@
           <div class="hint">
             Needs an <strong>admin</strong> key (<code>sk-admin-...</code>). Project and
             service-account keys can't read organization billing.
-            <button
-              type="button"
-              class="link"
-              onclick={() =>
-                openExternal('https://platform.openai.com/settings/organization/admin-keys')}
+            <button type="button" class="link" onclick={openAdminKeyPage}
               >Get an admin key</button
             >
           </div>
