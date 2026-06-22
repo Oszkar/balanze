@@ -87,7 +87,7 @@ pub fn pace_for_oauth(oauth: &ClaudeOAuthSnapshot, now: DateTime<Utc>) -> Vec<Wi
 /// carries its own version (see `balanze_cli::json_output`). Durable
 /// `UsageEvent` / history versioning is intentionally deferred to the SQLite
 /// persistence work, where the on-disk format is actually designed.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 
 fn default_snapshot_schema_version() -> u32 {
     SNAPSHOT_SCHEMA_VERSION
@@ -207,6 +207,13 @@ pub fn record_error(snapshot: &mut Snapshot, source: Source, error: &str) {
         Source::ClaudeStatusline => &mut snapshot.claude_statusline_error,
     };
     *slot = Some(error.to_string());
+    // A failed fetch means the source was reachable enough to be tried, so a
+    // stale "not configured" marker is now wrong. Clearing it keeps the neutral
+    // marker and an error from coexisting (mutually exclusive states). Only
+    // ClaudeOAuth carries the marker today.
+    if source == Source::ClaudeOAuth {
+        snapshot.claude_oauth_unavailable = None;
+    }
 }
 
 /// Mark Claude OAuth as intentionally unavailable / not configured (Claude Code
@@ -274,6 +281,20 @@ mod tests {
         assert!(s.claude_oauth.is_some());
         // Error recorded:
         assert_eq!(s.claude_oauth_error.as_deref(), Some("network unreachable"));
+    }
+
+    #[test]
+    fn record_error_clears_oauth_unavailable_marker() {
+        // A failed OAuth fetch after a prior "Claude Code not detected" must
+        // clear the neutral marker - the two states are mutually exclusive.
+        let mut s = Snapshot::empty(fixture_now());
+        record_oauth_unavailable(&mut s, "Claude Code not detected");
+        record_error(&mut s, Source::ClaudeOAuth, "network unreachable");
+        assert_eq!(s.claude_oauth_error.as_deref(), Some("network unreachable"));
+        assert!(
+            s.claude_oauth_unavailable.is_none(),
+            "an error must clear the not-configured marker"
+        );
     }
 
     #[test]
