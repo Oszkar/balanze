@@ -11,6 +11,9 @@ const SIZE: u32 = 32;
 
 fn bucket_rgb(bucket: ColorBucket) -> (u8, u8, u8) {
     match bucket {
+        // Muted cool grey: visible on both light and dark trays, clearly
+        // "inactive" next to the green/yellow/orange/red heat colors.
+        ColorBucket::Neutral => (0x8a, 0x8f, 0x99),
         ColorBucket::Green => (0x3f, 0x8f, 0x5f),
         ColorBucket::Yellow => (0xcf, 0x8a, 0x2a),
         ColorBucket::Orange => (0xd9, 0x6a, 0x2a),

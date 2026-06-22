@@ -11,6 +11,10 @@ use crate::tray_icon;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ColorBucket {
+    /// No quota signal from any source yet (cold start, or no provider
+    /// configured). Painted grey by `select_bucket` so an empty state never
+    /// reads as a healthy green.
+    Neutral,
     Green,
     Yellow,
     Orange,
@@ -81,6 +85,37 @@ pub(crate) fn worst_utilization(s: &Snapshot) -> f32 {
     worst
 }
 
+/// True when any source carries an actual quota signal - the same leaves
+/// `worst_utilization` reads. This distinguishes a real 0% utilization (paint
+/// the heat color) from a cold-start / not-configured snapshot with no signal
+/// at all (paint Neutral). Without it, an empty snapshot's 0.0 worst-util would
+/// map to Green and read as "all good" before any data has arrived.
+fn has_quota_data(s: &Snapshot) -> bool {
+    let oauth = s
+        .claude_oauth
+        .as_ref()
+        .is_some_and(|o| !o.cadences.is_empty());
+    let statusline = s
+        .claude_statusline
+        .as_ref()
+        .and_then(|sl| sl.payload.rate_limits.as_ref())
+        .is_some_and(|rl| rl.five_hour.is_some() || rl.seven_day.is_some());
+    oauth || statusline || s.codex_quota.is_some()
+}
+
+/// Pick the tray color for a snapshot. A degraded source forces the warning
+/// bucket; an empty snapshot (no quota signal yet) is Neutral; otherwise the
+/// worst-case utilization across sources maps to a heat color.
+fn select_bucket(s: &Snapshot, degraded: bool) -> ColorBucket {
+    if degraded {
+        ColorBucket::Warn
+    } else if !has_quota_data(s) {
+        ColorBucket::Neutral
+    } else {
+        ColorBucket::from_util(worst_utilization(s))
+    }
+}
+
 fn tray_title(s: &Snapshot) -> String {
     let c = s
         .claude_oauth
@@ -108,12 +143,7 @@ impl TauriSink {
     }
 
     fn paint_target(&self, s: &Snapshot, degraded: bool) -> (ColorBucket, String) {
-        let bucket = if degraded {
-            ColorBucket::Warn
-        } else {
-            ColorBucket::from_util(worst_utilization(s))
-        };
-        (bucket, tray_title(s))
+        (select_bucket(s, degraded), tray_title(s))
     }
 }
 
@@ -187,16 +217,15 @@ mod tests {
         assert_eq!(ColorBucket::from_util(150.0), ColorBucket::Red);
     }
 
-    #[test]
-    fn worst_util_picks_max_across_sources() {
+    /// Build a Claude OAuth snapshot carrying a single 5-hour cadence at the
+    /// given utilization, shared by the worst-util and bucket-selection tests.
+    fn oauth_with_util(util: f32) -> anthropic_oauth::ClaudeOAuthSnapshot {
         use chrono::Utc;
-        let mut s = Snapshot::empty(Utc::now());
-        assert_eq!(worst_utilization(&s), 0.0);
-        s.claude_oauth = Some(anthropic_oauth::ClaudeOAuthSnapshot {
+        anthropic_oauth::ClaudeOAuthSnapshot {
             cadences: vec![anthropic_oauth::CadenceBar {
                 key: "five_hour".into(),
                 display_label: "5h".into(),
-                utilization_percent: 62.0,
+                utilization_percent: util,
                 resets_at: Utc::now(),
             }],
             extra_usage: None,
@@ -204,7 +233,59 @@ mod tests {
             rate_limit_tier: None,
             org_uuid: None,
             fetched_at: Utc::now(),
-        });
+        }
+    }
+
+    #[test]
+    fn worst_util_picks_max_across_sources() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        assert_eq!(worst_utilization(&s), 0.0);
+        s.claude_oauth = Some(oauth_with_util(62.0));
         assert_eq!(worst_utilization(&s), 62.0);
+    }
+
+    #[test]
+    fn empty_snapshot_has_no_quota_data() {
+        use chrono::Utc;
+        assert!(!has_quota_data(&Snapshot::empty(Utc::now())));
+    }
+
+    #[test]
+    fn oauth_cadence_counts_as_quota_data() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        s.claude_oauth = Some(oauth_with_util(0.0));
+        assert!(has_quota_data(&s));
+    }
+
+    #[test]
+    fn empty_snapshot_paints_neutral_not_green() {
+        use chrono::Utc;
+        // The fix: a cold-start snapshot must read as Neutral, never the healthy
+        // Green that worst_utilization's 0.0 would otherwise produce.
+        assert_eq!(
+            select_bucket(&Snapshot::empty(Utc::now()), false),
+            ColorBucket::Neutral
+        );
+    }
+
+    #[test]
+    fn populated_zero_util_is_green_not_neutral() {
+        use chrono::Utc;
+        // Real data at 0% is healthy Green - distinct from "no data" Neutral.
+        let mut s = Snapshot::empty(Utc::now());
+        s.claude_oauth = Some(oauth_with_util(0.0));
+        assert_eq!(select_bucket(&s, false), ColorBucket::Green);
+    }
+
+    #[test]
+    fn degraded_overrides_neutral() {
+        use chrono::Utc;
+        // A failing source paints the warning bucket even with no quota data.
+        assert_eq!(
+            select_bucket(&Snapshot::empty(Utc::now()), true),
+            ColorBucket::Warn
+        );
     }
 }
