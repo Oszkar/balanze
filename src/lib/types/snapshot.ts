@@ -103,6 +103,9 @@ export interface Snapshot {
   fetched_at: string;
   claude_oauth: ClaudeOAuthSnapshot | null;
   claude_oauth_error: string | null;
+  /** Neutral "not configured" marker (e.g. Claude Code not installed), distinct
+   *  from claude_oauth_error. Mutually exclusive with claude_oauth data. */
+  claude_oauth_unavailable: string | null;
   claude_jsonl: JsonlSnapshot | null;
   claude_jsonl_error: string | null;
   anthropic_api_cost: Cost | null;

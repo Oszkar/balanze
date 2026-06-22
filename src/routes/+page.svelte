@@ -3,6 +3,7 @@
   import { usage } from '$lib/stores/usage.svelte';
   import { hideWindow } from '$lib/ipc';
   import Popover from '$lib/components/Popover.svelte';
+  import EmptyState from '$lib/components/EmptyState.svelte';
 
   onMount(() => {
     usage.init();
@@ -24,7 +25,12 @@
 {:else if usage.snapshot}
   <Popover snapshot={usage.snapshot} degraded={usage.degraded} onRefresh={() => usage.refresh()} />
 {:else}
-  <div class="state">No data {usage.lastError ? `· ${usage.lastError}` : ''}</div>
+  <EmptyState
+    title="Balanze isn't responding yet"
+    body="The background service may still be starting."
+    detail={usage.lastError}
+    actions={[{ label: 'Retry', kind: 'primary', onClick: () => void usage.refresh() }]}
+  />
 {/if}
 
 <style>

@@ -3,13 +3,22 @@ import { anthropicQuotaState, openaiColumnState } from './cellState';
 
 describe('anthropicQuotaState', () => {
   it('is data when a quota is present', () => {
-    expect(anthropicQuotaState({ hasQuota: true, error: null }).kind).toBe('data');
+    expect(anthropicQuotaState({ hasQuota: true, error: null, unavailable: null }).kind).toBe('data');
   });
   it('is error when a quota error is set', () => {
-    expect(anthropicQuotaState({ hasQuota: false, error: 'boom' })).toEqual({ kind: 'error', message: 'boom' });
+    expect(anthropicQuotaState({ hasQuota: false, error: 'boom', unavailable: null })).toEqual({ kind: 'error', message: 'boom' });
   });
-  it('is loading on cold start (no quota, no error)', () => {
-    expect(anthropicQuotaState({ hasQuota: false, error: null }).kind).toBe('loading');
+  it('is notConfigured when unavailable is set (no quota, no error)', () => {
+    expect(anthropicQuotaState({ hasQuota: false, error: null, unavailable: 'Claude Code not detected' })).toEqual({
+      kind: 'notConfigured',
+      message: 'Claude Code not detected',
+    });
+  });
+  it('error takes precedence over notConfigured', () => {
+    expect(anthropicQuotaState({ hasQuota: false, error: 'boom', unavailable: 'nope' }).kind).toBe('error');
+  });
+  it('is loading on cold start (no quota, no error, not unavailable)', () => {
+    expect(anthropicQuotaState({ hasQuota: false, error: null, unavailable: null }).kind).toBe('loading');
   });
 });
 

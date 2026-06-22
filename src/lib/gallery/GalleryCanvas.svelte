@@ -67,6 +67,7 @@
         snapshot={s.snapshot}
         degraded={s.degraded}
         openaiEnabled={s.openaiEnabled}
+        empty={s.empty}
       />
     {/each}
   </div>

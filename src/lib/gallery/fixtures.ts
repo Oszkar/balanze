@@ -30,6 +30,7 @@ export function baseSnapshot(): Snapshot {
       fetched_at: iso(0),
     },
     claude_oauth_error: null,
+    claude_oauth_unavailable: null,
     claude_jsonl: {
       files_scanned: 12,
       window_start: iso(-5 * H),
@@ -90,6 +91,23 @@ function coldStart(): Snapshot {
   return s; // OpenAI side keeps Codex data so only the Anthropic cell loads.
 }
 
+/** Claude Code not installed: OAuth reports unavailable (neutral, not an error),
+ *  no Codex/OpenAI -> the terminal "Claude Code not detected" cell, single
+ *  column, and the Add OpenAI affordance. */
+function claudeNotDetected(): Snapshot {
+  const s = clone(baseSnapshot());
+  s.claude_oauth = null;
+  s.claude_oauth_error = null;
+  s.claude_oauth_unavailable = 'Claude Code not detected';
+  s.claude_jsonl = null;
+  s.anthropic_api_cost = null;
+  s.codex_quota = null;
+  s.openai = null;
+  s.openai_error = null;
+  s.pace = [];
+  return s;
+}
+
 /** Billing opted in but nothing to show and no error -> the connect CTA. */
 function openaiConnect(): Snapshot {
   const s = clone(baseSnapshot());
@@ -146,15 +164,22 @@ function overageBilled(): Snapshot {
 
 export interface GalleryState {
   label: string;
-  view: 'grid' | 'cards' | 'settings';
+  view: 'grid' | 'cards' | 'settings' | 'empty';
   openaiEnabled?: boolean;
   snapshot?: Snapshot;
   degraded?: Record<string, string>;
+  empty?: {
+    title: string;
+    body?: string;
+    detail?: string | null;
+    actions?: { label: string; kind?: 'primary' | 'secondary' }[];
+  };
 }
 
 export const GALLERY_STATES: GalleryState[] = [
   { label: 'Grid - two providers', view: 'grid', openaiEnabled: true, snapshot: baseSnapshot() },
   { label: 'Grid - cold start (quota loading)', view: 'grid', openaiEnabled: true, snapshot: coldStart() },
+  { label: 'Grid - Claude Code not detected', view: 'grid', openaiEnabled: false, snapshot: claudeNotDetected() },
   { label: 'Grid - OpenAI connect CTA', view: 'grid', openaiEnabled: true, snapshot: openaiConnect() },
   { label: 'Grid - OpenAI error', view: 'grid', openaiEnabled: true, snapshot: openaiError() },
   { label: 'Grid - Anthropic only', view: 'grid', openaiEnabled: false, snapshot: singleProvider() },
@@ -174,6 +199,18 @@ export const GALLERY_STATES: GalleryState[] = [
   { label: 'Cards - OpenAI error', view: 'cards', openaiEnabled: true, snapshot: openaiError() },
 
   { label: 'Settings - configured', view: 'settings' },
+
+  { label: 'Empty - starting up (no snapshot yet)', view: 'empty', empty: {
+      title: 'Starting up...',
+      body: 'Balanze is reading your local usage. This only takes a moment.',
+      actions: [{ label: 'Retry', kind: 'primary' }],
+  } },
+  { label: 'Empty - backend not responding', view: 'empty', empty: {
+      title: "Balanze isn't responding yet",
+      body: 'The background service may still be starting.',
+      detail: 'get_snapshot failed: connection refused',
+      actions: [{ label: 'Retry', kind: 'primary' }],
+  } },
 ];
 
 // Canned IPC returns for the one Settings frame (see the route's mockIPC setup).
