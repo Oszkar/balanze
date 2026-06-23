@@ -196,6 +196,7 @@ export const GALLERY_STATES: GalleryState[] = [
   { label: 'Cards - two providers', view: 'cards', openaiEnabled: true, snapshot: baseSnapshot() },
   { label: 'Cards - Anthropic only', view: 'cards', openaiEnabled: false, snapshot: singleProvider() },
   { label: 'Cards - Codex stale window', view: 'cards', openaiEnabled: true, snapshot: codexStale() },
+  { label: 'Cards - OpenAI connect CTA', view: 'cards', openaiEnabled: true, snapshot: openaiConnect() },
   { label: 'Cards - OpenAI error', view: 'cards', openaiEnabled: true, snapshot: openaiError() },
   { label: 'Cards - cold start (quota loading)', view: 'cards', openaiEnabled: true, snapshot: coldStart() },
   { label: 'Cards - Claude Code not detected', view: 'cards', openaiEnabled: false, snapshot: claudeNotDetected() },

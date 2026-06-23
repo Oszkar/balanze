@@ -87,7 +87,7 @@
     {#if view === 'grid'}
       <GridView {snapshot} {degraded} {openaiEnabled} {onDismissOpenai} onSettings={() => (mode = 'settings')} />
     {:else}
-      <CardsView {snapshot} {openaiEnabled} {degraded} />
+      <CardsView {snapshot} {openaiEnabled} {degraded} {onDismissOpenai} onSettings={() => (mode = 'settings')} />
     {/if}
     <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} />
     <LeverageBox totalMicroUsd={cost?.total_micro_usd ?? 0} eventCount={cost?.total_event_count ?? 0}

@@ -9,22 +9,39 @@
     | { kind: 'data' }
     | { kind: 'error'; note: string; title: string }
     | { kind: 'notConfigured'; heading: string; hint: string; title: string }
-    | { kind: 'loading'; heading: string; sub: string; title: string };
+    | { kind: 'loading'; heading: string; sub: string; title: string }
+    | { kind: 'connect'; label: string; cta: string; hint: string };
 </script>
 
 <script lang="ts">
   import UsageBar from './UsageBar.svelte';
   import Badge from './Badge.svelte';
   import { relativeReset } from '$lib/presentation/format';
-  let { name, plan, windows, billed, quotaState }:
+  import { OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
+  // `billed` is optional: the connect/error states suppress the spend row (the
+  // state block spans the card body, mirroring GridView's two-row span). `onDismiss`
+  // renders the × that collapses the column; `onConnect` wires the connect CTA.
+  let { name, plan, windows, billed, quotaState, onDismiss, onConnect }:
     { name: string; plan: string; windows: CardWindow[];
-      billed: { amount: string | null; note: string; badge?: 'real' | 'na'; placeholder?: string; title?: string };
-      quotaState?: CardQuotaState } = $props();
+      billed?: { amount: string | null; note: string; badge?: 'real' | 'na'; placeholder?: string; title?: string };
+      quotaState?: CardQuotaState; onDismiss?: () => void; onConnect?: () => void } = $props();
 </script>
 
 <div class="pcard">
-  <div class="hd"><span class="name">{name}</span><span class="plan">{plan}</span></div>
-  {#if quotaState && quotaState.kind === 'error'}
+  <div class="hd">
+    <span class="name">{name}</span>
+    <span class="hd-right">
+      <span class="plan">{plan}</span>
+      {#if onDismiss}<button class="dismiss" type="button" aria-label={OPENAI_COL_COPY.dismiss.aria} title={OPENAI_COL_COPY.dismiss.title} onclick={() => onDismiss?.()}>×</button>{/if}
+    </span>
+  </div>
+  {#if quotaState && quotaState.kind === 'connect'}
+    <div class="qstate connect">
+      <span class="connect-label">{quotaState.label}</span>
+      <button class="connect-btn" type="button" onclick={() => onConnect?.()}>{quotaState.cta}</button>
+      <span class="connect-hint">{quotaState.hint}</span>
+    </div>
+  {:else if quotaState && quotaState.kind === 'error'}
     <div class="qstate hatch" title={quotaState.title}>
       <span class="qs-na">unavailable</span>
       <span class="qs-sub">{quotaState.note}</span>
@@ -47,11 +64,13 @@
       </div>
     {/each}
   {/if}
-  <div class="billed" title={billed.title}>
-    {#if billed.amount}<span class="amt">{billed.amount} <span class="cy">{billed.note}</span></span>
-    {:else}<span class="amt na">{billed.placeholder ?? 'none'} <span class="cy">{billed.note}</span></span>{/if}
-    {#if billed.badge}<Badge kind={billed.badge} />{/if}
-  </div>
+  {#if billed}
+    <div class="billed" title={billed.title}>
+      {#if billed.amount}<span class="amt">{billed.amount} <span class="cy">{billed.note}</span></span>
+      {:else}<span class="amt na">{billed.placeholder ?? 'none'} <span class="cy">{billed.note}</span></span>{/if}
+      {#if billed.badge}<Badge kind={billed.badge} />{/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -62,10 +81,25 @@
   }
   .pcard:hover { box-shadow: var(--tile-elev-hover); }
   .hd { display: flex; justify-content: space-between; align-items: baseline; }
+  .hd-right { display: flex; align-items: baseline; gap: 6px; }
   .name { font-size: 14px; font-weight: 600; } .plan { font-size: 10.5px; color: var(--faint); }
-  /* Non-data quota states (cold-start / error / not-configured), mirroring
-     GridView's anthState cells but inline within the card chrome. */
+  /* Dismiss × in the card header (OpenAI column only), mirroring GridView's. */
+  .dismiss { background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-base);
+    line-height: 1; padding: 0 2px; align-self: center; }
+  .dismiss:hover { color: var(--ink); }
+  .dismiss:focus-visible { outline: 2px solid var(--ink2); outline-offset: 1px; border-radius: 4px; }
+  /* Non-data quota states (cold-start / error / not-configured / connect),
+     mirroring GridView's cells but inline within the card chrome. */
   .qstate { display: flex; flex-direction: column; gap: 4px; justify-content: center; min-height: 50px; cursor: help; }
+  /* Connect CTA: billing opted in, nothing to show yet. Centered, non-help cursor
+     (it is actionable, not a tooltip). */
+  .qstate.connect { align-items: center; gap: 6px; cursor: default; }
+  .connect-label { font-size: var(--text-sm); color: var(--faint); }
+  .connect-btn { font-size: var(--text-sm); font-weight: 600; padding: 5px 12px; border-radius: 8px;
+    border: 1px solid var(--seg-border); background: var(--seg-on); color: var(--seg-on-text); cursor: pointer; }
+  .connect-btn:hover { opacity: .88; }
+  .connect-btn:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
+  .connect-hint { font-size: var(--text-2xs); color: var(--faint); }
   .qstate.hatch { border-radius: 10px; padding: 8px 10px;
     background-image: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--hatch) 5px, var(--hatch) 6px); }
   .qs-na { font-size: var(--text-base); color: var(--faint); }
