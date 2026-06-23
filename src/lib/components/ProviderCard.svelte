@@ -9,7 +9,7 @@
   import { relativeReset } from '$lib/presentation/format';
   let { name, plan, windows, billed }:
     { name: string; plan: string; windows: CardWindow[];
-      billed: { amount: string | null; note: string; badge: 'real' | 'na' } } = $props();
+      billed: { amount: string | null; note: string; badge?: 'real' | 'na' } } = $props();
 </script>
 
 <div class="pcard">
@@ -23,7 +23,7 @@
   <div class="billed">
     {#if billed.amount}<span class="amt">{billed.amount} <span class="cy">{billed.note}</span></span>
     {:else}<span class="note">{billed.note}</span>{/if}
-    <Badge kind={billed.badge} />
+    {#if billed.badge}<Badge kind={billed.badge} />{/if}
   </div>
 </div>
 
