@@ -4,6 +4,7 @@
   import { microUsdToDollars } from '$lib/presentation/format';
   import { PROV } from '$lib/presentation/provenance';
   import { anthropicQuotaState } from '$lib/presentation/cellState';
+  import { ANTH_QUOTA_COPY } from '$lib/presentation/quotaCopy';
   import ProviderCard, { type CardWindow, type CardQuotaState } from './ProviderCard.svelte';
 
   // `openaiEnabled` = the OpenAI billing opt-in (`openai_enabled`); default false.
@@ -50,23 +51,21 @@
   });
 
   // Cold-start / error / not-configured states for the Anthropic quota area,
-  // mirroring GridView's anthState branches (same selector, same copy). The
-  // overage billed row still renders underneath regardless of quota state.
-  // `hasQuota` is `anthWindows.length > 0` rather than Grid's `!!anthropicQuota()`
-  // so any OAuth cadence (not just five_hour) counts as data - consistent with
-  // Cards showing every cadence.
+  // mirroring GridView's anthState branches (same selector, same copy via
+  // ANTH_QUOTA_COPY). The overage billed row still renders underneath regardless
+  // of quota state. `hasQuota` is `anthWindows.length > 0` rather than Grid's
+  // `!!anthropicQuota()` so any OAuth cadence (not just five_hour) counts as data
+  // - consistent with Cards showing every cadence.
   const anthErr = $derived(snapshot.claude_oauth_error ?? snapshot.claude_statusline_error ?? null);
   const anthQuotaState = $derived.by<CardQuotaState>(() => {
     const s = anthropicQuotaState({ hasQuota: anthWindows.length > 0, error: anthErr, unavailable: snapshot.claude_oauth_unavailable });
     switch (s.kind) {
       case 'error':
-        return { kind: 'error', note: 'quota fetch failed', title: `Anthropic quota unavailable - ${s.message}` };
+        return { kind: 'error', note: ANTH_QUOTA_COPY.error.note, title: ANTH_QUOTA_COPY.error.title(s.message) };
       case 'notConfigured':
-        return { kind: 'notConfigured', heading: s.message, hint: 'Balanze reads your local Claude usage',
-          title: 'Claude Code not detected. Balanze reads your local Claude usage at ~/.claude; install Claude Code (or restart Balanze after installing) to track quota.' };
+        return { kind: 'notConfigured', heading: s.message, hint: ANTH_QUOTA_COPY.notConfigured.hint, title: ANTH_QUOTA_COPY.notConfigured.title };
       case 'loading':
-        return { kind: 'loading', heading: 'Connecting to Claude...', sub: 'first check can take a minute',
-          title: 'Balanze is fetching your Claude usage for the first time. Wire Balanze as your Claude statusLine in Settings for instant live quota.' };
+        return { kind: 'loading', heading: ANTH_QUOTA_COPY.loading.heading, sub: ANTH_QUOTA_COPY.loading.sub, title: ANTH_QUOTA_COPY.loading.title };
       default:
         return { kind: 'data' };
     }

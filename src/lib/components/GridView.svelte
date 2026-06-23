@@ -3,6 +3,7 @@
   import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired } from '$lib/presentation/quota';
   import { microUsdToDollars } from '$lib/presentation/format';
   import { PROV } from '$lib/presentation/provenance';
+  import { ANTH_QUOTA_COPY } from '$lib/presentation/quotaCopy';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
   import QuotaCell from './QuotaCell.svelte';
   import BilledCell from './BilledCell.svelte';
@@ -55,21 +56,19 @@
       stale={anthStale}
       title={aq.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title} />
   {:else if anthState.kind === 'error'}
-    <BilledCell hatch placeholder="unavailable" note="quota fetch failed"
-      title={`Anthropic quota unavailable - ${anthState.message}`} />
+    <BilledCell hatch placeholder="unavailable" note={ANTH_QUOTA_COPY.error.note}
+      title={ANTH_QUOTA_COPY.error.title(anthState.message)} />
   {:else if anthState.kind === 'notConfigured'}
-    <div class="cell notconf"
-      title="Claude Code not detected. Balanze reads your local Claude usage at ~/.claude; install Claude Code (or restart Balanze after installing) to track quota.">
+    <div class="cell notconf" title={ANTH_QUOTA_COPY.notConfigured.title}>
       <span class="notconf-title">{anthState.message}</span>
-      <span class="notconf-hint">Balanze reads your local Claude usage</span>
+      <span class="notconf-hint">{ANTH_QUOTA_COPY.notConfigured.hint}</span>
     </div>
   {:else}
-    <div class="cell skel"
-      title="Balanze is fetching your Claude usage for the first time. Wire Balanze as your Claude statusLine in Settings for instant live quota.">
+    <div class="cell skel" title={ANTH_QUOTA_COPY.loading.title}>
       <div class="skelbar"></div>
       <div class="skeltext">
-        <span class="skelcap">Connecting to Claude...</span>
-        <span class="skelsub">first check can take a minute</span>
+        <span class="skelcap">{ANTH_QUOTA_COPY.loading.heading}</span>
+        <span class="skelsub">{ANTH_QUOTA_COPY.loading.sub}</span>
       </div>
     </div>
   {/if}
