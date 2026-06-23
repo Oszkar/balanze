@@ -45,20 +45,15 @@
       <Header bind:view={activeView} fetchedAt={snapshot.fetched_at} onRefresh={noop} onSettings={noop} />
       {#if activeView === 'cards'}
         <CardsView {snapshot} {openaiEnabled} {degraded} />
-        <LeverageBox
-          totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
-          eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
-          error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
-        />
       {:else}
         <GridView {snapshot} {degraded} {openaiEnabled} onDismissOpenai={noop} onSettings={noop} />
-        <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} />
-        <LeverageBox
-          totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
-          eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
-          error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
-        />
       {/if}
+      <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} />
+      <LeverageBox
+        totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
+        eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
+        error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
+      />
     {/if}
   </div>
 </figure>

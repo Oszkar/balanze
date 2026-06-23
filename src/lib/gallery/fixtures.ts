@@ -197,6 +197,15 @@ export const GALLERY_STATES: GalleryState[] = [
   { label: 'Cards - Anthropic only', view: 'cards', openaiEnabled: false, snapshot: singleProvider() },
   { label: 'Cards - Codex stale window', view: 'cards', openaiEnabled: true, snapshot: codexStale() },
   { label: 'Cards - OpenAI error', view: 'cards', openaiEnabled: true, snapshot: openaiError() },
+  { label: 'Cards - cold start (quota loading)', view: 'cards', openaiEnabled: true, snapshot: coldStart() },
+  { label: 'Cards - Claude Code not detected', view: 'cards', openaiEnabled: false, snapshot: claudeNotDetected() },
+  {
+    label: 'Cards - Anthropic statusline fallback',
+    view: 'cards',
+    openaiEnabled: true,
+    snapshot: anthFallback(),
+    degraded: { claude_statusline: 'statusline payload is stale' },
+  },
 
   { label: 'Settings - configured', view: 'settings' },
 
