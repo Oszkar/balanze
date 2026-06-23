@@ -117,7 +117,8 @@
   {#if showOpenAI}
     <ProviderCard name="OpenAI" plan="API + Codex"
       windows={codexWindows} quotaState={openaiQuotaState}
-      onDismiss={onDismissOpenai} onConnect={onSettings}
+      dismiss={{ aria: OPENAI_COL_COPY.dismiss.aria, title: OPENAI_COL_COPY.dismiss.title, onClick: () => onDismissOpenai?.() }}
+      onConnect={onSettings}
       billed={colState.kind === 'data'
         ? (openai
             ? { amount: microUsdToDollars(openai.total_micro_usd), note: 'admin api · this cycle', badge: 'real', title: PROV.openaiBilled.title }

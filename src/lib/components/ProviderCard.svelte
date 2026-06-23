@@ -2,9 +2,10 @@
   import type { Tone } from '$lib/presentation/pace';
   export interface CardWindow { label: string; used: number; elapsed: number | null; tone: Tone; resetsAt: string; stale?: boolean; title?: string; }
 
-  // Non-data states for the quota area, rendered in place of the window bars
-  // (the billed row still renders underneath). Strings are resolved by the
-  // caller so this stays a dumb presentational component; `data` shows windows.
+  // Non-data states for the quota area, rendered in place of the window bars.
+  // The caller's billed row, if it supplies one, renders underneath - the
+  // connect/error states omit it. Strings are resolved by the caller so this
+  // stays a dumb presentational component; `data` shows windows.
   export type CardQuotaState =
     | { kind: 'data' }
     | { kind: 'error'; note: string; title: string }
@@ -17,14 +18,16 @@
   import UsageBar from './UsageBar.svelte';
   import Badge from './Badge.svelte';
   import { relativeReset } from '$lib/presentation/format';
-  import { OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
   // `billed` is optional: the connect/error states suppress the spend row (the
-  // state block spans the card body, mirroring GridView's two-row span). `onDismiss`
-  // renders the × that collapses the column; `onConnect` wires the connect CTA.
-  let { name, plan, windows, billed, quotaState, onDismiss, onConnect }:
+  // state block spans the card body, mirroring GridView's two-row span).
+  // `dismiss` renders the × that collapses the column - action plus its labels,
+  // caller-supplied so this component stays provider-agnostic. `onConnect` wires
+  // the connect CTA.
+  let { name, plan, windows, billed, quotaState, dismiss, onConnect }:
     { name: string; plan: string; windows: CardWindow[];
       billed?: { amount: string | null; note: string; badge?: 'real' | 'na'; placeholder?: string; title?: string };
-      quotaState?: CardQuotaState; onDismiss?: () => void; onConnect?: () => void } = $props();
+      quotaState?: CardQuotaState; dismiss?: { aria: string; title: string; onClick: () => void };
+      onConnect?: () => void } = $props();
 </script>
 
 <div class="pcard">
@@ -32,7 +35,7 @@
     <span class="name">{name}</span>
     <span class="hd-right">
       <span class="plan">{plan}</span>
-      {#if onDismiss}<button class="dismiss" type="button" aria-label={OPENAI_COL_COPY.dismiss.aria} title={OPENAI_COL_COPY.dismiss.title} onclick={() => onDismiss?.()}>×</button>{/if}
+      {#if dismiss}<button class="dismiss" type="button" aria-label={dismiss.aria} title={dismiss.title} onclick={() => dismiss.onClick()}>×</button>{/if}
     </span>
   </div>
   {#if quotaState && quotaState.kind === 'connect'}
