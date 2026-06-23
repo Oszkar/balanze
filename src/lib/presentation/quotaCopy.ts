@@ -25,7 +25,7 @@ export const ANTH_QUOTA_COPY = {
 // nothing to show yet), the fetch-error caption, the dismiss control, and the
 // re-add affordance shown when the column is collapsed.
 export const OPENAI_COL_COPY = {
-  connect: { label: 'not connected', cta: 'Connect ->', hint: 'paste admin key' },
+  connect: { label: 'not connected', cta: 'Connect ->', aria: 'Connect OpenAI billing in Settings', hint: 'paste admin key' },
   error: {
     note: 'fetch failed',
     title: (message: string) => `OpenAI unavailable - ${message}`,

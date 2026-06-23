@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { quotaTone, codexElapsedFraction, codexWindowExpired } from '$lib/presentation/quota';
+  import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired } from '$lib/presentation/quota';
   import { microUsdToDollars } from '$lib/presentation/format';
   import { PROV } from '$lib/presentation/provenance';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
@@ -56,12 +56,13 @@
   // Cold-start / error / not-configured states for the Anthropic quota area,
   // mirroring GridView's anthState branches (same selector, same copy via
   // ANTH_QUOTA_COPY). The overage billed row still renders underneath regardless
-  // of quota state. `hasQuota` is `anthWindows.length > 0` rather than Grid's
-  // `!!anthropicQuota()` so any OAuth cadence (not just five_hour) counts as data
-  // - consistent with Cards showing every cadence.
+  // of quota state. `hasQuota` uses Grid's exact gate (`!!anthropicQuota()`,
+  // which requires a five_hour cadence) so the two views agree on data-vs-loading
+  // even when only a seven_day / model-specific cadence is present; the
+  // all-cadence bar rendering (anthWindows) is unaffected.
   const anthErr = $derived(snapshot.claude_oauth_error ?? snapshot.claude_statusline_error ?? null);
   const anthQuotaState = $derived.by<CardQuotaState>(() => {
-    const s = anthropicQuotaState({ hasQuota: anthWindows.length > 0, error: anthErr, unavailable: snapshot.claude_oauth_unavailable });
+    const s = anthropicQuotaState({ hasQuota: !!anthropicQuota(snapshot), error: anthErr, unavailable: snapshot.claude_oauth_unavailable });
     switch (s.kind) {
       case 'error':
         return { kind: 'error', note: ANTH_QUOTA_COPY.error.note, title: ANTH_QUOTA_COPY.error.title(s.message) };
@@ -91,7 +92,7 @@
   const showOpenAI = $derived(colState.kind !== 'hidden');
   const openaiQuotaState = $derived.by<CardQuotaState>(() => {
     if (colState.kind === 'connect')
-      return { kind: 'connect', label: OPENAI_COL_COPY.connect.label, cta: OPENAI_COL_COPY.connect.cta, hint: OPENAI_COL_COPY.connect.hint };
+      return { kind: 'connect', label: OPENAI_COL_COPY.connect.label, cta: OPENAI_COL_COPY.connect.cta, aria: OPENAI_COL_COPY.connect.aria, hint: OPENAI_COL_COPY.connect.hint };
     if (colState.kind === 'error')
       return { kind: 'error', note: OPENAI_COL_COPY.error.note, title: OPENAI_COL_COPY.error.title(colState.message) };
     return { kind: 'data' };

@@ -77,7 +77,7 @@
     {#if colState.kind === 'connect'}
       <div class="cell connect">
         <span class="connect-label">{OPENAI_COL_COPY.connect.label}</span>
-        <button class="connect-btn" type="button" onclick={() => onSettings?.()}>{OPENAI_COL_COPY.connect.cta}</button>
+        <button class="connect-btn" type="button" aria-label={OPENAI_COL_COPY.connect.aria} onclick={() => onSettings?.()}>{OPENAI_COL_COPY.connect.cta}</button>
         <span class="connect-hint">{OPENAI_COL_COPY.connect.hint}</span>
       </div>
     {:else if colState.kind === 'error'}
@@ -126,8 +126,10 @@
   .colhead { position: relative; display: flex; flex-direction: column; align-items: center; padding-bottom: 3px; }
   .colhead .p { font-size: var(--text-base); font-weight: 600; }
   .colhead .plan { font-size: var(--text-2xs); color: var(--faint); }
-  .dismiss { position: absolute; top: 0; right: 1px; background: none; border: none; color: var(--faint);
-    cursor: pointer; font-size: var(--text-base); line-height: 1; padding: 0 2px; }
+  /* Offsets compensate for the larger padding so the × stays in the corner while
+     the hit target grows to ~22px (glyph weight unchanged). */
+  .dismiss { position: absolute; top: -3px; right: -3px; background: none; border: none; color: var(--faint);
+    cursor: pointer; font-size: var(--text-base); line-height: 1; padding: 5px 6px; border-radius: 4px; }
   .dismiss:hover { color: var(--ink); }
   .dismiss:focus-visible { outline: 2px solid var(--ink2); outline-offset: 1px; border-radius: 4px; }
   .cell { border-radius: 12px; background: var(--tile-face); box-shadow: var(--tile-elev); }
