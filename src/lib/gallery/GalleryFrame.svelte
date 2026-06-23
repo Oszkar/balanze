@@ -45,6 +45,7 @@
       <Header bind:view={activeView} fetchedAt={snapshot.fetched_at} onRefresh={noop} onSettings={noop} />
       {#if activeView === 'cards'}
         <CardsView {snapshot} {openaiEnabled} {degraded} />
+        <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} />
         <LeverageBox
           totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
           eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
