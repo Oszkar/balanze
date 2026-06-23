@@ -11,7 +11,7 @@
     | { kind: 'error'; note: string; title: string }
     | { kind: 'notConfigured'; heading: string; hint: string; title: string }
     | { kind: 'loading'; heading: string; sub: string; title: string }
-    | { kind: 'connect'; label: string; cta: string; hint: string };
+    | { kind: 'connect'; label: string; cta: string; aria: string; hint: string };
 </script>
 
 <script lang="ts">
@@ -41,7 +41,7 @@
   {#if quotaState && quotaState.kind === 'connect'}
     <div class="qstate connect">
       <span class="connect-label">{quotaState.label}</span>
-      <button class="connect-btn" type="button" onclick={() => onConnect?.()}>{quotaState.cta}</button>
+      <button class="connect-btn" type="button" aria-label={quotaState.aria} onclick={() => onConnect?.()}>{quotaState.cta}</button>
       <span class="connect-hint">{quotaState.hint}</span>
     </div>
   {:else if quotaState && quotaState.kind === 'error'}
@@ -87,8 +87,10 @@
   .hd-right { display: flex; align-items: baseline; gap: 6px; }
   .name { font-size: 14px; font-weight: 600; } .plan { font-size: 10.5px; color: var(--faint); }
   /* Dismiss × in the card header (OpenAI column only), mirroring GridView's. */
+  /* Negative margin keeps the header layout tight while the padding gives the
+     × a comfortable ~22px hit target (the glyph weight is unchanged). */
   .dismiss { background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-base);
-    line-height: 1; padding: 0 2px; align-self: center; }
+    line-height: 1; padding: 5px 6px; margin: -5px -4px -5px 0; border-radius: 4px; align-self: center; }
   .dismiss:hover { color: var(--ink); }
   .dismiss:focus-visible { outline: 2px solid var(--ink2); outline-offset: 1px; border-radius: 4px; }
   /* Non-data quota states (cold-start / error / not-configured / connect),
