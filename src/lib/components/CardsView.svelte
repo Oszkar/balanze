@@ -51,7 +51,7 @@
     windows={anthWindows}
     billed={eu?.is_enabled
       ? { amount: `${microUsdToDollars(eu.used_credits_micro_usd)}/${microUsdToDollars(eu.monthly_limit_micro_usd)}`, note: 'overage', badge: 'real' }
-      : { amount: null, note: 'API spend - unavailable', badge: 'na' }} />
+      : { amount: null, note: 'no overage this cycle' }} />
   {#if hasOpenAI}
     <ProviderCard name="OpenAI" plan="API + Codex"
       windows={codex
@@ -61,7 +61,7 @@
         : []}
       billed={openai
         ? { amount: microUsdToDollars(openai.total_micro_usd), note: 'this cycle', badge: 'real' }
-        : { amount: null, note: snapshot.openai_error ? 'fetch failed' : 'spend - unavailable', badge: 'na' }} />
+        : { amount: null, note: snapshot.openai_error ? 'fetch failed' : 'not configured' }} />
   {/if}
 </div>
 
