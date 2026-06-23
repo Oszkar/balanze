@@ -44,7 +44,7 @@
     {:else if snapshot}
       <Header bind:view={activeView} fetchedAt={snapshot.fetched_at} onRefresh={noop} onSettings={noop} />
       {#if activeView === 'cards'}
-        <CardsView {snapshot} {openaiEnabled} {degraded} />
+        <CardsView {snapshot} {openaiEnabled} {degraded} onDismissOpenai={noop} onSettings={noop} />
       {:else}
         <GridView {snapshot} {degraded} {openaiEnabled} onDismissOpenai={noop} onSettings={noop} />
       {/if}

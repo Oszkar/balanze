@@ -3,7 +3,7 @@
   import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired } from '$lib/presentation/quota';
   import { microUsdToDollars } from '$lib/presentation/format';
   import { PROV } from '$lib/presentation/provenance';
-  import { ANTH_QUOTA_COPY } from '$lib/presentation/quotaCopy';
+  import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
   import QuotaCell from './QuotaCell.svelte';
   import BilledCell from './BilledCell.svelte';
@@ -44,7 +44,7 @@
     <div class="colhead">
       <span class="p">OpenAI</span><span class="plan">API + Codex</span>
       {#if colState.kind === 'data' || colState.kind === 'connect' || colState.kind === 'error'}
-        <button class="dismiss" type="button" aria-label="Hide OpenAI column" title="Hide OpenAI - re-add in Settings" onclick={() => onDismissOpenai?.()}>×</button>
+        <button class="dismiss" type="button" aria-label={OPENAI_COL_COPY.dismiss.aria} title={OPENAI_COL_COPY.dismiss.title} onclick={() => onDismissOpenai?.()}>×</button>
       {/if}
     </div>
   {/if}
@@ -76,16 +76,16 @@
   {#if showOpenAI}
     {#if colState.kind === 'connect'}
       <div class="cell connect">
-        <span class="connect-label">not connected</span>
-        <button class="connect-btn" type="button" onclick={() => onSettings?.()}>Connect -&gt;</button>
-        <span class="connect-hint">paste admin key</span>
+        <span class="connect-label">{OPENAI_COL_COPY.connect.label}</span>
+        <button class="connect-btn" type="button" onclick={() => onSettings?.()}>{OPENAI_COL_COPY.connect.cta}</button>
+        <span class="connect-hint">{OPENAI_COL_COPY.connect.hint}</span>
       </div>
     {:else if colState.kind === 'error'}
       <!-- Span both OpenAI metric rows (col 2) so it stays symmetric with the
            Anthropic quota + billed cells (mirrors the connect-state placement). -->
       <div class="span2">
-        <BilledCell hatch placeholder="unavailable" note="fetch failed"
-          title={`OpenAI unavailable - ${colState.message}`} />
+        <BilledCell hatch placeholder="unavailable" note={OPENAI_COL_COPY.error.note}
+          title={OPENAI_COL_COPY.error.title(colState.message)} />
       </div>
     {:else if codex}
       <QuotaCell pct={codex.primary.used_percent} used={codex.primary.used_percent}
@@ -116,7 +116,7 @@
 
 {#if !showOpenAI}
   <div class="add-openai-row">
-    <button class="add-openai" type="button" onclick={() => onSettings?.()}>+ Add OpenAI</button>
+    <button class="add-openai" type="button" onclick={() => onSettings?.()}>{OPENAI_COL_COPY.add}</button>
   </div>
 {/if}
 
