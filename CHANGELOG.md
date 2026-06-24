@@ -8,24 +8,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [0.4.0] - UI polish - 2026-06-23
 
-The popover stops reading like a scaffold. A self-hosted type system and a design-token set grown out of `theme.css`, real empty / loading / error states across every cell, a first-run welcome, and Cards-view parity with the Grid - the screenshot now stands on its own. First sub-milestone of Phase 4 (Productization); it feeds the v0.4.2 release screenshots.
+The popover stops reading like a scaffold. New type system and a design-token set, real empty / loading / error states across every cell, a first-run welcome, and parity between the 2 views.
 
 ### Added
-- **Design-token foundation + machined tiles** - the popover polish pass: a self-hosted type system (no network font dependency), design tokens for spacing / type scale / color grown out of `theme.css`, machined-depth tiles, and content-hugging popover height.
+- **Design-token foundation + machined tiles** - a self-hosted type system, design tokens for spacing / type scale / color, machined-depth tiles, and content-hugging popover height.
 - **Real cell states across the matrix:**
   - **Actionable empty states** - not-detected, add-OpenAI, and retry prompts replace silently blank cells.
   - **`SourceUnavailable` coordinator state** - a not-configured source is now distinct from an errored one.
   - **Plain-language cold-start cell** - a connecting source reads in plain language, no jargon tooltip.
   - **Neutral tray gauge color for the no-data state** - no misleading color before there is data to show.
-- **First-run welcome** - first launch auto-opens the popover and fires a notification so the tray icon is discoverable (hardened against the startup focus race).
+- **First-run welcome** - first launch auto-opens the popover and fires a notification so the tray icon is discoverable.
 - **Cards view reaches parity with the Grid** - Anthropic state + burn indicator, the OpenAI column (connect / dismiss / error), quota-state gating, and aligned source badges / tooltips / labels.
 - **OpenAI key validation on save** - the key is validated before it lands, with inline admin-key help and surfaced link-open failures.
 - **Dev-only states gallery** - a standalone CSR harness rendering every popover screen for visual review and snapshotting.
 
 ### Changed
 - **Provenance badges trimmed to the billed-money signal** - badges now mark only real billed spend, cutting noise from cells where provenance is unambiguous.
-- **Roadmap reshaped distribution-first** - alerts and the dashboard resequenced to v0.5 / v0.6, after v0.4.1 (CLI maturity) and v0.4.2 (distribution), so the product reaches real users sooner.
-- Dependency bumps: `actions/checkout` 6 -> 7, `tauri-build` 2.6.2 -> 2.6.3.
 
 ### Fixed
 - **Accessibility, motion, and currency-format polish** - reduced-motion handling, focus / a11y on the column controls, and consistent currency formatting.
