@@ -19,6 +19,12 @@ use crate::cli::Cli;
 pub(crate) const BIN_NAME: &str = "balanze-cli";
 
 /// Write a shell completion script for `shell` to `out`.
+///
+/// Infallible on the write axis: `clap_complete::generate` returns `()` and its
+/// underlying writer panics (does not `Err`) on a write failure such as a broken
+/// pipe, which is the clap-ecosystem norm. The `Result` is kept for signature
+/// symmetry with [`write_man`] (which genuinely `?`-propagates I/O errors via
+/// `clap_mangen`), not because this path reports write errors.
 pub(crate) fn write_completions<W: Write>(shell: Shell, out: &mut W) -> Result<()> {
     let mut cmd = Cli::command();
     // clap_complete keys the generated script to the bin name; pass it
