@@ -54,6 +54,12 @@ tracing-subscriber = { workspace = true }
 directories = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
+
+[build-dependencies]
+clap = { workspace = true }
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"  # used by statusline snapshot write tests
