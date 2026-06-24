@@ -21,6 +21,7 @@
 
 use std::process::ExitCode;
 
+use anstream::ColorChoice;
 use anyhow::{Result, anyhow};
 use clap::Parser;
 
@@ -30,6 +31,7 @@ mod cli;
 mod format;
 mod json_output;
 mod keys;
+mod present;
 mod render;
 mod setup;
 mod sinks;
@@ -58,8 +60,14 @@ fn main() -> ExitCode {
         .command
         .unwrap_or(Commands::Status(StatusArgs::default()));
 
+    let color_choice = if cli.no_color {
+        ColorChoice::Never
+    } else {
+        ColorChoice::Auto
+    };
+
     let result = match command {
-        Commands::Status(args) => cmd_status(&args, cli.verbose),
+        Commands::Status(args) => cmd_status(&args, cli.verbose, color_choice),
         Commands::Watch(args) => {
             // verbose is not yet threaded into watch mode; `watch --json -v`
             // would need JsonlSink to accept a verbose flag so the JSONL
@@ -104,7 +112,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn cmd_status(args: &StatusArgs, verbose: bool) -> Result<()> {
+fn cmd_status(args: &StatusArgs, verbose: bool, color_choice: ColorChoice) -> Result<()> {
     let snapshot = tokio::runtime::Runtime::new()?.block_on(sources::build_snapshot());
 
     // Precedence (documented in --help): --json wins over --sections if both
@@ -125,8 +133,9 @@ fn cmd_status(args: &StatusArgs, verbose: bool) -> Result<()> {
     } else {
         // Default: glanceable 4-quadrant matrix mirroring the readiness
         // summary from `balanze-cli setup`. Run `balanze-cli status --sections`
-        // for the extended per-source breakdown.
-        render::print_compact(&snapshot)?;
+        // for the extended per-source breakdown. The colored path honors
+        // --no-color / NO_COLOR / non-TTY via anstream's AutoStream.
+        render::print_compact_colored(&snapshot, color_choice)?;
     }
     Ok(())
 }

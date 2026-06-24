@@ -350,6 +350,7 @@ dependencies = [
 name = "balanze_cli"
 version = "0.4.0"
 dependencies = [
+ "anstream",
  "anthropic_oauth",
  "anyhow",
  "backoff",
@@ -363,6 +364,7 @@ dependencies = [
  "directories",
  "keychain",
  "openai_client",
+ "owo-colors",
  "reqwest 0.12.28",
  "rpassword",
  "serde",
@@ -3015,6 +3017,12 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
 ]
+
+[[package]]
+name = "owo-colors"
+version = "4.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
 
 [[package]]
 name = "page_size"
