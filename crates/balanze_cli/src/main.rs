@@ -33,6 +33,7 @@ mod format;
 mod json_output;
 mod keys;
 mod present;
+mod probes;
 mod render;
 mod setup;
 mod sinks;
