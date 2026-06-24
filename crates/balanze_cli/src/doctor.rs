@@ -46,7 +46,9 @@ fn run_probes(offline: bool) -> Vec<CheckResult> {
             match tokio::runtime::Runtime::new() {
                 Ok(rt) => results.push(rt.block_on(probes::probe_openai_key_online(&key))),
                 Err(e) => results.push(CheckResult::warn(
-                    CheckCategory::Network,
+                    // A runtime-creation failure is a local/Other problem, not a
+                    // network reachability issue - keep the category honest.
+                    CheckCategory::Other,
                     format!("Could not start OpenAI validation runtime: {e}"),
                     Some("Re-run with --offline to skip network validation.".to_string()),
                 )),
