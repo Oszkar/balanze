@@ -6,6 +6,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+## [0.4.0] - UI polish - 2026-06-23
+
+The popover stops reading like a scaffold. New type system and a design-token set, real empty / loading / error states across every cell, a first-run welcome, and parity between the 2 views.
+
+### Added
+- **Design-token foundation + machined tiles** - a self-hosted type system, design tokens for spacing / type scale / color, machined-depth tiles, and content-hugging popover height.
+- **Real cell states across the matrix:**
+  - **Actionable empty states** - not-detected, add-OpenAI, and retry prompts replace silently blank cells.
+  - **`SourceUnavailable` coordinator state** - a not-configured source is now distinct from an errored one.
+  - **Plain-language cold-start cell** - a connecting source reads in plain language, no jargon tooltip.
+  - **Neutral tray gauge color for the no-data state** - no misleading color before there is data to show.
+- **First-run welcome** - first launch auto-opens the popover and fires a notification so the tray icon is discoverable.
+- **Cards view reaches parity with the Grid** - Anthropic state + burn indicator, the OpenAI column (connect / dismiss / error), quota-state gating, and aligned source badges / tooltips / labels.
+- **OpenAI key validation on save** - the key is validated before it lands, with inline admin-key help and surfaced link-open failures.
+- **Dev-only states gallery** - a standalone CSR harness rendering every popover screen for visual review and snapshotting.
+
+### Changed
+- **Provenance badges trimmed to the billed-money signal** - badges now mark only real billed spend, cutting noise from cells where provenance is unambiguous.
+
+### Fixed
+- **Accessibility, motion, and currency-format polish** - reduced-motion handling, focus / a11y on the column controls, and consistent currency formatting.
+
 ## [0.3.1] - Settings & trust - 2026-06-20
 
 The Settings UI lands - keys, live provider toggles, statusLine wiring - alongside the trust pass: real keychain persistence on Windows, the macOS Keychain OAuth read, and honest Codex staleness.
@@ -101,7 +123,8 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Oszkar/balanze/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Oszkar/balanze/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Oszkar/balanze/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Oszkar/balanze/compare/v0.1.1...v0.2.0
