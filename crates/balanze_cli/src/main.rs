@@ -29,6 +29,7 @@ use crate::cli::{Cli, Commands, StatusArgs};
 
 mod cli;
 mod completions;
+mod doctor;
 mod format;
 mod json_output;
 mod keys;
@@ -92,12 +93,26 @@ fn main() -> ExitCode {
         Commands::ClearOpenaiKey => keys::cmd_clear_openai_key(),
         Commands::Settings => cmd_settings(),
         Commands::Statusline => statusline::cmd_statusline(),
-        // The following subcommands are declared in the surface so the clap
+        // `doctor` computes its own process exit code (auth fail -> 3, network
+        // fail -> 4, degraded-under-strict -> 5, ...; see probes::worst_exit_code),
+        // so it cannot route through the uniform Ok/Err -> SUCCESS/FAILURE map
+        // below. Return its ExitCode directly; a diverging `return` type-checks
+        // alongside the other `Result<()>` arms. An Err from cmd_doctor (a
+        // genuinely unexpected failure) maps to FAILURE with the standard print.
+        Commands::Doctor(args) => {
+            match doctor::cmd_doctor(&args, cli.quiet, cli.strict, cli.no_color) {
+                Ok(code) => return ExitCode::from(code as u8),
+                Err(e) => {
+                    eprintln!("error: {e:#}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        // The remaining subcommands are declared in the surface so the clap
         // tree, --help, and completions are stable, but their handlers land in
-        // later changes (doctor / export / completions / man). Until then they
-        // return a non-zero error (via the `Err` arm below) so a caller or
-        // script sees a failure rather than a silent success exit.
-        Commands::Doctor(_) => Err(anyhow!("doctor: not implemented in this release yet")),
+        // later changes (export). Until then they return a non-zero error (via
+        // the `Err` arm below) so a caller or script sees a failure rather than
+        // a silent success exit.
         Commands::Export(_) => Err(anyhow!("export: not implemented in this release yet")),
         Commands::Completions(args) => completions::cmd_completions(args.shell),
         Commands::Man => completions::cmd_man(),
