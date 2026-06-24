@@ -28,6 +28,7 @@ use clap::Parser;
 use crate::cli::{Cli, Commands, StatusArgs};
 
 mod cli;
+mod completions;
 mod format;
 mod json_output;
 mod keys;
@@ -97,10 +98,8 @@ fn main() -> ExitCode {
         // script sees a failure rather than a silent success exit.
         Commands::Doctor(_) => Err(anyhow!("doctor: not implemented in this release yet")),
         Commands::Export(_) => Err(anyhow!("export: not implemented in this release yet")),
-        Commands::Completions(_) => {
-            Err(anyhow!("completions: not implemented in this release yet"))
-        }
-        Commands::Man => Err(anyhow!("man: not implemented in this release yet")),
+        Commands::Completions(args) => completions::cmd_completions(args.shell),
+        Commands::Man => completions::cmd_man(),
     };
 
     match result {
