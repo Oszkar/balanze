@@ -21,7 +21,7 @@
 
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::Parser;
 
 use crate::cli::{Cli, Commands, StatusArgs};
@@ -83,25 +83,16 @@ fn main() -> ExitCode {
         Commands::Settings => cmd_settings(),
         Commands::Statusline => statusline::cmd_statusline(),
         // The following subcommands are declared in the surface so the clap
-        // tree, --help, and completions are stable, but their handlers land
-        // in later v0.4.1 PRs (doctor / export / completions / man). Until
-        // then they are an honest no-op that returns success.
-        Commands::Doctor(_) => {
-            eprintln!("doctor: not implemented in this release yet");
-            Ok(())
-        }
-        Commands::Export(_) => {
-            eprintln!("export: not implemented in this release yet");
-            Ok(())
-        }
+        // tree, --help, and completions are stable, but their handlers land in
+        // later changes (doctor / export / completions / man). Until then they
+        // return a non-zero error (via the `Err` arm below) so a caller or
+        // script sees a failure rather than a silent success exit.
+        Commands::Doctor(_) => Err(anyhow!("doctor: not implemented in this release yet")),
+        Commands::Export(_) => Err(anyhow!("export: not implemented in this release yet")),
         Commands::Completions(_) => {
-            eprintln!("completions: not implemented in this release yet");
-            Ok(())
+            Err(anyhow!("completions: not implemented in this release yet"))
         }
-        Commands::Man => {
-            eprintln!("man: not implemented in this release yet");
-            Ok(())
-        }
+        Commands::Man => Err(anyhow!("man: not implemented in this release yet")),
     };
 
     match result {
