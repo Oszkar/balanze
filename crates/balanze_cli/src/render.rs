@@ -382,7 +382,7 @@ pub(crate) fn write_compact<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Res
     writeln!(w)?;
     writeln!(
         w,
-        "Run `balanze-cli --sections` for per-source detail, or `balanze-cli --json` for machine-readable output."
+        "Run `balanze-cli status --sections` for per-source detail, or `balanze-cli status --json` for machine-readable output."
     )
 }
 

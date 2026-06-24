@@ -56,6 +56,11 @@ chrono = { version = "0.4", features = ["serde"] }
 # stable rendering and we depend on the JSON estimates layout for our
 # committed baselines.
 criterion = "0.8"
+# CLI arg parsing (derive) + shell-completion script generation. Pure Rust,
+# no system libraries - keeps the CLI's zero-syslib promise. clap_complete's
+# Shell enum is the `completions <shell>` value type.
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 
 [workspace.dependencies.wiremock]
 version = "0.6"

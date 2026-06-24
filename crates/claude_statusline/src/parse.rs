@@ -61,6 +61,11 @@ where
 /// for invalid JSON or a present-but-wrong-shape required subfield. Unknown
 /// fields are tolerated; absent optional blocks become `None`.
 pub fn parse(input: &str) -> Result<StatuslineSnapshot, StatuslineError> {
+    // Strip a single leading UTF-8 BOM (U+FEFF) before deserializing. serde_json
+    // does not skip it, and some callers (e.g. a PowerShell pipe under a
+    // UTF-8-with-BOM OutputEncoding) prepend one. Claude Code itself sends clean
+    // UTF-8; this is defensive, consistent with the statusline drift tolerance.
+    let input = input.strip_prefix('\u{feff}').unwrap_or(input);
     let raw: RawRoot = serde_json::from_str(input).map_err(|e| match e.classify() {
         serde_json::error::Category::Data => StatuslineError::SchemaDrift {
             message: e.to_string(),
@@ -168,6 +173,18 @@ mod tests {
         assert!((rl.seven_day.unwrap().used_percent - 44.0).abs() < 1e-4);
         assert_eq!(s.session_cost_micro_usd, Some(12_500_000));
         assert_eq!(s.claude_code_version.as_deref(), Some("2.1.140"));
+    }
+
+    #[test]
+    fn tolerates_leading_utf8_bom() {
+        // A caller (e.g. a PowerShell pipe with a UTF-8-with-BOM OutputEncoding)
+        // can prepend a U+FEFF byte-order mark; serde_json does not skip it, so
+        // a single leading BOM is stripped before deserializing. Claude Code
+        // sends clean UTF-8 - this is defensive drift tolerance.
+        let with_bom = format!("\u{feff}{FULL}");
+        let s = parse(&with_bom).expect("parses despite a leading BOM");
+        assert_eq!(s.session_cost_micro_usd, Some(12_500_000));
+        assert!(s.rate_limits.is_some());
     }
 
     #[test]
