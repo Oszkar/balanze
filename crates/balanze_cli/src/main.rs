@@ -60,7 +60,23 @@ fn main() -> ExitCode {
 
     let result = match command {
         Commands::Status(args) => cmd_status(&args, cli.verbose),
-        Commands::Watch(args) => watch_cmd::run_watch_mode(args.json),
+        Commands::Watch(args) => {
+            // verbose is not yet threaded into watch mode; `watch --json -v`
+            // would need JsonlSink to accept a verbose flag so the JSONL
+            // stream surfaces org_uuid / session_id. Warn so the user does not
+            // quietly get redacted output and wonder why their jq filters do
+            // not see the identifiers.
+            // TODO: pass verbose to JsonlSink so `watch --json -v` surfaces
+            //       org_uuid / codex session_id.
+            if cli.verbose && args.json {
+                eprintln!(
+                    "warning: -v / --verbose is not yet threaded into `watch --json`; \
+                     org_uuid and codex.session_id will be redacted as if -v were absent. \
+                     Use `balanze-cli status --json -v` (one-shot) if you need identifiers."
+                );
+            }
+            watch_cmd::run_watch_mode(args.json)
+        }
         Commands::Setup => setup::cmd_setup(),
         Commands::SetOpenaiKey => keys::cmd_set_openai_key(),
         Commands::ClearOpenaiKey => keys::cmd_clear_openai_key(),
