@@ -61,6 +61,9 @@ mod tests {
         // Boundaries mirror src-tauri/src/tauri_sink.rs ColorBucket::from_util
         // (QUOTA_WARN_PCT = 50.0, QUOTA_BAD_PCT = 90.0, inclusive `>=`),
         // expressed here as fractions. Any drift from the tray must fail.
+        // The tray's intermediate 75% Orange band (QUOTA_ORANGE_PCT) is
+        // intentionally folded into `Warn` here - the CLI uses a 3-way bucket,
+        // so 50 / 90 are the only parity points, not an oversight.
         assert_eq!(bucket_for_fraction(0.0), Bucket::Ok);
         assert_eq!(bucket_for_fraction(0.499), Bucket::Ok);
         assert_eq!(bucket_for_fraction(0.50), Bucket::Warn);

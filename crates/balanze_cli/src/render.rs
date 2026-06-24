@@ -316,33 +316,17 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
     Ok(())
 }
 
-/// Compact 4-quadrant matrix renderer - the default `balanze-cli` output.
+/// Plain (uncolored) compact 4-quadrant matrix renderer, parameterized over the
+/// sink. The live `status` dispatch uses the colored sibling
+/// [`write_compact_colored`]; this plain variant backs the golden-string tests
+/// that capture the rendered bytes against the four-tier label discipline
+/// (estimate / real overage / Claude session estimate / server quota %) without
+/// piping stdout.
 ///
-/// One screen, no scrolling. The layout maps directly onto the design
-/// doc's 4-quadrant matrix: rows are providers (Anthropic, OpenAI),
-/// columns are cells (Quota %, API $). Cell content shows ✓ / ○ / ✗
-/// plus a one-line summary. See `print_sections` for per-source depth.
-///
-/// The live dispatch calls `print_compact_colored` instead; this plain variant
-/// is retained as an API anchor for callers that supply their own sink
-/// (test-only at present; a future TUI/watch path may use it directly).
-#[allow(dead_code)]
-pub(crate) fn print_compact(snapshot: &Snapshot) -> io::Result<()> {
-    let stdout = io::stdout();
-    let mut lock = stdout.lock();
-    write_compact(snapshot, &mut lock).or_else(|e| {
-        if e.kind() == io::ErrorKind::BrokenPipe {
-            Ok(())
-        } else {
-            Err(e)
-        }
-    })
-}
-
-/// Writer-driven sibling of [`print_compact`]. Same content, parameterized
-/// over the sink so tests can capture the rendered bytes against the
-/// four-tier label discipline (estimate / real overage / Claude session
-/// estimate / server quota %) without piping stdout.
+/// One screen, no scrolling. The layout maps directly onto the design doc's
+/// 4-quadrant matrix: rows are providers (Anthropic, OpenAI), columns are cells
+/// (Quota %, API $). Cell content shows ✓ / ○ / ✗ plus a one-line summary. See
+/// `print_sections` for per-source depth.
 pub(crate) fn write_compact<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Result<()> {
     writeln!(
         w,
@@ -682,10 +666,10 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     )
 }
 
-/// Color-aware variant of [`print_compact`]: wraps a locked stdout in an
-/// `anstream::AutoStream` with the given choice (Never under --no-color /
-/// NO_COLOR / non-TTY) and renders the colorized compact view. BrokenPipe is
-/// swallowed, as in `print_compact`.
+/// Stdout entry point for the colorized compact view: wraps a locked stdout in
+/// an `anstream::AutoStream` with the given choice (Never under --no-color /
+/// NO_COLOR / non-TTY) and renders [`write_compact_colored`]. BrokenPipe is
+/// swallowed (the reader closed the pipe), as in `print_sections`.
 pub(crate) fn print_compact_colored(snapshot: &Snapshot, choice: ColorChoice) -> io::Result<()> {
     let stdout = io::stdout();
     let lock = stdout.lock();
