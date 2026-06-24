@@ -24,6 +24,7 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 
+mod cli;
 mod format;
 mod json_output;
 mod keys;
