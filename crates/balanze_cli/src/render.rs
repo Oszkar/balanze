@@ -4,12 +4,15 @@
 
 use std::io::{self, Write};
 
+use anstream::ColorChoice;
+use owo_colors::{OwoColorize, Style};
 use state_coordinator::Snapshot;
 
 use crate::format::{
     fmt_int, format_codex_age, format_codex_window, micro_usd_to_display_dollars, pretty_duration,
     short_cadence,
 };
+use crate::present::{Bucket, bucket_for_fraction, bucket_for_pace_ratio};
 
 pub(crate) fn print_sections(snapshot: &Snapshot, verbose: bool) -> io::Result<()> {
     let stdout = io::stdout();
@@ -319,6 +322,11 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
 /// doc's 4-quadrant matrix: rows are providers (Anthropic, OpenAI),
 /// columns are cells (Quota %, API $). Cell content shows ✓ / ○ / ✗
 /// plus a one-line summary. See `print_sections` for per-source depth.
+///
+/// The live dispatch calls `print_compact_colored` instead; this plain variant
+/// is retained as an API anchor for callers that supply their own sink
+/// (test-only at present; a future TUI/watch path may use it directly).
+#[allow(dead_code)]
 pub(crate) fn print_compact(snapshot: &Snapshot) -> io::Result<()> {
     let stdout = io::stdout();
     let mut lock = stdout.lock();
@@ -527,6 +535,170 @@ fn compact_openai_cost(s: &Snapshot) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Color helpers (used by write_compact_colored only)
+// ---------------------------------------------------------------------------
+
+/// Map a presentation `Bucket` to an owo-colors `Style`. Green/yellow/red
+/// track the tray heat colors; `Neutral` is dim (no signal yet). The actual
+/// stripping for non-color sinks is anstream's job - this always produces a
+/// style and lets `AutoStream` decide whether the bytes survive.
+fn bucket_style(b: Bucket) -> Style {
+    match b {
+        Bucket::Ok => Style::new().green(),
+        Bucket::Warn => Style::new().yellow(),
+        Bucket::Critical => Style::new().red(),
+        Bucket::Neutral => Style::new().dimmed(),
+    }
+}
+
+/// Pad `cell` to `width` characters of PLAIN text first, then wrap the padded
+/// string in `style`. Padding-before-color is load-bearing: Rust's `{:width}`
+/// counts the ANSI escape bytes, so coloring before padding would corrupt the
+/// `{:38}` column alignment (and the glyph-aware golden tests). The ANSI codes
+/// land OUTSIDE the measured field. anstream strips them later if needed.
+fn pad_and_color(cell: &str, width: usize, style: Style) -> String {
+    let padded = format!("{cell:width$}");
+    padded.style(style).to_string()
+}
+
+/// Worst utilization across the Anthropic OAuth cadence bars, as a fraction.
+/// `None` when no cadence signal (cold start / not configured) -> Neutral.
+fn anthropic_quota_fraction(s: &Snapshot) -> Option<f64> {
+    let oauth = s.claude_oauth.as_ref()?;
+    if oauth.cadences.is_empty() {
+        return None;
+    }
+    let worst = oauth
+        .cadences
+        .iter()
+        .map(|c| c.utilization_percent as f64)
+        .fold(0.0_f64, f64::max);
+    Some(worst / 100.0)
+}
+
+/// Codex primary-window utilization as a fraction. `None` when no codex
+/// quota signal -> Neutral.
+fn codex_quota_fraction(s: &Snapshot) -> Option<f64> {
+    let q = s.codex_quota.as_ref()?;
+    Some(q.primary.used_percent / 100.0)
+}
+
+/// Colorized sibling of [`write_compact`]. Identical text content and column
+/// layout; the quota cells, pace ratio, subscription-leverage line, and any
+/// degraded (`✗`) cell are wrapped in bucket colors. Color is emitted
+/// unconditionally; the caller passes an `anstream::AutoStream` whose
+/// `ColorChoice` decides whether the codes survive (Never under --no-color /
+/// NO_COLOR / non-TTY). The `{:38}` columns are padded as plain text BEFORE
+/// coloring (see `pad_and_color`) so alignment is byte-stable.
+pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Result<()> {
+    writeln!(
+        w,
+        "=== Balanze status ({}) ===",
+        snapshot.fetched_at.format("%Y-%m-%d %H:%M:%S UTC")
+    )?;
+    writeln!(w)?;
+
+    let anth_quota = compact_anthropic_quota(snapshot);
+    let anth_cost = compact_anthropic_cost(snapshot);
+    let openai_quota = compact_codex_quota(snapshot);
+    let openai_cost = compact_openai_cost(snapshot);
+
+    // A failed-fetch cell (starts with ✗) is always Critical; otherwise color
+    // by the row's quota fraction, Neutral when there's no signal.
+    let anth_bucket = if anth_quota.starts_with('✗') {
+        Bucket::Critical
+    } else {
+        match anthropic_quota_fraction(snapshot) {
+            Some(f) => bucket_for_fraction(f),
+            None => Bucket::Neutral,
+        }
+    };
+    let codex_bucket = if openai_quota.starts_with('✗') {
+        Bucket::Critical
+    } else {
+        match codex_quota_fraction(snapshot) {
+            Some(f) => bucket_for_fraction(f),
+            None => Bucket::Neutral,
+        }
+    };
+
+    writeln!(
+        w,
+        "                    {:38}  API $ (real billed)",
+        "Quota %"
+    )?;
+    writeln!(
+        w,
+        "Anthropic           {}  {anth_cost}",
+        pad_and_color(&anth_quota, 38, bucket_style(anth_bucket))
+    )?;
+    writeln!(
+        w,
+        "OpenAI              {}  {openai_cost}",
+        pad_and_color(&openai_quota, 38, bucket_style(codex_bucket))
+    )?;
+    writeln!(w)?;
+
+    if let Some(pace) = compact_pace_line(snapshot) {
+        // Color the whole pace line by the worst per-window ratio bucket.
+        let worst_ratio = snapshot
+            .pace
+            .iter()
+            .filter_map(|p| p.ratio)
+            .fold(None, |acc: Option<f64>, r| {
+                Some(acc.map_or(r, |a| a.max(r)))
+            });
+        let style = bucket_style(bucket_for_pace_ratio(worst_ratio));
+        writeln!(w, "{}", pace.style(style))?;
+    }
+    if let Some(lev) = compact_subscription_leverage(snapshot) {
+        // Leverage is an estimate, not a heat signal: a failure (✗) reads
+        // Critical, otherwise it stays Neutral (dim) so it never competes
+        // visually with the measured quota colors.
+        let style = if lev.contains('✗') {
+            bucket_style(Bucket::Critical)
+        } else {
+            bucket_style(Bucket::Neutral)
+        };
+        writeln!(w, "{}", lev.style(style))?;
+    }
+    writeln!(w)?;
+
+    writeln!(
+        w,
+        "Quota % = live server-reported utilization. API $ = real billed spend"
+    )?;
+    writeln!(
+        w,
+        "only: Anthropic = pay-as-you-go overage (n/a unless enabled); OpenAI ="
+    )?;
+    writeln!(w, "Admin Costs API. 'Subscription leverage' is a separate")?;
+    writeln!(w, "list-price estimate, never charged.")?;
+    writeln!(w)?;
+    writeln!(
+        w,
+        "Run `balanze-cli status --sections` for per-source detail, or `balanze-cli status --json` for machine-readable output."
+    )
+}
+
+/// Color-aware variant of [`print_compact`]: wraps a locked stdout in an
+/// `anstream::AutoStream` with the given choice (Never under --no-color /
+/// NO_COLOR / non-TTY) and renders the colorized compact view. BrokenPipe is
+/// swallowed, as in `print_compact`.
+pub(crate) fn print_compact_colored(snapshot: &Snapshot, choice: ColorChoice) -> io::Result<()> {
+    let stdout = io::stdout();
+    let lock = stdout.lock();
+    let mut stream = anstream::AutoStream::new(lock, choice);
+    write_compact_colored(snapshot, &mut stream).or_else(|e| {
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,6 +829,58 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         write_compact(snap, &mut buf).expect("write_compact ok");
         String::from_utf8(buf).expect("compact output is UTF-8")
+    }
+
+    /// Render the compact view through an AutoStream forced to a given choice,
+    /// returning the raw bytes (so ANSI presence/absence is observable). Mirrors
+    /// the sinks.rs TTY test pattern: a Vec<u8> sink wrapped by anstream, with the
+    /// color decision injected rather than read from the real stdout.
+    fn render_compact_with_choice(snap: &Snapshot, choice: anstream::ColorChoice) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut stream = anstream::AutoStream::new(&mut buf, choice);
+            write_compact_colored(snap, &mut stream).expect("colored write ok");
+        }
+        buf
+    }
+
+    #[test]
+    fn compact_colored_emits_ansi_when_choice_always() {
+        let snap = fully_populated_snapshot();
+        let bytes = render_compact_with_choice(&snap, anstream::ColorChoice::Always);
+        // ESC [ is the SGR introducer - at least one styled span must be present
+        // (the quota cells / pace / leverage are colored by bucket).
+        assert!(
+            bytes.windows(2).any(|w| w == b"\x1b["),
+            "Always choice must emit ANSI SGR codes"
+        );
+        let text = String::from_utf8(bytes).expect("utf8");
+        // The load-bearing source tags must still be present between the codes.
+        assert!(
+            text.contains("(oauth)"),
+            "(oauth) tag must survive colorization"
+        );
+        assert!(
+            text.contains("(admin costs)"),
+            "(admin costs) tag must survive"
+        );
+    }
+
+    #[test]
+    fn compact_colored_strips_ansi_when_choice_never() {
+        let snap = fully_populated_snapshot();
+        let bytes = render_compact_with_choice(&snap, anstream::ColorChoice::Never);
+        // anstream::AutoStream with Never strips every ANSI byte - the contract
+        // that makes --no-color / NO_COLOR / non-TTY safe.
+        assert!(
+            !bytes.windows(2).any(|w| w == b"\x1b["),
+            "Never choice must strip all ANSI SGR codes"
+        );
+        let text = String::from_utf8(bytes).expect("utf8");
+        // Stripped output must be byte-identical-in-substance to the plain path.
+        assert!(text.contains("(oauth)"));
+        assert!(text.contains("Subscription leverage:"));
+        assert!(text.contains("(admin costs)"));
     }
 
     fn render_sections(snap: &Snapshot, verbose: bool) -> String {

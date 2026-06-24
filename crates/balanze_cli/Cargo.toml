@@ -34,6 +34,15 @@ watcher = { path = "../watcher" }
 # detection + termios/console manipulation). Used only by `balanze-cli setup`.
 rpassword = "7"
 
+# Auto-adapting ANSI: AutoStream is an io::Write that strips color on
+# non-TTY, under NO_COLOR, and when ColorChoice::Never is passed (our
+# --no-color path). owo-colors applies the SGR styles. Both pure-Rust, no
+# system libs - the CLI's zero-syslib promise holds (AGENTS deny gate).
+# Pin anstream to the same 1.x line clap pulls in to avoid a duplicate
+# version in the lock file (cargo deny warns on multiple-versions).
+anstream = "1"
+owo-colors = "4"
+
 tokio = { workspace = true }
 reqwest = { workspace = true }
 anyhow = { workspace = true }
