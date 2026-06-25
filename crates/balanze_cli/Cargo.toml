@@ -48,6 +48,14 @@ csv = "1"
 anstream = "1"
 owo-colors = "4"
 
+# Bounded `watch` TUI (see docs/superpowers/specs/2026-06-24-v0.4.1-cli-maturity-design.md
+# section 7). All pure-Rust, no system libraries - keeps the CLI's zero-syslib
+# promise. ratatui 0.29 depends on crossterm 0.28; the `event-stream` feature
+# pulls a futures Stream so the select loop can `StreamExt::next` on input.
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+futures = "0.3"
+
 tokio = { workspace = true }
 reqwest = { workspace = true }
 anyhow = { workspace = true }

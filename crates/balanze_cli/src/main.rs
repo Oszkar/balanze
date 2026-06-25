@@ -49,6 +49,7 @@ mod setup;
 mod sinks;
 mod sources;
 mod statusline;
+mod tui;
 mod watch_cmd;
 
 fn main() -> ExitCode {

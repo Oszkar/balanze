@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 use watcher::Watcher;
 
 use crate::sinks::{JsonlSink, StdoutSink};
+use crate::tui::{ChannelSink, run_tui};
 
 /// Entry-point called by `cmd_status` (and the `--watch` top-level alias)
 /// when `--watch` is present.
@@ -29,7 +30,15 @@ pub(crate) fn run_watch_mode(json: bool) -> Result<()> {
         .enable_all()
         .build()?;
 
-    if json {
+    // Enter the ratatui TUI only on an interactive stdout and when not emitting
+    // JSON. Otherwise keep today's StdoutSink (separator-append) / JsonlSink
+    // (one JSON doc per line) paths unchanged.
+    use std::io::IsTerminal;
+    let tui = !json && std::io::stdout().is_terminal();
+
+    if tui {
+        rt.block_on(run_tui_mode())
+    } else if json {
         rt.block_on(run_with_sink(JsonlSink))
     } else {
         rt.block_on(run_with_sink(StdoutSink::new()))
@@ -122,5 +131,52 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
         }
     }
     // Runtime drop on return aborts any tasks still running cleanly.
+    Ok(())
+}
+
+/// TUI variant of the watch supervisor. Spawns the coordinator with a
+/// `ChannelSink` (republishes snapshots into a watch channel) + the watcher,
+/// then runs the ratatui loop. `run_tui` owns the `TerminalGuard`; whichever
+/// `select!` arm wins, dropping the loser futures on return drops that guard and
+/// restores the terminal, so any fatal hint we print AFTER the block lands on
+/// the normal screen, not a garbled alt screen. The runtime drop aborts
+/// surviving tasks.
+async fn run_tui_mode() -> Result<()> {
+    let settings = settings::load().unwrap_or_else(|e| {
+        tracing::warn!("settings load failed ({e}); using defaults");
+        settings::Settings::default()
+    });
+
+    let (sink, rx) = ChannelSink::new();
+    let (handle, mut coord_join) = spawn_coord(sink);
+    let _watcher_handles = Watcher::spawn(handle.clone(), &settings);
+
+    // Race the TUI against ctrl-c and the coordinator task dying. `&mut
+    // coord_join` lets the TUI arm win without consuming the join handle.
+    let mut fatal: Option<&'static str> = None;
+    tokio::select! {
+        res = run_tui(rx, handle.clone()) => {
+            res?;
+        }
+        res = tokio::signal::ctrl_c() => {
+            if let Err(e) = res {
+                tracing::error!("ctrl_c handler install failed: {e}");
+                return Err(anyhow::anyhow!("failed to install SIGINT handler: {e}"));
+            }
+        }
+        res = &mut coord_join => {
+            tracing::error!("coordinator task exited unexpectedly: {res:?}");
+            fatal = Some(
+                "state_coordinator task exited unexpectedly. \
+                 See `BALANZE_LOG=debug` output for detail. Restart `watch` to recover.",
+            );
+        }
+    }
+    // The select dropped run_tui's TerminalGuard on the way out, restoring the
+    // terminal. Print any fatal hint NOW, on the normal screen (not the alt
+    // screen, which the restore just tore down).
+    if let Some(msg) = fatal {
+        eprintln!("\nfatal: {msg}");
+    }
     Ok(())
 }
