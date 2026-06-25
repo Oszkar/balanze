@@ -30,6 +30,18 @@ pub(crate) async fn build_snapshot() -> Snapshot {
     snapshot_composer::compose(&LiveSources, Utc::now()).await
 }
 
+/// `export` reuses the exact JSONL walk + dedup `status` uses (DRY): one source
+/// of truth for which roots are scanned and how events are deduped.
+pub(crate) fn export_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
+    live_load_claude_events()
+}
+
+/// `export` reuses the exact OpenAI fetch `status` uses, including the
+/// `BALANZE_OPENAI_KEY` env precedence over the keychain (AGENTS.md §3.4).
+pub(crate) async fn export_fetch_openai() -> Result<Option<OpenAiCosts>> {
+    live_fetch_openai().await
+}
+
 /// The production `SnapshotSources`: real network + filesystem + keychain.
 /// Every method body delegates to the pre-extraction helper, moved unchanged.
 struct LiveSources;
