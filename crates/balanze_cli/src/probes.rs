@@ -194,16 +194,22 @@ pub fn worst_exit_code(results: &[CheckResult], strict: bool) -> i32 {
 /// Keychain), confirms a real read (so the optimistic macOS Keychain source
 /// does not false-positive; the read may prompt once), and applies the
 /// expiry/read-only rule.
+///
+/// Severity: a genuinely-absent credential (Claude Code not installed or not
+/// logged in) is WARN, not Fail - the app treats a not-configured source as
+/// neutral (SourceUnavailable), and other providers can still populate the
+/// matrix. Only an actual breakage is Fail: a credential that is present but
+/// unreadable, or the keychain expired-read-only case in `oauth_check_from_parts`.
 pub fn probe_claude_oauth(now: DateTime<Utc>) -> CheckResult {
     let source = match locate_credentials() {
         Ok(s) => s,
         Err(_) => {
-            return CheckResult::fail(
+            return CheckResult::warn(
                 CheckCategory::Auth,
-                "Claude OAuth credential not found",
+                "Claude OAuth not configured (Claude Code not installed or not logged in)",
                 Some(
-                    "run `claude login` in Claude Code to enable the subscription-quota cell."
-                        .to_string(),
+                    "run `claude login` in Claude Code to enable the Claude subscription-quota cell"
+                        .into(),
                 ),
             );
         }

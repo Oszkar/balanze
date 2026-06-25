@@ -30,36 +30,99 @@ fn visible_results(results: &[CheckResult], quiet: bool) -> Vec<&CheckResult> {
         .collect()
 }
 
-/// Run all six probes. `--offline` validates the OpenAI key for presence only;
-/// otherwise it issues one fail-fast network request via the watcher.
-fn run_probes(offline: bool) -> Vec<CheckResult> {
+/// The four DATA-SOURCE probes, captured by name so the "is anything usable"
+/// decision reads them explicitly rather than by fragile array index. statusLine
+/// and settings/keychain are infra, not data sources, so they are excluded from
+/// the aggregate check.
+struct DataSourceResults {
+    oauth: CheckResult,
+    jsonl: CheckResult,
+    codex: CheckResult,
+    openai: CheckResult,
+}
+
+/// True when NONE of the four data sources is usable (every result is non-Ok).
+/// If even one is Ok, balanze has something to show, so this is false. Pure +
+/// testable: takes already-computed results, touches no environment.
+fn no_data_source_configured(data_results: &[&CheckResult]) -> bool {
+    data_results.iter().all(|r| r.level != CheckLevel::Ok)
+}
+
+/// The synthetic aggregate FAIL appended when no data source is usable. Auth
+/// category so `worst_exit_code` maps it to exit 3 (the actionable fix is
+/// providing a credential / source). Factored out so the render path and the
+/// tests share one definition.
+fn no_provider_aggregate_fail() -> CheckResult {
+    CheckResult::fail(
+        CheckCategory::Auth,
+        "No usable provider configured - balanze has nothing to show",
+        Some(
+            "set up at least one: run `claude login`, use Claude Code so JSONL exists, set the OpenAI key (`balanze-cli set-openai-key`), or run Codex"
+                .into(),
+        ),
+    )
+}
+
+/// Run the four data-source probes (Claude OAuth, Claude JSONL, Codex, OpenAI
+/// key). `--offline` validates the OpenAI key for presence only; otherwise it
+/// issues one fail-fast network request via the watcher.
+fn run_data_source_probes(offline: bool) -> DataSourceResults {
     let now = Utc::now();
-    let mut results = Vec::with_capacity(6);
-    results.push(probes::probe_claude_oauth(now));
-    results.push(probes::probe_claude_jsonl());
-    results.push(probes::probe_codex());
+    let oauth = probes::probe_claude_oauth(now);
+    let jsonl = probes::probe_claude_jsonl();
+    let codex = probes::probe_codex();
 
     let (key, presence) = probes::probe_openai_key_presence();
-    match (offline, key) {
+    let openai = match (offline, key) {
         (false, Some(key)) => {
             // A key resolved and we are online: one fail-fast request.
             match tokio::runtime::Runtime::new() {
-                Ok(rt) => results.push(rt.block_on(probes::probe_openai_key_online(&key))),
-                Err(e) => results.push(CheckResult::warn(
+                Ok(rt) => rt.block_on(probes::probe_openai_key_online(&key)),
+                Err(e) => CheckResult::warn(
                     // A runtime-creation failure is a local/Other problem, not a
                     // network reachability issue - keep the category honest.
                     CheckCategory::Other,
                     format!("Could not start OpenAI validation runtime: {e}"),
                     Some("Re-run with --offline to skip network validation.".to_string()),
-                )),
+                ),
             }
         }
         // Offline, or no key to validate: the presence probe is the answer.
-        _ => results.push(presence),
-    }
+        _ => presence,
+    };
 
+    DataSourceResults {
+        oauth,
+        jsonl,
+        codex,
+        openai,
+    }
+}
+
+/// Run all six probes plus, when no data source is usable, an appended
+/// aggregate FAIL. The four data sources come first (in their fixed order),
+/// then the two infra probes (statusLine, settings/keychain), then the
+/// optional aggregate line so the user sees WHY the exit is non-zero.
+fn run_probes(offline: bool) -> Vec<CheckResult> {
+    let ds = run_data_source_probes(offline);
+
+    // Decide before the bindings move into `results`.
+    let none_configured = no_data_source_configured(&[&ds.oauth, &ds.jsonl, &ds.codex, &ds.openai]);
+
+    let mut results = Vec::with_capacity(7);
+    results.push(ds.oauth);
+    results.push(ds.jsonl);
+    results.push(ds.codex);
+    results.push(ds.openai);
     results.push(probes::probe_statusline());
     results.push(probes::probe_settings_and_keychain());
+
+    if none_configured {
+        // Rendered as a FAIL line that survives --quiet so the non-zero exit is
+        // explained to the user.
+        results.push(no_provider_aggregate_fail());
+    }
+
     results
 }
 
@@ -169,6 +232,67 @@ mod tests {
             visible_results(&results, false).len(),
             3,
             "non-quiet shows all"
+        );
+    }
+
+    #[test]
+    fn no_data_source_configured_true_when_all_non_ok() {
+        // Every data source absent / degraded -> nothing to show.
+        let warn = CheckResult::warn(CheckCategory::Auth, "oauth not configured", None);
+        let warn2 = CheckResult::warn(CheckCategory::Other, "no jsonl", None);
+        let warn3 = CheckResult::warn(CheckCategory::Other, "no codex", None);
+        let warn4 = CheckResult::warn(CheckCategory::Auth, "no key", None);
+        assert!(no_data_source_configured(&[&warn, &warn2, &warn3, &warn4]));
+    }
+
+    #[test]
+    fn no_data_source_configured_false_when_one_ok() {
+        // A single usable source (here JSONL) means balanze has something.
+        let warn = CheckResult::warn(CheckCategory::Auth, "oauth not configured", None);
+        let ok = CheckResult::ok(CheckCategory::Other, "jsonl: 5 files");
+        let warn3 = CheckResult::warn(CheckCategory::Other, "no codex", None);
+        let warn4 = CheckResult::warn(CheckCategory::Auth, "no key", None);
+        assert!(!no_data_source_configured(&[&warn, &ok, &warn3, &warn4]));
+    }
+
+    #[test]
+    fn aggregate_fail_escalates_exit_to_three_when_none_configured() {
+        // Four non-Ok data sources -> the aggregate FAIL (Auth) is appended,
+        // and worst_exit_code maps it to 3 even though no individual probe is
+        // a Fail (they are all Warn).
+        let ds = [
+            CheckResult::warn(CheckCategory::Auth, "oauth not configured", None),
+            CheckResult::warn(CheckCategory::Other, "no jsonl", None),
+            CheckResult::warn(CheckCategory::Other, "no codex", None),
+            CheckResult::warn(CheckCategory::Auth, "no key", None),
+        ];
+        assert!(no_data_source_configured(&ds.iter().collect::<Vec<_>>()));
+        let mut results: Vec<CheckResult> = ds.to_vec();
+        results.push(no_provider_aggregate_fail());
+        assert_eq!(
+            doctor_exit_code(&results, false),
+            3,
+            "aggregate FAIL must escalate a warn-only set to exit 3"
+        );
+    }
+
+    #[test]
+    fn aggregate_not_appended_when_one_data_source_ok() {
+        // One Ok data source -> no aggregate appended; a lone WARN stays exit 0.
+        let ds = [
+            CheckResult::warn(CheckCategory::Auth, "oauth not configured", None),
+            CheckResult::ok(CheckCategory::Other, "jsonl: 5 files"),
+            CheckResult::warn(CheckCategory::Other, "no codex", None),
+            CheckResult::warn(CheckCategory::Auth, "no key", None),
+        ];
+        assert!(!no_data_source_configured(&ds.iter().collect::<Vec<_>>()));
+        // run_probes would NOT append the aggregate here, so the result set is
+        // just the (warn-bearing) probes - exit stays 0 without --strict.
+        let results: Vec<CheckResult> = ds.to_vec();
+        assert_eq!(
+            doctor_exit_code(&results, false),
+            0,
+            "one usable source must not be escalated by the aggregate"
         );
     }
 }
