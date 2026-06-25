@@ -29,7 +29,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
 use claude_cost::{Cost, PriceTable, compute_cost, load_bundled_prices};
-use claude_parser::UsageEvent;
+use claude_parser::{ParseError, UsageEvent};
 use openai_client::OpenAiCosts;
 
 use crate::cli::ExportArgs;
@@ -271,11 +271,18 @@ fn write_csv<W: Write>(w: &mut W, claude: &[ClaudeRow], openai: &[OpenAiRow]) ->
 /// (an absent provider is normal). A real fetch error propagates as `anyhow`
 /// and is classified into an exit code by `main` (PR5).
 pub(crate) fn cmd_export(args: &ExportArgs) -> Result<()> {
-    // Claude: re-derive ALL events, then the full (day, model) series.
-    let (events, _files_scanned) =
-        crate::sources::export_load_claude_events().context("loading Claude JSONL for export")?;
     let prices = load_bundled_prices().context("loading bundled price table")?;
-    let claude = claude_rows(&events, &prices);
+
+    // Claude: re-derive the full (day, model) series from ALL events. An absent
+    // Claude provider (no projects dir - an OpenAI-only or first-run machine) is
+    // normal: degrade to an empty section so the export still succeeds, mirroring
+    // the OpenAI None case below. A real read error (permissions, IO, schema
+    // drift) still propagates for exit-code classification.
+    let claude = match crate::sources::export_load_claude_events() {
+        Ok((events, _files_scanned)) => claude_rows(&events, &prices),
+        Err(e) if claude_load_absent(&e) => Vec::new(),
+        Err(e) => return Err(e.context("loading Claude JSONL for export")),
+    };
 
     // OpenAI: current-month billed spend. None (not configured) -> empty
     // section; a fetch error propagates for exit-code classification.
@@ -306,6 +313,15 @@ pub(crate) fn cmd_export(args: &ExportArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// True if a Claude-events load error just means the provider is absent (no
+/// projects directory), as opposed to a real read failure. An absent provider
+/// degrades to an empty CSV section (like an unconfigured OpenAI key); a real
+/// error (permissions, IO, schema drift) propagates for exit classification.
+fn claude_load_absent(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<ParseError>()
+        .is_some_and(|pe| matches!(pe, ParseError::FileMissing(_)))
 }
 
 /// True if `err` (or any layer of its context chain) is an I/O BrokenPipe - the
@@ -614,6 +630,29 @@ mod tests {
             ),
             "unpriced row must have an empty leverage cell:\n{out}"
         );
+    }
+
+    #[test]
+    fn claude_load_absent_only_for_missing_dir() {
+        use std::path::PathBuf;
+        // No projects dir -> FileMissing -> absent provider -> empty section, so
+        // an OpenAI-only / first-run export still succeeds instead of aborting.
+        let missing: anyhow::Error =
+            claude_parser::ParseError::FileMissing(PathBuf::from("/no/claude/projects")).into();
+        assert!(
+            claude_load_absent(&missing),
+            "a missing projects dir must degrade to an empty section"
+        );
+        // A real read failure must NOT be treated as absent - it propagates.
+        let perm: anyhow::Error =
+            claude_parser::ParseError::PermissionDenied(PathBuf::from("/locked")).into();
+        assert!(
+            !claude_load_absent(&perm),
+            "a permission error must propagate, not silently empty the section"
+        );
+        assert!(!claude_load_absent(&anyhow::anyhow!(
+            "some unrelated error"
+        )));
     }
 
     #[test]
