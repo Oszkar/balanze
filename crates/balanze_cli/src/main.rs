@@ -32,10 +32,12 @@ use anyhow::{Result, anyhow};
 use clap::Parser;
 
 use crate::cli::{Cli, Commands, StatusArgs};
+use crate::exit::{ExitClass, classify_snapshot};
 
 mod cli;
 mod completions;
 mod doctor;
+mod exit;
 mod format;
 mod json_output;
 mod keys;
@@ -58,31 +60,46 @@ fn main() -> ExitCode {
     // watcher it spawns).
     keychain::init_default_store();
 
-    // clap handles --help / --version / unknown-command (exit 2) by itself;
-    // parse() prints and exits for those. Everything past here is a real
-    // dispatch.
+    // clap handles --help / --version / unknown-command by itself; parse()
+    // prints and exits 2 for those (ExitClass::Usage = 2 documents that
+    // contract, but clap owns the exit - we never override it). Everything past
+    // here is a real dispatch that classifies into an ExitClass exactly once.
     let cli = Cli::parse();
 
-    // Bare `balanze-cli` (no subcommand) defaults to `status` with default
-    // args - kept because it is good DX and matches the advertised form.
-    let command = cli
-        .command
-        .unwrap_or(Commands::Status(StatusArgs::default()));
-
-    let color_choice = if cli.no_color {
-        ColorChoice::Never
-    } else {
-        ColorChoice::Auto
+    let class = match run(&cli) {
+        Ok(class) => class,
+        Err(e) => {
+            // anyhow boundary: print the full cause chain, then Other (1).
+            eprintln!("error: {e:#}");
+            ExitClass::Other
+        }
     };
 
-    let result = match command {
-        Commands::Status(args) => cmd_status(&args, cli.verbose, color_choice),
-        Commands::Watch(args) => {
+    // Classify once, exit once (AGENTS.md §9 / design §9). Codes are 0..=5, so
+    // `ExitCode::from(u8)` carries them exactly while still running destructors
+    // (no `std::process::exit`).
+    ExitCode::from(class.code() as u8)
+}
+
+/// Dispatch a parsed `Cli` to its handler and return the `ExitClass` for the
+/// outcome. `anyhow` errors propagate to `main`'s boundary (mapped to Other/1).
+/// Bare `balanze-cli` (no subcommand) defaults to `status` - good DX and the
+/// advertised compact form.
+fn run(cli: &Cli) -> Result<ExitClass> {
+    match &cli.command {
+        None => run_status(&StatusArgs::default(), cli),
+        Some(Commands::Status(args)) => run_status(args, cli),
+        Some(Commands::Doctor(args)) => {
+            // doctor folds its probe set into an ExitClass itself (shared
+            // taxonomy via probes::worst_exit_code), honoring --quiet/--strict.
+            doctor::cmd_doctor(args, cli.quiet, cli.strict, cli.no_color)
+        }
+        Some(Commands::Watch(args)) => {
             // verbose is not yet threaded into watch mode; `watch --json -v`
-            // would need JsonlSink to accept a verbose flag so the JSONL
-            // stream surfaces org_uuid / session_id. Warn so the user does not
-            // quietly get redacted output and wonder why their jq filters do
-            // not see the identifiers.
+            // would need JsonlSink to accept a verbose flag so the JSONL stream
+            // surfaces org_uuid / session_id. Warn so the user does not quietly
+            // get redacted output and wonder why their jq filters do not see the
+            // identifiers.
             // TODO: pass verbose to JsonlSink so `watch --json -v` surfaces
             //       org_uuid / codex session_id.
             if cli.verbose && args.json {
@@ -92,73 +109,110 @@ fn main() -> ExitCode {
                      Use `balanze-cli status --json -v` (one-shot) if you need identifiers."
                 );
             }
-            watch_cmd::run_watch_mode(args.json)
+            watch_cmd::run_watch_mode(args.json)?;
+            Ok(ExitClass::Ok)
         }
-        Commands::Setup => setup::cmd_setup(),
-        Commands::SetOpenaiKey => keys::cmd_set_openai_key(),
-        Commands::ClearOpenaiKey => keys::cmd_clear_openai_key(),
-        Commands::Settings => cmd_settings(),
-        Commands::Statusline => statusline::cmd_statusline(),
-        // `doctor` computes its own process exit code (auth fail -> 3, network
-        // fail -> 4, degraded-under-strict -> 5, ...; see probes::worst_exit_code),
-        // so it cannot route through the uniform Ok/Err -> SUCCESS/FAILURE map
-        // below. Return its ExitCode directly; a diverging `return` type-checks
-        // alongside the other `Result<()>` arms. An Err from cmd_doctor (a
-        // genuinely unexpected failure) maps to FAILURE with the standard print.
-        Commands::Doctor(args) => {
-            match doctor::cmd_doctor(&args, cli.quiet, cli.strict, cli.no_color) {
-                Ok(code) => return ExitCode::from(code as u8),
-                Err(e) => {
-                    eprintln!("error: {e:#}");
-                    return ExitCode::FAILURE;
-                }
-            }
+        Some(Commands::Setup) => {
+            setup::cmd_setup()?;
+            Ok(ExitClass::Ok)
         }
-        // The remaining subcommands are declared in the surface so the clap
-        // tree, --help, and completions are stable, but their handlers land in
-        // later changes (export). Until then they return a non-zero error (via
-        // the `Err` arm below) so a caller or script sees a failure rather than
-        // a silent success exit.
-        Commands::Export(_) => Err(anyhow!("export: not implemented in this release yet")),
-        Commands::Completions(args) => completions::cmd_completions(args.shell),
-        Commands::Man => completions::cmd_man(),
-    };
-
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e:#}");
-            ExitCode::FAILURE
+        Some(Commands::SetOpenaiKey) => {
+            keys::cmd_set_openai_key()?;
+            Ok(ExitClass::Ok)
+        }
+        Some(Commands::ClearOpenaiKey) => {
+            keys::cmd_clear_openai_key()?;
+            Ok(ExitClass::Ok)
+        }
+        Some(Commands::Settings) => {
+            cmd_settings()?;
+            Ok(ExitClass::Ok)
+        }
+        Some(Commands::Statusline) => {
+            statusline::cmd_statusline()?;
+            Ok(ExitClass::Ok)
+        }
+        // Declared in the surface so the clap tree, --help, and completions are
+        // stable, but the handler lands in a later change (export). Until then
+        // it returns an error so a caller or script sees a failure (Other/1),
+        // not a silent success.
+        Some(Commands::Export(_)) => Err(anyhow!("export: not implemented in this release yet")),
+        Some(Commands::Completions(args)) => {
+            completions::cmd_completions(args.shell)?;
+            Ok(ExitClass::Ok)
+        }
+        Some(Commands::Man) => {
+            completions::cmd_man()?;
+            Ok(ExitClass::Ok)
         }
     }
 }
 
-fn cmd_status(args: &StatusArgs, verbose: bool, color_choice: ColorChoice) -> Result<()> {
+/// Which render path `status` takes, decided purely from the flags so the
+/// precedence is unit-testable (no Snapshot build, no I/O).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderMode {
+    /// `--json`: machine-readable; emitted even under --quiet (it is the data a
+    /// scripting caller asked for).
+    Json,
+    /// `--sections`: detailed per-source human view.
+    Sections,
+    /// Default glanceable colored 4-quadrant matrix.
+    Compact,
+    /// `--quiet` with neither --json nor --sections: print nothing; the exit
+    /// code still reflects the snapshot.
+    Suppressed,
+}
+
+/// Precedence: --json wins over --sections wins over the default. --quiet
+/// suppresses ONLY the default matrix - never --json (data) and never the
+/// explicitly-requested --sections detail.
+fn render_mode(json: bool, sections: bool, quiet: bool) -> RenderMode {
+    if json {
+        RenderMode::Json
+    } else if sections {
+        RenderMode::Sections
+    } else if quiet {
+        RenderMode::Suppressed
+    } else {
+        RenderMode::Compact
+    }
+}
+
+/// Build the snapshot, render it (honoring --json / --sections / --quiet), then
+/// classify it. The snapshot's error slots plus --strict decide the exit class;
+/// rendering itself never changes the class.
+fn run_status(args: &StatusArgs, cli: &Cli) -> Result<ExitClass> {
     let snapshot = tokio::runtime::Runtime::new()?.block_on(sources::build_snapshot());
 
-    // Precedence (documented in --help): --json wins over --sections if both
-    // are passed. --json is the scripting/machine path; if a caller asked for
-    // it, honor it even alongside a stray --sections. Silently ignoring
-    // --sections here is the least-surprising behavior for
-    // `balanze-cli status --json --sections`.
-    if args.json {
-        // `--json` goes through json_output::render, not raw Snapshot serde:
-        // money cells get a `{value_micro_usd, source, confidence, details}`
-        // tagged DTO, and identifiers (org_uuid, codex session_id) are
-        // redacted unless `-v`/`--verbose` is also set.
-        println!("{}", json_output::render(&snapshot, verbose)?);
-    } else if args.sections {
-        // Per-source detailed view - useful for debugging, dev work, and
-        // anyone who wants the full window math + cadence bars in one go.
-        render::print_sections(&snapshot, verbose)?;
-    } else {
-        // Default: glanceable 4-quadrant matrix mirroring the readiness
-        // summary from `balanze-cli setup`. Run `balanze-cli status --sections`
-        // for the extended per-source breakdown. The colored path honors
-        // --no-color / NO_COLOR / non-TTY via anstream's AutoStream.
-        render::print_compact_colored(&snapshot, color_choice)?;
+    match render_mode(args.json, args.sections, cli.quiet) {
+        RenderMode::Json => {
+            // `--json` goes through json_output::render, not raw Snapshot serde:
+            // money cells get a `{value_micro_usd, source, confidence, details}`
+            // tagged DTO, and identifiers (org_uuid, codex session_id) are
+            // redacted unless `-v`/`--verbose` is also set.
+            println!("{}", json_output::render(&snapshot, cli.verbose)?);
+        }
+        RenderMode::Sections => {
+            // Per-source detailed view - useful for debugging, dev work, and
+            // anyone who wants the full window math + cadence bars in one go.
+            render::print_sections(&snapshot, cli.verbose)?;
+        }
+        RenderMode::Compact => {
+            // Default: glanceable 4-quadrant matrix mirroring the readiness
+            // summary from `balanze-cli setup`. The colored path honors
+            // --no-color / NO_COLOR / non-TTY via anstream's AutoStream.
+            let color_choice = if cli.no_color {
+                ColorChoice::Never
+            } else {
+                ColorChoice::Auto
+            };
+            render::print_compact_colored(&snapshot, color_choice)?;
+        }
+        RenderMode::Suppressed => {}
     }
-    Ok(())
+
+    Ok(classify_snapshot(&snapshot, cli.strict))
 }
 
 fn cmd_settings() -> Result<()> {
@@ -167,4 +221,28 @@ fn cmd_settings() -> Result<()> {
     let path = settings::default_path()?;
     eprintln!("(loaded from: {})", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RenderMode, render_mode};
+
+    #[test]
+    fn render_mode_json_beats_quiet_and_sections() {
+        // --json is data: it must win over --quiet and over a stray --sections.
+        assert_eq!(render_mode(true, false, true), RenderMode::Json);
+        assert_eq!(render_mode(true, true, true), RenderMode::Json);
+    }
+
+    #[test]
+    fn render_mode_sections_prints_even_under_quiet() {
+        // --sections is an explicit detail request, not the default matrix.
+        assert_eq!(render_mode(false, true, true), RenderMode::Sections);
+    }
+
+    #[test]
+    fn render_mode_quiet_suppresses_only_the_default_matrix() {
+        assert_eq!(render_mode(false, false, true), RenderMode::Suppressed);
+        assert_eq!(render_mode(false, false, false), RenderMode::Compact);
+    }
 }

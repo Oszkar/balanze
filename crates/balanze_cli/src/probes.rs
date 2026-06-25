@@ -17,6 +17,8 @@ use anthropic_oauth::{load_from_source, locate_credentials};
 use chrono::{DateTime, Utc};
 use watcher::KeyProbe;
 
+use crate::exit::ExitClass;
+
 /// Severity of a single probe. Ordered Ok < Warn < Fail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckLevel {
@@ -152,18 +154,17 @@ fn openai_probe_from_keyprobe(probe: KeyProbe) -> CheckResult {
     }
 }
 
-/// Fold a probe set to a process exit code. A Fail wins (auth -> 3, network ->
-/// 4, other -> 1); auth is preferred over network when both fail (the more
-/// actionable blocker). No Fail: Warn maps to 5 only under --strict
-/// (degraded), else 0.
+/// Fold a probe set to an [`ExitClass`]. A Fail wins (auth, then network, then
+/// other); auth is preferred over network when both fail (the more actionable
+/// blocker). No Fail: Warn maps to `Degraded` only under --strict, else `Ok`.
 ///
-// TODO: return a shared exit-code type once one exists; raw i32 keeps this
-// module self-contained for now. The numeric values are: auth=3, network=4,
-// other=1, strict-degraded=5, clean=0.
-pub fn worst_exit_code(results: &[CheckResult], strict: bool) -> i32 {
+/// Returns the shared `exit::ExitClass` so `doctor` and the `status` path agree
+/// on one taxonomy; `.code()` yields auth=3, network=4, other=1,
+/// strict-degraded=5, clean=0.
+pub fn worst_exit_code(results: &[CheckResult], strict: bool) -> ExitClass {
     // Track each failing category independently so the result is ORDER-
     // INDEPENDENT: an Other fail seen before a Network fail must still rank the
-    // Network fail (4) above Other (1). Ranking is Auth > Network > Other.
+    // Network fail above Other. Ranking is Auth > Network > Other.
     let mut has_warn = false;
     let mut has_auth_fail = false;
     let mut has_network_fail = false;
@@ -180,18 +181,18 @@ pub fn worst_exit_code(results: &[CheckResult], strict: bool) -> i32 {
         }
     }
     if has_auth_fail {
-        return 3;
+        return ExitClass::AuthMissing;
     }
     if has_network_fail {
-        return 4;
+        return ExitClass::Network;
     }
     if has_other_fail {
-        return 1;
+        return ExitClass::Other;
     }
     if has_warn && strict {
-        return 5;
+        return ExitClass::Degraded;
     }
-    0
+    ExitClass::Ok
 }
 
 /// Probe 1: Claude OAuth credential. Locates the source (file vs macOS
@@ -619,54 +620,67 @@ mod tests {
 
     #[test]
     fn worst_exit_code_maps_per_spec_table() {
+        use crate::exit::ExitClass;
+
         let oks = vec![
             CheckResult::ok(CheckCategory::Other, "a"),
             CheckResult::ok(CheckCategory::Auth, "b"),
         ];
-        assert_eq!(worst_exit_code(&oks, /* strict */ false), 0);
+        assert_eq!(worst_exit_code(&oks, /* strict */ false), ExitClass::Ok);
 
         let auth = vec![CheckResult::fail(CheckCategory::Auth, "x", None)];
-        assert_eq!(worst_exit_code(&auth, false), 3);
+        assert_eq!(worst_exit_code(&auth, false), ExitClass::AuthMissing);
 
         let net = vec![CheckResult::fail(CheckCategory::Network, "x", None)];
-        assert_eq!(worst_exit_code(&net, false), 4);
+        assert_eq!(worst_exit_code(&net, false), ExitClass::Network);
 
         let warn = vec![CheckResult::warn(CheckCategory::Other, "x", None)];
-        assert_eq!(worst_exit_code(&warn, false), 0);
-        assert_eq!(worst_exit_code(&warn, true), 5);
+        assert_eq!(worst_exit_code(&warn, false), ExitClass::Ok);
+        assert_eq!(worst_exit_code(&warn, true), ExitClass::Degraded);
+        // The numeric contract still holds through .code().
+        assert_eq!(worst_exit_code(&warn, true).code(), 5);
     }
 
     #[test]
     fn worst_exit_code_auth_outranks_network() {
-        // Auth (3) outranks Network (4 in number but higher priority) regardless
-        // of order in the slice.
+        use crate::exit::ExitClass;
+
+        // Auth outranks Network regardless of order in the slice.
         let auth_first = vec![
             CheckResult::fail(CheckCategory::Auth, "a", None),
             CheckResult::fail(CheckCategory::Network, "n", None),
         ];
-        assert_eq!(worst_exit_code(&auth_first, false), 3);
+        assert_eq!(worst_exit_code(&auth_first, false), ExitClass::AuthMissing);
         let net_first = vec![
             CheckResult::fail(CheckCategory::Network, "n", None),
             CheckResult::fail(CheckCategory::Auth, "a", None),
         ];
-        assert_eq!(worst_exit_code(&net_first, false), 3);
+        assert_eq!(worst_exit_code(&net_first, false), ExitClass::AuthMissing);
     }
 
     #[test]
     fn worst_exit_code_is_order_independent_for_other_then_network() {
+        use crate::exit::ExitClass;
+
         // Regression: an Other fail seen BEFORE a Network fail must still rank
-        // Network (4) above Other (1). The old Option-accumulation returned 1.
+        // Network above Other. The old Option-accumulation returned Other.
         let other_then_network = vec![
             CheckResult::fail(CheckCategory::Other, "o", None),
             CheckResult::fail(CheckCategory::Network, "n", None),
         ];
-        assert_eq!(worst_exit_code(&other_then_network, false), 4);
+        assert_eq!(
+            worst_exit_code(&other_then_network, false),
+            ExitClass::Network
+        );
         // And the reverse order agrees.
         let network_then_other = vec![
             CheckResult::fail(CheckCategory::Network, "n", None),
             CheckResult::fail(CheckCategory::Other, "o", None),
         ];
-        assert_eq!(worst_exit_code(&network_then_other, false), 4);
+        assert_eq!(
+            worst_exit_code(&network_then_other, false),
+            ExitClass::Network
+        );
     }
 
     #[test]
@@ -703,9 +717,11 @@ mod tests {
 
     #[test]
     fn other_fail_exits_one() {
+        use crate::exit::ExitClass;
+
         // An Other-category Fail (e.g., settings.json unreadable, codex parse
-        // error) must map to exit code 1, not 0 or any auth/network code.
-        // This branch in worst_exit_code was previously uncovered by tests.
+        // error) must map to `Other` (exit code 1), not Ok or any auth/network
+        // class. This branch in worst_exit_code was previously uncovered.
         let results = vec![CheckResult::fail(
             CheckCategory::Other,
             "settings.json unreadable",
@@ -713,25 +729,34 @@ mod tests {
         )];
         assert_eq!(
             worst_exit_code(&results, /* strict */ false),
-            1,
-            "Other-category Fail must map to exit code 1"
+            ExitClass::Other,
+            "Other-category Fail must map to ExitClass::Other (code 1)"
         );
+        assert_eq!(worst_exit_code(&results, false).code(), 1);
     }
 
     #[test]
     fn other_fail_outranked_by_auth_and_network() {
-        // Auth (3) > Network (4 in code, but higher priority) > Other (1).
-        // A mix of Other + Network still returns 4; Other + Auth still returns 3.
+        use crate::exit::ExitClass;
+
+        // Auth > Network > Other. A mix of Other + Network still returns
+        // Network; Other + Auth still returns AuthMissing.
         let other_plus_network = vec![
             CheckResult::fail(CheckCategory::Other, "o", None),
             CheckResult::fail(CheckCategory::Network, "n", None),
         ];
-        assert_eq!(worst_exit_code(&other_plus_network, false), 4);
+        assert_eq!(
+            worst_exit_code(&other_plus_network, false),
+            ExitClass::Network
+        );
 
         let other_plus_auth = vec![
             CheckResult::fail(CheckCategory::Other, "o", None),
             CheckResult::fail(CheckCategory::Auth, "a", None),
         ];
-        assert_eq!(worst_exit_code(&other_plus_auth, false), 3);
+        assert_eq!(
+            worst_exit_code(&other_plus_auth, false),
+            ExitClass::AuthMissing
+        );
     }
 }
