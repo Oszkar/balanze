@@ -149,11 +149,36 @@ async fn run_tui_mode() -> Result<()> {
 
     let (sink, rx) = ChannelSink::new();
     let (handle, mut coord_join) = spawn_coord(sink);
-    let _watcher_handles = Watcher::spawn(handle.clone(), &settings);
+    let watcher_handles = Watcher::spawn(handle.clone(), &settings);
 
-    // Race the TUI against ctrl-c and the coordinator task dying. `&mut
-    // coord_join` lets the TUI arm win without consuming the join handle.
-    let mut fatal: Option<&'static str> = None;
+    // Per-task watchdog mirroring `run_with_sink`: surface an unexpected watcher
+    // Err-return or panic so a dead provider task is not silently invisible
+    // behind the TUI (AGENTS.md §3.2 - long-running tasks must be supervised).
+    // Clean Ok(()) exits (a provider that is simply not configured) are NOT
+    // signalled - treating those as fatal would break `watch` for the common
+    // single-provider user.
+    let (exit_tx, mut exit_rx) = mpsc::unbounded_channel::<&'static str>();
+    for (label, h) in watcher_handles {
+        let tx = exit_tx.clone();
+        tokio::spawn(async move {
+            match h.await {
+                Ok(Ok(())) => tracing::debug!("watcher/{label}: exited Ok(())"),
+                Ok(Err(e)) => {
+                    tracing::error!("watcher/{label}: returned error: {e}");
+                    let _ = tx.send(label);
+                }
+                Err(join_err) => {
+                    tracing::error!("watcher/{label}: panicked or aborted: {join_err}");
+                    let _ = tx.send(label);
+                }
+            }
+        });
+    }
+    drop(exit_tx); // only the wrapper tasks hold senders now
+
+    // Race the TUI against ctrl-c, the coordinator dying, and a watcher dying.
+    // `&mut coord_join` lets the TUI arm win without consuming the join handle.
+    let mut fatal: Option<String> = None;
     tokio::select! {
         res = run_tui(rx, handle.clone()) => {
             res?;
@@ -168,8 +193,17 @@ async fn run_tui_mode() -> Result<()> {
             tracing::error!("coordinator task exited unexpectedly: {res:?}");
             fatal = Some(
                 "state_coordinator task exited unexpectedly. \
-                 See `BALANZE_LOG=debug` output for detail. Restart `watch` to recover.",
+                 See `BALANZE_LOG=debug` output for detail. Restart `watch` to recover."
+                    .to_string(),
             );
+        }
+        Some(label) = exit_rx.recv() => {
+            tracing::error!("watcher task '{label}' exited unexpectedly");
+            fatal = Some(format!(
+                "watcher task '{label}' exited unexpectedly. The data source it covers \
+                 is no longer live. See `BALANZE_LOG=debug` output for detail. \
+                 Restart `watch` to recover."
+            ));
         }
     }
     // The select dropped run_tui's TerminalGuard on the way out, restoring the

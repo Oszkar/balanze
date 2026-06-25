@@ -18,12 +18,12 @@ use std::io::{self, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use futures::StreamExt;
+use futures_util::StreamExt;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -124,14 +124,22 @@ impl TerminalGuard {
     pub fn enter() -> anyhow::Result<Self> {
         install_panic_hook();
         enable_raw_mode()?;
+        // Mark entered as soon as raw mode is live, BEFORE the alt-screen write:
+        // a panic during the window (e.g. on another tokio worker thread - the
+        // coordinator + watcher are already spawned) must still route through
+        // restore_terminal() and disable raw mode. The restore's
+        // LeaveAlternateScreen is a harmless no-op if the alt screen was never
+        // entered.
+        TERMINAL_ENTERED.store(true, Ordering::SeqCst);
         let mut out = io::stdout();
-        // If entering the alt screen fails, undo raw mode before bailing so we
-        // don't leave the terminal half-configured.
+        // If entering the alt screen fails, undo raw mode and clear the flag
+        // before bailing so a later Drop/hook doesn't try to leave a screen we
+        // never entered.
         if let Err(e) = execute!(out, EnterAlternateScreen) {
             let _ = disable_raw_mode();
+            TERMINAL_ENTERED.store(false, Ordering::SeqCst);
             return Err(e.into());
         }
-        TERMINAL_ENTERED.store(true, Ordering::SeqCst);
         Ok(Self { out })
     }
 
@@ -408,6 +416,14 @@ enum Action {
 }
 
 fn classify_key(key: KeyEvent) -> Action {
+    // Press-only: crossterm on Windows (a primary target) emits a Press AND a
+    // Release for every keystroke, plus Repeat while held. Acting on all of them
+    // would fire `r` (Refresh) twice per press. The Quit keys are unaffected (the
+    // loop breaks on Press, never reading the Release), but gating here keeps the
+    // mapping honest and unit-testable.
+    if key.kind != KeyEventKind::Press {
+        return Action::Ignore;
+    }
     match (key.code, key.modifiers) {
         (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => Action::Quit,
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => Action::Quit,
@@ -561,6 +577,30 @@ mod tests {
         assert_eq!(
             classify_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
             Action::Ignore
+        );
+    }
+
+    #[test]
+    fn classify_key_ignores_release_and_repeat() {
+        // Windows emits a Release (and Repeat) for every keystroke; acting on
+        // them would double-fire `r`. Only Press is honored.
+        assert_eq!(
+            classify_key(KeyEvent::new_with_kind(
+                KeyCode::Char('r'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+            Action::Ignore,
+            "a Release event must not trigger Refresh"
+        );
+        assert_eq!(
+            classify_key(KeyEvent::new_with_kind(
+                KeyCode::Char('q'),
+                KeyModifiers::NONE,
+                KeyEventKind::Repeat,
+            )),
+            Action::Ignore,
+            "a Repeat event must not trigger Quit"
         );
     }
 

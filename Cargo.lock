@@ -371,7 +371,7 @@ dependencies = [
  "crossterm",
  "csv",
  "directories",
- "futures",
+ "futures-util",
  "keychain",
  "openai_client",
  "owo-colors",
