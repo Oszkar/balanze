@@ -1,7 +1,7 @@
 //! `doctor` subcommand: run each integration probe (probes.rs), print an
 //! OK/WARN/FAIL line with an actionable hint, then a readiness summary. The
-//! worst severity maps to a process exit code per the v0.4.1 spec (§9):
-//! auth fail -> 3, network fail -> 4, degraded-under-strict -> 5, else 0/1.
+//! worst severity maps to a process exit code: auth fail -> 3, network fail ->
+//! 4, other fail -> 1, degraded-under-strict -> 5, else 0.
 //!
 //! Offline by default for everything except the OpenAI key validation, which
 //! is skipped under `--offline`. `--quiet` prints only non-OK probes.
@@ -121,7 +121,7 @@ fn run_probes(offline: bool) -> Vec<CheckResult> {
     results.push(ds.openai);
     results.push(probes::probe_statusline());
     // Reuse the keychain health learned by the OpenAI presence probe so the
-    // settings probe does not issue a second keychain read (FIX 4 invariant).
+    // settings probe does not issue a second keychain read (one-prompt-max invariant).
     results.push(probes::probe_settings_and_keychain(ds.keychain_health));
 
     if none_configured {

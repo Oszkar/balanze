@@ -4,7 +4,7 @@
 //! `clap_complete::generate`; `man` streams the man-page roff to stdout via
 //! `clap_mangen`. Both derive their structure from `Cli::command()` so the
 //! generated artifacts never drift from the parsed surface. The build.rs
-//! renders the same artifacts into OUT_DIR for v0.5 packaging.
+//! renders the same artifacts into OUT_DIR for packaging convenience.
 
 use std::io::Write;
 

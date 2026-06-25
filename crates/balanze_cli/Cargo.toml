@@ -1,6 +1,6 @@
 [package]
 name = "balanze_cli"
-description = "CLI front-end for Balanze's backend — composes anthropic_oauth + claude_parser into a single Snapshot view. Used standalone for testing and as a reference for the Tauri integration."
+description = "CLI front-end for Balanze's backend - composes anthropic_oauth + claude_parser into a single Snapshot view. Used standalone for testing and as a reference for the Tauri integration."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -65,5 +65,5 @@ clap_mangen = { workspace = true }
 tempfile = "3"  # used by statusline snapshot write tests
 # integration_4quadrant.rs calls window::summarize_window directly (composition-
 # contract test, not the CLI binary). The binary accesses window fields only
-# through state_coordinator::Snapshot public fields — no direct window:: call.
+# through state_coordinator::Snapshot public fields - no direct window:: call.
 window = { path = "../window" }

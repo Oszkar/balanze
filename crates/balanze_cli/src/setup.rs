@@ -397,3 +397,41 @@ fn print_readiness(oauth_summary: &str, openai_status: &OpenAiKeyStatus) {
     eprintln!();
     eprintln!("Run `balanze-cli` to see the live snapshot.");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // FIX E(5): summary_line() mapping - pure function, no env/keychain needed.
+    #[test]
+    fn openai_key_status_summary_line_mapping() {
+        // Each variant maps to a distinct, non-empty summary string. The
+        // ready variants carry "✓"; the failure variants carry "✗".
+        let cases: &[(OpenAiKeyStatus, &str, bool)] = &[
+            (OpenAiKeyStatus::SavedAndValidated, "✓", true),
+            (OpenAiKeyStatus::KeptExistingKey, "✓", true),
+            (OpenAiKeyStatus::EnvVarOverride, "✓", true),
+            (OpenAiKeyStatus::ValidationFailed, "✗", false),
+            (OpenAiKeyStatus::KeychainBroken, "✗", false),
+        ];
+        for (status, glyph, is_ok) in cases {
+            let line = status.summary_line();
+            assert!(
+                !line.is_empty(),
+                "{status:?} must produce a non-empty summary line"
+            );
+            assert!(
+                line.contains(glyph),
+                "{status:?} summary must contain '{glyph}': {line}"
+            );
+            let _ = is_ok; // future: assert is_ok maps to exit 0 via doctor
+        }
+        // Verify SavedAndValidated and KeptExistingKey share the same line
+        // (both represent a valid, ready key).
+        assert_eq!(
+            OpenAiKeyStatus::SavedAndValidated.summary_line(),
+            OpenAiKeyStatus::KeptExistingKey.summary_line(),
+            "SavedAndValidated and KeptExistingKey must produce the same summary line"
+        );
+    }
+}

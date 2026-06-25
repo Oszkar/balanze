@@ -1,18 +1,18 @@
 //! Build-time artifact generation: shell completions + man page into OUT_DIR
-//! for v0.5 packaging (installers wire these into the system completion/man
-//! dirs). This is a CONVENIENCE copy. The authoritative, drift-free artifacts
-//! at runtime are produced by the `completions` and `man` subcommands, which
+//! for packaging (installers wire these into the system completion/man dirs).
+//! This is a CONVENIENCE copy. The authoritative, drift-free artifacts at
+//! runtime are produced by the `completions` and `man` subcommands, which
 //! render from the real `Cli::command()`.
 //!
-//! Guarantees (AGENTS 3.1 / spec 4): pure-Rust, no network, no system libs.
+//! Guarantees (AGENTS.md §3.1): pure-Rust, no network, no system libs.
 //! Any artifact-write failure degrades to a `cargo:warning` and NEVER fails
 //! the CLI build - the CLI must build on Linux with only a Rust toolchain.
 //!
 //! A build.rs cannot import the crate it is compiling, so the command is
 //! reconstructed here from a minimal mirror. Drift is acceptable: only the
 //! runtime handlers are tested/authoritative; these OUT_DIR copies are for
-//! packaging convenience and a future packaging PR may switch to include!-ing
-//! a shared cli module.
+//! packaging convenience and a future change may switch to include!-ing a
+//! shared cli module.
 
 use std::io::Write;
 use std::path::PathBuf;

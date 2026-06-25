@@ -1,17 +1,23 @@
 //! Balanze CLI - composes the backend crates into a single status view.
 //!
-//! Subcommands:
-//!   balanze-cli                      Print pretty status (default)
-//!   balanze-cli status [--json]       Same as above; --json is machine-readable
-//!   balanze-cli setup                 Interactive wizard: check Anthropic OAuth + Codex + OpenAI key
-//!   balanze-cli set-openai-key        Masked-TTY prompt for sk-... (also accepts piped stdin); stores in OS keychain
-//!   balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
-//!   balanze-cli settings              Print current settings.json contents
-//!   balanze-cli --help                clap-generated help for every subcommand
+//! Subcommands (see `balanze-cli --help` for full flag details):
+//!   balanze-cli                      4-quadrant compact status (default, same as `status`)
+//!   balanze-cli status               Compact status; --json for machine-readable, --sections for detail
+//!   balanze-cli watch                Live view: streaming compact view (--json for JSONL stream)
+//!   balanze-cli doctor               Diagnose each integration; exit codes: auth=3, net=4, other=1, strict-warn=5
+//!   balanze-cli export               Export usage history as CSV (not yet implemented)
+//!   balanze-cli completions <shell>  Print a shell completion script to stdout
+//!   balanze-cli man                  Print the man page (roff) to stdout [hidden]
+//!   balanze-cli setup                Interactive auth wizard
+//!   balanze-cli set-openai-key       Masked-TTY prompt; stores sk-admin-... in OS keychain
+//!   balanze-cli clear-openai-key     Remove the OpenAI key from the keychain
+//!   balanze-cli settings             Print current settings.json contents
+//!   balanze-cli statusline           Claude Code statusLine command (reads stdin) - FROZEN contract
 //!
-//! When the Tauri front-end lands, the same composition logic will live
-//! behind the `get_snapshot` IPC command in `src-tauri`. This CLI is the
-//! reference implementation and a useful dev tool in its own right.
+//! Global flags: --verbose / -v, --quiet, --no-color, --strict
+//!
+//! The same composition logic lives behind the `get_snapshot` IPC command in
+//! `src-tauri`. This CLI is the reference implementation and a useful dev tool.
 //!
 //! This file is the entry point + command dispatch only. The clap surface
 //! lives in `cli`; the work lives in the sibling modules: `sources` (build
