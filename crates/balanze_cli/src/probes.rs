@@ -152,14 +152,14 @@ fn openai_probe_from_keyprobe(probe: KeyProbe) -> CheckResult {
     }
 }
 
-/// Fold a probe set to a process exit code per spec §9. A Fail wins (auth -> 3,
-/// network -> 4, other -> 1); auth is preferred over network when both fail
-/// (the more actionable blocker). No Fail: Warn maps to 5 only under --strict
+/// Fold a probe set to a process exit code. A Fail wins (auth -> 3, network ->
+/// 4, other -> 1); auth is preferred over network when both fail (the more
+/// actionable blocker). No Fail: Warn maps to 5 only under --strict
 /// (degraded), else 0.
 ///
-// TODO: when PR5's `exit.rs` lands, swap this body to return `exit::ExitClass`
-// and let the caller call `.code()`. This module keeps the raw i32 mapping so
-// doctor is mergeable before PR5; the numeric values are identical.
+// TODO: return a shared exit-code type once one exists; raw i32 keeps this
+// module self-contained for now. The numeric values are: auth=3, network=4,
+// other=1, strict-degraded=5, clean=0.
 pub fn worst_exit_code(results: &[CheckResult], strict: bool) -> i32 {
     // Track each failing category independently so the result is ORDER-
     // INDEPENDENT: an Other fail seen before a Network fail must still rank the
@@ -672,7 +672,7 @@ mod tests {
     #[test]
     fn resolve_keychain_health_reuses_prior_signal_without_a_read() {
         // A prior Healthy/Broken signal from the presence probe is returned
-        // verbatim - no second keychain::get (the FIX 4 dedup invariant). Only
+        // verbatim - no second keychain::get (the one-prompt-max invariant). Only
         // the NotProbed case (env-var short-circuit) reads, which we do not
         // exercise here to keep the test environment-free.
         assert_eq!(
@@ -695,5 +695,43 @@ mod tests {
             "reason must surface: {}",
             r.message
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // FIX E(4): Other-category Fail -> exit code 1 (previously untested)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn other_fail_exits_one() {
+        // An Other-category Fail (e.g., settings.json unreadable, codex parse
+        // error) must map to exit code 1, not 0 or any auth/network code.
+        // This branch in worst_exit_code was previously uncovered by tests.
+        let results = vec![CheckResult::fail(
+            CheckCategory::Other,
+            "settings.json unreadable",
+            None,
+        )];
+        assert_eq!(
+            worst_exit_code(&results, /* strict */ false),
+            1,
+            "Other-category Fail must map to exit code 1"
+        );
+    }
+
+    #[test]
+    fn other_fail_outranked_by_auth_and_network() {
+        // Auth (3) > Network (4 in code, but higher priority) > Other (1).
+        // A mix of Other + Network still returns 4; Other + Auth still returns 3.
+        let other_plus_network = vec![
+            CheckResult::fail(CheckCategory::Other, "o", None),
+            CheckResult::fail(CheckCategory::Network, "n", None),
+        ];
+        assert_eq!(worst_exit_code(&other_plus_network, false), 4);
+
+        let other_plus_auth = vec![
+            CheckResult::fail(CheckCategory::Other, "o", None),
+            CheckResult::fail(CheckCategory::Auth, "a", None),
+        ];
+        assert_eq!(worst_exit_code(&other_plus_auth, false), 3);
     }
 }

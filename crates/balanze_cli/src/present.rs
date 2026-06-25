@@ -3,9 +3,11 @@
 //! own `ColorBucket` lives in `src-tauri/src/tauri_sink.rs` and is `pub(crate)`
 //! to that binary, so it cannot be imported here (the CLI does not depend on
 //! the `src-tauri` package). The thresholds (50 / 90 percent, inclusive `>=`)
-//! are replicated below and pinned to the documented tray values by
-//! `bucket_for_fraction_matches_tray_thresholds`. Keep the two in lockstep:
-//! if `tauri_sink.rs` QUOTA_WARN_PCT / QUOTA_BAD_PCT change, update here too.
+//! are replicated below and manually kept in lockstep with
+//! `src-tauri/src/tauri_sink.rs` (QUOTA_WARN_PCT = 50, QUOTA_BAD_PCT = 90).
+//! The test below pins only the CLI's own constants; it does NOT enforce
+//! cross-crate parity automatically - if the tray thresholds change, update
+//! the constants here too.
 //!
 //! Consumed by the colored one-shot `status` renderer (and, later, the `watch`
 //! TUI) so the matrix coloring logic is not forked.
@@ -58,9 +60,12 @@ mod tests {
 
     #[test]
     fn bucket_for_fraction_matches_tray_thresholds() {
-        // Boundaries mirror src-tauri/src/tauri_sink.rs ColorBucket::from_util
-        // (QUOTA_WARN_PCT = 50.0, QUOTA_BAD_PCT = 90.0, inclusive `>=`),
-        // expressed here as fractions. Any drift from the tray must fail.
+        // Pins the CLI's own constants (WARN_FRACTION = 0.50, CRITICAL_FRACTION
+        // = 0.90, inclusive `>=`) against hardcoded expected values.
+        // These are manually kept in sync with src-tauri/src/tauri_sink.rs
+        // (QUOTA_WARN_PCT = 50.0, QUOTA_BAD_PCT = 90.0). This test does NOT
+        // cross-crate-import the tray constants; if the tray thresholds change,
+        // update WARN_FRACTION / CRITICAL_FRACTION above AND this test.
         // The tray's intermediate 75% Orange band (QUOTA_ORANGE_PCT) is
         // intentionally folded into `Warn` here - the CLI uses a 3-way bucket,
         // so 50 / 90 are the only parity points, not an oversight.
