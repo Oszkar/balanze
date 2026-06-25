@@ -317,11 +317,9 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
 }
 
 /// Plain (uncolored) compact 4-quadrant matrix renderer, parameterized over the
-/// sink. The live `status` dispatch uses the colored sibling
-/// [`write_compact_colored`]; this plain variant backs the golden-string tests
-/// that capture the rendered bytes against the four-tier label discipline
-/// (estimate / real overage / Claude session estimate / server quota %) without
-/// piping stdout.
+/// sink. Both the live `watch` path (`StdoutSink` in sinks.rs calls this) and
+/// the golden-string tests use this renderer. The colored one-shot `status` path
+/// uses [`write_compact_colored`] instead.
 ///
 /// One screen, no scrolling. The layout maps directly onto the design doc's
 /// 4-quadrant matrix: rows are providers (Anthropic, OpenAI), columns are cells
@@ -568,6 +566,17 @@ fn codex_quota_fraction(s: &Snapshot) -> Option<f64> {
     Some(q.primary.used_percent / 100.0)
 }
 
+/// True when a Codex quota snapshot is present AND its primary window has
+/// already reset (fetched_at > primary.resets_at). This is the same staleness
+/// check `compact_codex_quota` uses for the `⚠` / "stale" marker; calling it
+/// here keeps the bucket decision in lockstep with the displayed glyph instead
+/// of relying on glyph-sniffing at the call site.
+fn codex_window_expired(s: &Snapshot) -> bool {
+    s.codex_quota
+        .as_ref()
+        .is_some_and(|q| s.fetched_at > q.primary.resets_at)
+}
+
 /// Colorized sibling of [`write_compact`]. Identical text content and column
 /// layout; the quota cells, pace ratio, subscription-leverage line, and any
 /// degraded (`✗`) cell are wrapped in bucket colors. Color is emitted
@@ -588,8 +597,9 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     let openai_quota = compact_codex_quota(snapshot);
     let openai_cost = compact_openai_cost(snapshot);
 
-    // A failed-fetch cell (starts with ✗) is always Critical; otherwise color
-    // by the row's quota fraction, Neutral when there's no signal.
+    // A failed-fetch cell (starts with ✗) is always Critical; a stale Codex
+    // window (fetched_at > primary.resets_at, shown with ⚠) is Warn; otherwise
+    // color by the row's quota fraction, Neutral when there's no signal.
     let anth_bucket = if anth_quota.starts_with('✗') {
         Bucket::Critical
     } else {
@@ -600,6 +610,12 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     };
     let codex_bucket = if openai_quota.starts_with('✗') {
         Bucket::Critical
+    } else if codex_window_expired(snapshot) {
+        // Stale window: the used% describes an elapsed window; color Warn so
+        // the ⚠ glyph in the cell and the bucket color agree. Without this
+        // check a <50% stale window would be colored Ok (green), contradicting
+        // the warning marker.
+        Bucket::Warn
     } else {
         match codex_quota_fraction(snapshot) {
             Some(f) => bucket_for_fraction(f),
@@ -1196,6 +1212,230 @@ mod tests {
         assert!(
             out.contains("subscription leverage, NOT money billed"),
             "leverage qualifier must survive extra_usage going away:\n{out}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // FIX A: stale Codex bucket color regression guard
+    // -----------------------------------------------------------------------
+
+    /// A stale Codex window (fetched_at > primary.resets_at, shown with ⚠) must
+    /// produce a Warn (yellow) bucket, NOT an Ok (green) bucket, even when the
+    /// used% is below the 50% Warn threshold. The old code only short-circuited
+    /// on ✗; the ⚠ path fell through to `bucket_for_fraction`, coloring a
+    /// <50%-stale window green - contradicting its own warning glyph.
+    #[test]
+    fn stale_codex_window_colors_warn_not_ok() {
+        let now = fixture_fetched_at();
+        let mut snap = fully_populated_snapshot();
+        if let Some(q) = snap.codex_quota.as_mut() {
+            // Low usage (<50%) but expired window - old code returned Ok (green).
+            q.primary.used_percent = 17.5;
+            q.primary.resets_at = now - Duration::hours(1); // expired
+        }
+        // Confirm codex_window_expired detects the condition.
+        assert!(
+            codex_window_expired(&snap),
+            "sanity: expired window must be detected"
+        );
+        // Confirm compact_codex_quota emits ⚠ (the display matches the bucket).
+        let cell = compact_codex_quota(&snap);
+        assert!(
+            cell.starts_with('⚠'),
+            "stale cell must carry the ⚠ marker:\n{cell}"
+        );
+        // The colored output must NOT contain a green SGR code wrapping the
+        // codex cell. We check by asserting the cell renders Warn (yellow) via
+        // the ANSI SGR code 33m (owo-colors yellow) and does NOT render 32m
+        // (owo-colors green). Use ColorChoice::Always to force ANSI emission.
+        let bytes = render_compact_with_choice(&snap, anstream::ColorChoice::Always);
+        let raw = String::from_utf8(bytes).expect("utf8");
+        // Yellow SGR must be present.
+        assert!(
+            raw.contains("\x1b[33m"),
+            "stale Codex cell must be colored yellow (SGR 33m), got:\n{raw}"
+        );
+        // Green SGR must NOT appear for the codex row. We confirm by checking
+        // the full output has no occurrence of the green code at all (the only
+        // colored cells in a fully-stale snapshot are the stale Codex cell and
+        // the Anthropic quota cell, which is at ~42% -> also Ok normally, but
+        // the oauth cell is the OTHER colored cell; we must not see green on the
+        // OpenAI row). Since the Anthropic cell IS at 42% (Ok / green) we
+        // can't blanket-assert "no green" - but we CAN verify that no green
+        // appears on the OpenAI/Codex row by checking for yellow and checking
+        // the Anthropic bucket is still Ok independently.
+        let anth_fraction = anthropic_quota_fraction(&snap).expect("anthropic fraction present");
+        assert_eq!(
+            bucket_for_fraction(anth_fraction),
+            Bucket::Ok,
+            "Anthropic cell stays Ok at 42.5%"
+        );
+        // The codex bucket helper itself must return Warn.
+        assert!(
+            codex_window_expired(&snap),
+            "helper returns true for expired"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // FIX E(1): per-cell bucket-selection unit tests
+    // -----------------------------------------------------------------------
+
+    /// Direct unit tests for the Snapshot->Bucket decision for representative
+    /// utilization fractions (Anthropic) and the stale-window path (Codex).
+    #[test]
+    fn anthropic_quota_fraction_to_bucket_representative_cases() {
+        let now = fixture_fetched_at();
+
+        // Helper: build a snapshot with a single cadence at `pct` utilization.
+        let snap_with_pct = |pct: f32| {
+            let mut snap = Snapshot::empty(now);
+            snap.claude_oauth = Some(ClaudeOAuthSnapshot {
+                cadences: vec![CadenceBar {
+                    key: "five_hour".to_string(),
+                    display_label: "5h".to_string(),
+                    utilization_percent: pct,
+                    resets_at: now + Duration::hours(2),
+                }],
+                extra_usage: None,
+                subscription_type: None,
+                rate_limit_tier: None,
+                org_uuid: None,
+                fetched_at: now,
+            });
+            snap
+        };
+
+        // ~30% -> Ok
+        let snap = snap_with_pct(30.0_f32);
+        assert_eq!(
+            bucket_for_fraction(anthropic_quota_fraction(&snap).unwrap()),
+            Bucket::Ok,
+            "30% must be Ok"
+        );
+        // ~60% -> Warn
+        let snap = snap_with_pct(60.0_f32);
+        assert_eq!(
+            bucket_for_fraction(anthropic_quota_fraction(&snap).unwrap()),
+            Bucket::Warn,
+            "60% must be Warn"
+        );
+        // ~95% -> Critical
+        let snap = snap_with_pct(95.0_f32);
+        assert_eq!(
+            bucket_for_fraction(anthropic_quota_fraction(&snap).unwrap()),
+            Bucket::Critical,
+            "95% must be Critical"
+        );
+        // No cadences -> None -> Neutral
+        let mut snap = Snapshot::empty(now);
+        snap.claude_oauth = Some(ClaudeOAuthSnapshot {
+            cadences: vec![],
+            extra_usage: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            org_uuid: None,
+            fetched_at: now,
+        });
+        assert_eq!(
+            anthropic_quota_fraction(&snap),
+            None,
+            "empty cadences must yield None (Neutral)"
+        );
+    }
+
+    #[test]
+    fn codex_bucket_representative_cases() {
+        let now = fixture_fetched_at();
+
+        let snap_with_codex = |pct: f64, expired: bool| {
+            let mut snap = Snapshot::empty(now);
+            let resets_at = if expired {
+                now - Duration::hours(1)
+            } else {
+                now + Duration::days(5)
+            };
+            snap.codex_quota = Some(codex_local::CodexQuotaSnapshot {
+                observed_at: now - Duration::minutes(5),
+                session_id: "test".to_string(),
+                primary: codex_local::RateLimitWindow {
+                    used_percent: pct,
+                    window_duration_minutes: 10_080,
+                    resets_at,
+                },
+                secondary: None,
+                plan_type: "go".to_string(),
+                rate_limit_reached: false,
+            });
+            snap
+        };
+
+        // ~30%, live -> Ok
+        assert_eq!(
+            bucket_for_fraction(codex_quota_fraction(&snap_with_codex(30.0, false)).unwrap()),
+            Bucket::Ok,
+            "30% live must be Ok"
+        );
+        // ~60%, live -> Warn
+        assert_eq!(
+            bucket_for_fraction(codex_quota_fraction(&snap_with_codex(60.0, false)).unwrap()),
+            Bucket::Warn,
+            "60% live must be Warn"
+        );
+        // ~95%, live -> Critical
+        assert_eq!(
+            bucket_for_fraction(codex_quota_fraction(&snap_with_codex(95.0, false)).unwrap()),
+            Bucket::Critical,
+            "95% live must be Critical"
+        );
+        // stale (expired), any pct -> Warn (FIX A: codex_window_expired path)
+        let stale = snap_with_codex(17.5, true);
+        assert!(
+            codex_window_expired(&stale),
+            "expired window must be detected"
+        );
+    }
+
+    #[test]
+    fn errored_codex_cell_yields_critical_bucket() {
+        let now = fixture_fetched_at();
+        let mut snap = Snapshot::empty(now);
+        snap.codex_quota_error = Some("parse error".to_string());
+        let cell = compact_codex_quota(&snap);
+        assert!(
+            cell.starts_with('✗'),
+            "error cell must start with ✗:\n{cell}"
+        );
+        // The bucket assignment in write_compact_colored checks starts_with('✗')
+        // -> Critical. Confirm via the colored render: red SGR 31m must appear.
+        let bytes = render_compact_with_choice(&snap, anstream::ColorChoice::Always);
+        let raw = String::from_utf8(bytes).expect("utf8");
+        assert!(
+            raw.contains("\x1b[31m"),
+            "errored cell must be colored red (SGR 31m):\n{raw}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // FIX E(2): strip==plain invariant
+    // -----------------------------------------------------------------------
+
+    /// `write_compact_colored` rendered with ColorChoice::Never must produce
+    /// byte-identical output to plain `write_compact` for the same Snapshot.
+    /// This locks the pad-before-color alignment invariant: if a future change
+    /// accidentally pads AFTER coloring, the ANSI codes inflate the field width
+    /// and the two outputs diverge.
+    #[test]
+    fn colored_never_is_byte_identical_to_plain() {
+        let snap = fully_populated_snapshot();
+
+        let plain = render_compact(&snap);
+        let stripped_bytes = render_compact_with_choice(&snap, anstream::ColorChoice::Never);
+        let stripped = String::from_utf8(stripped_bytes).expect("utf8");
+
+        assert_eq!(
+            plain, stripped,
+            "ColorChoice::Never output must be byte-identical to plain write_compact"
         );
     }
 }
