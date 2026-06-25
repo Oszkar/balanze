@@ -42,6 +42,9 @@ const OPENAI_PROVENANCE: &str = "openai_admin_costs";
 
 /// One emitted Claude `(day, model)` row. `leverage_micro_usd` is the
 /// list-price estimate; it is NEVER added to any OpenAI billed figure.
+/// `None` means the model is absent from the bundled price table (price
+/// UNKNOWN, not zero) - the CSV leaves that cell empty so "unpriced" is never
+/// read as "free".
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ClaudeRow {
     day: String, // YYYY-MM-DD (UTC)
@@ -51,7 +54,7 @@ struct ClaudeRow {
     tokens_output: u64,
     tokens_cache_creation: u64,
     tokens_cache_read: u64,
-    leverage_micro_usd: i64,
+    leverage_micro_usd: Option<i64>,
 }
 
 /// One emitted OpenAI billed row (current-month, per line item).
@@ -110,16 +113,29 @@ fn claude_rows(events: &[UsageEvent], prices: &PriceTable) -> Vec<ClaudeRow> {
             tokens_cache_read = tokens_cache_read.saturating_add(ev.cache_read_input_tokens);
         }
 
-        // Leverage via the shared pure cost fn. All events in the group share
-        // one model, so per_model is either empty (unknown model -> 0 leverage,
-        // tokens still emitted) or a single row.
+        // Skip buckets with no usage at all (e.g. Claude Code's `<synthetic>`
+        // placeholder turns carry zero tokens): a usage export has nothing to
+        // say about a zero-usage row, and emitting it is pure noise.
+        if tokens_input == 0
+            && tokens_output == 0
+            && tokens_cache_creation == 0
+            && tokens_cache_read == 0
+        {
+            continue;
+        }
+
+        // Leverage via the shared pure cost fn. All events in the group share one
+        // model, so per_model is either empty (model not in the price table) or a
+        // single row. `None` means price UNKNOWN (the CSV leaves the cell empty),
+        // distinct from a priced model that genuinely cost 0 - so "unpriced" is
+        // never rendered as "0.000000" / free. Mirrors the status surface, which
+        // segregates unpriced models into a "Skipped models" section.
         let cost: Cost = compute_cost(&group, prices);
         let leverage_micro_usd = cost
             .per_model
             .iter()
             .find(|m| m.model == model)
-            .map(|m| m.total_micro_usd)
-            .unwrap_or(0);
+            .map(|m| m.total_micro_usd);
 
         rows.push(ClaudeRow {
             day,
@@ -176,12 +192,18 @@ fn micro_to_usd_csv(micro: i64) -> String {
 /// `leverage_list_price_usd` (Claude estimate) and `billed_usd` (OpenAI real)
 /// are SEPARATE columns; a Claude row leaves `billed_usd` empty and vice
 /// versa, so the two are never co-located, let alone summed.
+///
+/// The time columns are `period_start` / `period_end` (NOT a column named
+/// `day`, which would mislead for the month-window OpenAI rows): a Claude row
+/// covers a single UTC day, so both equal that day; an OpenAI row covers the
+/// current-month window. An empty `leverage_list_price_usd` cell means the model
+/// is unpriced (price unknown), distinct from a priced `0.000000`.
 fn write_csv<W: Write>(w: &mut W, claude: &[ClaudeRow], openai: &[OpenAiRow]) -> Result<()> {
     let mut wtr = csv::Writer::from_writer(w);
     wtr.write_record([
         "section",
         "provenance",
-        "day",
+        "period_start",
         "period_end",
         "model_or_line_item",
         "event_count",
@@ -195,18 +217,25 @@ fn write_csv<W: Write>(w: &mut W, claude: &[ClaudeRow], openai: &[OpenAiRow]) ->
     .context("write csv header")?;
 
     for r in claude {
+        // Unpriced model -> empty cell (price unknown), never a misleading
+        // "0.000000". A priced model that genuinely cost 0 still prints
+        // "0.000000".
+        let leverage = r
+            .leverage_micro_usd
+            .map(micro_to_usd_csv)
+            .unwrap_or_default();
         wtr.write_record([
             "claude",
             CLAUDE_PROVENANCE,
             r.day.as_str(),
-            "", // period_end: claude rows are single-day
+            r.day.as_str(), // period_end == period_start: claude rows are single-day
             r.model.as_str(),
             r.event_count.to_string().as_str(),
             r.tokens_input.to_string().as_str(),
             r.tokens_output.to_string().as_str(),
             r.tokens_cache_creation.to_string().as_str(),
             r.tokens_cache_read.to_string().as_str(),
-            micro_to_usd_csv(r.leverage_micro_usd).as_str(),
+            leverage.as_str(),
             "", // billed_usd: never set on a Claude (leverage) row
         ])
         .context("write claude csv row")?;
@@ -265,10 +294,32 @@ pub(crate) fn cmd_export(args: &ExportArgs) -> Result<()> {
         None => {
             let stdout = std::io::stdout();
             let mut lock = stdout.lock();
-            write_csv(&mut lock, &claude, &openai)?;
+            // A reader closing our piped stdout early (e.g. `export | head`) is
+            // normal, not an error: swallow BrokenPipe as quiet success, matching
+            // render.rs / sinks.rs / completions.rs. The `-o file` branch has no
+            // pipe, so its write errors still propagate.
+            match write_csv(&mut lock, &claude, &openai) {
+                Ok(()) => {}
+                Err(e) if is_broken_pipe(&e) => {}
+                Err(e) => return Err(e),
+            }
         }
     }
     Ok(())
+}
+
+/// True if `err` (or any layer of its context chain) is an I/O BrokenPipe - the
+/// reader of our piped stdout closed early (e.g. `export | head`). The csv
+/// writer wraps the io error in `csv::ErrorKind::Io`, so check that first, then
+/// any bare io error. Mirrors the crate-wide "BrokenPipe is quiet success"
+/// convention (render.rs / sinks.rs / completions.rs).
+fn is_broken_pipe(err: &anyhow::Error) -> bool {
+    match err.downcast_ref::<csv::Error>().map(csv::Error::kind) {
+        Some(csv::ErrorKind::Io(io)) => io.kind() == std::io::ErrorKind::BrokenPipe,
+        _ => err
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe),
+    }
 }
 
 /// Run the existing live OpenAI fetch on a local runtime. Mirrors how
@@ -355,15 +406,20 @@ mod tests {
             .find(|r| r.model == "claude-sonnet-4-6")
             .expect("sonnet row present");
         assert_eq!(sonnet.event_count, 2);
-        // Leverage is a positive list-price estimate, never zero for priced
-        // sonnet events, and is the claude_cost figure - not a billed number.
-        assert!(sonnet.leverage_micro_usd > 0);
+        // Pin the EXACT list-price leverage (the claude_cost figure, not a billed
+        // number) so a silent cost-math drift - dropped cache pricing, halved
+        // rates, wrong price column - fails loudly. Derived from the committed
+        // price table; a deliberate price bump updates this value intentionally.
+        // sonnet: in 3000@3e-6 + out 300@1.5e-5 + cc 100@3.75e-6 + cr 50@3e-7.
+        assert_eq!(sonnet.leverage_micro_usd, Some(13_890));
 
         let haiku = rows
             .iter()
             .find(|r| r.model == "claude-haiku-4-5")
             .expect("haiku row present");
         assert_eq!(haiku.event_count, 1);
+        // haiku: in 5000@1e-6 + out 300@5e-6 = 6_500 micro-USD.
+        assert_eq!(haiku.leverage_micro_usd, Some(6_500));
 
         // Rows are deterministically ordered (day asc, then model asc).
         assert_eq!(rows[0].model, "claude-haiku-4-5");
@@ -429,16 +485,166 @@ mod tests {
             "export must not emit a column that sums leverage + billed:\n{out}"
         );
 
-        // Golden Claude rows: stable section+provenance+day+model content. The
-        // empty field between `day` and the model is the unused `period_end`
-        // column (claude rows are single-day), hence the doubled comma.
+        // Golden Claude rows: the FULL section+provenance+period+model+tokens+
+        // leverage prefix, locking column order, the single-day period
+        // (start==end), the token sums, and the exact list-price leverage cell.
         assert!(
-            out.contains("claude,jsonl_list_price,2026-05-15,,claude-haiku-4-5,"),
+            out.contains(
+                "claude,jsonl_list_price,2026-05-15,2026-05-15,claude-haiku-4-5,1,5000,300,0,0,0.006500,"
+            ),
             "haiku row:\n{out}"
         );
         assert!(
-            out.contains("claude,jsonl_list_price,2026-05-15,,claude-sonnet-4-6,"),
+            out.contains(
+                "claude,jsonl_list_price,2026-05-15,2026-05-15,claude-sonnet-4-6,2,3000,300,100,50,0.013890,"
+            ),
             "sonnet row:\n{out}"
+        );
+    }
+
+    /// Build a `UsageEvent` with only the fields `claude_rows` reads; the rest
+    /// take inert defaults (no dedup key, subscription/Jsonl provenance).
+    fn ev(model: &str, ts: &str, input: u64, output: u64, cc: u64, cr: u64) -> UsageEvent {
+        UsageEvent {
+            ts: DateTime::parse_from_rfc3339(ts)
+                .expect("ts parses")
+                .with_timezone(&Utc),
+            provider: claude_parser::Provider::Claude,
+            account_type: claude_parser::AccountType::Subscription,
+            model: model.to_string(),
+            input_tokens: input,
+            output_tokens: output,
+            cache_creation_input_tokens: cc,
+            cache_read_input_tokens: cr,
+            cost_micro_usd: None,
+            source: claude_parser::DataSource::Jsonl,
+            message_id: None,
+            request_id: None,
+        }
+    }
+
+    #[test]
+    fn claude_rows_split_same_model_across_days() {
+        // The (day, model) key must separate the SAME model on DIFFERENT days and
+        // order (day asc, model asc). The committed fixture is single-day, so this
+        // hand-built case is what actually exercises the day component of the key.
+        let prices = load_bundled_prices().expect("bundled prices");
+        let events = vec![
+            ev("claude-sonnet-4-6", "2026-05-16T09:00:00Z", 2000, 0, 0, 0),
+            ev("claude-sonnet-4-6", "2026-05-15T09:00:00Z", 1000, 0, 0, 0),
+            ev("claude-haiku-4-5", "2026-05-15T10:00:00Z", 5000, 0, 0, 0),
+        ];
+        let rows = claude_rows(&events, &prices);
+        assert_eq!(
+            rows.len(),
+            3,
+            "same model on two days -> two rows: {rows:?}"
+        );
+        assert_eq!(
+            (rows[0].day.as_str(), rows[0].model.as_str()),
+            ("2026-05-15", "claude-haiku-4-5")
+        );
+        assert_eq!(
+            (rows[1].day.as_str(), rows[1].model.as_str()),
+            ("2026-05-15", "claude-sonnet-4-6")
+        );
+        assert_eq!(
+            (rows[2].day.as_str(), rows[2].model.as_str()),
+            ("2026-05-16", "claude-sonnet-4-6")
+        );
+        // The two sonnet rows keep independent per-day token sums.
+        assert_eq!(rows[1].tokens_input, 1000);
+        assert_eq!(rows[2].tokens_input, 2000);
+    }
+
+    #[test]
+    fn claude_rows_skip_empty_model_and_zero_usage_events() {
+        // Empty-model events (no usable label) and zero-usage placeholder turns
+        // (e.g. `<synthetic>`, 0 tokens) must NOT produce rows; only the real
+        // sonnet event survives.
+        let prices = load_bundled_prices().expect("bundled prices");
+        let events = vec![
+            ev("", "2026-05-15T09:00:00Z", 500, 10, 0, 0), // empty model -> skipped
+            ev("<synthetic>", "2026-05-15T09:01:00Z", 0, 0, 0, 0), // zero usage -> skipped
+            ev("claude-sonnet-4-6", "2026-05-15T09:02:00Z", 1000, 0, 0, 0),
+        ];
+        let rows = claude_rows(&events, &prices);
+        assert_eq!(
+            rows.len(),
+            1,
+            "only the real sonnet event yields a row: {rows:?}"
+        );
+        assert_eq!(rows[0].model, "claude-sonnet-4-6");
+        assert!(
+            rows.iter()
+                .all(|r| !r.model.is_empty() && r.model != "<synthetic>"),
+            "no empty-model or synthetic row may be emitted: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn claude_rows_unpriced_model_has_empty_leverage_not_zero() {
+        // A model absent from the bundled price table is price-UNKNOWN: leverage
+        // is None (-> empty CSV cell), never Some(0), so "unpriced" is never read
+        // as "free". Tokens are still reported.
+        let prices = load_bundled_prices().expect("bundled prices");
+        let events = vec![ev(
+            "claude-from-the-future-99",
+            "2026-05-15T09:00:00Z",
+            1234,
+            56,
+            0,
+            0,
+        )];
+        let rows = claude_rows(&events, &prices);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].leverage_micro_usd, None,
+            "unpriced model must be None, not Some(0)"
+        );
+        assert_eq!(rows[0].tokens_input, 1234);
+
+        // In the CSV the leverage cell is empty while tokens are present.
+        let mut buf: Vec<u8> = Vec::new();
+        write_csv(&mut buf, &rows, &[]).expect("write_csv ok");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert!(
+            out.contains(
+                "claude,jsonl_list_price,2026-05-15,2026-05-15,claude-from-the-future-99,1,1234,56,0,0,,"
+            ),
+            "unpriced row must have an empty leverage cell:\n{out}"
+        );
+    }
+
+    #[test]
+    fn write_csv_broken_pipe_is_classified_for_quiet_stdout_success() {
+        // A reader closing piped stdout surfaces as a write error; is_broken_pipe
+        // must classify it so cmd_export's stdout branch exits 0 (matches
+        // render.rs / sinks.rs). A non-pipe error must NOT be misclassified.
+        struct BrokenPipeWriter;
+        impl std::io::Write for BrokenPipeWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "broken pipe",
+                ))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "broken pipe",
+                ))
+            }
+        }
+        let mut w = BrokenPipeWriter;
+        let err = write_csv(&mut w, &[], &[]).expect_err("broken pipe must surface as Err");
+        assert!(
+            is_broken_pipe(&err),
+            "BrokenPipe must be recognized for quiet stdout success: {err:#}"
+        );
+        assert!(
+            !is_broken_pipe(&anyhow::anyhow!("disk full")),
+            "a non-pipe error must not be misclassified as BrokenPipe"
         );
     }
 
