@@ -194,4 +194,78 @@ mod tests {
             .expect_err("--version should short-circuit parsing");
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
     }
+
+    // -----------------------------------------------------------------------
+    // FIX E(3): global flags + subcommand-specific arg parse tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn global_strict_flag_parses() {
+        let cli = Cli::parse_from(["balanze-cli", "--strict", "doctor"]);
+        assert!(cli.strict, "--strict must set Cli.strict");
+        // Verify it also works positioned after the subcommand.
+        let cli2 = Cli::parse_from(["balanze-cli", "doctor", "--strict"]);
+        assert!(cli2.strict, "--strict after subcommand must set Cli.strict");
+    }
+
+    #[test]
+    fn global_quiet_flag_parses() {
+        let cli = Cli::parse_from(["balanze-cli", "--quiet", "doctor"]);
+        assert!(cli.quiet, "--quiet must set Cli.quiet");
+        let cli2 = Cli::parse_from(["balanze-cli", "doctor", "--quiet"]);
+        assert!(cli2.quiet, "--quiet after subcommand must set Cli.quiet");
+    }
+
+    #[test]
+    fn global_no_color_flag_parses() {
+        let cli = Cli::parse_from(["balanze-cli", "--no-color"]);
+        assert!(cli.no_color, "--no-color must set Cli.no_color");
+        let cli2 = Cli::parse_from(["balanze-cli", "status", "--no-color"]);
+        assert!(
+            cli2.no_color,
+            "--no-color after subcommand must set Cli.no_color"
+        );
+    }
+
+    #[test]
+    fn doctor_offline_flag_parses() {
+        let cli = Cli::parse_from(["balanze-cli", "doctor", "--offline"]);
+        match cli.command {
+            Some(Commands::Doctor(args)) => {
+                assert!(args.offline, "--offline must set DoctorArgs.offline");
+            }
+            other => panic!("expected Doctor, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn completions_zsh_parses_shell_arg() {
+        let cli = Cli::parse_from(["balanze-cli", "completions", "zsh"]);
+        match cli.command {
+            Some(Commands::Completions(args)) => {
+                assert_eq!(
+                    args.shell,
+                    clap_complete::Shell::Zsh,
+                    "completions zsh must set shell to Zsh"
+                );
+            }
+            other => panic!("expected Completions, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn export_output_flag_parses() {
+        use std::path::PathBuf;
+        let cli = Cli::parse_from(["balanze-cli", "export", "-o", "/tmp/out.csv"]);
+        match cli.command {
+            Some(Commands::Export(args)) => {
+                assert_eq!(
+                    args.output,
+                    Some(PathBuf::from("/tmp/out.csv")),
+                    "-o must set ExportArgs.output"
+                );
+            }
+            other => panic!("expected Export, got {:?}", other.is_some()),
+        }
+    }
 }
