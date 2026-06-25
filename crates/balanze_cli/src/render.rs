@@ -481,7 +481,7 @@ fn compact_codex_quota(s: &Snapshot) -> String {
             // (not wall-clock now) so it's deterministic/testable; the popover's
             // `codexWindowExpired` in src/lib/presentation/quota.ts uses the same
             // basis - keep the two in lockstep.
-            let expired = s.fetched_at > q.primary.resets_at;
+            let expired = codex_window_expired(s);
             // Append snapshot age when meaningfully stale (≥1 min). The
             // walker returns the newest-mtime rollout file regardless of
             // age, so a 7-day-old session and a 2-min-old session look
