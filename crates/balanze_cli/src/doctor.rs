@@ -14,7 +14,7 @@ use chrono::Utc;
 use owo_colors::OwoColorize;
 
 use crate::cli::DoctorArgs;
-use crate::probes::{self, CheckCategory, CheckLevel, CheckResult};
+use crate::probes::{self, CheckCategory, CheckLevel, CheckResult, KeychainHealth};
 
 /// Pure exit-code fold for doctor. Delegates to the shared probes mapping so
 /// doctor and any future caller agree on the taxonomy.
@@ -39,6 +39,10 @@ struct DataSourceResults {
     jsonl: CheckResult,
     codex: CheckResult,
     openai: CheckResult,
+    /// Backend health learned from the OpenAI presence probe's (single) keychain
+    /// read, threaded into the settings/keychain infra probe so a doctor run
+    /// performs at most one `keychain::get(OPENAI_API_KEY)` (one macOS prompt).
+    keychain_health: KeychainHealth,
 }
 
 /// True when NONE of the four data sources is usable (every result is non-Ok).
@@ -72,7 +76,7 @@ fn run_data_source_probes(offline: bool) -> DataSourceResults {
     let jsonl = probes::probe_claude_jsonl();
     let codex = probes::probe_codex();
 
-    let (key, presence) = probes::probe_openai_key_presence();
+    let (key, presence, keychain_health) = probes::probe_openai_key_presence();
     let openai = match (offline, key) {
         (false, Some(key)) => {
             // A key resolved and we are online: one fail-fast request.
@@ -96,6 +100,7 @@ fn run_data_source_probes(offline: bool) -> DataSourceResults {
         jsonl,
         codex,
         openai,
+        keychain_health,
     }
 }
 
@@ -115,7 +120,9 @@ fn run_probes(offline: bool) -> Vec<CheckResult> {
     results.push(ds.codex);
     results.push(ds.openai);
     results.push(probes::probe_statusline());
-    results.push(probes::probe_settings_and_keychain());
+    // Reuse the keychain health learned by the OpenAI presence probe so the
+    // settings probe does not issue a second keychain read (FIX 4 invariant).
+    results.push(probes::probe_settings_and_keychain(ds.keychain_health));
 
     if none_configured {
         // Rendered as a FAIL line that survives --quiet so the non-zero exit is

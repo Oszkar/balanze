@@ -161,28 +161,32 @@ fn openai_probe_from_keyprobe(probe: KeyProbe) -> CheckResult {
 // and let the caller call `.code()`. This module keeps the raw i32 mapping so
 // doctor is mergeable before PR5; the numeric values are identical.
 pub fn worst_exit_code(results: &[CheckResult], strict: bool) -> i32 {
+    // Track each failing category independently so the result is ORDER-
+    // INDEPENDENT: an Other fail seen before a Network fail must still rank the
+    // Network fail (4) above Other (1). Ranking is Auth > Network > Other.
     let mut has_warn = false;
-    let mut fail: Option<CheckCategory> = None;
+    let mut has_auth_fail = false;
+    let mut has_network_fail = false;
+    let mut has_other_fail = false;
     for r in results {
         match r.level {
-            CheckLevel::Fail => {
-                // Auth fail is reported even if a later network fail exists.
-                if r.category == CheckCategory::Auth {
-                    fail = Some(CheckCategory::Auth);
-                } else {
-                    fail.get_or_insert(r.category);
-                }
-            }
+            CheckLevel::Fail => match r.category {
+                CheckCategory::Auth => has_auth_fail = true,
+                CheckCategory::Network => has_network_fail = true,
+                CheckCategory::Other => has_other_fail = true,
+            },
             CheckLevel::Warn => has_warn = true,
             CheckLevel::Ok => {}
         }
     }
-    if let Some(cat) = fail {
-        return match cat {
-            CheckCategory::Auth => 3,
-            CheckCategory::Network => 4,
-            CheckCategory::Other => 1,
-        };
+    if has_auth_fail {
+        return 3;
+    }
+    if has_network_fail {
+        return 4;
+    }
+    if has_other_fail {
+        return 1;
     }
     if has_warn && strict {
         return 5;
@@ -251,10 +255,25 @@ pub fn probe_claude_jsonl() -> CheckResult {
         );
     }
     let mut file_count = 0usize;
+    let mut read_errors = Vec::new();
     for dir in &dirs {
-        if let Ok(files) = claude_parser::find_jsonl_files(dir) {
-            file_count += files.len();
+        match claude_parser::find_jsonl_files(dir) {
+            Ok(files) => file_count += files.len(),
+            Err(e) => read_errors.push(format!("{}: {e}", dir.display())),
         }
+    }
+    if !read_errors.is_empty() {
+        return CheckResult::fail(
+            CheckCategory::Other,
+            format!(
+                "Could not read Claude JSONL projects dir(s): {}",
+                read_errors.join("; ")
+            ),
+            Some(
+                "Fix directory permissions or remove stale Claude projects directories."
+                    .to_string(),
+            ),
+        );
     }
     if file_count == 0 {
         return CheckResult::warn(
@@ -339,12 +358,32 @@ fn latest_session_age_label(path: &Path) -> String {
     }
 }
 
+/// What the OpenAI presence probe learned about the keychain backend, threaded
+/// into [`probe_settings_and_keychain`] so a doctor run never does a SECOND
+/// `keychain::get(OPENAI_API_KEY)` (a second macOS ACL prompt). The presence
+/// probe already does the read whenever `BALANZE_OPENAI_KEY` does not short-
+/// circuit it; that one read settles the backend's health too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeychainHealth {
+    /// The keychain backend responded (Ok or NotFound on the get) - reachable.
+    Healthy,
+    /// A PlatformError on the get: the backend itself is not functional. Carries
+    /// the reason (never any secret value).
+    Broken(String),
+    /// The presence probe short-circuited on `BALANZE_OPENAI_KEY` and never
+    /// touched the keychain, so its health is still unknown. The settings probe
+    /// performs the (single) read in this case.
+    NotProbed,
+}
+
 /// Probe 4 (offline): OpenAI key presence only. Honors BALANZE_OPENAI_KEY
 /// precedence over the keychain (matching setup.rs / sources.rs). Returns the
-/// resolved key (for the optional online step) plus a presence CheckResult.
+/// resolved key (for the optional online step), a presence CheckResult, and the
+/// keychain backend health learned from the (at most one) `get` it performs.
 /// Uses a single keychain `get` (exists is a get under the hood; avoids a
-/// double ACL prompt on macOS).
-pub fn probe_openai_key_presence() -> (Option<String>, CheckResult) {
+/// double ACL prompt on macOS), and the `KeychainHealth` it returns lets the
+/// settings/keychain probe avoid a SECOND `get`.
+pub fn probe_openai_key_presence() -> (Option<String>, CheckResult, KeychainHealth) {
     if let Ok(env_key) = std::env::var("BALANZE_OPENAI_KEY") {
         let trimmed = env_key.trim();
         if !trimmed.is_empty() {
@@ -354,6 +393,9 @@ pub fn probe_openai_key_presence() -> (Option<String>, CheckResult) {
                     CheckCategory::Auth,
                     "OpenAI key present (via BALANZE_OPENAI_KEY)",
                 ),
+                // Did not touch the keychain - leave its health for the settings
+                // probe to settle with the single allowed read.
+                KeychainHealth::NotProbed,
             );
         }
     }
@@ -361,6 +403,7 @@ pub fn probe_openai_key_presence() -> (Option<String>, CheckResult) {
         Ok(k) => (
             Some(k),
             CheckResult::ok(CheckCategory::Auth, "OpenAI key present (keychain)"),
+            KeychainHealth::Healthy,
         ),
         Err(keychain::KeychainError::NotFound(_)) => (
             None,
@@ -372,17 +415,19 @@ pub fn probe_openai_key_presence() -> (Option<String>, CheckResult) {
                         .to_string(),
                 ),
             ),
+            KeychainHealth::Healthy,
         ),
-        Err(e) => (
+        Err(keychain::KeychainError::PlatformError { reason, .. }) => (
             None,
             CheckResult::fail(
                 CheckCategory::Other,
-                format!("Keychain read failed: {e}"),
+                format!("Keychain read failed: {reason}"),
                 Some(
                     "Use BALANZE_OPENAI_KEY as a fallback if the OS keychain is unavailable."
                         .to_string(),
                 ),
             ),
+            KeychainHealth::Broken(reason),
         ),
     }
 }
@@ -408,6 +453,9 @@ pub fn probe_statusline() -> CheckResult {
             CheckCategory::Other,
             format!("statusLine wired to balanze-cli ({})", path.display()),
         ),
+        // Show the occupying command so the user knows what currently owns the
+        // statusLine slot - it is their own local config surfaced on their own
+        // terminal, and naming it is useful for the diagnostic.
         Ok(WireStatus::OccupiedBy(cmd)) => CheckResult::warn(
             CheckCategory::Other,
             format!("statusLine occupied by another command: {cmd}"),
@@ -429,12 +477,30 @@ pub fn probe_statusline() -> CheckResult {
     }
 }
 
+/// Resolve the keychain backend health WITHOUT a redundant read. If the OpenAI
+/// presence probe already touched the keychain (`Healthy` / `Broken`), reuse
+/// that result; only when it short-circuited on the env var (`NotProbed`) do we
+/// perform the single allowed `keychain::get` here. This keeps a doctor run to
+/// at most one `keychain::get(OPENAI_API_KEY)` (one macOS ACL prompt).
+fn resolve_keychain_health(prior: KeychainHealth) -> KeychainHealth {
+    match prior {
+        KeychainHealth::Healthy | KeychainHealth::Broken(_) => prior,
+        KeychainHealth::NotProbed => match keychain::get(keychain::keys::OPENAI_API_KEY) {
+            Ok(_) | Err(keychain::KeychainError::NotFound(_)) => KeychainHealth::Healthy,
+            Err(keychain::KeychainError::PlatformError { reason, .. }) => {
+                KeychainHealth::Broken(reason)
+            }
+        },
+    }
+}
+
 /// Probe 6: settings.json readable + keychain backend functional. `settings::load`
 /// returns defaults when the file is absent (not an error), so Malformed is the
-/// only fail. The keychain backend is probed via a benign read of the OpenAI key
-/// entry: NotFound is a healthy backend (entry simply absent); a PlatformError
-/// means the backend itself is broken.
-pub fn probe_settings_and_keychain() -> CheckResult {
+/// only fail. The keychain backend health is taken from the OpenAI presence
+/// probe when it already read the keychain (NotFound/Ok => healthy, PlatformError
+/// => broken); only the env-var short-circuit case (`NotProbed`) triggers the
+/// single read here, so a doctor run does at most one keychain get.
+pub fn probe_settings_and_keychain(keychain_health: KeychainHealth) -> CheckResult {
     let settings_label = settings::default_path()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "(unresolved config dir)".to_string());
@@ -445,17 +511,22 @@ pub fn probe_settings_and_keychain() -> CheckResult {
             Some(format!("Fix or remove {settings_label}.")),
         );
     }
-    match keychain::get(keychain::keys::OPENAI_API_KEY) {
-        Ok(_) | Err(keychain::KeychainError::NotFound(_)) => CheckResult::ok(
+    match resolve_keychain_health(keychain_health) {
+        KeychainHealth::Healthy => CheckResult::ok(
             CheckCategory::Other,
             format!("settings.json readable ({settings_label}); keychain backend OK"),
         ),
-        Err(keychain::KeychainError::PlatformError { reason, .. }) => CheckResult::fail(
+        KeychainHealth::Broken(reason) => CheckResult::fail(
             CheckCategory::Other,
             format!("Keychain backend not functional: {reason}"),
             Some(
                 "On Linux no native keychain is wired; use BALANZE_OPENAI_KEY instead.".to_string(),
             ),
+        ),
+        // resolve_keychain_health never returns NotProbed; exhaustive for safety.
+        KeychainHealth::NotProbed => CheckResult::ok(
+            CheckCategory::Other,
+            format!("settings.json readable ({settings_label}); keychain backend OK"),
         ),
     }
 }
@@ -563,5 +634,66 @@ mod tests {
         let warn = vec![CheckResult::warn(CheckCategory::Other, "x", None)];
         assert_eq!(worst_exit_code(&warn, false), 0);
         assert_eq!(worst_exit_code(&warn, true), 5);
+    }
+
+    #[test]
+    fn worst_exit_code_auth_outranks_network() {
+        // Auth (3) outranks Network (4 in number but higher priority) regardless
+        // of order in the slice.
+        let auth_first = vec![
+            CheckResult::fail(CheckCategory::Auth, "a", None),
+            CheckResult::fail(CheckCategory::Network, "n", None),
+        ];
+        assert_eq!(worst_exit_code(&auth_first, false), 3);
+        let net_first = vec![
+            CheckResult::fail(CheckCategory::Network, "n", None),
+            CheckResult::fail(CheckCategory::Auth, "a", None),
+        ];
+        assert_eq!(worst_exit_code(&net_first, false), 3);
+    }
+
+    #[test]
+    fn worst_exit_code_is_order_independent_for_other_then_network() {
+        // Regression: an Other fail seen BEFORE a Network fail must still rank
+        // Network (4) above Other (1). The old Option-accumulation returned 1.
+        let other_then_network = vec![
+            CheckResult::fail(CheckCategory::Other, "o", None),
+            CheckResult::fail(CheckCategory::Network, "n", None),
+        ];
+        assert_eq!(worst_exit_code(&other_then_network, false), 4);
+        // And the reverse order agrees.
+        let network_then_other = vec![
+            CheckResult::fail(CheckCategory::Network, "n", None),
+            CheckResult::fail(CheckCategory::Other, "o", None),
+        ];
+        assert_eq!(worst_exit_code(&network_then_other, false), 4);
+    }
+
+    #[test]
+    fn resolve_keychain_health_reuses_prior_signal_without_a_read() {
+        // A prior Healthy/Broken signal from the presence probe is returned
+        // verbatim - no second keychain::get (the FIX 4 dedup invariant). Only
+        // the NotProbed case (env-var short-circuit) reads, which we do not
+        // exercise here to keep the test environment-free.
+        assert_eq!(
+            resolve_keychain_health(KeychainHealth::Healthy),
+            KeychainHealth::Healthy
+        );
+        let broken = KeychainHealth::Broken("backend down".to_string());
+        assert_eq!(resolve_keychain_health(broken.clone()), broken);
+    }
+
+    #[test]
+    fn settings_probe_reuses_broken_health_as_fail_without_reading() {
+        // When the presence probe already saw a PlatformError, the settings
+        // probe surfaces a Fail using that signal - no second keychain read.
+        let r = probe_settings_and_keychain(KeychainHealth::Broken("keychain locked".to_string()));
+        assert_eq!(r.level, CheckLevel::Fail);
+        assert_eq!(r.category, CheckCategory::Other);
+        assert!(
+            r.message.contains("keychain locked"),
+            "reason must surface: {}",
+            r.message
+        );
     }
 }
