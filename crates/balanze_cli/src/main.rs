@@ -28,7 +28,7 @@
 use std::process::ExitCode;
 
 use anstream::ColorChoice;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{Cli, Commands, StatusArgs};
@@ -38,6 +38,7 @@ mod cli;
 mod completions;
 mod doctor;
 mod exit;
+mod export;
 mod format;
 mod json_output;
 mod keys;
@@ -132,11 +133,10 @@ fn run(cli: &Cli) -> Result<ExitClass> {
             statusline::cmd_statusline()?;
             Ok(ExitClass::Ok)
         }
-        // Declared in the surface so the clap tree, --help, and completions are
-        // stable, but the handler lands in a later change (export). Until then
-        // it returns an error so a caller or script sees a failure (Other/1),
-        // not a silent success.
-        Some(Commands::Export(_)) => Err(anyhow!("export: not implemented in this release yet")),
+        Some(Commands::Export(args)) => {
+            export::cmd_export(args)?;
+            Ok(ExitClass::Ok)
+        }
         Some(Commands::Completions(args)) => {
             completions::cmd_completions(args.shell)?;
             Ok(ExitClass::Ok)

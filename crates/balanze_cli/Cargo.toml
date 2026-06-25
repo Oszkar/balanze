@@ -34,6 +34,11 @@ watcher = { path = "../watcher" }
 # detection + termios/console manipulation). Used only by `balanze-cli setup`.
 rpassword = "7"
 
+# Stateless `export` writes CSV to stdout / a file. Pure-Rust, no system libs
+# (keeps the CLI's zero-syslib promise); cleared by `cargo deny` for license +
+# advisories. Used only by `balanze-cli export`.
+csv = "1"
+
 # Auto-adapting ANSI: AutoStream is an io::Write that strips color on
 # non-TTY, under NO_COLOR, and when ColorChoice::Never is passed (our
 # --no-color path). owo-colors applies the SGR styles. Both pure-Rust, no
