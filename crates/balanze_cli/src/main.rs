@@ -148,41 +148,68 @@ fn run(cli: &Cli) -> Result<ExitClass> {
     }
 }
 
+/// Which render path `status` takes, decided purely from the flags so the
+/// precedence is unit-testable (no Snapshot build, no I/O).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderMode {
+    /// `--json`: machine-readable; emitted even under --quiet (it is the data a
+    /// scripting caller asked for).
+    Json,
+    /// `--sections`: detailed per-source human view.
+    Sections,
+    /// Default glanceable colored 4-quadrant matrix.
+    Compact,
+    /// `--quiet` with neither --json nor --sections: print nothing; the exit
+    /// code still reflects the snapshot.
+    Suppressed,
+}
+
+/// Precedence: --json wins over --sections wins over the default. --quiet
+/// suppresses ONLY the default matrix - never --json (data) and never the
+/// explicitly-requested --sections detail.
+fn render_mode(json: bool, sections: bool, quiet: bool) -> RenderMode {
+    if json {
+        RenderMode::Json
+    } else if sections {
+        RenderMode::Sections
+    } else if quiet {
+        RenderMode::Suppressed
+    } else {
+        RenderMode::Compact
+    }
+}
+
 /// Build the snapshot, render it (honoring --json / --sections / --quiet), then
 /// classify it. The snapshot's error slots plus --strict decide the exit class;
 /// rendering itself never changes the class.
 fn run_status(args: &StatusArgs, cli: &Cli) -> Result<ExitClass> {
     let snapshot = tokio::runtime::Runtime::new()?.block_on(sources::build_snapshot());
 
-    let color_choice = if cli.no_color {
-        ColorChoice::Never
-    } else {
-        ColorChoice::Auto
-    };
-
-    // Precedence (documented in --help): --json wins over --sections if both
-    // are passed. --json is the scripting/machine path; if a caller asked for
-    // it, honor it even alongside a stray --sections. Silently ignoring
-    // --sections here is the least-surprising behavior for
-    // `balanze-cli status --json --sections`.
-    if args.json {
-        // `--json` goes through json_output::render, not raw Snapshot serde:
-        // money cells get a `{value_micro_usd, source, confidence, details}`
-        // tagged DTO, and identifiers (org_uuid, codex session_id) are
-        // redacted unless `-v`/`--verbose` is also set. --json is data, so it
-        // is emitted even under --quiet (a scripting caller asked for it).
-        println!("{}", json_output::render(&snapshot, cli.verbose)?);
-    } else if args.sections {
-        // Per-source detailed view - useful for debugging, dev work, and
-        // anyone who wants the full window math + cadence bars in one go.
-        render::print_sections(&snapshot, cli.verbose)?;
-    } else if !cli.quiet {
-        // Default: glanceable 4-quadrant matrix mirroring the readiness summary
-        // from `balanze-cli setup`. --quiet suppresses this human-readable
-        // matrix (scripting callers who want data use --json); the exit code
-        // still reflects the snapshot. The colored path honors --no-color /
-        // NO_COLOR / non-TTY via anstream's AutoStream.
-        render::print_compact_colored(&snapshot, color_choice)?;
+    match render_mode(args.json, args.sections, cli.quiet) {
+        RenderMode::Json => {
+            // `--json` goes through json_output::render, not raw Snapshot serde:
+            // money cells get a `{value_micro_usd, source, confidence, details}`
+            // tagged DTO, and identifiers (org_uuid, codex session_id) are
+            // redacted unless `-v`/`--verbose` is also set.
+            println!("{}", json_output::render(&snapshot, cli.verbose)?);
+        }
+        RenderMode::Sections => {
+            // Per-source detailed view - useful for debugging, dev work, and
+            // anyone who wants the full window math + cadence bars in one go.
+            render::print_sections(&snapshot, cli.verbose)?;
+        }
+        RenderMode::Compact => {
+            // Default: glanceable 4-quadrant matrix mirroring the readiness
+            // summary from `balanze-cli setup`. The colored path honors
+            // --no-color / NO_COLOR / non-TTY via anstream's AutoStream.
+            let color_choice = if cli.no_color {
+                ColorChoice::Never
+            } else {
+                ColorChoice::Auto
+            };
+            render::print_compact_colored(&snapshot, color_choice)?;
+        }
+        RenderMode::Suppressed => {}
     }
 
     Ok(classify_snapshot(&snapshot, cli.strict))
@@ -194,4 +221,28 @@ fn cmd_settings() -> Result<()> {
     let path = settings::default_path()?;
     eprintln!("(loaded from: {})", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RenderMode, render_mode};
+
+    #[test]
+    fn render_mode_json_beats_quiet_and_sections() {
+        // --json is data: it must win over --quiet and over a stray --sections.
+        assert_eq!(render_mode(true, false, true), RenderMode::Json);
+        assert_eq!(render_mode(true, true, true), RenderMode::Json);
+    }
+
+    #[test]
+    fn render_mode_sections_prints_even_under_quiet() {
+        // --sections is an explicit detail request, not the default matrix.
+        assert_eq!(render_mode(false, true, true), RenderMode::Sections);
+    }
+
+    #[test]
+    fn render_mode_quiet_suppresses_only_the_default_matrix() {
+        assert_eq!(render_mode(false, false, true), RenderMode::Suppressed);
+        assert_eq!(render_mode(false, false, false), RenderMode::Compact);
+    }
 }

@@ -33,6 +33,21 @@ fn visible_results(results: &[CheckResult], quiet: bool) -> Vec<&CheckResult> {
         .collect()
 }
 
+/// The severity to summarize at the end of a doctor run, or `None` when the
+/// summary is suppressed. Under --quiet the header AND the summary are dropped
+/// so a scripting caller gets only the actionable WARN/FAIL lines plus the exit
+/// code. Pure so the suppression invariant is testable without the colored I/O.
+fn doctor_summary_level(results: &[CheckResult], quiet: bool) -> Option<CheckLevel> {
+    if quiet {
+        return None;
+    }
+    Some(
+        results
+            .iter()
+            .fold(CheckLevel::Ok, |acc, r| acc.worst(r.level)),
+    )
+}
+
 /// The four DATA-SOURCE probes, captured by name so the "is anything usable"
 /// decision reads them explicitly rather than by fragile array index. statusLine
 /// and settings/keychain are infra, not data sources, so they are excluded from
@@ -178,10 +193,7 @@ pub fn cmd_doctor(
 
     // Under --quiet the summary is suppressed too: a scripting caller wants only
     // the WARN/FAIL lines and the exit code, nothing else.
-    if !quiet {
-        let worst = results
-            .iter()
-            .fold(CheckLevel::Ok, |acc, r| acc.worst(r.level));
+    if let Some(worst) = doctor_summary_level(&results, quiet) {
         let summary = match worst {
             CheckLevel::Ok => "All integrations OK.".green().to_string(),
             CheckLevel::Warn => "Some integrations degraded (see WARN above)."
@@ -240,6 +252,31 @@ mod tests {
         let results = vec![CheckResult::warn(CheckCategory::Other, "no codex", None)];
         assert_eq!(doctor_exit_code(&results, false), ExitClass::Ok);
         assert_eq!(doctor_exit_code(&results, true), ExitClass::Degraded);
+    }
+
+    #[test]
+    fn summary_suppressed_under_quiet_else_reports_worst_level() {
+        let results = vec![
+            CheckResult::ok(CheckCategory::Other, "jsonl ok"),
+            CheckResult::warn(CheckCategory::Other, "no codex", None),
+        ];
+        // --quiet drops the summary line entirely (scripting-only output).
+        assert_eq!(doctor_summary_level(&results, /* quiet */ true), None);
+        // Otherwise it reports the worst level across all probes (Warn here).
+        assert_eq!(
+            doctor_summary_level(&results, false),
+            Some(CheckLevel::Warn)
+        );
+    }
+
+    #[test]
+    fn aggregate_fail_is_fail_auth_so_it_survives_quiet_and_exits_three() {
+        // The appended aggregate is a Fail (so it survives the --quiet filter in
+        // visible_results) in the Auth category (so worst_exit_code maps it to
+        // AuthMissing / exit 3). Lock both halves of the documented contract.
+        let agg = no_provider_aggregate_fail();
+        assert_eq!(agg.level, CheckLevel::Fail);
+        assert_eq!(agg.category, CheckCategory::Auth);
     }
 
     #[test]

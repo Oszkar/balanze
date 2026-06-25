@@ -5,8 +5,8 @@
 //! code. Keeping the mapping pure (no I/O, no process exit) makes every case
 //! unit-testable.
 //!
-//! Codes (documented in `--help` and the README, AGENTS.md §9 / the v0.4.1
-//! CLI-maturity design):
+//! Codes (documented in `--help`, AGENTS.md §9 / the v0.4.1 CLI-maturity
+//! design; the user-facing README table lands with the docs-lockstep change):
 //!
 //! | Code | Meaning |
 //! |------|---------|
@@ -50,7 +50,8 @@ pub enum ExitClass {
 
 impl ExitClass {
     /// The process exit code for this class. Stable, scripting-facing contract -
-    /// do not renumber without updating `--help` and the README.
+    /// do not renumber without updating `--help` (and the README table once it
+    /// lands).
     pub fn code(self) -> i32 {
         match self {
             ExitClass::Ok => 0,
@@ -78,17 +79,35 @@ fn looks_like_network(err: &str) -> bool {
         || e.contains("dns")
 }
 
-/// True if `err` reads as a missing-or-expired credential. Matches the
-/// `CredentialExpiredReadOnly` copy ("re-run `claude login`"), the
-/// credentials-missing wording, and generic expired/unauthorized text.
+/// True if `err` reads as an expired-or-rejected credential (exit 3). Substring
+/// heuristic over the error copy the source crates emit:
+///   - Claude OAuth expired / read-only: "expired", "re-run", "claude login"
+///     (anthropic_oauth's AuthExpired / RefreshTokenMissing /
+///     CredentialExpiredReadOnly).
+///   - OpenAI admin-key rejection (HTTP 401/403): "http 401", "http 403",
+///     "returned 403", "rejected" - covering both the raw `OpenAiError` Display
+///     and the sources.rs override copy. This aligns the status path with the
+///     doctor path, which types the same `KeyProbe::Rejected` (401/403) as Auth.
+///
+/// A genuinely ABSENT credential ("credentials file not found", from
+/// `OAuthError::CredentialsMissing`) is deliberately NOT matched: a
+/// not-configured source is neutral (exit 0; degraded under --strict), mirroring
+/// doctor's Warn for an absent credential - the user may simply not use that
+/// provider, which is not an auth failure.
+// TODO: replace this substring sniffing with a typed error category carried in
+// the Snapshot (mirroring probes::CheckCategory) so status and doctor share real
+// types, not strings. That needs a Snapshot schema change (out of scope here).
 fn looks_like_auth(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
     e.contains("claude login")
         || e.contains("expired")
-        || e.contains("credentials missing")
         || e.contains("re-run")
         || e.contains("unauthorized")
         || e.contains("not authenticated")
+        || e.contains("http 401")
+        || e.contains("http 403")
+        || e.contains("returned 403")
+        || e.contains("rejected")
 }
 
 /// Classify a built `Snapshot` into an `ExitClass`.
@@ -196,7 +215,49 @@ mod tests {
         let mut snap = empty();
         snap.openai_error = Some("network unreachable".to_string());
         snap.claude_oauth_error = Some("token expired - re-run `claude login`".to_string());
+        // Auth short-circuits before the strict/degraded fold, so the result is
+        // AuthMissing for BOTH strict values (guards the loop-vs-fold ordering).
         assert_eq!(classify_snapshot(&snap, false), ExitClass::AuthMissing);
+        assert_eq!(classify_snapshot(&snap, true), ExitClass::AuthMissing);
+    }
+
+    #[test]
+    fn openai_rejected_admin_key_is_auth_missing() {
+        // The exact strings sources.rs sets into openai_error on HTTP 401/403.
+        // The status path must agree with the doctor path (KeyProbe::Rejected ->
+        // Auth -> exit 3), not silently fall through to degraded/ok.
+        let mut snap401 = empty();
+        snap401.openai_error = Some(
+            "OpenAI admin key rejected (HTTP 401). Run `balanze-cli set-openai-key` \
+             with a fresh `sk-admin-...` key."
+                .to_string(),
+        );
+        assert_eq!(classify_snapshot(&snap401, false), ExitClass::AuthMissing);
+        assert_eq!(classify_snapshot(&snap401, true), ExitClass::AuthMissing);
+
+        let mut snap403 = empty();
+        snap403.openai_error = Some(
+            "OpenAI returned 403. organization/costs requires an admin API key \
+             (`sk-admin-...`), not a project or service-account key."
+                .to_string(),
+        );
+        assert_eq!(classify_snapshot(&snap403, false), ExitClass::AuthMissing);
+        assert_eq!(classify_snapshot(&snap403, true), ExitClass::AuthMissing);
+    }
+
+    #[test]
+    fn absent_claude_credential_is_neutral_not_auth() {
+        // A genuinely absent credential surfaces as "credentials file not found"
+        // (OAuthError::CredentialsMissing). It must NOT be AuthMissing(3):
+        // not-configured is neutral, matching doctor's Warn. Only --strict
+        // escalates it to degraded(5). Guards the deliberate decision to not map
+        // absent credentials to exit 3.
+        let mut snap = empty();
+        snap.claude_oauth_error = Some(
+            "credentials file not found (looked at [\"~/.claude/.credentials.json\"])".to_string(),
+        );
+        assert_eq!(classify_snapshot(&snap, false), ExitClass::Ok);
+        assert_eq!(classify_snapshot(&snap, true), ExitClass::Degraded);
     }
 
     #[test]
