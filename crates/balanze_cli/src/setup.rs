@@ -7,7 +7,6 @@ use std::env;
 use std::io::{self, Write};
 
 use anthropic_oauth::{load_from_source, locate_credentials};
-use claude_parser::find_all_claude_projects_dirs;
 use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiError, costs_this_month};
 
 // ────────────────────────────────────────────────────────────────────
@@ -36,30 +35,13 @@ use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiError, costs_this
 //     (don't re-prompt). User can answer 'y' to replace.
 // ────────────────────────────────────────────────────────────────────
 
-// Status enums only carry the discriminants - paths and error messages
-// are already eprintln'd at the moment they're known. If a future step
-// (balanze_cli wiring) needs to thread the paths into a Snapshot, add
-// the payload then. YAGNI for now.
-
-#[derive(Debug)]
-enum AnthropicOAuthStatus {
-    Found,
-    NotFound,
-}
-
-#[derive(Debug)]
-enum CodexStatus {
-    HasSessions,
-    InstalledNoSessions,
-    NotInstalled,
-    /// Sessions dir is present but we couldn't read it (permission
-    /// denied, disk I/O failure, etc.). Distinct from `NotInstalled`
-    /// so the readiness summary doesn't lie about which problem the
-    /// user is hitting. The specific error was already eprintln'd at
-    /// step 2; this variant just lets the summary echo a truthful
-    /// label.
-    Error,
-}
+// The interactive [1/5]/[2/5] step checks (check_anthropic_oauth / check_codex)
+// print their own pass/fail lines as they run; the final readiness summary is
+// rendered separately by `print_readiness`, which calls the shared `probes`
+// module so setup and `doctor` cannot drift (AGENTS.md §2 DRY). Only the OpenAI
+// step keeps a status enum, because its [3/5] flow has several distinct
+// outcomes (kept existing key, env override, validation failed, ...) that its
+// own messaging surfaces.
 
 #[derive(Debug)]
 enum OpenAiKeyStatus {
@@ -68,6 +50,22 @@ enum OpenAiKeyStatus {
     EnvVarOverride,
     ValidationFailed,
     KeychainBroken,
+}
+
+impl OpenAiKeyStatus {
+    /// Ready-to-print readiness-summary line for the OpenAI API $ row. Derived
+    /// from the [3/5] outcome the wizard already resolved, so the [5/5] summary
+    /// does NOT re-read the keychain (avoids a second macOS ACL prompt).
+    fn summary_line(&self) -> &'static str {
+        match self {
+            OpenAiKeyStatus::SavedAndValidated | OpenAiKeyStatus::KeptExistingKey => {
+                "✓ ready (validated against OpenAI Admin Costs API)"
+            }
+            OpenAiKeyStatus::EnvVarOverride => "✓ ready (via BALANZE_OPENAI_KEY env var)",
+            OpenAiKeyStatus::ValidationFailed => "✗ key validation failed - re-run setup",
+            OpenAiKeyStatus::KeychainBroken => "✗ keychain broken - use BALANZE_OPENAI_KEY env var",
+        }
+    }
 }
 
 pub(crate) fn cmd_setup() -> Result<()> {
@@ -83,15 +81,20 @@ pub(crate) fn cmd_setup() -> Result<()> {
     eprintln!();
 
     eprintln!("[1/5] Anthropic OAuth credentials");
-    let anthropic = check_anthropic_oauth();
+    // Capture the resolved OAuth state so the [5/5] summary reuses it instead of
+    // re-locating + re-reading the credential (second macOS Keychain prompt).
+    let oauth_summary = check_anthropic_oauth();
     eprintln!();
 
     eprintln!("[2/5] Codex CLI sessions");
-    let codex = check_codex();
+    check_codex();
     eprintln!();
 
     eprintln!("[3/5] OpenAI admin key");
-    let openai = setup_openai_key()?;
+    // The interactive key step resolves the key (prompt / validate / store) and
+    // returns its outcome; the [5/5] summary maps that outcome to a line rather
+    // than re-reading the keychain (second macOS ACL prompt).
+    let openai_status = setup_openai_key()?;
     eprintln!();
 
     eprintln!("[4/5] Claude Code statusLine wiring");
@@ -99,12 +102,16 @@ pub(crate) fn cmd_setup() -> Result<()> {
     eprintln!();
 
     eprintln!("[5/5] Readiness summary");
-    print_readiness(&anthropic, &codex, &openai);
+    print_readiness(&oauth_summary, &openai_status);
 
     Ok(())
 }
 
-fn check_anthropic_oauth() -> AnthropicOAuthStatus {
+/// Result of the [1/5] Anthropic OAuth check, captured so the [5/5] readiness
+/// summary can render its row WITHOUT re-locating + re-reading the credential
+/// (which on macOS re-triggers a Keychain ACL prompt). The string is a ready-to-
+/// print summary message; no credential material is held.
+fn check_anthropic_oauth() -> String {
     // Locate AND load: on macOS the source is the login Keychain, returned
     // optimistically by `locate_credentials`, so confirm the entry actually
     // reads before reporting it found (may prompt for Keychain access once).
@@ -113,8 +120,9 @@ fn check_anthropic_oauth() -> AnthropicOAuthStatus {
         .filter(|src| load_from_source(src).is_ok());
     match located {
         Some(source) => {
-            eprintln!("  ✓ Found at {}", source.describe());
-            AnthropicOAuthStatus::Found
+            let where_found = source.describe();
+            eprintln!("  ✓ Found at {where_found}");
+            format!("✓ found ({where_found})")
         }
         None => {
             eprintln!("  ✗ Not found.");
@@ -122,26 +130,23 @@ fn check_anthropic_oauth() -> AnthropicOAuthStatus {
             eprintln!("    or the login Keychain on recent macOS).");
             eprintln!("    Balanze still derives Claude API cost from JSONL session files");
             eprintln!("    without this, but the subscription-quota cell will be empty.");
-            AnthropicOAuthStatus::NotFound
+            "✗ not configured - run `claude login`".to_string()
         }
     }
 }
 
-fn check_codex() -> CodexStatus {
+fn check_codex() {
     match codex_local::find_codex_sessions_dir() {
         Err(codex_local::ParseError::FileMissing(_)) => {
             eprintln!("  ✗ Codex CLI not installed (no ~/.codex/sessions/ directory).");
             eprintln!("    The Codex quota cell will be empty.");
-            CodexStatus::NotInstalled
         }
         Err(e) => {
             eprintln!("  ✗ Error finding Codex sessions dir: {e}");
-            CodexStatus::Error
         }
         Ok(dir) => match codex_local::find_latest_session(&dir) {
             Ok(Some(path)) => {
                 eprintln!("  ✓ Latest session: {}", path.display());
-                CodexStatus::HasSessions
             }
             Ok(None) => {
                 eprintln!("  ○ Codex installed but no sessions yet.");
@@ -149,11 +154,9 @@ fn check_codex() -> CodexStatus {
                     "    Run `codex` once to populate {} with a session file.",
                     dir.display()
                 );
-                CodexStatus::InstalledNoSessions
             }
             Err(e) => {
                 eprintln!("  ✗ Error walking Codex sessions: {e}");
-                CodexStatus::Error
             }
         },
     }
@@ -368,43 +371,29 @@ fn validate_openai_key_blocking(key: &str) -> Result<()> {
     })
 }
 
-fn print_readiness(
-    anthropic: &AnthropicOAuthStatus,
-    codex: &CodexStatus,
-    openai: &OpenAiKeyStatus,
-) {
-    let anthropic_quota = match anthropic {
-        AnthropicOAuthStatus::Found => "✓ ready (anthropic_oauth)",
-        AnthropicOAuthStatus::NotFound => "✗ not configured - run `claude login`",
-    };
-    // Anthropic API $ derivation only needs JSONL files; OAuth isn't required.
-    let claude_cost = if !find_all_claude_projects_dirs().is_empty() {
-        "✓ ready (claude_cost - estimated from JSONL)"
-    } else {
-        "✗ no Claude Code JSONL found"
-    };
-    let codex_str = match codex {
-        CodexStatus::HasSessions => "✓ ready (codex_local)",
-        CodexStatus::InstalledNoSessions => "○ installed, no sessions yet - run `codex` once",
-        CodexStatus::NotInstalled => "✗ Codex CLI not installed",
-        CodexStatus::Error => "✗ error reading Codex sessions (see message above)",
-    };
-    let openai_str = match openai {
-        OpenAiKeyStatus::SavedAndValidated | OpenAiKeyStatus::KeptExistingKey => {
-            "✓ ready (openai_client)"
-        }
-        OpenAiKeyStatus::EnvVarOverride => "✓ ready (via BALANZE_OPENAI_KEY env var)",
-        OpenAiKeyStatus::ValidationFailed => "✗ key validation failed - re-run setup",
-        OpenAiKeyStatus::KeychainBroken => "✗ keychain broken - use BALANZE_OPENAI_KEY env var",
-    };
+/// Render the 4-row readiness summary. The Anthropic-subscription and OpenAI-API
+/// rows are passed in ALREADY RESOLVED by the [1/5] / [3/5] wizard steps, so the
+/// summary never re-locates the Claude credential or re-reads the keychain (each
+/// of which can re-trigger a macOS ACL prompt - the prior double-prompt
+/// regression). The JSONL + Codex rows come from their probes, which touch only
+/// the filesystem (no keychain / credential read), so calling them here is free
+/// of duplicate-prompt risk and keeps those two rows DRY with `doctor`. The
+/// summary stays on stderr (setup's convention).
+fn print_readiness(oauth_summary: &str, openai_status: &OpenAiKeyStatus) {
+    use crate::probes;
+    let jsonl = probes::probe_claude_jsonl();
+    let codex = probes::probe_codex();
 
     eprintln!();
     eprintln!("  Source                       Status");
     eprintln!("  ───────────────────────────  ───────────────────────────────────────");
-    eprintln!("  Anthropic subscription %     {anthropic_quota}");
-    eprintln!("  Anthropic API $ (estimated)  {claude_cost}");
-    eprintln!("  OpenAI Codex %               {codex_str}");
-    eprintln!("  OpenAI API $                 {openai_str}");
+    eprintln!("  Anthropic subscription %     {oauth_summary}");
+    eprintln!("  Anthropic API $ (estimated)  {}", jsonl.message);
+    eprintln!("  OpenAI Codex %               {}", codex.message);
+    eprintln!(
+        "  OpenAI API $                 {}",
+        openai_status.summary_line()
+    );
     eprintln!();
     eprintln!("Run `balanze-cli` to see the live snapshot.");
 }
