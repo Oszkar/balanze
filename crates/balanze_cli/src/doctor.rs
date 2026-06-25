@@ -1,10 +1,12 @@
 //! `doctor` subcommand: run each integration probe (probes.rs), print an
-//! OK/WARN/FAIL line with an actionable hint, then a readiness summary. The
-//! worst severity maps to a process exit code: auth fail -> 3, network fail ->
+//! OK/WARN/FAIL line with an actionable hint, then a one-line summary. The
+//! worst severity maps to an `exit::ExitClass`: auth fail -> 3, network fail ->
 //! 4, other fail -> 1, degraded-under-strict -> 5, else 0.
 //!
 //! Offline by default for everything except the OpenAI key validation, which
-//! is skipped under `--offline`. `--quiet` prints only non-OK probes.
+//! is skipped under `--offline`. `--quiet` prints only non-OK probes and drops
+//! the header + summary, so a scripting caller gets just the actionable
+//! WARN/FAIL lines and relies on the exit code.
 
 use std::io::Write;
 
@@ -14,11 +16,12 @@ use chrono::Utc;
 use owo_colors::OwoColorize;
 
 use crate::cli::DoctorArgs;
+use crate::exit::ExitClass;
 use crate::probes::{self, CheckCategory, CheckLevel, CheckResult, KeychainHealth};
 
 /// Pure exit-code fold for doctor. Delegates to the shared probes mapping so
-/// doctor and any future caller agree on the taxonomy.
-fn doctor_exit_code(results: &[CheckResult], strict: bool) -> i32 {
+/// doctor and the `status` path agree on one taxonomy.
+fn doctor_exit_code(results: &[CheckResult], strict: bool) -> ExitClass {
     probes::worst_exit_code(results, strict)
 }
 
@@ -142,8 +145,14 @@ fn label(level: CheckLevel) -> String {
     }
 }
 
-/// Entry point. Returns the process exit code (caller converts to ExitCode).
-pub fn cmd_doctor(args: &DoctorArgs, quiet: bool, strict: bool, no_color: bool) -> Result<i32> {
+/// Entry point. Returns the `ExitClass` for the run (caller exits with
+/// `.code()`).
+pub fn cmd_doctor(
+    args: &DoctorArgs,
+    quiet: bool,
+    strict: bool,
+    no_color: bool,
+) -> Result<ExitClass> {
     let results = run_probes(args.offline);
 
     // owo-colors always writes the SGR codes; the AutoStream decides whether
@@ -167,19 +176,23 @@ pub fn cmd_doctor(args: &DoctorArgs, quiet: bool, strict: bool, no_color: bool) 
         }
     }
 
-    let worst = results
-        .iter()
-        .fold(CheckLevel::Ok, |acc, r| acc.worst(r.level));
-    let summary = match worst {
-        CheckLevel::Ok => "All integrations OK.".green().to_string(),
-        CheckLevel::Warn => "Some integrations degraded (see WARN above)."
-            .yellow()
-            .to_string(),
-        CheckLevel::Fail => "One or more integrations failed (see FAIL above)."
-            .red()
-            .to_string(),
-    };
-    let _ = writeln!(out, "\n{summary}");
+    // Under --quiet the summary is suppressed too: a scripting caller wants only
+    // the WARN/FAIL lines and the exit code, nothing else.
+    if !quiet {
+        let worst = results
+            .iter()
+            .fold(CheckLevel::Ok, |acc, r| acc.worst(r.level));
+        let summary = match worst {
+            CheckLevel::Ok => "All integrations OK.".green().to_string(),
+            CheckLevel::Warn => "Some integrations degraded (see WARN above)."
+                .yellow()
+                .to_string(),
+            CheckLevel::Fail => "One or more integrations failed (see FAIL above)."
+                .red()
+                .to_string(),
+        };
+        let _ = writeln!(out, "\n{summary}");
+    }
     let _ = out.flush();
 
     Ok(doctor_exit_code(&results, strict))
@@ -188,6 +201,7 @@ pub fn cmd_doctor(args: &DoctorArgs, quiet: bool, strict: bool, no_color: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exit::ExitClass;
     use crate::probes::{CheckCategory, CheckLevel, CheckResult};
 
     #[test]
@@ -196,7 +210,10 @@ mod tests {
             CheckResult::ok(CheckCategory::Auth, "oauth ok"),
             CheckResult::ok(CheckCategory::Other, "jsonl ok"),
         ];
-        assert_eq!(doctor_exit_code(&results, /* strict */ false), 0);
+        assert_eq!(
+            doctor_exit_code(&results, /* strict */ false),
+            ExitClass::Ok
+        );
     }
 
     #[test]
@@ -205,7 +222,7 @@ mod tests {
             CheckResult::ok(CheckCategory::Other, "jsonl ok"),
             CheckResult::fail(CheckCategory::Auth, "oauth expired read-only", None),
         ];
-        assert_eq!(doctor_exit_code(&results, false), 3);
+        assert_eq!(doctor_exit_code(&results, false), ExitClass::AuthMissing);
     }
 
     #[test]
@@ -215,14 +232,14 @@ mod tests {
             "openai unreachable",
             None,
         )];
-        assert_eq!(doctor_exit_code(&results, false), 4);
+        assert_eq!(doctor_exit_code(&results, false), ExitClass::Network);
     }
 
     #[test]
     fn warn_only_is_zero_unless_strict() {
         let results = vec![CheckResult::warn(CheckCategory::Other, "no codex", None)];
-        assert_eq!(doctor_exit_code(&results, false), 0);
-        assert_eq!(doctor_exit_code(&results, true), 5);
+        assert_eq!(doctor_exit_code(&results, false), ExitClass::Ok);
+        assert_eq!(doctor_exit_code(&results, true), ExitClass::Degraded);
     }
 
     #[test]
@@ -278,8 +295,8 @@ mod tests {
         results.push(no_provider_aggregate_fail());
         assert_eq!(
             doctor_exit_code(&results, false),
-            3,
-            "aggregate FAIL must escalate a warn-only set to exit 3"
+            ExitClass::AuthMissing,
+            "aggregate FAIL must escalate a warn-only set to exit 3 (AuthMissing)"
         );
     }
 
@@ -294,11 +311,11 @@ mod tests {
         ];
         assert!(!no_data_source_configured(&ds.iter().collect::<Vec<_>>()));
         // run_probes would NOT append the aggregate here, so the result set is
-        // just the (warn-bearing) probes - exit stays 0 without --strict.
+        // just the (warn-bearing) probes - exit stays Ok without --strict.
         let results: Vec<CheckResult> = ds.to_vec();
         assert_eq!(
             doctor_exit_code(&results, false),
-            0,
+            ExitClass::Ok,
             "one usable source must not be escalated by the aggregate"
         );
     }

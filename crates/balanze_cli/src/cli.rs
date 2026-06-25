@@ -16,7 +16,15 @@ use std::path::PathBuf;
 #[command(
     name = "balanze-cli",
     version,
-    about = "Personal AI usage in one normalized view"
+    about = "Personal AI usage in one normalized view",
+    long_about = "Personal AI usage in one normalized view.\n\n\
+Exit codes (for scripting):\n  \
+0  ok (a degraded source still exits 0 unless --strict)\n  \
+1  unexpected / other error\n  \
+2  usage error (bad flags / unknown subcommand)\n  \
+3  auth: credentials missing or expired (re-run `claude login`, or set the OpenAI key)\n  \
+4  network: a provider was unreachable\n  \
+5  degraded: a source was stale or errored (only with --strict)"
 )]
 pub struct Cli {
     #[command(subcommand)]
