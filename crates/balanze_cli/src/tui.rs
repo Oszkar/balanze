@@ -69,9 +69,11 @@ impl Sink for ChannelSink {
     }
 
     fn on_degraded(&mut self, _source: Source, _error: &str) {
-        // No-op: the degraded banner is rendered from the snapshot's `*_error`
-        // slots (already set before this fires), so the next `on_snapshot`
-        // carries the error. Mirrors `JsonlSink`.
+        // No-op: this carries no `Snapshot`, and the coordinator records the
+        // error in its snapshot WITHOUT a following `on_snapshot` (a pure-failure
+        // update fires only `on_degraded`). The degraded banner is instead pulled
+        // in by `run_tui`'s periodic `StateMsg::Refresh` tick, which re-notifies
+        // the current (error-bearing) snapshot into the channel within one tick.
     }
 }
 
@@ -432,20 +434,43 @@ fn classify_key(key: KeyEvent) -> Action {
     }
 }
 
-/// Drive the TUI until the user quits. Selects over snapshot updates
-/// (`watch.changed()`) and terminal input (`crossterm` `EventStream`). The
-/// `TerminalGuard` is owned here and dropped on every return path, restoring
-/// the terminal. `r` sends `StateMsg::Refresh` to the coordinator (a re-paint,
-/// not a re-fetch - see messages.rs).
+/// Why [`run_tui`] returned. Lets the supervisor distinguish a user-initiated
+/// quit from the coordinator dropping the snapshot channel - the latter would
+/// otherwise look like a clean quit and hide a coordinator failure when the
+/// `run_tui` arm wins the supervisor's `select!` race against the join handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiExit {
+    /// The user quit (q / Esc / Ctrl-C) or the input stream ended.
+    UserQuit,
+    /// The snapshot channel closed: the state coordinator dropped its sink
+    /// (exited or panicked). The supervisor surfaces this as a fatal.
+    CoordinatorGone,
+}
+
+/// How often the TUI asks the coordinator to re-notify (`StateMsg::Refresh`).
+/// A provider FAILURE records its error in the coordinator's snapshot and fires
+/// only `on_degraded` (no `on_snapshot`), so the watch channel would not update
+/// on a pure failure and the degraded banner would stay dead. The periodic
+/// Refresh pulls the coordinator's current (error-bearing) snapshot into the
+/// channel, surfacing the degraded state within one tick. Refresh is a
+/// re-notify, not a re-fetch, so it generates no provider traffic.
+const REPAINT_INTERVAL_SECS: u64 = 2;
+
+/// Drive the TUI until the user quits or the coordinator drops the channel.
+/// Selects over snapshot updates (`watch.changed()`), terminal input (crossterm
+/// `EventStream`), and a Refresh tick. The `TerminalGuard` is owned here and
+/// dropped on every return path, restoring the terminal. `r` (and the tick)
+/// send `StateMsg::Refresh` (a re-paint, not a re-fetch - see messages.rs).
 pub async fn run_tui(
     mut rx: watch::Receiver<Option<Snapshot>>,
     handle: StateCoordinatorHandle,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<TuiExit> {
     let mut guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(guard.stdout());
     let mut terminal = Terminal::new(backend)?;
 
     let mut events = EventStream::new();
+    let mut repaint = tokio::time::interval(std::time::Duration::from_secs(REPAINT_INTERVAL_SECS));
 
     // Initial paint from whatever the channel currently holds.
     {
@@ -454,27 +479,33 @@ pub async fn run_tui(
         terminal.draw(|f| draw_ui(f, &snap))?;
     }
 
-    loop {
+    let outcome = loop {
         tokio::select! {
             // A newer snapshot arrived.
             changed = rx.changed() => {
                 if changed.is_err() {
-                    // Sender dropped (coordinator gone): exit cleanly; the
-                    // supervisor will surface the fatal reason.
-                    break;
+                    // Sender dropped: the coordinator exited/panicked. Report it
+                    // distinctly so the supervisor surfaces a fatal even if this
+                    // arm wins the race against the coordinator join handle.
+                    break TuiExit::CoordinatorGone;
                 }
                 let snap = rx.borrow_and_update().clone();
                 let snap = snap.unwrap_or_else(|| Snapshot::empty(Utc::now()));
                 terminal.draw(|f| draw_ui(f, &snap))?;
             }
+            // Periodic re-notify: pulls the coordinator's current snapshot (incl.
+            // any error slots set via on_degraded-only failure updates) into the
+            // channel; the resulting `rx.changed()` drives the redraw. Best-effort
+            // - a closed coordinator is caught by the changed() arm.
+            _ = repaint.tick() => {
+                let _ = handle.send(StateMsg::Refresh).await;
+            }
             // A terminal event arrived.
             maybe_event = events.next() => {
                 match maybe_event {
                     Some(Ok(Event::Key(key))) => match classify_key(key) {
-                        Action::Quit => break,
+                        Action::Quit => break TuiExit::UserQuit,
                         Action::Refresh => {
-                            // Best-effort: a closed coordinator is handled by the
-                            // watch.changed() arm on the next loop.
                             let _ = handle.send(StateMsg::Refresh).await;
                         }
                         Action::Ignore => {}
@@ -490,16 +521,16 @@ pub async fn run_tui(
                         // on the early return, restoring the terminal.
                         return Err(e.into());
                     }
-                    None => break, // EventStream ended.
+                    None => break TuiExit::UserQuit, // EventStream ended.
                 }
             }
         }
-    }
+    };
 
     // Explicit drop documents the restore boundary; Drop would fire anyway.
     drop(terminal);
     drop(guard);
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(test)]

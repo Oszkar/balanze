@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 use watcher::Watcher;
 
 use crate::sinks::{JsonlSink, StdoutSink};
-use crate::tui::{ChannelSink, run_tui};
+use crate::tui::{ChannelSink, TuiExit, run_tui};
 
 /// Entry-point called by `cmd_status` (and the `--watch` top-level alias)
 /// when `--watch` is present.
@@ -181,7 +181,17 @@ async fn run_tui_mode() -> Result<()> {
     let mut fatal: Option<String> = None;
     tokio::select! {
         res = run_tui(rx, handle.clone()) => {
-            res?;
+            // A coordinator-gone exit (the run_tui arm winning the race) is
+            // surfaced as fatal too, so a coordinator death is never mistaken
+            // for a clean user quit.
+            if let TuiExit::CoordinatorGone = res? {
+                tracing::error!("snapshot channel closed: state coordinator gone");
+                fatal = Some(
+                    "state_coordinator task exited unexpectedly. \
+                     See `BALANZE_LOG=debug` output for detail. Restart `watch` to recover."
+                        .to_string(),
+                );
+            }
         }
         res = tokio::signal::ctrl_c() => {
             if let Err(e) = res {
