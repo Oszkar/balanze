@@ -4,7 +4,7 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 - minor bumps may break; patch bumps are fixes only.
 
-## [Unreleased]
+## [0.4.1] - CLI maturity - 2026-06-27
 
 CLI maturity: `balanze-cli` becomes a first-class, scriptable surface. `status` is now colored, and `doctor` / `export` / `watch` (TUI) / `completions` land alongside an exit-code taxonomy.
 
@@ -112,7 +112,7 @@ The data updates itself. New live spine = statusline-push + JSONL `notify`; OAut
 OAuth keepalive + the v0.2 de-risk foundations (Tracks A + B), shipped in one tag.
 
 ### Added
-- **Proactive Anthropic OAuth refresh** - `refresh_access_token` + atomic anti-clobber `write_back`; pre-flight refresh + one 401-retry. Bearer no longer hard-fails every ~7–8 h.
+- **Proactive Anthropic OAuth refresh** - `refresh_access_token` + atomic anti-clobber `write_back`; pre-flight refresh + one 401-retry. Bearer no longer hard-fails every ~7-8 h.
 - Cap window anchored to OAuth's `resets_at` (was `now − 5h`), removing clock-drift error.
 - **`snapshot_composer` crate** - one `compose()` shared by the CLI and the future watcher (parity-tested).
 - **`backoff` crate** - exponential policy + async retry, wired into both HTTP clients (CLI fail-fast; watcher standard).
@@ -141,7 +141,7 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.4.0...HEAD
+[0.4.1]: https://github.com/Oszkar/balanze/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Oszkar/balanze/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Oszkar/balanze/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Oszkar/balanze/compare/v0.2.0...v0.3.0
