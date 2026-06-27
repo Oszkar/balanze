@@ -549,6 +549,27 @@ mod tests {
     }
 
     #[test]
+    fn over_limit_extra_usage_still_surfaces_real_billed_value() {
+        // Once usage exceeds the cap, Anthropic flips is_enabled=false but keeps
+        // the real billed numbers. --json must still surface that value (a
+        // consumer reads value_micro_usd + is_enabled), never drop it.
+        let mut s = populated_snapshot();
+        s.claude_oauth.as_mut().unwrap().extra_usage = Some(anthropic_oauth::ExtraUsage {
+            is_enabled: false,
+            monthly_limit_micro_usd: 45_000_000,
+            used_credits_micro_usd: 45_580_000,
+            utilization_percent: 100.0,
+            currency: "USD".to_string(),
+        });
+        let v = render_to_value(&s, false);
+        let eu = &v["claude_oauth"]["extra_usage"];
+        assert_eq!(eu["value_micro_usd"], 45_580_000);
+        assert_eq!(eu["monthly_limit_micro_usd"], 45_000_000);
+        assert_eq!(eu["source"], "extra_usage_billed");
+        assert!(!eu["details"]["is_enabled"].as_bool().unwrap());
+    }
+
+    #[test]
     fn extra_usage_absent_is_null_not_present_as_empty_object() {
         let mut s = populated_snapshot();
         s.claude_oauth = Some(sample_oauth(false, true));
