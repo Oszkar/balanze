@@ -22,7 +22,7 @@ use crate::present::{Bucket, bucket_for_fraction, bucket_for_pace_ratio};
 /// Rendering an over-cap block as "not configured" hid real billed money
 /// exactly when it was highest, so the over-limit case gets its own state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OverageState {
+pub(crate) enum OverageState {
     /// Pay-as-you-go active (under the cap).
     Active,
     /// Usage at or over the monthly cap: `is_enabled` is false but the billed
@@ -33,7 +33,7 @@ enum OverageState {
     NotConfigured,
 }
 
-fn classify_overage(eu: &ExtraUsage) -> OverageState {
+pub(crate) fn classify_overage(eu: &ExtraUsage) -> OverageState {
     if eu.is_enabled {
         OverageState::Active
     } else if eu.monthly_limit_micro_usd > 0
