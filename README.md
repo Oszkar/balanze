@@ -30,26 +30,42 @@ Planning and history live elsewhere: roadmap and phase detail in [`docs/PRD.md`]
 
 ## CLI
 
-`balanze-cli` is the headless surface and the reference composition the tray popover (v0.3.0) renders.
+`balanze-cli` is the headless surface and the reference composition the tray popover (v0.3.0) renders. It is a clap-derive multi-command tool; bare `balanze-cli` (no subcommand) defaults to `status`.
+
+> **Breaking change (CLI surface).** The CLI moved from bare flags to subcommands. `balanze-cli --json` is now `balanze-cli status --json`; `balanze-cli --sections` is now `balanze-cli status --sections`; `balanze-cli --watch` is now `balanze-cli watch`. Bare `balanze-cli` (no subcommand) still defaults to `status`.
 
 ```text
-balanze-cli                       4-quadrant compact status (default)
-balanze-cli status [--json] [--sections] [-v]
+balanze-cli                       4-quadrant compact status (default; colored on
+                                  a TTY, honors NO_COLOR / --no-color)
+balanze-cli status [--json] [--sections]
                                   --sections  per-source detail (cadence bars,
                                               model breakdown, codex window)
                                   --json      machine-readable Snapshot JSON
                                               (wins over --sections if both)
-                                  -v          account-identifying fields
-                                              (org uuid, codex session_id)
-balanze-cli --watch [--json]      Long-running refresh loop. Without --json,
-                                  redraws the compact status in place on TTY
-                                  (separator-prefixed append on non-TTY).
-                                  With --json, emits one compact JSON
-                                  document per snapshot per line — jq-pipeable.
-                                  Ctrl-C to exit. (Also: balanze-cli status
-                                  --watch.)
-balanze-cli setup                 Interactive wizard — run this first
-balanze-cli set-openai-key        Store an sk-admin-… key in the OS keychain
+balanze-cli watch [--json]        Live view. On an interactive TTY without --json
+                                  it draws a bounded ratatui TUI (q / Esc /
+                                  Ctrl-C to quit). Piped/redirected or with
+                                  --json it streams instead: non-TTY appends the
+                                  compact view separator-prefixed; --json emits
+                                  one compact JSON document per snapshot per line
+                                  (jq-pipeable).
+balanze-cli doctor [--offline]    Diagnose each integration (six probes):
+                                  OK/WARN/FAIL per source + an actionable hint +
+                                  a one-line summary. --offline skips the network
+                                  validation of the OpenAI key. The exit code
+                                  reflects the worst finding (see Exit codes).
+balanze-cli export [-o <file>]    Stateless CSV of usage history, re-derived from
+                                  JSONL each run (nothing persisted). Claude
+                                  (day, model) rows carry a list-price leverage
+                                  column (jsonl_list_price, estimate); OpenAI
+                                  current-month billed rows (openai_admin_costs,
+                                  real) sit in a SEPARATE column, never summed.
+                                  -o writes a file instead of stdout. Filters and
+                                  per-day OpenAI buckets are tracked in #114.
+balanze-cli completions <shell>   Print a shell completion script to stdout
+                                  (bash, zsh, fish, powershell, elvish).
+balanze-cli setup                 Interactive wizard - run this first
+balanze-cli set-openai-key        Store an sk-admin-... key in the OS keychain
                                   (masked TTY prompt, or piped stdin)
 balanze-cli clear-openai-key      Remove the OpenAI key from the keychain
 balanze-cli settings              Print current settings.json
@@ -57,15 +73,40 @@ balanze-cli statusline            Claude Code statusLine command: reads the
                                   statusLine JSON on stdin, prints a one-line
                                   status (live 5h/7d quota + session cost).
                                   Also atomically writes the snapshot file
-                                  <ProjectDirs.data>/statusline.snapshot.json
-                                  — the IPC bridge the v0.2 watcher reads.
-balanze-cli help                  This help
+                                  <ProjectDirs.data>/statusline.snapshot.json -
+                                  the IPC bridge the watcher reads.
+balanze-cli help [cmd]            Built-in clap help (also --help / -h).
+
+Global flags (apply to every subcommand, before or after it):
+  -v, --verbose   Surface account-identifying fields (org_uuid, codex
+                  session_id); redacted without it.
+      --quiet     Suppress non-essential output: drops the status compact matrix
+                  (not --json) and trims doctor to WARN/FAIL lines.
+      --no-color  Disable ANSI color (NO_COLOR is also honored; non-TTY
+                  auto-disables).
+      --strict    Treat a degraded source (stale/errored) as failure: exit 5
+                  instead of 0.
+  -V, --version   Print the version and exit.
+
+A hidden `man` subcommand prints the man-page roff to stdout; a build.rs also
+renders the completions + man page into OUT_DIR for packaging.
 
 Env override: BALANZE_OPENAI_KEY=sk-admin-...  (takes precedence over the
 keychain; handy for CI/headless or a locked keychain).
 ```
 
-`balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) — shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit.
+**Exit codes** (for scripting). `main` classifies the outcome once, and `doctor` shares the same taxonomy:
+
+| Code | Meaning |
+|------|---------|
+| 0 | OK (a degraded source still exits 0 unless `--strict`) |
+| 1 | unexpected / other error |
+| 2 | usage error (bad flags / unknown subcommand; clap owns this) |
+| 3 | auth: credentials missing or expired (re-run `claude login`, or set the OpenAI key) |
+| 4 | network: a provider was unreachable |
+| 5 | degraded: a source was stale or errored (only with `--strict`) |
+
+`balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) - shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit.
 
 ```text
 === Balanze status (2026-05-20 04:27:42 UTC) ===
@@ -75,7 +116,7 @@ Anthropic           ✓ 82.0% 5h, 88.0% 7d (oauth)            $20.92/$25.00 over
 OpenAI              ✓ 6.0% 7d (codex go)                    $4.20 (admin costs)
 
 Pace: 5h 82% used / 60% elapsed (1.4×);  7d 88% used / 95% elapsed (0.9×)
-Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (leverage — NOT billed)
+Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (leverage - NOT billed)
 
 Quota % = live server-reported utilization. API $ = real billed spend
 only: Anthropic = pay-as-you-go overage (n/a unless enabled); OpenAI =
@@ -85,7 +126,16 @@ list-price estimate, never charged.
 
 (Without "Extra usage" enabled, the Anthropic API-$ cell reads `— not available` and only the leverage line carries a Claude dollar figure.)
 
-`--sections` expands each source (cadence bars + reset clocks, the per-model JSONL breakdown + burn rate, the estimated-cost detail with LiteLLM provenance, the Codex window, OpenAI spend by line item). `--json` emits a machine-readable document with a top-level `schema_version` (currently `1`); every money cell is `{ value_micro_usd, source, confidence, details }` (OpenAI spend included - i64 micro-USD throughout), so a script can read `.anthropic_api_cost.value_micro_usd` and `.openai.value_micro_usd` uniformly and tell `jsonl_list_price`/`estimate` apart from `openai_admin_costs`/`real` without parsing labels. Two extra cells (v0.2): `.claude_statusline` carries the live `StatuslineFilePayload` envelope (`captured_at` + `payload.rate_limits` + `payload.cost.total_cost_usd` — Claude Code's *session* estimate, an explicitly distinct cost tier), and `.pace` carries a per-window array of `{ key, used_fraction, elapsed_fraction, ratio }` — used % vs elapsed % of each quota window (5h, 7d) plus their ratio, computed by `window::pace`; `ratio` is null right after a window reset. `--json -v` adds account identifiers (`org_uuid`, Codex `session_id`); without `-v` they're redacted. `--watch --json` reuses this same DTO, emitted one JSON object per line.
+`status --sections` expands each source (cadence bars + reset clocks, the per-model JSONL breakdown + burn rate, the estimated-cost detail with LiteLLM provenance, the Codex window, OpenAI spend by line item). `status --json` emits a machine-readable document with a top-level `schema_version` (currently `1`); every money cell is `{ value_micro_usd, source, confidence, details }` (OpenAI spend included - i64 micro-USD throughout), so a script can read `.anthropic_api_cost.value_micro_usd` and `.openai.value_micro_usd` uniformly and tell `jsonl_list_price`/`estimate` apart from `openai_admin_costs`/`real` without parsing labels. Two extra cells (v0.2): `.claude_statusline` carries the live statusLine payload, flattened to `captured_at`, the `five_hour`/`seven_day` rate windows, and `session_cost_usd` (Claude Code's *session* estimate, an explicitly distinct cost tier), and `.pace` carries a per-window array of `{ key, used_fraction, elapsed_fraction, ratio }` - used % vs elapsed % of each quota window (5h, 7d) plus their ratio, computed by `window::pace`; `ratio` is null right after a window reset. Add `-v` (`status --json -v`) for account identifiers (`org_uuid`, Codex `session_id`); without `-v` they're redacted. `watch --json` reuses this same DTO, emitted one JSON object per line (note: `watch --json -v` does not yet surface identifiers; use `status --json -v` for those).
+
+**Shell completions.** `balanze-cli completions <shell>` prints a script to stdout; install it per shell, for example:
+
+```bash
+balanze-cli completions bash > ~/.local/share/bash-completion/completions/balanze-cli
+balanze-cli completions zsh  > "${fpath[1]}/_balanze-cli"
+balanze-cli completions fish > ~/.config/fish/completions/balanze-cli.fish
+balanze-cli completions powershell >> $PROFILE
+```
 
 ## Install
 
@@ -96,7 +146,7 @@ Balanze currently ships **from source only** — no binaries, installers, or Git
 # workspace, so name the package explicitly — it builds the `balanze-cli`
 # binary. Plain `cargo install balanze_cli` will NOT work.
 cargo install --git https://github.com/Oszkar/balanze balanze_cli
-balanze-cli setup      # run this first — wizard for the OpenAI admin key
+balanze-cli setup      # run this first - wizard for the OpenAI admin key
 balanze-cli            # 4-quadrant status
 ```
 
