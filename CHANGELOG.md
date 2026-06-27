@@ -6,15 +6,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
-CLI maturity: `balanze-cli` becomes a first-class, scriptable surface (it is also the entire Linux story). The arg parser moved to clap, `status` is colored, and `doctor` / `export` / `watch` (TUI) / `completions` land alongside an exit-code taxonomy. Durable SQLite history stays deferred to the post-1.0 dashboard - `export` re-derives the series from JSONL and persists nothing.
+CLI maturity: `balanze-cli` becomes a first-class, scriptable surface. `status` is now colored, and `doctor` / `export` / `watch` (TUI) / `completions` land alongside an exit-code taxonomy.
 
 ### Added
 - **clap-derive CLI surface** - the whole command tree moved to clap (new `cli` module); bare `balanze-cli` still defaults to `status`. New global flags `-v`/`--verbose`, `--quiet`, `--no-color`, `--strict`, `--version`, plus auto-generated `--help`/`-h`.
-- **Colored `status`** - the compact 4-quadrant matrix is colored on a TTY (anstream + owo-colors), honoring `NO_COLOR` / `--no-color` / non-TTY; a shared `present` module replicates the tray's 50 / 90 color-bucket thresholds so the CLI and tray cannot diverge.
-- **`doctor [--offline]`** - per-integration diagnostics over a headless six-probe set (OK/WARN/FAIL + an actionable hint + a one-line summary); `--offline` skips the network validation of the OpenAI key. `setup`'s readiness summary reuses the same probes (one keychain read per run).
-- **Exit-code taxonomy** - `0` ok / `1` other / `2` usage / `3` auth / `4` network / `5` degraded-under-`--strict`; `main` classifies the outcome once and `doctor` shares the taxonomy. `--strict` promotes a degraded source (stale/errored, neither auth nor network) to exit 5.
-- **`export [-o <file>]`** - stateless CSV of usage history, re-derived from JSONL each run (nothing persisted): Claude `(day, model)` rows with token counts + a list-price *leverage* column (`jsonl_list_price`, estimate) and OpenAI current-month *billed* rows (`openai_admin_costs`, real) in provenance-separated columns that are never summed. Filters (`--since` / `--until` / `--provider` / `--format`) and per-day OpenAI buckets are deferred to #114.
-- **`watch` TUI** - on an interactive terminal `balanze-cli watch` draws a bounded ratatui/crossterm TUI (`q` / `Esc` / `Ctrl-C` to quit; `r` refreshes); pipes / redirects / `--json` keep the streaming `StdoutSink` (separator-append) / `JsonlSink` (one JSON doc per line) paths.
+- **Colored `status`** - the compact 4-quadrant matrix is colored on a TTY, honoring `NO_COLOR` / `--no-color` / non-TTY; a shared `present` module replicates the tray's 50 / 90 color-bucket thresholds so the CLI and tray cannot diverge.
+- **`doctor [--offline]`** - per-integration diagnostics; `--offline` skips the network validation of the OpenAI key. `setup`'s readiness summary reuses the same probes (one keychain read per run).
+- **Exit-code taxonomy** - `0` ok / `1` other / `2` usage / `3` auth / `4` network / `5` degraded-under-`--strict`; `main` classifies the outcome once and `doctor` shares the taxonomy.
+- **`export [-o <file>]`** - stateless CSV of usage history, re-derived from JSONL each run (nothing persisted): Claude `(day, model)` rows with token counts + a list-price *leverage* column (`jsonl_list_price`, estimate) and OpenAI current-month *billed* rows (`openai_admin_costs`, real) in provenance-separated columns that are never summed.
+- **`watch` TUI** - on an interactive terminal `balanze-cli watch` draws a bounded ratatui/crossterm TUI (`q` / `Esc` / `Ctrl-C` to quit; `r` refreshes).
 - **Shell completions + man page** - `completions <shell>` (bash, zsh, fish, powershell, elvish) and a hidden `man` subcommand print to stdout; a `build.rs` also renders both into `OUT_DIR` for packaging.
 
 ### Changed
