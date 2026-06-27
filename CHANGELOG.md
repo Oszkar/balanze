@@ -22,6 +22,7 @@ CLI maturity: `balanze-cli` becomes a first-class, scriptable surface. `status` 
 - **`--quiet` is scriptable** - it suppresses the human-readable status matrix (but NOT `--json`, which is data) and trims `doctor` to WARN/FAIL lines only.
 
 ### Fixed
+- **Over-limit pay-as-you-go overage now reads as real billed money.** Past the monthly cap, Anthropic flips the `extra_usage` block to `is_enabled=false` while keeping the real billed amount (and clamps utilization to 100%). The compact matrix, `--sections`, and the `watch` TUI all keyed on `is_enabled` alone and mislabeled it "not configured" / "not available" / "not enabled" - hiding real spend exactly when it was highest. Now detected from `used >= limit` and shown as `$X/$Y over limit (real)`.
 - **statusLine UTF-8 BOM tolerance** - `balanze-cli statusline` strips a leading UTF-8 BOM before parsing, so a BOM-prefixed payload (e.g. piped from PowerShell) no longer reads as a parse error.
 
 ## [0.4.0] - UI polish - 2026-06-23
