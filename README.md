@@ -86,7 +86,7 @@ Global flags (apply to every subcommand, before or after it):
                   auto-disables).
       --strict    Treat a degraded source (stale/errored) as failure: exit 5
                   instead of 0.
-      --version   Print the version and exit.
+  -V, --version   Print the version and exit.
 
 A hidden `man` subcommand prints the man-page roff to stdout; a build.rs also
 renders the completions + man page into OUT_DIR for packaging.
