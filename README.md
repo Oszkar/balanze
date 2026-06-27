@@ -1,9 +1,18 @@
-# Balanze
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-white.svg">
+    <img src="docs/assets/logo.svg" alt="Balanze" width="140">
+  </picture>
+</p>
 
-[![CI](https://img.shields.io/github/actions/workflow/status/Oszkar/balanze/ci.yml?branch=main&label=ci&logo=github)](https://github.com/Oszkar/balanze/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/github/v/tag/Oszkar/balanze?label=version&color=blue)](https://github.com/Oszkar/balanze/tags)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust&logoColor=white)](Cargo.toml)
+<h1 align="center">Balanze</h1>
+
+<p align="center">
+  <a href="https://github.com/Oszkar/balanze/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Oszkar/balanze/ci.yml?branch=main&label=ci&logo=github"></a>
+  <a href="https://github.com/Oszkar/balanze/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/Oszkar/balanze?label=version&color=blue"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust&logoColor=white"></a>
+</p>
 
 A local-first utility that consolidates personal AI usage into one normalized view - Claude subscription quota, an estimate of Claude Code's API-rate value, OpenAI Codex quota, and real OpenAI API spend, in one glance. Rust + Tauri 2 + Svelte 5. Side project; Windows 11 and macOS 15+ (CLI also runs on Linux).
 
@@ -31,6 +40,11 @@ Planning and history live elsewhere: roadmap and phase detail in [`docs/PRD.md`]
 ## CLI
 
 `balanze-cli` is the headless surface and the reference composition the tray popover renders. It is a clap-derive multi-command tool; bare `balanze-cli` (no subcommand) defaults to `status`. (Upgrading from an earlier `--git` build? The old bare flags are now subcommands - `--json` / `--sections` moved under `status`, and `--watch` became `watch`.)
+
+<p align="center">
+  <img src="docs/assets/watch-tui.png" alt="balanze-cli watch - live cross-provider TUI" width="640">
+</p>
+<p align="center"><sub><code>balanze-cli watch</code> - a live, bounded TUI showing Anthropic and OpenAI usage side by side.</sub></p>
 
 ```text
 balanze-cli                       4-quadrant compact status (default; colored on
