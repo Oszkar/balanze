@@ -5,6 +5,7 @@
 use std::io::{self, Write};
 
 use anstream::ColorChoice;
+use anthropic_oauth::ExtraUsage;
 use owo_colors::{OwoColorize, Style};
 use state_coordinator::Snapshot;
 
@@ -13,6 +14,36 @@ use crate::format::{
     short_cadence,
 };
 use crate::present::{Bucket, bucket_for_fraction, bucket_for_pace_ratio};
+
+/// How the `extra_usage` overage block should be presented. Anthropic flips
+/// `is_enabled` to false once usage exceeds the monthly cap, but keeps the real
+/// billed `used_credits` / `monthly_limit` and clamps `utilization` to 100.0 -
+/// so a cap breach is detected from `used >= limit`, NOT the utilization %.
+/// Rendering an over-cap block as "not configured" hid real billed money
+/// exactly when it was highest, so the over-limit case gets its own state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverageState {
+    /// Pay-as-you-go active (under the cap).
+    Active,
+    /// Usage at or over the monthly cap: `is_enabled` is false but the billed
+    /// amount is real. (No observed payload has `is_enabled=false` with spend
+    /// *under* the cap, so that case falls through to `NotConfigured`.)
+    OverLimit,
+    /// Never configured, or disabled with no accrued spend.
+    NotConfigured,
+}
+
+fn classify_overage(eu: &ExtraUsage) -> OverageState {
+    if eu.is_enabled {
+        OverageState::Active
+    } else if eu.monthly_limit_micro_usd > 0
+        && eu.used_credits_micro_usd >= eu.monthly_limit_micro_usd
+    {
+        OverageState::OverLimit
+    } else {
+        OverageState::NotConfigured
+    }
+}
 
 pub(crate) fn print_sections(snapshot: &Snapshot, verbose: bool) -> io::Result<()> {
     let stdout = io::stdout();
@@ -73,29 +104,49 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
         // the estimated API-rate figure below. Only meaningful when the user
         // enabled it.
         if let Some(eu) = &oauth.extra_usage {
-            if eu.is_enabled {
-                writeln!(w)?;
-                writeln!(
-                    w,
-                    "EXTRA USAGE (pay-as-you-go overage - REAL billed spend, from Anthropic OAuth):"
-                )?;
-                writeln!(
-                    w,
-                    "  Spent this cycle:  {} of {} ({:.1}%)",
-                    micro_usd_to_display_dollars(eu.used_credits_micro_usd),
-                    micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
-                    eu.utilization_percent
-                )?;
-                writeln!(
-                    w,
-                    "  Real money billed beyond your subscription - NOT the estimate below."
-                )?;
-            } else {
-                writeln!(w)?;
-                writeln!(
-                    w,
-                    "EXTRA USAGE: disabled (no pay-as-you-go overage configured)"
-                )?;
+            match classify_overage(eu) {
+                OverageState::Active => {
+                    writeln!(w)?;
+                    writeln!(
+                        w,
+                        "EXTRA USAGE (pay-as-you-go overage - REAL billed spend, from Anthropic OAuth):"
+                    )?;
+                    writeln!(
+                        w,
+                        "  Spent this cycle:  {} of {} ({:.1}%)",
+                        micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                        micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
+                        eu.utilization_percent
+                    )?;
+                    writeln!(
+                        w,
+                        "  Real money billed beyond your subscription - NOT the estimate below."
+                    )?;
+                }
+                OverageState::OverLimit => {
+                    writeln!(w)?;
+                    writeln!(
+                        w,
+                        "EXTRA USAGE (pay-as-you-go overage - REAL billed spend, from Anthropic OAuth):"
+                    )?;
+                    writeln!(
+                        w,
+                        "  Spent this cycle:  {} of {} (over limit - cap reached)",
+                        micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                        micro_usd_to_display_dollars(eu.monthly_limit_micro_usd)
+                    )?;
+                    writeln!(
+                        w,
+                        "  Real money billed beyond your subscription - NOT the estimate below."
+                    )?;
+                }
+                OverageState::NotConfigured => {
+                    writeln!(w)?;
+                    writeln!(
+                        w,
+                        "EXTRA USAGE: disabled (no pay-as-you-go overage configured)"
+                    )?;
+                }
             }
         }
     } else if let Some(err) = &snapshot.claude_oauth_error {
@@ -405,17 +456,20 @@ fn compact_anthropic_cost(s: &Snapshot) -> String {
     // Measured-only matrix cell: real billed money or nothing. The list-price
     // estimate is NOT here - it renders on the separate "Subscription leverage"
     // line (see compact_subscription_leverage).
-    match s
-        .claude_oauth
-        .as_ref()
-        .and_then(|o| o.extra_usage.as_ref())
-        .filter(|eu| eu.is_enabled)
-    {
-        Some(eu) => format!(
-            "{}/{} overage (real)",
-            micro_usd_to_display_dollars(eu.used_credits_micro_usd),
-            micro_usd_to_display_dollars(eu.monthly_limit_micro_usd)
-        ),
+    match s.claude_oauth.as_ref().and_then(|o| o.extra_usage.as_ref()) {
+        Some(eu) => match classify_overage(eu) {
+            OverageState::Active => format!(
+                "{}/{} overage (real)",
+                micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                micro_usd_to_display_dollars(eu.monthly_limit_micro_usd)
+            ),
+            OverageState::OverLimit => format!(
+                "{}/{} over limit (real)",
+                micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                micro_usd_to_display_dollars(eu.monthly_limit_micro_usd)
+            ),
+            OverageState::NotConfigured => "- not available".to_string(),
+        },
         None => "- not available".to_string(),
     }
 }
@@ -1021,6 +1075,80 @@ mod tests {
         assert!(
             cell.contains("stale"),
             "an expired window must be labeled stale:\n{cell}"
+        );
+    }
+
+    /// The over-limit overage shape Anthropic returns once usage exceeds the
+    /// monthly cap: `is_enabled=false`, real billed `used >= limit`, and
+    /// `utilization` clamped to 100.0 (so the breach is NOT visible in the %).
+    fn over_limit_snapshot() -> Snapshot {
+        let mut snap = fully_populated_snapshot();
+        if let Some(oauth) = snap.claude_oauth.as_mut() {
+            oauth.extra_usage = Some(ExtraUsage {
+                is_enabled: false,
+                monthly_limit_micro_usd: 45_000_000, // $45.00 cap
+                used_credits_micro_usd: 45_580_000,  // $45.58 billed (over cap)
+                utilization_percent: 100.0,          // Anthropic clamps this at 100.0
+                currency: "USD".to_string(),
+            });
+        }
+        snap
+    }
+
+    #[test]
+    fn compact_over_limit_overage_shows_real_billed_not_unavailable() {
+        // The over-limit overage is REAL billed money. Anthropic flips
+        // is_enabled=false past the cap but keeps the numbers; keying the cell
+        // on is_enabled alone hid real money as "- not available". The cap
+        // breach is detected from used >= limit, NOT the clamped utilization.
+        let snap = over_limit_snapshot();
+        assert_eq!(
+            compact_anthropic_cost(&snap),
+            "$45.58/$45.00 over limit (real)"
+        );
+        let out = render_compact(&snap);
+        assert!(
+            out.contains("$45.58/$45.00 over limit (real)"),
+            "over-limit overage must show real billed spend in the matrix cell:\n{out}"
+        );
+    }
+
+    #[test]
+    fn sections_over_limit_overage_shows_spend_not_disabled() {
+        let snap = over_limit_snapshot();
+        let out = render_sections(&snap, false);
+        assert!(
+            out.contains("$45.58") && out.contains("$45.00") && out.contains("over limit"),
+            "over-limit --sections must show the real spend + an over-limit marker:\n{out}"
+        );
+        assert!(
+            !out.contains("disabled (no pay-as-you-go overage configured)"),
+            "over-limit overage must NOT read as 'disabled / not configured':\n{out}"
+        );
+        assert!(
+            out.contains("EXTRA USAGE (pay-as-you-go overage - REAL billed spend"),
+            "over-limit block must keep the REAL billed spend header:\n{out}"
+        );
+    }
+
+    #[test]
+    fn sections_disabled_overage_with_no_spend_still_reads_not_configured() {
+        // Guard the NotConfigured branch: is_enabled=false with no accrued
+        // spend (limit 0 / used 0) must still read as "disabled / not configured".
+        let mut snap = fully_populated_snapshot();
+        if let Some(oauth) = snap.claude_oauth.as_mut() {
+            oauth.extra_usage = Some(ExtraUsage {
+                is_enabled: false,
+                monthly_limit_micro_usd: 0,
+                used_credits_micro_usd: 0,
+                utilization_percent: 0.0,
+                currency: "USD".to_string(),
+            });
+        }
+        let out = render_sections(&snap, false);
+        assert!(
+            out.contains("EXTRA USAGE: disabled (no pay-as-you-go overage configured)"),
+            "disabled-with-no-spend must still read as not configured:\n{out}"
         );
     }
 
