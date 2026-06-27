@@ -36,6 +36,7 @@ use tokio::sync::watch;
 
 use crate::format::micro_usd_to_display_dollars;
 use crate::present::{Bucket, bucket_for_fraction};
+use crate::render::{OverageState, classify_overage};
 
 // ---------------------------------------------------------------------------
 // ChannelSink: republish snapshots into a watch channel.
@@ -289,13 +290,23 @@ fn draw_anthropic(frame: &mut Frame, area: Rect, s: &Snapshot) {
                 let label = short_cadence_label(&c.key);
                 frame.render_widget(quota_gauge(label, c.utilization_percent), rows[i]);
             }
-            // Extra-usage overage (real billed), only when enabled.
-            let eu_line = match oauth.extra_usage.as_ref().filter(|eu| eu.is_enabled) {
-                Some(eu) => format!(
-                    "extra usage {}/{} (real billed)",
-                    micro_usd_to_display_dollars(eu.used_credits_micro_usd),
-                    micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
-                ),
+            // Extra-usage overage (real billed). Mirrors render::classify_overage:
+            // an over-cap overage (is_enabled=false but used >= limit) is real
+            // money, not "not enabled".
+            let eu_line = match oauth.extra_usage.as_ref() {
+                Some(eu) => match classify_overage(eu) {
+                    OverageState::Active => format!(
+                        "extra usage {}/{} (real billed)",
+                        micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                        micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
+                    ),
+                    OverageState::OverLimit => format!(
+                        "extra usage {}/{} over limit (real billed)",
+                        micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                        micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
+                    ),
+                    OverageState::NotConfigured => "extra usage: not enabled".to_string(),
+                },
                 None => "extra usage: not enabled".to_string(),
             };
             frame.render_widget(Paragraph::new(eu_line), rows[2]);
@@ -736,6 +747,37 @@ mod tests {
         assert!(
             text.contains("refresh"),
             "missing refresh keybind in:\n{text}"
+        );
+    }
+
+    #[test]
+    fn tui_render_over_limit_overage_shows_real_billed_not_disabled() {
+        // Over the monthly cap, Anthropic flips is_enabled=false but keeps the
+        // real billed numbers (used >= limit, utilization clamped to 100.0). The
+        // TUI must show the spend with an "over limit" marker, not "not enabled".
+        let mut snap = populated_snapshot();
+        if let Some(oauth) = snap.claude_oauth.as_mut() {
+            oauth.extra_usage = Some(ExtraUsage {
+                is_enabled: false,
+                monthly_limit_micro_usd: 45_000_000, // $45.00 cap
+                used_credits_micro_usd: 45_580_000,  // $45.58 billed (over cap)
+                utilization_percent: 100.0,
+                currency: "USD".to_string(),
+            });
+        }
+        let terminal = render_to_terminal(&snap);
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("over limit"),
+            "over-limit overage must show 'over limit', not 'not enabled':\n{text}"
+        );
+        assert!(
+            text.contains("$45.58"),
+            "over-limit overage must show the real billed spend:\n{text}"
+        );
+        assert!(
+            !text.contains("not enabled"),
+            "over-limit overage must not read 'not enabled':\n{text}"
         );
     }
 
