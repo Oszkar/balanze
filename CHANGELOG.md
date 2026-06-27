@@ -4,17 +4,17 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 - minor bumps may break; patch bumps are fixes only.
 
-## [Unreleased]
+## [0.4.1] - CLI maturity - 2026-06-27
 
-CLI maturity: `balanze-cli` becomes a first-class, scriptable surface (it is also the entire Linux story). The arg parser moved to clap, `status` is colored, and `doctor` / `export` / `watch` (TUI) / `completions` land alongside an exit-code taxonomy. Durable SQLite history stays deferred to the post-1.0 dashboard - `export` re-derives the series from JSONL and persists nothing.
+CLI maturity: `balanze-cli` becomes a first-class, scriptable surface. `status` is now colored, and `doctor` / `export` / `watch` (TUI) / `completions` land alongside an exit-code taxonomy.
 
 ### Added
 - **clap-derive CLI surface** - the whole command tree moved to clap (new `cli` module); bare `balanze-cli` still defaults to `status`. New global flags `-v`/`--verbose`, `--quiet`, `--no-color`, `--strict`, `--version`, plus auto-generated `--help`/`-h`.
-- **Colored `status`** - the compact 4-quadrant matrix is colored on a TTY (anstream + owo-colors), honoring `NO_COLOR` / `--no-color` / non-TTY; a shared `present` module replicates the tray's 50 / 90 color-bucket thresholds so the CLI and tray cannot diverge.
-- **`doctor [--offline]`** - per-integration diagnostics over a headless six-probe set (OK/WARN/FAIL + an actionable hint + a one-line summary); `--offline` skips the network validation of the OpenAI key. `setup`'s readiness summary reuses the same probes (one keychain read per run).
-- **Exit-code taxonomy** - `0` ok / `1` other / `2` usage / `3` auth / `4` network / `5` degraded-under-`--strict`; `main` classifies the outcome once and `doctor` shares the taxonomy. `--strict` promotes a degraded source (stale/errored, neither auth nor network) to exit 5.
-- **`export [-o <file>]`** - stateless CSV of usage history, re-derived from JSONL each run (nothing persisted): Claude `(day, model)` rows with token counts + a list-price *leverage* column (`jsonl_list_price`, estimate) and OpenAI current-month *billed* rows (`openai_admin_costs`, real) in provenance-separated columns that are never summed. Filters (`--since` / `--until` / `--provider` / `--format`) and per-day OpenAI buckets are deferred to #114.
-- **`watch` TUI** - on an interactive terminal `balanze-cli watch` draws a bounded ratatui/crossterm TUI (`q` / `Esc` / `Ctrl-C` to quit; `r` refreshes); pipes / redirects / `--json` keep the streaming `StdoutSink` (separator-append) / `JsonlSink` (one JSON doc per line) paths.
+- **Colored `status`** - the compact 4-quadrant matrix is colored on a TTY, honoring `NO_COLOR` / `--no-color` / non-TTY; a shared `present` module replicates the tray's 50 / 90 color-bucket thresholds so the CLI and tray cannot diverge.
+- **`doctor [--offline]`** - per-integration diagnostics; `--offline` skips the network validation of the OpenAI key. `setup`'s readiness summary reuses the same probes (one keychain read per run).
+- **Exit-code taxonomy** - `0` ok / `1` other / `2` usage / `3` auth / `4` network / `5` degraded-under-`--strict`; `main` classifies the outcome once and `doctor` shares the taxonomy.
+- **`export [-o <file>]`** - stateless CSV of usage history, re-derived from JSONL each run (nothing persisted): Claude `(day, model)` rows with token counts + a list-price *leverage* column (`jsonl_list_price`, estimate) and OpenAI current-month *billed* rows (`openai_admin_costs`, real) in provenance-separated columns that are never summed.
+- **`watch` TUI** - on an interactive terminal `balanze-cli watch` draws a bounded ratatui/crossterm TUI (`q` / `Esc` / `Ctrl-C` to quit; `r` refreshes).
 - **Shell completions + man page** - `completions <shell>` (bash, zsh, fish, powershell, elvish) and a hidden `man` subcommand print to stdout; a `build.rs` also renders both into `OUT_DIR` for packaging.
 
 ### Changed
@@ -22,6 +22,7 @@ CLI maturity: `balanze-cli` becomes a first-class, scriptable surface (it is als
 - **`--quiet` is scriptable** - it suppresses the human-readable status matrix (but NOT `--json`, which is data) and trims `doctor` to WARN/FAIL lines only.
 
 ### Fixed
+- **Over-limit pay-as-you-go overage now reads as real billed money.** Past the monthly cap, Anthropic flips the `extra_usage` block to `is_enabled=false` while keeping the real billed amount (and clamps utilization to 100%). The compact matrix, `--sections`, and the `watch` TUI all keyed on `is_enabled` alone and mislabeled it "not configured" / "not available" / "not enabled" - hiding real spend exactly when it was highest. Now detected from `used >= limit` and shown as `$X/$Y over limit (real)`.
 - **statusLine UTF-8 BOM tolerance** - `balanze-cli statusline` strips a leading UTF-8 BOM before parsing, so a BOM-prefixed payload (e.g. piped from PowerShell) no longer reads as a parse error.
 
 ## [0.4.0] - UI polish - 2026-06-23
@@ -112,7 +113,7 @@ The data updates itself. New live spine = statusline-push + JSONL `notify`; OAut
 OAuth keepalive + the v0.2 de-risk foundations (Tracks A + B), shipped in one tag.
 
 ### Added
-- **Proactive Anthropic OAuth refresh** - `refresh_access_token` + atomic anti-clobber `write_back`; pre-flight refresh + one 401-retry. Bearer no longer hard-fails every ~7–8 h.
+- **Proactive Anthropic OAuth refresh** - `refresh_access_token` + atomic anti-clobber `write_back`; pre-flight refresh + one 401-retry. Bearer no longer hard-fails every ~7-8 h.
 - Cap window anchored to OAuth's `resets_at` (was `now − 5h`), removing clock-drift error.
 - **`snapshot_composer` crate** - one `compose()` shared by the CLI and the future watcher (parity-tested).
 - **`backoff` crate** - exponential policy + async retry, wired into both HTTP clients (CLI fail-fast; watcher standard).
@@ -141,7 +142,7 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.4.0...HEAD
+[0.4.1]: https://github.com/Oszkar/balanze/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Oszkar/balanze/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Oszkar/balanze/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Oszkar/balanze/compare/v0.2.0...v0.3.0
