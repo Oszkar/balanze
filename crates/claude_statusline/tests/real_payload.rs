@@ -21,7 +21,12 @@ fn real_captured_payload_parses_with_rate_limits() {
     let sd = rl.seven_day.expect("seven_day window present");
     assert!((sd.used_percent - 54.0).abs() < 1e-4);
     assert_eq!(sd.resets_at.timestamp(), 1779458400);
-    // $100.03923590000005 × 1e6 = 100_039_235.9… → round-half-away → 100_039_236 micro-USD
+    // $100.03923590000005 × 1e6 = 100_039_235.9... -> round-half-away -> 100_039_236 micro-USD
     assert_eq!(s.session_cost_micro_usd, Some(100_039_236));
     assert_eq!(s.claude_code_version.as_deref(), Some("2.1.144"));
+    assert_eq!(
+        s.model_display_name.as_deref(),
+        Some("Opus 4.7 (1M context)")
+    );
+    assert_eq!(s.context_used_percent, Some(83.0));
 }

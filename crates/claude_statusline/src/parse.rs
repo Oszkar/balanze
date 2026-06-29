@@ -9,11 +9,26 @@ struct RawRoot {
     version: Option<String>,
     cost: Option<RawCost>,
     rate_limits: Option<RawRateLimits>,
+    model: Option<RawModel>,
+    context_window: Option<RawContextWindow>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawCost {
     total_cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawModel {
+    // Absent or null display_name degrades to None (plain Option semantics):
+    // a missing model name must never blank the whole line.
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawContextWindow {
+    // Integer in real payloads (e.g. 83), fractional in others (4.2) - f32.
+    used_percentage: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +99,8 @@ pub fn parse(input: &str) -> Result<StatuslineSnapshot, StatuslineError> {
         rate_limits,
         session_cost_micro_usd,
         claude_code_version: raw.version,
+        model_display_name: raw.model.and_then(|m| m.display_name),
+        context_used_percent: raw.context_window.and_then(|c| c.used_percentage),
     })
 }
 
@@ -301,5 +318,21 @@ mod tests {
         let rl = parse(body).unwrap().rate_limits.unwrap();
         assert!(rl.five_hour.is_none());
         assert!(rl.seven_day.is_none());
+    }
+
+    #[test]
+    fn parses_model_and_context_window() {
+        // FULL already carries model.display_name "Opus" and
+        // context_window.used_percentage 4.2.
+        let s = parse(FULL).expect("parses");
+        assert_eq!(s.model_display_name.as_deref(), Some("Opus"));
+        assert!((s.context_used_percent.unwrap() - 4.2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn model_and_context_absent_are_none() {
+        let s = parse(r#"{"version":"2.1.140"}"#).expect("parses");
+        assert!(s.model_display_name.is_none());
+        assert!(s.context_used_percent.is_none());
     }
 }

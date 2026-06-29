@@ -20,11 +20,15 @@ pub struct RateLimits {
 /// Parsed statusLine payload. `None` fields = "not present in this payload"
 /// (e.g. `rate_limits` is Pro/Max-only and only after the first API
 /// response). `session_cost_micro_usd` is a Claude-side SESSION ESTIMATE
-/// (i64 micro-USD, AGENTS.md §2.1) — a distinct cost tier, never conflated
+/// (i64 micro-USD, AGENTS.md §2.1) - a distinct cost tier, never conflated
 /// with the JSONL list-price estimate or the real `extra_usage` overage.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatuslineSnapshot {
     pub rate_limits: Option<RateLimits>,
     pub session_cost_micro_usd: Option<i64>,
     pub claude_code_version: Option<String>,
+    /// Human model name from `model.display_name` (e.g. "Opus 4.7 (1M context)").
+    pub model_display_name: Option<String>,
+    /// Context-window utilization percent from `context_window.used_percentage`.
+    pub context_used_percent: Option<f32>,
 }
