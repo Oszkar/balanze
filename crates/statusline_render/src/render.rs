@@ -50,6 +50,11 @@ pub fn render(input: &RenderInput) -> String {
 /// or literal text (kept). Segment values may contain spaces - they are
 /// inserted whole, so internal spacing is preserved while inter-segment gaps
 /// collapse to one space.
+///
+/// LITERAL (non-placeholder) tokens are always kept, while `{placeholder}`
+/// tokens are dropped when their segment is empty/None. A custom template that
+/// mixes literals with an absent segment (e.g. `"cost: {cost}"`) can therefore
+/// leave a dangling literal (`"cost:"`) when that segment renders empty.
 fn fill_line(template: &str, input: &RenderInput) -> String {
     let mut parts: Vec<String> = Vec::new();
     for tok in template.split_whitespace() {
@@ -89,7 +94,8 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             let pct = snap.context_used_percent?;
             let c = &segs.context_bar;
             let tone = tone_pct(pct, c.warn, c.critical);
-            let text = format!("{} {:.0}%", bar(pct, c.width), pct);
+            let shown = pct.round() as i64;
+            let text = format!("{} {shown}%", bar(pct, c.width));
             Some(paint(
                 &text,
                 &c.style,
@@ -171,7 +177,8 @@ fn render_window(
     input: &RenderInput,
 ) -> String {
     let tone = tone_pct(w.used_percent, c.warn, c.critical);
-    let mut text = format!("{label} {:.0}%", w.used_percent);
+    let shown = w.used_percent.round() as i64;
+    let mut text = format!("{label} {shown}%");
     if c.show_pace {
         let p = window::pace(w.used_percent as f64, w.resets_at, window_len, input.now);
         if let Some(ratio) = p.ratio {
@@ -350,5 +357,81 @@ mod tests {
             })
         };
         assert_eq!(mk(), mk());
+    }
+
+    #[test]
+    fn display_percent_uses_round_half_away_matching_tone() {
+        // 82.5% must display "83%" (round half away from zero), matching the
+        // tone computation, so the shown number and the color never disagree.
+        let c = cfg();
+        let mut s = snap();
+        s.rate_limits
+            .as_mut()
+            .unwrap()
+            .five_hour
+            .as_mut()
+            .unwrap()
+            .used_percent = 82.5;
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: false,
+        });
+        assert!(
+            out.contains("5h 83%"),
+            "82.5 must round to 83 in display: {out}"
+        );
+    }
+
+    #[test]
+    fn no_pace_arrow_right_after_reset() {
+        // A window whose resets_at is exactly now + window_len has elapsed_fraction
+        // 0, so window::pace returns ratio None -> no arrow. Set BOTH windows so
+        // no arrow appears anywhere.
+        let c = cfg();
+        let n = now();
+        let mut s = snap();
+        {
+            let rl = s.rate_limits.as_mut().unwrap();
+            rl.five_hour.as_mut().unwrap().resets_at = n + chrono::Duration::hours(5);
+            rl.seven_day.as_mut().unwrap().resets_at = n + chrono::Duration::days(7);
+        }
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: n,
+            color: false,
+        });
+        assert!(
+            !out.contains('↑') && !out.contains('↓'),
+            "no pace arrow when ratio is None: {out}"
+        );
+    }
+
+    #[test]
+    fn usage_flags_suppress_pace_and_reset() {
+        let mut c = cfg();
+        c.segments.usage.show_pace = false;
+        c.segments.usage.show_reset = false;
+        let s = snap();
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: false,
+        });
+        assert!(out.contains("5h 82%"), "{out}");
+        assert!(
+            !out.contains('↑') && !out.contains('↓'),
+            "no pace arrow when show_pace=false: {out}"
+        );
+        assert!(
+            !out.contains('('),
+            "no reset countdown when show_reset=false: {out}"
+        );
     }
 }
