@@ -436,6 +436,26 @@ mod tests {
     }
 
     #[test]
+    fn statusline_partial_segment_override_keeps_curated_thresholds() {
+        // Overriding only ONE sub-field of a segment must still fill that
+        // segment's curated thresholds (serde fills absent fields from each
+        // field's serde-default, not the struct Default).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"segments":{"cost":{"style":"fg:#aabbcc"},"context_bar":{"style":"fg:#ddeeff"}}}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(s.statusline.segments.cost.warn_micro_usd, 2_000_000);
+        assert_eq!(s.statusline.segments.cost.critical_micro_usd, 5_000_000);
+        assert_eq!(s.statusline.segments.cost.style, "fg:#aabbcc");
+        assert_eq!(s.statusline.segments.context_bar.warn, 40);
+        assert_eq!(s.statusline.segments.context_bar.critical, 70);
+    }
+
+    #[test]
     fn statusline_roundtrips() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
