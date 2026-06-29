@@ -1,0 +1,45 @@
+{
+  "planPath": "docs/superpowers/plans/2026-06-30-statusline-pr1-engine-config.md",
+  "tasks": [
+    {
+      "id": 9,
+      "subject": "Task 1: Scaffold statusline_render crate + style->ANSI parser",
+      "status": "pending",
+      "description": "**Goal:** Create the `statusline_render` crate and its pure `style` module that turns a cship-like style spec into a 24-bit ANSI wrapper.\n\n**Files:**\n- Create: crates/statusline_render/Cargo.toml\n- Create: crates/statusline_render/src/lib.rs\n- Create: crates/statusline_render/src/style.rs\n\n**Acceptance Criteria:**\n- cargo build -p statusline_render succeeds\n- apply_style(\"\", \"x\") returns \"x\"\n- apply_style(\"bold fg:#7aa2f7\", \"x\") returns the 24-bit ANSI wrapper\n- invalid hex and unknown tokens ignored\n\n**Verify:** cargo nextest run -p statusline_render\n\n```json:metadata\n{\"files\": [\"crates/statusline_render/Cargo.toml\", \"crates/statusline_render/src/lib.rs\", \"crates/statusline_render/src/style.rs\"], \"verifyCommand\": \"cargo nextest run -p statusline_render\", \"acceptanceCriteria\": [\"cargo build -p statusline_render succeeds\", \"apply_style blank spec returns text unchanged\", \"apply_style bold+fg produces 24-bit ANSI wrapper\", \"invalid hex and unknown tokens ignored\"]}\n```"
+    },
+    {
+      "id": 10,
+      "subject": "Task 2: StatuslineConfig section in settings",
+      "status": "pending",
+      "description": "**Goal:** Add a curated, additive `statusline` config (theme, line templates, per-segment styles + integer thresholds) to settings::Settings, no schema version bump.\n\n**Files:**\n- Create: crates/settings/src/statusline.rs\n- Modify: crates/settings/src/lib.rs\n\n**Acceptance Criteria:**\n- StatuslineConfig::default curated (theme dark, cost warn 2_000_000 micro-USD, context warn 40, usage warn 70, show_pace true)\n- absent section defaults to curated config without version bump\n- custom config round-trips save/load\n- Settings still derives Eq (integer thresholds only)\n\n**Verify:** cargo nextest run -p settings\n\n```json:metadata\n{\"files\": [\"crates/settings/src/statusline.rs\", \"crates/settings/src/lib.rs\"], \"verifyCommand\": \"cargo nextest run -p settings\", \"acceptanceCriteria\": [\"StatuslineConfig::default values are curated\", \"absent statusline section defaults to curated config without version bump\", \"custom statusline config round-trips save/load\", \"Settings still derives Eq\"]}\n```"
+    },
+    {
+      "id": 11,
+      "subject": "Task 3: Extend claude_statusline parser with model + context fields",
+      "status": "pending",
+      "description": "**Goal:** Surface model.display_name and context_window.used_percentage on StatuslineSnapshot with drift tolerance matching the existing parser.\n\n**Files:**\n- Modify: crates/claude_statusline/src/types.rs\n- Modify: crates/claude_statusline/src/parse.rs\n- Modify: crates/claude_statusline/tests/real_payload.rs\n\n**Acceptance Criteria:**\n- parse(FULL).model_display_name == Some(\"Opus\"); context_used_percent ~= 4.2\n- absent model/context_window yield None without error\n- existing parser tests still pass\n- real_payload fixture test asserts the new fields\n\n**Verify:** cargo nextest run -p claude_statusline\n\n```json:metadata\n{\"files\": [\"crates/claude_statusline/src/types.rs\", \"crates/claude_statusline/src/parse.rs\", \"crates/claude_statusline/tests/real_payload.rs\"], \"verifyCommand\": \"cargo nextest run -p claude_statusline\", \"acceptanceCriteria\": [\"parse surfaces model.display_name and context_window.used_percentage\", \"absent model/context_window yield None without error\", \"existing parser tests still pass\", \"real_payload fixture test asserts the new fields\"]}\n```"
+    },
+    {
+      "id": 12,
+      "subject": "Task 4: Renderer core - segments, layout, countdown, pace (plain text)",
+      "status": "pending",
+      "blockedBy": [9, 10, 11],
+      "description": "**Goal:** Implement statusline_render::render producing the configured lines in plain text (model, context_bar, cost, usage 5h/7d with reset countdown + pace). Coloring stubbed via a single paint seam. Cross-provider placeholders render empty.\n\n**Files:**\n- Create: crates/statusline_render/src/render.rs\n- Modify: crates/statusline_render/src/lib.rs\n\n**Acceptance Criteria:**\n- default layout renders model/context/cost/5h+7d with reset countdown and pace arrow (color=false)\n- absent segments collapse: no unfilled placeholders, no double spaces, no blank lines\n- render is pure for fixed (snapshot, config, now)\n\n**Verify:** cargo nextest run -p statusline_render\n\n```json:metadata\n{\"files\": [\"crates/statusline_render/src/render.rs\", \"crates/statusline_render/src/lib.rs\"], \"verifyCommand\": \"cargo nextest run -p statusline_render\", \"acceptanceCriteria\": [\"default layout renders model/context/cost/5h+7d with countdown and pace arrow\", \"absent segments collapse cleanly\", \"render is pure\"]}\n```"
+    },
+    {
+      "id": 13,
+      "subject": "Task 5: Threshold coloring via the paint seam",
+      "status": "pending",
+      "blockedBy": [12],
+      "description": "**Goal:** Fill the paint seam so segments emit per-tone ANSI from config (base/warn/critical styles), gated by the color flag. No other renderer change.\n\n**Files:**\n- Modify: crates/statusline_render/src/render.rs\n\n**Acceptance Criteria:**\n- color=false emits no ANSI escapes\n- color=true wraps a critical-tone segment in the configured critical_style ANSI\n- blank style string yields no escapes even with color=true\n\n**Verify:** cargo nextest run -p statusline_render\n\n```json:metadata\n{\"files\": [\"crates/statusline_render/src/render.rs\"], \"verifyCommand\": \"cargo nextest run -p statusline_render\", \"acceptanceCriteria\": [\"color=false emits no ANSI escapes\", \"color=true wraps toned segment in configured critical_style ANSI\", \"blank style yields no escapes even with color=true\"]}\n```"
+    },
+    {
+      "id": 14,
+      "subject": "Task 6: Rewire balanze-cli statusline onto the renderer",
+      "status": "pending",
+      "blockedBy": [13],
+      "description": "**Goal:** Replace format_statusline_from_snapshot with statusline_render::render (load settings, color from NO_COLOR only, now=Utc::now(), cross=None), keep the IPC snapshot write + frozen no-arg contract, update tests.\n\n**Files:**\n- Modify: crates/balanze_cli/Cargo.toml\n- Modify: crates/balanze_cli/src/statusline.rs\n\n**Acceptance Criteria:**\n- statusline prints new multi-line rendered output and still writes the IPC snapshot\n- color gated on NO_COLOR only, not TTY\n- parse error prints non-empty fallback without panic\n- snapshot-write tests retained; literal updated with new fields; render smoke test added\n\n**Verify:** cargo nextest run -p balanze_cli; cargo clippy --workspace --all-targets -- -D warnings\n\n```json:metadata\n{\"files\": [\"crates/balanze_cli/Cargo.toml\", \"crates/balanze_cli/src/statusline.rs\"], \"verifyCommand\": \"cargo nextest run -p balanze_cli\", \"acceptanceCriteria\": [\"statusline prints new multi-line output and still writes the IPC snapshot\", \"color gated on NO_COLOR only not TTY\", \"parse error prints non-empty fallback without panic\", \"snapshot-write tests retained, literal updated, render smoke test added\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-06-30T00:00:00Z"
+}
