@@ -64,7 +64,7 @@ clap_complete = "4"
 # clap_mangen is NOT in lockstep with clap's version line (it uses its own 0.2.x
 # series targeting clap 4). Verified: 0.2 resolves to 0.2.33 which is
 # clap-4 compatible. Build-dep for build.rs + runtime dep for the `man` handler.
-clap_mangen = "0.2"
+clap_mangen = "0.3"
 
 [workspace.dependencies.wiremock]
 version = "0.6"
