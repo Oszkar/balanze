@@ -14,8 +14,8 @@ pub fn apply_style(spec: &str, text: &str) -> String {
 }
 
 /// Parse a style spec into ANSI SGR parameter fragments (no escape framing).
-/// Exposed for unit testing.
-pub fn ansi_codes(spec: &str) -> Vec<String> {
+/// Internal: used by `apply_style` and the unit tests.
+pub(crate) fn ansi_codes(spec: &str) -> Vec<String> {
     let mut codes = Vec::new();
     for tok in spec.split_whitespace() {
         match tok {
@@ -40,7 +40,7 @@ pub fn ansi_codes(spec: &str) -> Vec<String> {
 }
 
 fn parse_hex(hex: &str) -> Option<(u8, u8, u8)> {
-    if hex.len() != 6 {
+    if hex.len() != 6 || !hex.is_ascii() {
         return None;
     }
     let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -80,6 +80,7 @@ mod tests {
     fn invalid_hex_and_unknown_tokens_ignored() {
         assert!(ansi_codes("fg:#zzzzzz").is_empty());
         assert!(ansi_codes("fg:#abc").is_empty()); // wrong length
+        assert!(ansi_codes("fg:#aé00b").is_empty()); // 6 bytes, non-ASCII
         assert!(ansi_codes("sparkle wobble").is_empty());
         assert_eq!(ansi_codes("bogus bold"), vec!["1"]);
     }
