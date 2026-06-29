@@ -480,12 +480,26 @@ mod tests {
     }
 
     #[test]
-    fn blank_style_yields_no_escapes_even_with_color() {
+    fn blank_styles_yield_no_escapes_even_with_color() {
+        // With every segment style blank, color=true must still produce zero
+        // ANSI: apply_style returns text unchanged for a blank spec.
         let mut c = cfg();
+        c.segments.model.style = String::new();
+        c.segments.agent.style = String::new();
+        c.segments.context_bar.style = String::new();
+        c.segments.context_bar.warn_style = String::new();
+        c.segments.context_bar.critical_style = String::new();
         c.segments.cost.style = String::new();
         c.segments.cost.warn_style = String::new();
         c.segments.cost.critical_style = String::new();
-        let s = snap(); // cost $2.50 -> warn (>=2_000_000)
+        c.segments.usage.style = String::new();
+        c.segments.usage.warn_style = String::new();
+        c.segments.usage.critical_style = String::new();
+        c.segments.codex.style = String::new();
+        c.segments.codex.warn_style = String::new();
+        c.segments.codex.critical_style = String::new();
+        c.segments.openai_cost.style = String::new();
+        let s = snap();
         let out = render(&RenderInput {
             snapshot: &s,
             cross: None,
@@ -494,10 +508,35 @@ mod tests {
             color: true,
         });
         assert!(out.contains("💰 $2.50"), "cost text present: {out:?}");
-        // The cost substring must not be wrapped (blank warn_style).
         assert!(
-            !out.contains("\x1b[") || !out.split("💰").nth(1).unwrap_or("").starts_with('m'),
-            "blank style must not wrap cost: {out:?}"
+            !out.contains('\x1b'),
+            "blank styles must produce no ANSI: {out:?}"
+        );
+    }
+
+    #[test]
+    fn color_true_wraps_warn_tone_with_warn_style() {
+        // 5h at 75% -> warn (>=70, <90); default usage warn_style = "fg:#e0af68"
+        // = rgb(224,175,104), no bold.
+        let c = cfg();
+        let mut s = snap();
+        s.rate_limits
+            .as_mut()
+            .unwrap()
+            .five_hour
+            .as_mut()
+            .unwrap()
+            .used_percent = 75.0;
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(
+            out.contains("\x1b[38;2;224;175;104m"),
+            "warn style applied: {out:?}"
         );
     }
 }
