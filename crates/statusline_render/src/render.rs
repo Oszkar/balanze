@@ -200,18 +200,18 @@ fn render_window(
     )
 }
 
-/// Style seam. A LATER task replaces the body with real ANSI application; here
-/// it returns the text unchanged so the layout/text can be tested in isolation.
+/// Apply the tone's configured style to `text`, gated by `color`. A blank style
+/// string (or `color=false`) returns the text unchanged.
 fn paint(text: &str, base: &str, warn: &str, crit: &str, tone: Tone, color: bool) -> String {
-    let _ = (
-        base,
-        warn,
-        crit,
-        tone,
-        color,
-        apply_style as fn(&str, &str) -> String,
-    );
-    text.to_string()
+    if !color {
+        return text.to_string();
+    }
+    let spec = match tone {
+        Tone::Base => base,
+        Tone::Warn => warn,
+        Tone::Critical => crit,
+    };
+    apply_style(spec, text)
 }
 
 fn tone_pct(pct: f32, warn: u32, critical: u32) -> Tone {
@@ -432,6 +432,72 @@ mod tests {
         assert!(
             !out.contains('('),
             "no reset countdown when show_reset=false: {out}"
+        );
+    }
+
+    #[test]
+    fn color_false_has_no_escapes() {
+        let c = cfg();
+        let s = snap();
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: false,
+        });
+        assert!(!out.contains('\x1b'), "no ANSI when color=false: {out:?}");
+    }
+
+    #[test]
+    fn color_true_wraps_toned_segments() {
+        let c = cfg();
+        // 5h at 95% -> critical (>=90); default critical_style = "bold fg:#f7768e".
+        let mut s = snap();
+        s.rate_limits
+            .as_mut()
+            .unwrap()
+            .five_hour
+            .as_mut()
+            .unwrap()
+            .used_percent = 95.0;
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(
+            out.contains('\x1b'),
+            "ANSI present when color=true: {out:?}"
+        );
+        // bold + truecolor #f7768e = rgb(247,118,142)
+        assert!(
+            out.contains("\x1b[1;38;2;247;118;142m"),
+            "critical style applied to 5h: {out:?}"
+        );
+    }
+
+    #[test]
+    fn blank_style_yields_no_escapes_even_with_color() {
+        let mut c = cfg();
+        c.segments.cost.style = String::new();
+        c.segments.cost.warn_style = String::new();
+        c.segments.cost.critical_style = String::new();
+        let s = snap(); // cost $2.50 -> warn (>=2_000_000)
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(out.contains("💰 $2.50"), "cost text present: {out:?}");
+        // The cost substring must not be wrapped (blank warn_style).
+        assert!(
+            !out.contains("\x1b[") || !out.split("💰").nth(1).unwrap_or("").starts_with('m'),
+            "blank style must not wrap cost: {out:?}"
         );
     }
 }
