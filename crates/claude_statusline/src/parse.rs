@@ -335,4 +335,18 @@ mod tests {
         assert!(s.model_display_name.is_none());
         assert!(s.context_used_percent.is_none());
     }
+
+    #[test]
+    fn null_optional_inner_fields_degrade_to_none() {
+        // model.display_name and context_window.used_percentage are optional
+        // display fields: an explicit null degrades to None (plain Option),
+        // NOT SchemaDrift. The counterpart to
+        // explicit_null_required_field_is_schema_drift_not_dropped, which pins
+        // the opposite contract for required numerics.
+        let body =
+            r#"{"model":{"id":"x","display_name":null},"context_window":{"used_percentage":null}}"#;
+        let s = parse(body).expect("optional inner nulls must not error");
+        assert!(s.model_display_name.is_none());
+        assert!(s.context_used_percent.is_none());
+    }
 }
