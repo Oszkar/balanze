@@ -21,6 +21,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{debug, warn};
 
+pub mod statusline;
+pub use statusline::StatuslineConfig;
+
 const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +49,11 @@ pub struct Settings {
     /// serde-default false so a fresh install (and older files) get it once.
     #[serde(default)]
     pub seen_welcome: bool,
+    /// Statusline display configuration (segments, styles, thresholds, theme).
+    /// Additive serde-default: an older settings.json gets the curated default
+    /// (no schema version bump). Consumed by the `statusline_render` crate.
+    #[serde(default)]
+    pub statusline: StatuslineConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +90,7 @@ impl Default for Settings {
             providers: ProviderSettings::default(),
             oauth_poll_interval_secs: default_poll_interval(),
             seen_welcome: false,
+            statusline: StatuslineConfig::default(),
         }
     }
 }
@@ -396,6 +405,46 @@ mod tests {
         save_to(&s, &path).expect("save");
         let loaded = load_from(&path).expect("load");
         assert_eq!(loaded.oauth_poll_interval_secs, 600);
+    }
+
+    #[test]
+    fn statusline_defaults_are_curated() {
+        let c = crate::statusline::StatuslineConfig::default();
+        assert_eq!(c.theme, "dark");
+        assert!(!c.lines.is_empty(), "default lines present");
+        assert!(c.segments.usage.show_pace);
+        assert!(c.segments.usage.show_reset);
+        assert_eq!(c.segments.cost.warn_micro_usd, 2_000_000);
+        assert_eq!(c.segments.cost.critical_micro_usd, 5_000_000);
+        assert_eq!(c.segments.context_bar.warn, 40);
+        assert_eq!(c.segments.context_bar.critical, 70);
+        assert_eq!(c.segments.usage.warn, 70);
+        assert_eq!(c.segments.usage.critical, 90);
+    }
+
+    #[test]
+    fn statusline_absent_defaults_to_curated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"providers":{"openai_enabled":false,"anthropic_enabled":true,"codex_enabled":true}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(s.statusline, crate::statusline::StatuslineConfig::default());
+    }
+
+    #[test]
+    fn statusline_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut s = Settings::default();
+        s.statusline.theme = "light".to_string();
+        s.statusline.segments.cost.warn_micro_usd = 9_000_000;
+        save_to(&s, &path).expect("save");
+        let loaded = load_from(&path).expect("load");
+        assert_eq!(s, loaded);
     }
 
     #[test]
