@@ -55,7 +55,7 @@ owo-colors = "4"
 # depend on the narrow `futures-util` (already in the tree via reqwest) rather
 # than the full `futures` facade - the loop only needs `StreamExt::next`.
 ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = { version = "0.3", default-features = false }
 
 tokio = { workspace = true }
