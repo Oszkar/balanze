@@ -54,7 +54,7 @@ owo-colors = "4"
 # pulls a futures Stream so the select loop can `StreamExt::next` on input. We
 # depend on the narrow `futures-util` (already in the tree via reqwest) rather
 # than the full `futures` facade - the loop only needs `StreamExt::next`.
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = { version = "0.3", default-features = false }
 
