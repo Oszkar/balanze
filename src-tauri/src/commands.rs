@@ -227,7 +227,7 @@ pub struct WatcherReload(pub tokio::sync::mpsc::Sender<()>);
 /// means the change applies on the next natural cycle / restart, never an error
 /// to the user (the settings are already persisted by the time we get here).
 fn apply_settings_live(coord: &StateCoordinatorHandle, reload: &WatcherReload, settings: Settings) {
-    let _ = coord.try_send(StateMsg::SettingsChanged(settings));
+    let _ = coord.try_send(StateMsg::SettingsChanged(Box::new(settings)));
     let _ = reload.0.try_send(());
 }
 

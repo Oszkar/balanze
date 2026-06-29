@@ -198,7 +198,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             if !p.codex_enabled {
                 clear_source(&mut state.snapshot, Source::CodexQuota);
             }
-            state.last_settings = Some(s);
+            state.last_settings = Some(*s);
             sink.on_snapshot(&state.snapshot);
         }
         StateMsg::SourceUnavailable { source, reason } => match source {
@@ -674,7 +674,10 @@ mod tests {
     async fn settings_changed_msg_does_not_panic() {
         let (handle, _join) = spawn(NullSink);
         let s = Settings::default();
-        handle.send(StateMsg::SettingsChanged(s)).await.unwrap();
+        handle
+            .send(StateMsg::SettingsChanged(Box::new(s)))
+            .await
+            .unwrap();
         // Followed by a Query to confirm the actor is still alive and processing:
         let _ = handle.query().await.unwrap();
     }
@@ -713,7 +716,10 @@ mod tests {
             },
             ..Settings::default()
         };
-        handle.send(StateMsg::SettingsChanged(s)).await.unwrap();
+        handle
+            .send(StateMsg::SettingsChanged(Box::new(s)))
+            .await
+            .unwrap();
 
         let after = handle.query().await.unwrap();
         assert!(

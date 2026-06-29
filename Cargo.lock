@@ -383,6 +383,7 @@ dependencies = [
  "settings",
  "snapshot_composer",
  "state_coordinator",
+ "statusline_render",
  "tempfile",
  "tokio",
  "tracing",
