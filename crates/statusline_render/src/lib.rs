@@ -6,5 +6,6 @@
 //! Cross-provider segments (codex, openai_cost) and the per-turn cache arrive
 //! in later PRs; their placeholders render empty until then.
 
+mod render;
 pub mod style;
-// `render` module is added in Task 4.
+pub use render::{CrossProvider, RenderInput, render};
