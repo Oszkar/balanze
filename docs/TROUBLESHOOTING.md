@@ -35,3 +35,15 @@ The `settings` crate must use the atomic-write pattern: write to `settings.json.
 ## "Anthropic Console scrape stopped working overnight"
 
 Expected. Console UI changes will break scrapes regularly — that's why the design defers this to v0.3 (now opt-in) and treats it as best-effort. Mark the data stale via `DegradedState::parse_error` and inform the user. Don't try to "make the scrape more robust" by spending a week on it; if the official endpoint isn't there, that's the answer.
+
+## "balanze-cli statusline is wired but the Claude Code status line is blank (Windows)"
+
+Almost always the `statusLine.command` path in `~/.claude/settings.json` uses single backslashes. Two things mangle it at once: JSON parses `\b` / `\t` / `\r` as control characters (so `...\balanze\target\release...` decodes to backspace / tab / carriage-return garbage), and Claude Code runs the status line through Git Bash on Windows, where backslashes are escape characters. Both fail silently - the mangled command isn't found, so the line is just empty (no error surfaces).
+
+Fix: use forward slashes, which are valid in Windows file APIs, JSON, and Git Bash all at once: `"command": "e:/Programming/balanze/target/release/balanze-cli.exe statusline"`. To prove the binary itself is fine, pipe a payload straight to it: `balanze-cli statusline < some-payload.json` (try `crates/claude_statusline/tests/fixtures/real-payload.json`). Once `balanze-cli` is on `PATH` (after distribution), the bare `balanze-cli statusline` invocation avoids absolute-path escaping entirely.
+
+## "`bun run tauri dev` hangs with `transport invoke timed out after 60000ms`"
+
+A Vite 8 module-runner stall while SvelteKit's dev server evaluates its server runtime module (`@sveltejs/kit/.../server/index.js`), almost always right after clearing `.vite` / `.svelte-kit` forces a cold dependency re-optimization. It is a frontend dev-server cold-start problem, not app code: the Rust side builds and launches fine, and the app is SPA (`src/routes/+layout.ts` sets `ssr = false`), so this is the module-runner transport, not real SSR.
+
+Fixes, in order: (1) just retry - the failed run warms `.vite`, so the second run usually succeeds (kill any lingering `vite` / `balanze.exe` holding port 1420 first); (2) isolate with `bun run dev` alone and open <http://localhost:1420> to tell Vite/SvelteKit apart from the Tauri webview; (3) clean reinstall: `Remove-Item -Recurse -Force node_modules, .svelte-kit; bun install`; (4) `bun run tauri build --no-bundle` compiles the frontend with `vite build` (no dev module-runner) and runs the produced binary, sidestepping the hang for a one-off desktop smoke. Avoid pre-clearing `.vite` unless you need to - clearing it is what forces the slow cold optimize that times out.
