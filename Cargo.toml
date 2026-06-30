@@ -66,7 +66,5 @@ clap_complete = "4"
 # clap-4 compatible. Build-dep for build.rs + runtime dep for the `man` handler.
 clap_mangen = "0.3"
 
-tempfile = "3"
-
 [workspace.dependencies.wiremock]
 version = "0.6"

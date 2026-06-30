@@ -108,9 +108,11 @@ fn write(dir: &Path, entry: &OpenAiCostEntry) {
 fn try_write(dir: &Path, entry: &OpenAiCostEntry) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let final_path = dir.join(FILE_NAME);
+    // Fixed tmp name: concurrent writers from distinct processes can silently lose the race (rename is still atomic, so the file is never corrupt). Acceptable for a best-effort cache.
     let tmp_path = dir.join(format!("{FILE_NAME}.tmp"));
     let bytes = serde_json::to_vec(entry).map_err(std::io::Error::other)?;
     std::fs::write(&tmp_path, &bytes)?;
+    // No sync_all: best-effort cache; a crash before flush just triggers a refetch.
     std::fs::rename(&tmp_path, &final_path)?;
     Ok(())
 }
@@ -120,6 +122,8 @@ mod tests {
     use super::*;
     use chrono::{Duration, TimeZone as _, Utc};
     use tempfile::tempdir;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn t0() -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 30, 12, 0, 0).unwrap()
@@ -138,6 +142,10 @@ mod tests {
         let e = read(dir.path(), "fp").expect("entry");
         assert_eq!(e.total_micro_usd, Some(4_200_000));
         assert!(is_fresh(&e, t0() + Duration::seconds(299)));
+        assert!(
+            !is_fresh(&e, t0() + Duration::seconds(300)),
+            "exactly TTL is not fresh (< not <=)"
+        );
         assert!(!is_fresh(&e, t0() + Duration::seconds(301)));
         // no leftover tmp file
         let leftovers: Vec<_> = std::fs::read_dir(dir.path())
@@ -175,6 +183,10 @@ mod tests {
         assert_eq!(e.total_micro_usd, None);
         assert!(!is_fresh(&e, t0()));
         assert!(in_cooldown(&e, t0()));
+        assert!(
+            !in_cooldown(&e, t0() + Duration::seconds(60)),
+            "exactly the cooldown window is not in cooldown (< not <=)"
+        );
     }
 
     #[test]
@@ -194,10 +206,10 @@ mod tests {
 
     #[test]
     fn cache_dir_path_honors_override() {
-        // serialize env mutation with the process-wide lock pattern if added;
-        // here a unique value avoids cross-test races.
+        // Serialize env mutation across every env-touching test in this module.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
-        // SAFETY: single-threaded test; restore after.
+        // SAFETY: ENV_LOCK serializes env-mutating tests in this module; restore after.
         unsafe { std::env::set_var("BALANZE_CACHE_DIR_OVERRIDE", dir.path()) };
         let p = cache_dir_path().expect("path");
         assert_eq!(p, dir.path().join("statusline"));
