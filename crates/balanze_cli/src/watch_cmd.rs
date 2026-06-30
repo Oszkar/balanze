@@ -57,7 +57,10 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
         settings::Settings::default()
     });
 
-    let (handle, coord_join) = spawn_coord(sink);
+    let (handle, coord_join) = match state_coordinator::snapshot_file_path() {
+        Some(path) => spawn_coord(state_coordinator::SnapshotFileSink::new(sink, path)),
+        None => spawn_coord(sink),
+    };
     let watcher_handles = Watcher::spawn(handle.clone(), &settings);
 
     // Per-task watchdog: each watcher handle gets a wrapper that signals
@@ -148,7 +151,10 @@ async fn run_tui_mode() -> Result<()> {
     });
 
     let (sink, rx) = ChannelSink::new();
-    let (handle, mut coord_join) = spawn_coord(sink);
+    let (handle, mut coord_join) = match state_coordinator::snapshot_file_path() {
+        Some(path) => spawn_coord(state_coordinator::SnapshotFileSink::new(sink, path)),
+        None => spawn_coord(sink),
+    };
     let watcher_handles = Watcher::spawn(handle.clone(), &settings);
 
     // Per-task watchdog mirroring `run_with_sink`: surface an unexpected watcher

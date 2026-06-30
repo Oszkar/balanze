@@ -332,7 +332,17 @@ fn boot_backend(app: &App, rt: &tokio::runtime::Handle) {
     let _enter = rt.enter();
 
     let sink = TauriSink::new(app.handle().clone());
-    let (handle, coord_join) = state_coordinator::spawn(sink);
+    let (handle, coord_join) = match state_coordinator::snapshot_file_path() {
+        Some(path) => {
+            state_coordinator::spawn(state_coordinator::SnapshotFileSink::new(sink, path))
+        }
+        None => {
+            tracing::warn!(
+                "could not resolve snapshot.json path; cross-provider statusline will fall back to Claude-only"
+            );
+            state_coordinator::spawn(sink)
+        }
+    };
     app.manage(handle.clone());
 
     // Live settings-apply: settings/key commands signal a reload; the
