@@ -4892,7 +4892,11 @@ version = "0.4.1"
 dependencies = [
  "chrono",
  "claude_statusline",
+ "directories",
+ "serde",
+ "serde_json",
  "settings",
+ "tempfile",
  "tracing",
  "window",
 ]

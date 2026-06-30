@@ -14,3 +14,9 @@ settings = { path = "../settings" }
 window = { path = "../window" }
 chrono = { workspace = true }
 tracing = { workspace = true }
+directories = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
