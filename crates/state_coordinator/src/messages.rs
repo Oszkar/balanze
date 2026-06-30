@@ -120,7 +120,9 @@ pub enum StateMsg {
     Refresh,
     /// Settings file changed. Scaffold stores the value; future pollers will
     /// subscribe to a settings-change broadcast and reconfigure themselves.
-    SettingsChanged(Settings),
+    /// Boxed: `Settings` carries the full statusline config (~450 bytes), which
+    /// would otherwise dominate this enum's size (clippy `large_enum_variant`).
+    SettingsChanged(Box<Settings>),
     /// A source reports it is intentionally unavailable / not configured - e.g.
     /// Claude Code isn't installed, so the OAuth poller has no credential to
     /// read. A NEUTRAL state, distinct from `Update(Err(..))`: the cell reads

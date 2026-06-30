@@ -1,11 +1,9 @@
 //! `statusline` subcommand: Claude Code's statusLine command. Reads the
-//! statusLine JSON on stdin, prints a one-line status, and atomically writes
-//! the snapshot file the watcher reads.
+//! statusLine JSON on stdin, prints the configured multi-line status, and
+//! atomically writes the snapshot file the watcher reads.
 
 use anyhow::Result;
 use std::io::Write;
-
-use crate::format::micro_usd_to_display_dollars;
 
 pub(crate) fn cmd_statusline() -> Result<()> {
     use std::io::Read as _;
@@ -15,8 +13,8 @@ pub(crate) fn cmd_statusline() -> Result<()> {
         let _ = writeln!(stdout, "bal (statusline: stdin unreadable)");
         return Ok(());
     }
-    // Parse once - both the human formatter and the snapshot writer need the
-    // result. Parse error → print the error line and skip the write (no good
+    // Parse once - both the renderer and the snapshot writer need the
+    // result. Parse error -> print the error line and skip the write (no good
     // payload to persist for the watcher).
     let snap = match claude_statusline::parse(&buf) {
         Ok(s) => s,
@@ -25,7 +23,7 @@ pub(crate) fn cmd_statusline() -> Result<()> {
             return Ok(());
         }
     };
-    let _ = writeln!(stdout, "{}", format_statusline_from_snapshot(&snap));
+    let _ = writeln!(stdout, "{}", render_line(&snap));
     // Independent error handling, not independent timing: the stdout write
     // is synchronous so backpressure DOES delay the snapshot write, but
     // any `writeln!` error is discarded via `let _ =` so we still attempt
@@ -37,50 +35,31 @@ pub(crate) fn cmd_statusline() -> Result<()> {
     Ok(())
 }
 
-/// Formats a parsed [`claude_statusline::StatuslineSnapshot`] into a terse
-/// one-liner for Claude Code's statusLine display. A minimal honest line;
-/// rich/configurable formatting and feeding the live Snapshot come later.
-fn format_statusline_from_snapshot(snap: &claude_statusline::StatuslineSnapshot) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(rl) = &snap.rate_limits {
-        // {:.0}: a statusline is a glance - sub-1% truncation is acceptable
-        // here. compact_anthropic_quota uses {:.1} to avoid the "0%" == "no
-        // usage" ambiguity in the full terminal view; that concern does not
-        // apply to a terse one-liner. Intentional inconsistency - do not
-        // "align" these without re-reading both rationales.
-        if let Some(w) = &rl.five_hour {
-            parts.push(format!("5h {:.0}%", w.used_percent));
-        }
-        if let Some(w) = &rl.seven_day {
-            parts.push(format!("7d {:.0}%", w.used_percent));
-        }
-    }
-    if let Some(c) = snap.session_cost_micro_usd {
-        // `sess-est`, not `sess`: this is a Claude-side session estimate
-        // (claude_statusline/types.rs:22) - a distinct cost tier from the
-        // JSONL list-price estimate and the real `extra_usage` overage.
-        // The qualifier mirrors compact_anthropic_quota's `est-leverage`
-        // discipline so a statusline glance can't be mistaken for billed $.
-        parts.push(format!("sess-est {}", micro_usd_to_display_dollars(c)));
-    }
-    if parts.is_empty() {
-        "bal (no rate-limit data yet)".to_string()
-    } else {
-        format!("bal {}", parts.join(" · "))
-    }
+/// Render the configured statusline for `snap`, reading the user's settings.
+/// Settings load failure falls back to the curated default (the statusline must
+/// never fail to render). Color is gated on `NO_COLOR` only - Claude Code
+/// captures stdout (not a TTY) and renders ANSI, so TTY detection would wrongly
+/// strip color.
+fn render_line(snap: &claude_statusline::StatuslineSnapshot) -> String {
+    let settings = settings::load().unwrap_or_default();
+    let color = std::env::var_os("NO_COLOR").is_none();
+    render_with(snap, &settings.statusline, color)
 }
 
-/// Pure: payload string → one status-line string. Thin wrapper around
-/// [`format_statusline_from_snapshot`] retained for the existing test suite
-/// which supplies a raw JSON string. New callers should parse first and call
-/// the typed helper directly.
-#[cfg(test)]
-fn format_statusline(payload: &str) -> String {
-    let snap = match claude_statusline::parse(payload) {
-        Ok(s) => s,
-        Err(_) => return "bal (statusline parse error)".to_string(),
-    };
-    format_statusline_from_snapshot(&snap)
+/// Testable core: render `snap` against an explicit config. Kept separate from
+/// `render_line` so tests do not depend on the developer's real settings.json.
+fn render_with(
+    snap: &claude_statusline::StatuslineSnapshot,
+    config: &settings::StatuslineConfig,
+    color: bool,
+) -> String {
+    statusline_render::render(&statusline_render::RenderInput {
+        snapshot: snap,
+        cross: None,
+        config,
+        now: chrono::Utc::now(),
+        color,
+    })
 }
 
 /// Writes the parsed statusline snapshot to `<data_dir>/statusline.snapshot.json`
@@ -117,8 +96,6 @@ fn statusline_snapshot_path() -> Option<std::path::PathBuf> {
 
 #[cfg(test)]
 mod statusline_tests {
-    use super::format_statusline;
-
     /// Process-wide lock for tests that mutate a shared environment variable.
     /// Cargo test parallelizes per-crate by default; two tests that both
     /// `set_var(BALANZE_DATA_DIR_OVERRIDE, ...)` with different values would
@@ -168,35 +145,16 @@ mod statusline_tests {
     }
 
     #[test]
-    fn formats_full_payload() {
-        let p = r#"{"rate_limits":{"five_hour":{"used_percentage":13.0,"resets_at":1747650600},"seven_day":{"used_percentage":44.0,"resets_at":1747915200}},"cost":{"total_cost_usd":12.5}}"#;
-        assert_eq!(
-            format_statusline(p),
-            "bal 5h 13% · 7d 44% · sess-est $12.50"
-        );
-    }
-    #[test]
-    fn formats_no_rate_limits() {
-        assert_eq!(
-            format_statusline(r#"{"cost":{"total_cost_usd":2.0}}"#),
-            "bal sess-est $2.00"
-        );
-    }
-    #[test]
-    fn formats_empty_payload() {
-        assert_eq!(format_statusline("{}"), "bal (no rate-limit data yet)");
-    }
-    #[test]
-    fn parse_error_is_nonempty_fallback_not_panic() {
-        assert_eq!(
-            format_statusline("not json"),
-            "bal (statusline parse error)"
-        );
-    }
-    #[test]
-    fn formats_only_seven_day() {
-        let p = r#"{"rate_limits":{"seven_day":{"used_percentage":72.0,"resets_at":1747915200}}}"#;
-        assert_eq!(format_statusline(p), "bal 7d 72%");
+    fn render_with_default_config_contains_known_segments() {
+        let snap = claude_statusline::parse(
+            r#"{"rate_limits":{"five_hour":{"used_percentage":82,"resets_at":4102444800}},"cost":{"total_cost_usd":2.5},"model":{"display_name":"Opus"}}"#,
+        )
+        .unwrap();
+        // color=false for a deterministic, escape-free assertion.
+        let out = super::render_with(&snap, &settings::StatuslineConfig::default(), false);
+        assert!(out.contains("🤖 Opus"), "{out}");
+        assert!(out.contains("5h 82%"), "{out}");
+        assert!(out.contains("💰 ~$2.50"), "{out}");
     }
 
     #[test]
@@ -220,6 +178,8 @@ mod statusline_tests {
             rate_limits: None,
             session_cost_micro_usd: Some(3_420_000),
             claude_code_version: Some("v2.1.144".to_string()),
+            model_display_name: None,
+            context_used_percent: None,
         };
         super::write_statusline_snapshot(&snap);
 

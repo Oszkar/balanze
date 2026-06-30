@@ -653,6 +653,8 @@ mod tests {
             rate_limits: None,
             session_cost_micro_usd: Some(3_420_000),
             claude_code_version: Some("v2.1.144".to_string()),
+            model_display_name: None,
+            context_used_percent: None,
         };
         StatuslineFilePayload::new(snap, fixed_now())
     }

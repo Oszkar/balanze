@@ -9,11 +9,32 @@ struct RawRoot {
     version: Option<String>,
     cost: Option<RawCost>,
     rate_limits: Option<RawRateLimits>,
+    model: Option<RawModel>,
+    context_window: Option<RawContextWindow>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawCost {
     total_cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawModel {
+    // Cosmetic/display-only: an absent, null, OR wrong-typed `display_name`
+    // degrades to `None` (via `lenient_opt`) rather than failing the whole
+    // parse. A drift here drops just the model segment; it must never blank the
+    // statusline (including the valuable rate-limit data) over a display field.
+    #[serde(default, deserialize_with = "lenient_opt")]
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawContextWindow {
+    // Cosmetic/display-only (integer in real payloads, e.g. 83; fractional
+    // elsewhere, e.g. 4.2 - hence f32). Absent/null/wrong-typed degrades to
+    // `None` via `lenient_opt`, dropping just the context segment.
+    #[serde(default, deserialize_with = "lenient_opt")]
+    used_percentage: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +78,21 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
+/// Deserialize an OPTIONAL COSMETIC field that must never fail the whole parse.
+/// The opposite of `deserialize_non_null`: where required rate-limit numerics
+/// surface a wrong-type/null as `SchemaDrift`, a display-only field (model name,
+/// context %) degrades any wrong-typed or null value to `None` so a single drift
+/// drops just that segment instead of blanking the entire statusline. Routes the
+/// value through `serde_json::Value` and keeps it only if it converts to `T`.
+fn lenient_opt<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|v| serde_json::from_value(v).ok()))
+}
+
 /// Parse the Claude Code statusLine stdin payload. Pure, infallible except
 /// for invalid JSON or a present-but-wrong-shape required subfield. Unknown
 /// fields are tolerated; absent optional blocks become `None`.
@@ -84,6 +120,8 @@ pub fn parse(input: &str) -> Result<StatuslineSnapshot, StatuslineError> {
         rate_limits,
         session_cost_micro_usd,
         claude_code_version: raw.version,
+        model_display_name: raw.model.and_then(|m| m.display_name),
+        context_used_percent: raw.context_window.and_then(|c| c.used_percentage),
     })
 }
 
@@ -301,5 +339,65 @@ mod tests {
         let rl = parse(body).unwrap().rate_limits.unwrap();
         assert!(rl.five_hour.is_none());
         assert!(rl.seven_day.is_none());
+    }
+
+    #[test]
+    fn parses_model_and_context_window() {
+        // FULL already carries model.display_name "Opus" and
+        // context_window.used_percentage 4.2.
+        let s = parse(FULL).expect("parses");
+        assert_eq!(s.model_display_name.as_deref(), Some("Opus"));
+        assert!((s.context_used_percent.unwrap() - 4.2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn model_and_context_absent_are_none() {
+        let s = parse(r#"{"version":"2.1.140"}"#).expect("parses");
+        assert!(s.model_display_name.is_none());
+        assert!(s.context_used_percent.is_none());
+    }
+
+    #[test]
+    fn null_optional_inner_fields_degrade_to_none() {
+        // model.display_name and context_window.used_percentage are optional
+        // display fields: an explicit null degrades to None (plain Option),
+        // NOT SchemaDrift. The counterpart to
+        // explicit_null_required_field_is_schema_drift_not_dropped, which pins
+        // the opposite contract for required numerics.
+        let body =
+            r#"{"model":{"id":"x","display_name":null},"context_window":{"used_percentage":null}}"#;
+        let s = parse(body).expect("optional inner nulls must not error");
+        assert!(s.model_display_name.is_none());
+        assert!(s.context_used_percent.is_none());
+    }
+
+    #[test]
+    fn wrong_type_optional_cosmetic_fields_degrade_not_fail() {
+        // A WRONG-TYPE in an optional cosmetic field (display_name as a number,
+        // used_percentage as a string) must NOT fail the whole parse - that
+        // would blank the entire statusline, including the valuable rate-limit
+        // data, over a display-only drift. It drops just that field to None
+        // while the rest of the payload survives. Distinct from the rate-limit
+        // windows, where a wrong-typed required numeric IS SchemaDrift.
+        let body = r#"{
+          "model":{"display_name":42},
+          "context_window":{"used_percentage":"83%"},
+          "rate_limits":{"five_hour":{"used_percentage":13.0,"resets_at":1747650600}},
+          "cost":{"total_cost_usd":2.5}
+        }"#;
+        let s = parse(body).expect("wrong-typed cosmetic fields must not fail the payload");
+        assert!(
+            s.model_display_name.is_none(),
+            "wrong-type display_name degrades to None"
+        );
+        assert!(
+            s.context_used_percent.is_none(),
+            "wrong-type used_percentage degrades to None"
+        );
+        assert!(
+            s.rate_limits.unwrap().five_hour.is_some(),
+            "rate-limit data survives a cosmetic-field drift"
+        );
+        assert_eq!(s.session_cost_micro_usd, Some(2_500_000), "cost survives");
     }
 }
