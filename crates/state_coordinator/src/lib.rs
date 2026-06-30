@@ -27,6 +27,7 @@ mod coordinator;
 mod jsonl;
 mod messages;
 mod sink;
+mod sink_file;
 mod snapshot;
 pub mod snapshot_file;
 
@@ -37,6 +38,7 @@ pub use coordinator::{StateCoordinatorHandle, spawn};
 pub use jsonl::{JsonlCells, summarize_jsonl};
 pub use messages::{ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateMsg};
 pub use sink::{LogSink, NullSink, Sink};
+pub use sink_file::SnapshotFileSink;
 pub use snapshot::{
     JsonlSnapshot, SNAPSHOT_SCHEMA_VERSION, Snapshot, WindowPace, pace_for_oauth, record_error,
 };
