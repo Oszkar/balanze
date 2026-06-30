@@ -136,6 +136,14 @@ pub fn atomic_write_snapshot_file(
         source: e,
     })?;
 
+    // NOTE: serde_json serialization of SnapshotFilePayload is infallible for
+    // all current envelope fields (u32, DateTime<Utc>, and the Snapshot cells,
+    // which are plain serde structs / Options). This arm is unreachable in
+    // practice. `ParseError` is a read-path concept reused here for a write-side
+    // serialization failure; if a non-serializable field is ever added to the
+    // envelope, introduce a distinct `WriteSerializeError` variant rather than
+    // reusing `ParseError` - naming the variant for the failure mode matters
+    // once the branch becomes reachable.
     let bytes = serde_json::to_vec_pretty(payload).map_err(|e| SnapshotFileError::ParseError {
         path: path.to_path_buf(),
         source: e,
@@ -274,14 +282,82 @@ mod tests {
         assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn path_honors_env_override() {
-        // SAFETY: single-threaded test mutating a process env var; no other
-        // test in this module reads BALANZE_DATA_DIR_OVERRIDE concurrently.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var("BALANZE_DATA_DIR_OVERRIDE").ok();
+        // SAFETY: ENV_LOCK serializes every env-mutating test in this module;
+        // set_var/remove_var are unsafe as of edition 2024.
         unsafe { std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", "/tmp/balanze-x") };
         let p = snapshot_file_path().unwrap();
-        unsafe { std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE") };
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", v),
+                None => std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE"),
+            }
+        }
         assert!(p.ends_with("snapshot.json"));
         assert!(p.to_string_lossy().contains("balanze-x"));
+    }
+
+    #[test]
+    fn parent_resolution_handles_none_and_empty_parent() {
+        use std::path::{Path, PathBuf};
+        let resolve = |p: &Path| -> PathBuf {
+            match p.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+                _ => Path::new(".").to_path_buf(),
+            }
+        };
+        assert_eq!(resolve(Path::new("")), PathBuf::from("."));
+        assert_eq!(resolve(Path::new("snapshot.json")), PathBuf::from("."));
+        assert_eq!(
+            resolve(&PathBuf::from("/tmp/balanze/snapshot.json")),
+            PathBuf::from("/tmp/balanze")
+        );
+    }
+
+    #[test]
+    fn valid_json_with_missing_required_field_is_parse_error() {
+        // Passes the version probe (schema_version 2), then fails the full
+        // SnapshotFilePayload parse because `snapshot` is missing - exercises
+        // the second from_slice path.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snapshot.json");
+        std::fs::write(
+            &path,
+            br#"{"schema_version":2,"captured_at":"2026-06-30T12:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            read_snapshot_file(&path).unwrap_err(),
+            SnapshotFileError::ParseError { .. }
+        ));
+    }
+
+    #[test]
+    fn write_creates_parent_dirs() {
+        let base = tempdir().unwrap();
+        let path = base.path().join("sub").join("nested").join("snapshot.json");
+        atomic_write_snapshot_file(&path, &payload_with_codex()).unwrap();
+        assert!(path.exists());
+        read_snapshot_file(&path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_preserves_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snapshot.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&path, perms).unwrap();
+        atomic_write_snapshot_file(&path, &payload_with_codex()).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }
