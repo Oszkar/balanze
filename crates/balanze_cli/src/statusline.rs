@@ -61,9 +61,10 @@ fn statusline_cross_provider() -> Option<statusline_render::CrossProvider> {
     }
 }
 
-/// Pure map: snapshot-file payload -> `CrossProvider`. `stale` when the payload
-/// is older than the freshness window (stale-but-known data is still shown with
-/// a marker rather than hidden - the project's stale-with-indicator rule).
+/// Pure map: snapshot-file payload -> `CrossProvider`. Both cells are marked
+/// stale when the payload is older than the freshness window (stale-but-known
+/// data is still shown with a marker rather than hidden - the project's
+/// stale-with-indicator rule).
 fn cross_from_payload(
     payload: &state_coordinator::SnapshotFilePayload,
     now: chrono::DateTime<chrono::Utc>,
