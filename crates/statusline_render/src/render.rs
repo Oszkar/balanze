@@ -76,12 +76,13 @@ fn fill_line(template: &str, input: &RenderInput) -> String {
 fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
     let snap = input.snapshot;
     let segs = &input.config.segments;
+    let theme = input.config.theme.as_str();
     match key {
         "model" => {
             let name = snap.model_display_name.as_deref()?;
             Some(paint(
                 &format!("🤖 {name}"),
-                &segs.model.style,
+                resolve(&segs.model.style, theme, "model", Tone::Base),
                 "",
                 "",
                 Tone::Base,
@@ -98,9 +99,9 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             let text = format!("{} {shown}%", bar(pct, c.width));
             Some(paint(
                 &text,
-                &c.style,
-                &c.warn_style,
-                &c.critical_style,
+                resolve(&c.style, theme, "context_bar", Tone::Base),
+                resolve(&c.warn_style, theme, "context_bar", Tone::Warn),
+                resolve(&c.critical_style, theme, "context_bar", Tone::Critical),
                 tone,
                 input.color,
             ))
@@ -109,11 +110,13 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             let micro = snap.session_cost_micro_usd?;
             let c = &segs.cost;
             let tone = tone_money(micro, c.warn_micro_usd, c.critical_micro_usd);
+            // `~` marks this as the Claude session ESTIMATE, not billed spend -
+            // it must stay distinguishable from a real `OpenAI $` segment.
             Some(paint(
-                &format!("💰 {}", fmt_money(micro)),
-                &c.style,
-                &c.warn_style,
-                &c.critical_style,
+                &format!("💰 ~{}", fmt_money(micro)),
+                resolve(&c.style, theme, "cost", Tone::Base),
+                resolve(&c.warn_style, theme, "cost", Tone::Warn),
+                resolve(&c.critical_style, theme, "cost", Tone::Critical),
                 tone,
                 input.color,
             ))
@@ -127,9 +130,9 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             let mark = if cross.stale { " ⚠" } else { "" };
             Some(paint(
                 &format!("◇Codex {pct:.0}%{mark}"),
-                &c.style,
-                &c.warn_style,
-                &c.critical_style,
+                resolve(&c.style, theme, "codex", Tone::Base),
+                resolve(&c.warn_style, theme, "codex", Tone::Warn),
+                resolve(&c.critical_style, theme, "codex", Tone::Critical),
                 tone,
                 input.color,
             ))
@@ -140,7 +143,7 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             let mark = if cross.stale { " ⚠" } else { "" };
             Some(paint(
                 &format!("OpenAI {}{mark}", fmt_money(micro)),
-                &segs.openai_cost.style,
+                resolve(&segs.openai_cost.style, theme, "openai_cost", Tone::Base),
                 "",
                 "",
                 Tone::Base,
@@ -190,11 +193,12 @@ fn render_window(
         let delta = w.resets_at - input.now;
         text.push_str(&format!(" ({})", fmt_countdown(delta)));
     }
+    let theme = input.config.theme.as_str();
     paint(
         &text,
-        &c.style,
-        &c.warn_style,
-        &c.critical_style,
+        resolve(&c.style, theme, "usage", Tone::Base),
+        resolve(&c.warn_style, theme, "usage", Tone::Warn),
+        resolve(&c.critical_style, theme, "usage", Tone::Critical),
         tone,
         input.color,
     )
@@ -212,6 +216,53 @@ fn paint(text: &str, base: &str, warn: &str, crit: &str, tone: Tone, color: bool
         Tone::Critical => crit,
     };
     apply_style(spec, text)
+}
+
+/// Effective style spec for a segment+tone: a non-empty config override wins; an
+/// empty override falls through to the `theme` palette. This is what makes a
+/// partial settings override (changing only a width or threshold) keep its
+/// coloring, and what makes `theme` actually switch colors.
+fn resolve<'a>(over: &'a str, theme: &str, segment: &'static str, tone: Tone) -> &'a str {
+    if over.is_empty() {
+        palette_style(theme, segment, tone)
+    } else {
+        over
+    }
+}
+
+/// Curated default style for a (theme, segment, tone). Dark is the fallback for
+/// any unrecognized theme (e.g. a typo). Warn and critical are shared across
+/// segments per theme; the base tone differs per segment. Dark values reproduce
+/// the pre-theme hard-coded defaults exactly; light is a tokyonight-light set.
+fn palette_style(theme: &str, segment: &str, tone: Tone) -> &'static str {
+    let light = theme.eq_ignore_ascii_case("light");
+    match tone {
+        Tone::Warn => {
+            if light {
+                "fg:#8f5e15"
+            } else {
+                "fg:#e0af68"
+            }
+        }
+        Tone::Critical => {
+            if light {
+                "bold fg:#8c4351"
+            } else {
+                "bold fg:#f7768e"
+            }
+        }
+        Tone::Base => match (segment, light) {
+            ("model", false) => "bold fg:#7aa2f7",
+            ("model", true) => "bold fg:#34548a",
+            ("agent", false) => "fg:#9ece6a",
+            ("agent", true) => "fg:#485e30",
+            ("context_bar", false) | ("codex", false) => "fg:#7dcfff",
+            ("context_bar", true) | ("codex", true) => "fg:#166775",
+            // cost, usage, openai_cost, and any unknown segment -> neutral fg.
+            (_, false) => "fg:#a9b1d6",
+            (_, true) => "fg:#343b58",
+        },
+    }
 }
 
 fn tone_pct(pct: f32, warn: u32, critical: u32) -> Tone {
@@ -316,7 +367,7 @@ mod tests {
         assert!(out.contains("(1h23m)"), "5h countdown: {out}");
         assert!(out.contains('↑'), "pace arrow over pace: {out}");
         assert!(out.contains("7d 88%"), "7d pct: {out}");
-        assert!(out.contains("💰 $2.50"), "cost: {out}");
+        assert!(out.contains("💰 ~$2.50"), "cost (estimate-marked): {out}");
         assert!(!out.contains("Codex"), "codex empty in PR1: {out}");
         assert!(!out.contains("OpenAI"), "openai empty in PR1: {out}");
     }
@@ -480,25 +531,12 @@ mod tests {
     }
 
     #[test]
-    fn blank_styles_yield_no_escapes_even_with_color() {
-        // With every segment style blank, color=true must still produce zero
-        // ANSI: apply_style returns text unchanged for a blank spec.
-        let mut c = cfg();
-        c.segments.model.style = String::new();
-        c.segments.agent.style = String::new();
-        c.segments.context_bar.style = String::new();
-        c.segments.context_bar.warn_style = String::new();
-        c.segments.context_bar.critical_style = String::new();
-        c.segments.cost.style = String::new();
-        c.segments.cost.warn_style = String::new();
-        c.segments.cost.critical_style = String::new();
-        c.segments.usage.style = String::new();
-        c.segments.usage.warn_style = String::new();
-        c.segments.usage.critical_style = String::new();
-        c.segments.codex.style = String::new();
-        c.segments.codex.warn_style = String::new();
-        c.segments.codex.critical_style = String::new();
-        c.segments.openai_cost.style = String::new();
+    fn blank_styles_resolve_to_theme_palette() {
+        // Blank per-segment styles are NOT "no color" - they resolve to the
+        // theme palette (dark by default). This is what lets a partial override
+        // (changing only a width or threshold) keep its coloring. The default
+        // config has all styles blank.
+        let c = cfg();
         let s = snap();
         let out = render(&RenderInput {
             snapshot: &s,
@@ -507,10 +545,58 @@ mod tests {
             now: now(),
             color: true,
         });
-        assert!(out.contains("💰 $2.50"), "cost text present: {out:?}");
         assert!(
-            !out.contains('\x1b'),
-            "blank styles must produce no ANSI: {out:?}"
+            out.contains('\x1b'),
+            "blank styles must resolve to themed ANSI: {out:?}"
+        );
+        // model is always base tone; dark base = "bold fg:#7aa2f7" = rgb(122,162,247).
+        assert!(
+            out.contains("\x1b[1;38;2;122;162;247m"),
+            "model uses the dark base palette: {out:?}"
+        );
+    }
+
+    #[test]
+    fn theme_light_changes_colors() {
+        // Setting theme=light (with default blank styles) must swap the palette.
+        let mut c = cfg();
+        c.theme = "light".to_string();
+        let s = snap();
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        // light model base = "bold fg:#34548a" = rgb(52,84,138).
+        assert!(
+            out.contains("\x1b[1;38;2;52;84;138m"),
+            "light theme model color present: {out:?}"
+        );
+        // the dark model color must be gone.
+        assert!(
+            !out.contains("\x1b[1;38;2;122;162;247m"),
+            "dark model color must not appear under the light theme: {out:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_style_overrides_theme() {
+        // A non-empty per-segment style wins over the theme palette.
+        let mut c = cfg();
+        c.segments.model.style = "fg:#010203".to_string();
+        let s = snap();
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(
+            out.contains("\x1b[38;2;1;2;3m"),
+            "explicit model override used instead of the palette: {out:?}"
         );
     }
 

@@ -4,8 +4,14 @@
 //!
 //! Thresholds use integer percent (`u32`) and i64 micro-USD (AGENTS.md §2.1:
 //! never f64 for threshold comparisons), which also keeps `Settings: Eq`.
-//! Default values match the maintainer's cship taste so a switch is visually
-//! lossless; everything is overridable.
+//! Threshold/width/flag defaults match the maintainer's cship taste so a switch
+//! is visually lossless; everything is overridable.
+//!
+//! Per-segment STYLE defaults are intentionally EMPTY: an empty style resolves
+//! to the `theme` palette in the `statusline_render` crate (dark or light). This
+//! is what makes `theme` actually switch colors and what lets a partial override
+//! (changing only a width or threshold) keep its coloring instead of going
+//! colorless. An explicit non-empty style overrides the theme palette.
 
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +56,11 @@ impl Default for StatuslineConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Per-segment config. Style-only segments (model/agent/openai_cost) default to
+/// empty styles (themed by the renderer); the threshold-bearing segments carry
+/// curated thresholds via their own `Default`. The curated colors live in
+/// `statusline_render`'s palette, not here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SegmentConfigs {
     #[serde(default)]
     pub model: StyleOnly,
@@ -66,26 +76,6 @@ pub struct SegmentConfigs {
     pub codex: PctSegment,
     #[serde(default)]
     pub openai_cost: StyleOnly,
-}
-
-impl Default for SegmentConfigs {
-    fn default() -> Self {
-        Self {
-            model: StyleOnly {
-                style: "bold fg:#7aa2f7".to_string(),
-            },
-            agent: StyleOnly {
-                style: "fg:#9ece6a".to_string(),
-            },
-            context_bar: ContextSegment::default(),
-            cost: MoneySegment::default(),
-            usage: UsageSegment::default(),
-            codex: PctSegment::default(),
-            openai_cost: StyleOnly {
-                style: "fg:#a9b1d6".to_string(),
-            },
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -129,9 +119,9 @@ impl Default for ContextSegment {
             warn: default_context_warn(),
             critical: default_context_critical(),
             width: default_bar_width(),
-            style: "fg:#7dcfff".to_string(),
-            warn_style: "fg:#e0af68".to_string(),
-            critical_style: "bold fg:#f7768e".to_string(),
+            style: String::new(),
+            warn_style: String::new(),
+            critical_style: String::new(),
         }
     }
 }
@@ -166,9 +156,9 @@ impl Default for MoneySegment {
         Self {
             warn_micro_usd: default_cost_warn_micro_usd(),
             critical_micro_usd: default_cost_critical_micro_usd(),
-            style: "fg:#a9b1d6".to_string(),
-            warn_style: "fg:#e0af68".to_string(),
-            critical_style: "bold fg:#f7768e".to_string(),
+            style: String::new(),
+            warn_style: String::new(),
+            critical_style: String::new(),
         }
     }
 }
@@ -207,9 +197,9 @@ impl Default for UsageSegment {
             critical: default_usage_critical(),
             show_pace: true,
             show_reset: true,
-            style: "fg:#a9b1d6".to_string(),
-            warn_style: "fg:#e0af68".to_string(),
-            critical_style: "bold fg:#f7768e".to_string(),
+            style: String::new(),
+            warn_style: String::new(),
+            critical_style: String::new(),
         }
     }
 }
@@ -242,9 +232,9 @@ impl Default for PctSegment {
         Self {
             warn: default_pct_warn(),
             critical: default_pct_critical(),
-            style: "fg:#7dcfff".to_string(),
-            warn_style: "fg:#e0af68".to_string(),
-            critical_style: "bold fg:#f7768e".to_string(),
+            style: String::new(),
+            warn_style: String::new(),
+            critical_style: String::new(),
         }
     }
 }

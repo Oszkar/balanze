@@ -154,7 +154,7 @@ mod statusline_tests {
         let out = super::render_with(&snap, &settings::StatuslineConfig::default(), false);
         assert!(out.contains("🤖 Opus"), "{out}");
         assert!(out.contains("5h 82%"), "{out}");
-        assert!(out.contains("💰 $2.50"), "{out}");
+        assert!(out.contains("💰 ~$2.50"), "{out}");
     }
 
     #[test]
