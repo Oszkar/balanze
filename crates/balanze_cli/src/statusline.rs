@@ -48,7 +48,16 @@ fn statusline_cross_provider() -> Option<statusline_render::CrossProvider> {
     let path = state_coordinator::snapshot_file_path()?;
     match state_coordinator::read_snapshot_file(&path) {
         Ok(payload) => Some(cross_from_payload(&payload, chrono::Utc::now())),
-        Err(_) => None,
+        // FileMissing is the normal "host not running" case - stay silent.
+        Err(state_coordinator::SnapshotFileError::FileMissing { .. }) => None,
+        // ParseError / SchemaDrift / Io are genuinely unexpected; surface them
+        // at debug (BALANZE_LOG=debug) without any production noise.
+        Err(e) => {
+            tracing::debug!(
+                "statusline: cross-provider snapshot unreadable, falling back to Claude-only: {e}"
+            );
+            None
+        }
     }
 }
 
@@ -259,6 +268,14 @@ mod statusline_tests {
         );
         assert!(out.contains("Codex 6%"), "{out}");
         assert!(out.contains("OpenAI $4.20"), "{out}");
+    }
+
+    #[test]
+    fn cross_provider_returns_none_when_snapshot_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = EnvGuard::set("BALANZE_DATA_DIR_OVERRIDE", dir.path());
+        // snapshot.json does not exist in `dir` (host not running) -> Claude-only.
+        assert!(super::statusline_cross_provider().is_none());
     }
 
     #[test]
