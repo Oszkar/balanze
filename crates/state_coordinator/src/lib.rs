@@ -28,6 +28,7 @@ mod jsonl;
 mod messages;
 mod sink;
 mod snapshot;
+pub mod snapshot_file;
 
 #[cfg(test)]
 mod test_support;
@@ -38,4 +39,8 @@ pub use messages::{ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateM
 pub use sink::{LogSink, NullSink, Sink};
 pub use snapshot::{
     JsonlSnapshot, SNAPSHOT_SCHEMA_VERSION, Snapshot, WindowPace, pace_for_oauth, record_error,
+};
+pub use snapshot_file::{
+    SnapshotFileError, SnapshotFilePayload, atomic_write_snapshot_file, read_snapshot_file,
+    snapshot_file_path,
 };

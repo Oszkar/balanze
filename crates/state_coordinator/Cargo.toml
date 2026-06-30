@@ -20,9 +20,11 @@ window = { path = "../window" }
 
 tokio = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
+directories = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
+tempfile = "3"
