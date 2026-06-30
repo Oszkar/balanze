@@ -70,13 +70,16 @@ fn cross_from_payload(
 ) -> statusline_render::CrossProvider {
     let snap = &payload.snapshot;
     let age = now.signed_duration_since(payload.captured_at).num_seconds();
+    let stale = age > SNAPSHOT_FRESHNESS_SECS;
     statusline_render::CrossProvider {
         codex_used_percent: snap
             .codex_quota
             .as_ref()
             .map(|q| q.primary.used_percent as f32),
         openai_cost_micro_usd: snap.openai.as_ref().map(|c| c.total_micro_usd),
-        stale: age > SNAPSHOT_FRESHNESS_SECS,
+        // Both cells come from one snapshot, so they share its freshness.
+        codex_stale: stale,
+        openai_stale: stale,
     }
 }
 
@@ -233,10 +236,13 @@ mod statusline_tests {
         let c = super::cross_from_payload(&fresh, now);
         assert_eq!(c.codex_used_percent, Some(6.0));
         assert_eq!(c.openai_cost_micro_usd, Some(4_200_000));
-        assert!(!c.stale, "fresh payload is not stale");
+        assert!(!c.codex_stale, "fresh payload: codex not stale");
+        assert!(!c.openai_stale, "fresh payload: openai not stale");
         let stale_payload =
             state_coordinator::SnapshotFilePayload::new(s, now - chrono::Duration::seconds(200));
-        assert!(super::cross_from_payload(&stale_payload, now).stale);
+        let stale = super::cross_from_payload(&stale_payload, now);
+        assert!(stale.codex_stale, "old payload: codex stale");
+        assert!(stale.openai_stale, "old payload: openai stale");
     }
 
     #[test]
@@ -258,7 +264,8 @@ mod statusline_tests {
         let cross = statusline_render::CrossProvider {
             codex_used_percent: Some(6.0),
             openai_cost_micro_usd: Some(4_200_000),
-            stale: false,
+            codex_stale: false,
+            openai_stale: false,
         };
         let out = super::render_with(
             &snap,
