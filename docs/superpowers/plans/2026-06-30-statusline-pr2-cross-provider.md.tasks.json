@@ -1,0 +1,40 @@
+{
+  "planPath": "docs/superpowers/plans/2026-06-30-statusline-pr2-cross-provider.md",
+  "tasks": [
+    {
+      "id": 15,
+      "subject": "PR2 Task 1: snapshot.json envelope, atomic IO, path resolver",
+      "status": "pending",
+      "description": "**Goal:** Add `state_coordinator::snapshot_file` - versioned envelope around `Snapshot`, atomic read/write mirroring `claude_statusline::file_io`, and `snapshot_file_path()`.\n\n**Files:** crates/state_coordinator/src/snapshot_file.rs (create), src/lib.rs (re-export), Cargo.toml (add directories; tempfile/codex_local dev-deps as needed)\n\n**Acceptance Criteria:**\n- envelope (de)serializes; ::new stamps SNAPSHOT_SCHEMA_VERSION\n- write->read round-trips (assert schema_version + a cell; no PartialEq on Snapshot)\n- missing->FileMissing, wrong version->SchemaDrift, malformed->ParseError, no .tmp left\n- snapshot_file_path honors BALANZE_DATA_DIR_OVERRIDE else ProjectDirs data_dir()/snapshot.json\n\n**Verify:** cargo nextest run -p state_coordinator\n\n```json:metadata\n{\"files\": [\"crates/state_coordinator/src/snapshot_file.rs\", \"crates/state_coordinator/src/lib.rs\", \"crates/state_coordinator/Cargo.toml\"], \"verifyCommand\": \"cargo nextest run -p state_coordinator\", \"acceptanceCriteria\": [\"envelope (de)serializes; ::new stamps version\", \"write->read round-trips\", \"missing/drift/malformed map correctly; no tmp left\", \"path resolver honors override else ProjectDirs\"]}\n```"
+    },
+    {
+      "id": 16,
+      "subject": "PR2 Task 2: SnapshotFileSink writer decorator",
+      "status": "pending",
+      "blockedBy": [15],
+      "description": "**Goal:** A `Sink` that persists the full `Snapshot` to snapshot.json on each update then delegates; best-effort (write failure logs warn!, never breaks inner/coordinator).\n\n**Files:** crates/state_coordinator/src/sink_file.rs (create), src/lib.rs (re-export)\n\n**Acceptance Criteria:**\n- SnapshotFileSink::new(inner, path) wraps any S: Sink\n- on_snapshot writes snapshot.json AND calls inner.on_snapshot\n- on_degraded delegates\n- write failure does not panic; inner still called\n\n**Verify:** cargo nextest run -p state_coordinator\n\n```json:metadata\n{\"files\": [\"crates/state_coordinator/src/sink_file.rs\", \"crates/state_coordinator/src/lib.rs\"], \"verifyCommand\": \"cargo nextest run -p state_coordinator\", \"acceptanceCriteria\": [\"wraps any Sink\", \"on_snapshot writes file + delegates\", \"on_degraded delegates\", \"write failure does not panic, inner still called\"]}\n```"
+    },
+    {
+      "id": 17,
+      "subject": "PR2 Task 3: wire the writer into both hosts",
+      "status": "pending",
+      "blockedBy": [16],
+      "description": "**Goal:** Wrap the coordinator sink with SnapshotFileSink in the Tauri host and CLI watch paths.\n\n**Files:** src-tauri/src/lib.rs (boot_backend ~L334), crates/balanze_cli/src/watch_cmd.rs (~L60 streaming, ~L150 TUI)\n\n**Acceptance Criteria:**\n- Tauri host wraps TauriSink with SnapshotFileSink when path resolves; else bare + warn!\n- CLI watch streaming + TUI wrapped\n- cargo build --workspace succeeds; existing tests green\n\n**Verify:** cargo build --workspace && cargo nextest run -p balanze_cli (tray smoke deferred to #136; CLI watch is the verifiable path)\n\n```json:metadata\n{\"files\": [\"src-tauri/src/lib.rs\", \"crates/balanze_cli/src/watch_cmd.rs\"], \"verifyCommand\": \"cargo build --workspace && cargo nextest run -p balanze_cli\", \"acceptanceCriteria\": [\"Tauri host wraps (fallback+warn)\", \"CLI watch both paths wrapped\", \"workspace builds; tests green\"]}\n```"
+    },
+    {
+      "id": 18,
+      "subject": "PR2 Task 4: reader + Snapshot->CrossProvider mapper in cmd_statusline",
+      "status": "pending",
+      "blockedBy": [15],
+      "description": "**Goal:** balanze-cli statusline reads snapshot.json, maps Codex/OpenAI cells into CrossProvider (TTL stale), passes to renderer; absent/unreadable -> Claude-only.\n\n**Files:** crates/balanze_cli/src/statusline.rs (reader+mapper+thread cross; tests), Cargo.toml (codex_local/openai_client dev-deps if needed)\n\n**Acceptance Criteria:**\n- cross_from_payload maps codex used_percent (f64->f32) + openai total_micro_usd; stale = age>120s\n- fresh->Some(stale=false); old->stale=true; empty->cells None\n- statusline_cross_provider() None on absent/parse-error/drift\n- render_line threads cross; existing tests green; cross-render test passes\n\n**Verify:** cargo nextest run -p balanze_cli; manual: watch (override data dir) writes snapshot.json then statusline reads it\n\n```json:metadata\n{\"files\": [\"crates/balanze_cli/src/statusline.rs\", \"crates/balanze_cli/Cargo.toml\"], \"verifyCommand\": \"cargo nextest run -p balanze_cli\", \"acceptanceCriteria\": [\"mapper maps cells + TTL stale\", \"fresh/old/empty handled\", \"absent/unreadable -> None\", \"render_line threads cross; cross-render test passes\"]}\n```"
+    },
+    {
+      "id": 19,
+      "subject": "PR2 Task 5: document the snapshot.json IPC artifact",
+      "status": "pending",
+      "blockedBy": [17, 18],
+      "description": "**Goal:** Document snapshot.json in ARCHITECTURE.md + add the missing statusline_render crate to the crate map.\n\n**Files:** docs/ARCHITECTURE.md (crate map + IPC contract / boundary #12)\n\n**Acceptance Criteria:**\n- crate map lists statusline_render\n- snapshot.json documented: writer=host via SnapshotFileSink, reader=statusline, opposite direction to statusline.snapshot.json, 120s freshness, zero-network read\n- no em-dash / ellipsis introduced\n\n**Verify:** prose review; grep for em-dash/ellipsis\n\n```json:metadata\n{\"files\": [\"docs/ARCHITECTURE.md\"], \"verifyCommand\": \"grep -rc snapshot.json docs/ARCHITECTURE.md\", \"acceptanceCriteria\": [\"crate map lists statusline_render\", \"snapshot.json documented fully\", \"no em-dash/ellipsis introduced\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-06-30T15:00:00Z"
+}
