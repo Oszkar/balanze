@@ -8,8 +8,6 @@
 
 use std::path::PathBuf;
 
-use chrono::Utc;
-
 use crate::messages::Source;
 use crate::sink::Sink;
 use crate::snapshot::Snapshot;
@@ -28,7 +26,11 @@ impl<S: Sink> SnapshotFileSink<S> {
 
 impl<S: Sink> Sink for SnapshotFileSink<S> {
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
-        let payload = SnapshotFilePayload::new(snapshot.clone(), Utc::now());
+        // captured_at = the snapshot's last actual merge time, NOT Utc::now():
+        // on_snapshot also fires on pure re-notifies (Refresh / popover-open /
+        // SettingsChanged) that fetched nothing, and restamping now() there
+        // would reset the reader's freshness window over unchanged data.
+        let payload = SnapshotFilePayload::new(snapshot.clone(), snapshot.fetched_at);
         if let Err(e) = atomic_write_snapshot_file(&self.path, &payload) {
             tracing::warn!("snapshot.json write failed: {e}");
         }
@@ -71,13 +73,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("snapshot.json");
         let mut sink = SnapshotFileSink::new(CountingSink::default(), path.clone());
-        sink.on_snapshot(&snap());
+        let s = snap();
+        sink.on_snapshot(&s);
         assert_eq!(sink.inner.snapshots, 1, "inner sink still called");
         let back = read_snapshot_file(&path).expect("file written");
         assert_eq!(
             back.schema_version,
             crate::snapshot::SNAPSHOT_SCHEMA_VERSION
         );
+        // captured_at preserves the snapshot's fetched_at, not the write time -
+        // a re-notify must not restamp freshness over unchanged data.
+        assert_eq!(back.captured_at, s.fetched_at);
     }
 
     #[test]
