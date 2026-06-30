@@ -35,6 +35,42 @@ pub(crate) fn cmd_statusline() -> Result<()> {
     Ok(())
 }
 
+/// How fresh `snapshot.json` must be for its cross-provider cells to render
+/// without a staleness marker. The host rewrites the file on every coordinator
+/// update (safety-poll floor 60s), so a running host stays well inside this.
+const SNAPSHOT_FRESHNESS_SECS: i64 = 120;
+
+/// Read the host-written `snapshot.json` and map its Codex/OpenAI cells into the
+/// renderer's cross-provider input. `None` (Claude-only) when the file is
+/// absent, unreadable, or schema-drifted - PR2 does ZERO network here; the
+/// self-compose fallback is PR3.
+fn statusline_cross_provider() -> Option<statusline_render::CrossProvider> {
+    let path = state_coordinator::snapshot_file_path()?;
+    match state_coordinator::read_snapshot_file(&path) {
+        Ok(payload) => Some(cross_from_payload(&payload, chrono::Utc::now())),
+        Err(_) => None,
+    }
+}
+
+/// Pure map: snapshot-file payload -> `CrossProvider`. `stale` when the payload
+/// is older than the freshness window (stale-but-known data is still shown with
+/// a marker rather than hidden - the project's stale-with-indicator rule).
+fn cross_from_payload(
+    payload: &state_coordinator::SnapshotFilePayload,
+    now: chrono::DateTime<chrono::Utc>,
+) -> statusline_render::CrossProvider {
+    let snap = &payload.snapshot;
+    let age = now.signed_duration_since(payload.captured_at).num_seconds();
+    statusline_render::CrossProvider {
+        codex_used_percent: snap
+            .codex_quota
+            .as_ref()
+            .map(|q| q.primary.used_percent as f32),
+        openai_cost_micro_usd: snap.openai.as_ref().map(|c| c.total_micro_usd),
+        stale: age > SNAPSHOT_FRESHNESS_SECS,
+    }
+}
+
 /// Render the configured statusline for `snap`, reading the user's settings.
 /// Settings load failure falls back to the curated default (the statusline must
 /// never fail to render). Color is gated on `NO_COLOR` only - Claude Code
@@ -43,7 +79,8 @@ pub(crate) fn cmd_statusline() -> Result<()> {
 fn render_line(snap: &claude_statusline::StatuslineSnapshot) -> String {
     let settings = settings::load().unwrap_or_default();
     let color = std::env::var_os("NO_COLOR").is_none();
-    render_with(snap, &settings.statusline, color)
+    let cross = statusline_cross_provider();
+    render_with(snap, &settings.statusline, color, cross.as_ref())
 }
 
 /// Testable core: render `snap` against an explicit config. Kept separate from
@@ -52,10 +89,11 @@ fn render_with(
     snap: &claude_statusline::StatuslineSnapshot,
     config: &settings::StatuslineConfig,
     color: bool,
+    cross: Option<&statusline_render::CrossProvider>,
 ) -> String {
     statusline_render::render(&statusline_render::RenderInput {
         snapshot: snap,
-        cross: None,
+        cross,
         config,
         now: chrono::Utc::now(),
         color,
@@ -151,10 +189,76 @@ mod statusline_tests {
         )
         .unwrap();
         // color=false for a deterministic, escape-free assertion.
-        let out = super::render_with(&snap, &settings::StatuslineConfig::default(), false);
+        let out = super::render_with(&snap, &settings::StatuslineConfig::default(), false, None);
         assert!(out.contains("🤖 Opus"), "{out}");
         assert!(out.contains("5h 82%"), "{out}");
         assert!(out.contains("💰 ~$2.50"), "{out}");
+    }
+
+    #[test]
+    fn cross_from_payload_maps_cells_and_freshness() {
+        use chrono::TimeZone as _;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 6, 30, 12, 0, 0).unwrap();
+        let mut s = state_coordinator::Snapshot::empty(now);
+        s.codex_quota = Some(codex_local::types::CodexQuotaSnapshot {
+            observed_at: now,
+            session_id: "s".into(),
+            primary: codex_local::types::RateLimitWindow {
+                used_percent: 6.0,
+                window_duration_minutes: 10_080,
+                resets_at: now,
+            },
+            secondary: None,
+            plan_type: "go".into(),
+            rate_limit_reached: false,
+        });
+        s.openai = Some(openai_client::OpenAiCosts {
+            start_time: now,
+            end_time: now,
+            total_micro_usd: 4_200_000,
+            by_line_item: vec![],
+            truncated: false,
+            fetched_at: now,
+        });
+        let fresh = state_coordinator::SnapshotFilePayload::new(s.clone(), now);
+        let c = super::cross_from_payload(&fresh, now);
+        assert_eq!(c.codex_used_percent, Some(6.0));
+        assert_eq!(c.openai_cost_micro_usd, Some(4_200_000));
+        assert!(!c.stale, "fresh payload is not stale");
+        let stale_payload =
+            state_coordinator::SnapshotFilePayload::new(s, now - chrono::Duration::seconds(200));
+        assert!(super::cross_from_payload(&stale_payload, now).stale);
+    }
+
+    #[test]
+    fn cross_from_empty_snapshot_has_no_cells() {
+        use chrono::TimeZone as _;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 6, 30, 12, 0, 0).unwrap();
+        let payload = state_coordinator::SnapshotFilePayload::new(
+            state_coordinator::Snapshot::empty(now),
+            now,
+        );
+        let c = super::cross_from_payload(&payload, now);
+        assert!(c.codex_used_percent.is_none());
+        assert!(c.openai_cost_micro_usd.is_none());
+    }
+
+    #[test]
+    fn cross_renders_codex_and_openai_segments() {
+        let snap = claude_statusline::parse(r#"{"model":{"display_name":"Opus"}}"#).unwrap();
+        let cross = statusline_render::CrossProvider {
+            codex_used_percent: Some(6.0),
+            openai_cost_micro_usd: Some(4_200_000),
+            stale: false,
+        };
+        let out = super::render_with(
+            &snap,
+            &settings::StatuslineConfig::default(),
+            false,
+            Some(&cross),
+        );
+        assert!(out.contains("Codex 6%"), "{out}");
+        assert!(out.contains("OpenAI $4.20"), "{out}");
     }
 
     #[test]
