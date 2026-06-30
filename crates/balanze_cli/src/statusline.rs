@@ -40,21 +40,76 @@ pub(crate) fn cmd_statusline() -> Result<()> {
 /// update (safety-poll floor 60s), so a running host stays well inside this.
 const SNAPSHOT_FRESHNESS_SECS: i64 = 120;
 
-/// Read the host-written `snapshot.json` and map its Codex/OpenAI cells into the
-/// renderer's cross-provider input. `None` (Claude-only) when the file is
-/// absent, unreadable, or schema-drifted - PR2 does ZERO network here; the
-/// self-compose fallback is PR3.
+/// Resolve cross-provider data (Codex %, OpenAI $) for the statusline.
+///
+/// Precedence (see PR3 plan): a fresh host-written `snapshot.json` wins (zero
+/// network); otherwise self-compose Codex + OpenAI directly (5.4: never via the
+/// OAuth-touching composer); otherwise fall back to a stale snapshot so the
+/// line never blanks; otherwise Claude-only.
 fn statusline_cross_provider() -> Option<statusline_render::CrossProvider> {
+    let now = chrono::Utc::now();
+
+    // 1. Fresh snapshot wins (zero network).
+    let snapshot_cross = read_snapshot_cross(now);
+    if let Some(cross) = &snapshot_cross {
+        if !cross.openai_stale && !cross.codex_stale {
+            return snapshot_cross;
+        }
+    }
+
+    // 2. Self-compose; 3. stale snapshot is the never-blank fallback.
+    pick_cross(self_compose_cross(now), snapshot_cross)
+}
+
+/// Choose between a self-composed result and a (possibly stale) snapshot, once
+/// the fresh-snapshot short-circuit has been ruled out. Prefer composed data
+/// that has at least one cell; otherwise keep the snapshot so the line never
+/// blanks. Pure - unit-tested.
+fn pick_cross(
+    composed: Option<statusline_render::CrossProvider>,
+    stale_snapshot: Option<statusline_render::CrossProvider>,
+) -> Option<statusline_render::CrossProvider> {
+    match composed {
+        Some(c) if c.codex_used_percent.is_some() || c.openai_cost_micro_usd.is_some() => Some(c),
+        _ => stale_snapshot,
+    }
+}
+
+/// Run the self-compose path: resolve cache dir + key fingerprint, build a
+/// one-shot runtime, and call `statusline_render::self_compose` with the
+/// OAuth-free `LiveCrossSources`. `None` if there is no cache dir or the runtime
+/// cannot be built (never panics).
+fn self_compose_cross(
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<statusline_render::CrossProvider> {
+    let cache_dir = statusline_render::cache::cache_dir_path()?;
+    let fingerprint = statusline_render::cache::key_fingerprint(
+        crate::sources::resolve_openai_key()
+            .ok()
+            .flatten()
+            .as_deref(),
+    );
+    let rt = tokio::runtime::Runtime::new().ok()?;
+    Some(rt.block_on(statusline_render::self_compose(
+        &crate::sources::LiveCrossSources,
+        &cache_dir,
+        &fingerprint,
+        now,
+    )))
+}
+
+/// Read `snapshot.json` and map it to a `CrossProvider` (cells may be stale).
+/// `None` only when the file is absent/unreadable.
+fn read_snapshot_cross(
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<statusline_render::CrossProvider> {
     let path = state_coordinator::snapshot_file_path()?;
     match state_coordinator::read_snapshot_file(&path) {
-        Ok(payload) => Some(cross_from_payload(&payload, chrono::Utc::now())),
-        // FileMissing is the normal "host not running" case - stay silent.
+        Ok(payload) => Some(cross_from_payload(&payload, now)),
         Err(state_coordinator::SnapshotFileError::FileMissing { .. }) => None,
-        // ParseError / SchemaDrift / Io are genuinely unexpected; surface them
-        // at debug (BALANZE_LOG=debug) without any production noise.
         Err(e) => {
             tracing::debug!(
-                "statusline: cross-provider snapshot unreadable, falling back to Claude-only: {e}"
+                "statusline: cross-provider snapshot unreadable, trying self-compose: {e}"
             );
             None
         }
@@ -278,12 +333,104 @@ mod statusline_tests {
         assert!(out.contains("OpenAI $4.20"), "{out}");
     }
 
+    /// Like `EnvGuard` but for multiple env vars under a single `ENV_LOCK`
+    /// acquisition. Use when a test needs to set more than one env var
+    /// atomically - creating two `EnvGuard`s would deadlock on the same thread.
+    struct MultiEnvGuard {
+        vars: Vec<(&'static str, Option<String>)>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+    impl MultiEnvGuard {
+        fn set(pairs: &[(&'static str, &std::ffi::OsStr)]) -> Self {
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let vars = pairs
+                .iter()
+                .map(|&(k, v)| {
+                    let prev = std::env::var(k).ok();
+                    // SAFETY: ENV_LOCK is held for this guard's entire lifetime,
+                    // serializing all env-touching tests (see ENV_LOCK comment).
+                    unsafe { std::env::set_var(k, v) };
+                    (k, prev)
+                })
+                .collect();
+            Self { vars, _lock }
+        }
+    }
+    impl Drop for MultiEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: ENV_LOCK is still held (self._lock), so the restore is serialized.
+            unsafe {
+                for (key, prev) in &self.vars {
+                    match prev {
+                        Some(v) => std::env::set_var(key, v),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
+    /// When no snapshot.json exists AND self-compose has nothing to compose
+    /// (no OpenAI key, no Codex files), `statusline_cross_provider` returns
+    /// `None` (Claude-only). Deterministic: sets all relevant env vars to
+    /// empty/temp dirs so the test makes no network calls and is unaffected by
+    /// the developer's real Codex or OpenAI configuration.
     #[test]
-    fn cross_provider_returns_none_when_snapshot_absent() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = EnvGuard::set("BALANZE_DATA_DIR_OVERRIDE", dir.path());
-        // snapshot.json does not exist in `dir` (host not running) -> Claude-only.
+    fn cross_provider_none_when_snapshot_absent_and_no_self_compose_data() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let cache_dir = tempfile::tempdir().unwrap();
+        let codex_dir = tempfile::tempdir().unwrap();
+        let _guard = MultiEnvGuard::set(&[
+            ("BALANZE_DATA_DIR_OVERRIDE", data_dir.path().as_os_str()),
+            ("BALANZE_CACHE_DIR_OVERRIDE", cache_dir.path().as_os_str()),
+            // Empty key -> resolve_openai_key() returns Ok(None) -> no network.
+            ("BALANZE_OPENAI_KEY", std::ffi::OsStr::new("")),
+            // Empty dir -> codex_local finds no sessions -> codex cell is None.
+            ("CODEX_CONFIG_DIR", codex_dir.path().as_os_str()),
+        ]);
+        // No snapshot.json -> self-compose triggers.
+        // No OpenAI key + no Codex data -> self-compose yields no cells.
+        // pick_cross(Some(empty), None) -> None.
         assert!(super::statusline_cross_provider().is_none());
+    }
+
+    fn cp(codex: Option<f32>, openai: Option<i64>) -> statusline_render::CrossProvider {
+        statusline_render::CrossProvider {
+            codex_used_percent: codex,
+            openai_cost_micro_usd: openai,
+            codex_stale: false,
+            openai_stale: false,
+        }
+    }
+
+    #[test]
+    fn pick_cross_prefers_composed_with_cells() {
+        let composed = cp(Some(5.0), None);
+        let snap = cp(None, Some(99));
+        let got = super::pick_cross(Some(composed), Some(snap)).unwrap();
+        assert_eq!(got.codex_used_percent, Some(5.0));
+        assert_eq!(got.openai_cost_micro_usd, None);
+    }
+
+    #[test]
+    fn pick_cross_falls_back_to_stale_snapshot_when_composed_empty() {
+        let composed = cp(None, None);
+        let snap = cp(None, Some(99));
+        let got = super::pick_cross(Some(composed), Some(snap)).unwrap();
+        assert_eq!(got.openai_cost_micro_usd, Some(99));
+    }
+
+    #[test]
+    fn pick_cross_falls_back_when_composed_absent() {
+        let snap = cp(Some(1.0), None);
+        let got = super::pick_cross(None, Some(snap)).unwrap();
+        assert_eq!(got.codex_used_percent, Some(1.0));
+    }
+
+    #[test]
+    fn pick_cross_none_when_nothing_available() {
+        assert!(super::pick_cross(Some(cp(None, None)), None).is_none());
+        assert!(super::pick_cross(None, None).is_none());
     }
 
     #[test]

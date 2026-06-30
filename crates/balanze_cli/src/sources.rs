@@ -307,10 +307,6 @@ pub(crate) fn resolve_openai_key() -> Result<Option<String>> {
 
 /// Production OpenAI base, overridable via `BALANZE_OPENAI_API_BASE` (a test
 /// seam; lets integration tests point the self-compose fetch at wiremock).
-// Called only from LiveCrossSources (below); Task 5 wires LiveCrossSources into
-// statusline.rs, at which point this function is transitively used and the
-// allow can be removed.
-#[allow(dead_code)]
 fn openai_api_base() -> String {
     std::env::var("BALANZE_OPENAI_API_BASE").unwrap_or_else(|_| OPENAI_API_BASE.to_string())
 }
@@ -365,9 +361,6 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
 /// The real cross-provider sources for the statusline self-compose path.
 /// Codex = local files; OpenAI = Admin Costs API behind a short timeout. Calls
 /// NEITHER the Anthropic OAuth path NOR `snapshot_composer::compose` (5.4).
-// Constructed in statusline.rs (Task 5). The allow can be removed once Task 5
-// wires this into self_compose_cross().
-#[allow(dead_code)]
 pub(crate) struct LiveCrossSources;
 
 impl statusline_render::CrossSources for LiveCrossSources {
