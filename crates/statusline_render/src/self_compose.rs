@@ -17,6 +17,8 @@ use crate::render::CrossProvider;
 /// The two cross-provider sources, abstracted so the orchestrator (and its
 /// once-per-300s gate) is testable without network. The real implementation
 /// lives in `balanze_cli` (`LiveCrossSources`).
+// Static dispatch only; async-fn-in-trait is stable and safe here.
+// See snapshot_composer::SnapshotSources for the full rationale.
 #[allow(async_fn_in_trait)]
 pub trait CrossSources {
     /// `Ok(Some(v))` = fetched v (micro-USD); `Ok(None)` = no OpenAI key
@@ -183,5 +185,8 @@ mod tests {
         assert_eq!(cp.openai_cost_micro_usd, None);
         assert!(!cp.openai_stale);
         assert_eq!(cp.codex_used_percent, Some(3.0));
+        // One fetch attempt is made (empty cache, no cooldown), but a missing
+        // key caches nothing, so no cooldown starts.
+        assert_eq!(f.calls.get(), 1);
     }
 }
