@@ -160,26 +160,29 @@ fn read_snapshot_payload() -> Option<state_coordinator::SnapshotFilePayload> {
     }
 }
 
-/// Pure map: snapshot-file payload -> `CrossProvider`. Both cells are marked
-/// stale when the payload is older than the freshness window (stale-but-known
-/// data is still shown with a marker rather than hidden - the project's
-/// stale-with-indicator rule).
+/// Pure map: snapshot-file payload -> `CrossProvider`. A cell is stale when the
+/// whole snapshot is old (envelope age) OR its own source reported an error on
+/// its last poll (stale-but-known data is still shown with a marker rather than
+/// hidden - the project's stale-with-indicator rule).
 fn cross_from_payload(
     payload: &state_coordinator::SnapshotFilePayload,
     now: chrono::DateTime<chrono::Utc>,
 ) -> statusline_render::CrossProvider {
     let snap = &payload.snapshot;
     let age = now.signed_duration_since(payload.captured_at).num_seconds();
-    let stale = age > SNAPSHOT_FRESHNESS_SECS;
+    // The host rewrites the envelope on every coordinator update, so its age
+    // only tells us the whole snapshot is old. A single source can be stale
+    // while the envelope is young (e.g. Claude JSONL keeps updating while OpenAI
+    // polls fail), so also mark a cell stale when its source last errored.
+    let envelope_stale = age > SNAPSHOT_FRESHNESS_SECS;
     statusline_render::CrossProvider {
         codex_used_percent: snap
             .codex_quota
             .as_ref()
             .map(|q| q.primary.used_percent as f32),
         openai_cost_micro_usd: snap.openai.as_ref().map(|c| c.total_micro_usd),
-        // Both cells come from one snapshot, so they share its freshness.
-        codex_stale: stale,
-        openai_stale: stale,
+        codex_stale: envelope_stale || snap.codex_quota_error.is_some(),
+        openai_stale: envelope_stale || snap.openai_error.is_some(),
     }
 }
 
@@ -343,6 +346,50 @@ mod statusline_tests {
         let stale = super::cross_from_payload(&stale_payload, now);
         assert!(stale.codex_stale, "old payload: codex stale");
         assert!(stale.openai_stale, "old payload: openai stale");
+    }
+
+    #[test]
+    fn cross_from_payload_marks_errored_cells_stale_despite_fresh_envelope() {
+        use chrono::TimeZone as _;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 6, 30, 12, 0, 0).unwrap();
+        let mut s = state_coordinator::Snapshot::empty(now);
+        // Coordinator keeps the last-known values...
+        s.codex_quota = Some(codex_local::types::CodexQuotaSnapshot {
+            observed_at: now,
+            session_id: "s".into(),
+            primary: codex_local::types::RateLimitWindow {
+                used_percent: 6.0,
+                window_duration_minutes: 10_080,
+                resets_at: now,
+            },
+            secondary: None,
+            plan_type: "go".into(),
+            rate_limit_reached: false,
+        });
+        s.openai = Some(openai_client::OpenAiCosts {
+            start_time: now,
+            end_time: now,
+            total_micro_usd: 4_200_000,
+            by_line_item: vec![],
+            truncated: false,
+            fetched_at: now,
+        });
+        // ...but each source's last poll failed.
+        s.codex_quota_error = Some("codex boom".into());
+        s.openai_error = Some("openai boom".into());
+        // Envelope is fresh (now), yet the errored cells must render stale.
+        let payload = state_coordinator::SnapshotFilePayload::new(s, now);
+        let c = super::cross_from_payload(&payload, now);
+        assert_eq!(c.codex_used_percent, Some(6.0));
+        assert_eq!(c.openai_cost_micro_usd, Some(4_200_000));
+        assert!(
+            c.codex_stale,
+            "errored codex cell stale despite fresh envelope"
+        );
+        assert!(
+            c.openai_stale,
+            "errored openai cell stale despite fresh envelope"
+        );
     }
 
     #[test]
