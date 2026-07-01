@@ -42,7 +42,7 @@ balanze/
 │   ├── claude_parser/          JSONL wire format: parse, walker, dedup, IncrementalParser, find_claude_projects_dir
 │   ├── claude_cost/            pure JSONL → estimated $ vs vendored LiteLLM prices; infallible
 │   ├── claude_statusline/      Claude Code statusLine payload + settings.json statusLine stanza (read/atomic-write)
-│   ├── statusline_render/      renders the statusline: segment model, {key} line layout, reset countdown + pace, threshold coloring (dark/light theme palette); consumes settings::StatuslineConfig + claude_statusline + window
+│   ├── statusline_render/      renders the statusline: segment model, {key} line layout, reset countdown + pace, threshold coloring (dark/light theme palette); consumes settings::StatuslineConfig + claude_statusline + window. Also owns the OpenAI-cost cache primitive (`cache` mod: envelope, atomic read/write, key fingerprint, 300s TTL + 60s failure cooldown) and the self-compose orchestrator (`CrossSources` trait + `self_compose`). The real I/O adapter (`LiveCrossSources`) lives in `balanze_cli`.
 │   ├── anthropic_oauth/        only HTTP client for /api/oauth/usage; reader/writer of ~/.claude/.credentials.json (+ read-only macOS login-Keychain credential)
 │   ├── window/                 pure rolling-window math (5h + 30m burn + per-model) and pace (used vs elapsed)
 │   ├── openai_client/          only HTTP client for /v1/organization/costs
@@ -104,6 +104,8 @@ The CLI `--json` schema is the same `Snapshot` rendered through a presentation D
 | `snapshot.json` | `state_coordinator::SnapshotFileSink`, from whichever host owns the coordinator (the Tauri app or `balanze-cli watch`) | `balanze-cli statusline`, when fresh (within 120 s of `captured_at`) | `SnapshotFilePayload { schema_version, captured_at, snapshot }` - the full cross-provider `Snapshot`; fills the Codex quota + OpenAI billed-$ statusline segments (boundary #7) |
 
 The statusline does no network on the `snapshot.json` read path; Claude segments always come from stdin. An absent or unreadable file degrades to a Claude-only line. Both files use the same atomic tmp+fsync+rename discipline and a `schema_version` probe; neither holds secrets.
+
+**Self-compose fallback cache.** When no fresh `snapshot.json` exists (no desktop app or `balanze-cli watch` running), `balanze-cli statusline` self-composes the cross-provider segments: Codex from local files and OpenAI from the Admin Costs API via a short-timeout (3s) client. The OpenAI result is persisted to `<ProjectDirs.cache>/statusline/openai-cost.json` (or `<BALANZE_CACHE_DIR_OVERRIDE>/statusline/openai-cost.json` when that env var is set) so the upstream API is called at most once per 300 seconds - this is the AGENTS.md §3.1 OpenAI politeness gate. The cache entry is keyed by an FNV-1a fingerprint of the resolved OpenAI key (never the key itself - §3.4); a 60s negative-cooldown prevents retry-hammering a broken endpoint; stale-while-updating keeps the segment populated rather than blank. The self-compose path calls only `codex_local` and `openai_client`; it never reaches `anthropic_oauth` (§5.4 politeness invariant). Source precedence: fresh `snapshot.json` (within 120s) wins; else self-compose; else a stale snapshot as a never-blank fallback; else Claude-only.
 
 ## Errors and degraded state
 
