@@ -15,8 +15,11 @@ use serde::{Deserialize, Serialize};
 
 /// TTL for a cached OpenAI cost figure. This is the AGENTS.md 3.1 5-minute gate.
 pub const OPENAI_TTL_SECS: i64 = 300;
-/// After a failed fetch, do not retry for this long (avoid hammering a 4xx/5xx).
-pub const NEGATIVE_COOLDOWN_SECS: i64 = 60;
+/// After a failed fetch, do not retry for this long. Matches the TTL: AGENTS.md
+/// 3.1 caps OpenAI billing polls at one per 5 minutes regardless of outcome, so
+/// a failing endpoint (bad key, 429, 5xx, timeout) must not be re-polled every
+/// minute inside the gate.
+pub const NEGATIVE_COOLDOWN_SECS: i64 = 300;
 
 const FILE_NAME: &str = "openai-cost.json";
 
@@ -171,7 +174,10 @@ mod tests {
         let e = read(dir.path(), "fp").expect("entry");
         assert_eq!(e.total_micro_usd, Some(500), "prior value kept");
         assert!(in_cooldown(&e, t0() + Duration::seconds(401)));
-        assert!(!in_cooldown(&e, t0() + Duration::seconds(500)));
+        // 100s after the failure is still inside the 300s cooldown (the 3.1 gate).
+        assert!(in_cooldown(&e, t0() + Duration::seconds(500)));
+        // 301s after the failure the cooldown has elapsed.
+        assert!(!in_cooldown(&e, t0() + Duration::seconds(701)));
         assert!(!is_fresh(&e, t0() + Duration::seconds(401)), "stale by TTL");
     }
 
@@ -183,8 +189,9 @@ mod tests {
         assert_eq!(e.total_micro_usd, None);
         assert!(!is_fresh(&e, t0()));
         assert!(in_cooldown(&e, t0()));
+        assert!(in_cooldown(&e, t0() + Duration::seconds(299)));
         assert!(
-            !in_cooldown(&e, t0() + Duration::seconds(60)),
+            !in_cooldown(&e, t0() + Duration::seconds(300)),
             "exactly the cooldown window is not in cooldown (< not <=)"
         );
     }
