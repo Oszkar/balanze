@@ -360,7 +360,7 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
 
 /// The real cross-provider sources for the statusline self-compose path.
 /// Codex = local files; OpenAI = Admin Costs API behind a short timeout. Calls
-/// NEITHER the Anthropic OAuth path NOR `snapshot_composer::compose` (5.4).
+/// NEITHER the Anthropic OAuth path NOR `snapshot_composer::compose` (AGENTS.md §3.1).
 pub(crate) struct LiveCrossSources;
 
 impl statusline_render::CrossSources for LiveCrossSources {

@@ -43,7 +43,7 @@ const SNAPSHOT_FRESHNESS_SECS: i64 = 120;
 /// Resolve cross-provider data (Codex %, OpenAI $) for the statusline.
 ///
 /// Precedence (see PR3 plan): a fresh host-written `snapshot.json` wins (zero
-/// network); otherwise self-compose Codex + OpenAI directly (5.4: never via the
+/// network); otherwise self-compose Codex + OpenAI directly (AGENTS.md §3.1: never via the
 /// OAuth-touching composer); otherwise fall back to a stale snapshot so the
 /// line never blanks; otherwise Claude-only.
 fn statusline_cross_provider() -> Option<statusline_render::CrossProvider> {

@@ -4,7 +4,7 @@
 //! reads Codex locally (cheap, every turn) and serves the OpenAI cost figure
 //! through the cache (cache.rs) so the billing API is hit at most once per 300s
 //! (AGENTS.md 3.1). It calls ONLY the two sources behind `CrossSources` - never
-//! the Anthropic OAuth path (5.4 politeness invariant); that is why this crate
+//! the Anthropic OAuth path (AGENTS.md §3.1 politeness invariant); that is why this crate
 //! has no `anthropic_oauth` dependency.
 
 use std::path::Path;
