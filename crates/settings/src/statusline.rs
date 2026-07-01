@@ -33,6 +33,11 @@ pub struct StatuslineConfig {
     pub lines: Vec<String>,
     #[serde(default)]
     pub segments: SegmentConfigs,
+    /// The foreign `statusLine.command` displaced by a Balanze "replace", kept
+    /// so `balanze-cli statusline restore` / the Settings "Restore" control can
+    /// put it back. `None` when Balanze has not replaced anything.
+    #[serde(default)]
+    pub replaced_command: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -52,6 +57,7 @@ impl Default for StatuslineConfig {
             theme: default_theme(),
             lines: default_lines(),
             segments: SegmentConfigs::default(),
+            replaced_command: None,
         }
     }
 }
@@ -236,5 +242,27 @@ impl Default for PctSegment {
             warn_style: String::new(),
             critical_style: String::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replaced_command_defaults_to_none() {
+        let c: StatuslineConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(c.replaced_command, None);
+    }
+
+    #[test]
+    fn replaced_command_round_trips() {
+        let c = StatuslineConfig {
+            replaced_command: Some("cship".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let back: StatuslineConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.replaced_command, Some("cship".to_string()));
     }
 }
