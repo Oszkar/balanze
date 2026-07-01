@@ -196,6 +196,18 @@ pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineEr
     atomic_write_json(path, &root)
 }
 
+/// Restore a previously-displaced `statusLine.command`. `Some(cmd)` writes that
+/// command back (the inverse of a Balanze "replace"); `None` unwires Balanze's
+/// statusLine entirely. Provider-agnostic: `cmd` is whatever string was
+/// displaced. The foreign tool's own config files are never touched - only
+/// Claude Code's `settings.json` statusLine stanza.
+pub fn restore_statusline(path: &Path, previous: Option<&str>) -> Result<(), StatuslineError> {
+    match previous {
+        Some(cmd) => wire_statusline(path, cmd),
+        None => unwire_statusline(path),
+    }
+}
+
 /// Remove the `statusLine` stanza from `settings.json`, preserving every other
 /// key, via the same atomic tmp+fsync+rename as [`wire_statusline`]. No-op
 /// (returns `Ok`) if the file or the `statusLine` key is absent.
@@ -561,5 +573,28 @@ mod tests {
         assert_eq!(read_wire_status(&path).unwrap(), WireStatus::Unwired);
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["keep"], true, "unrelated keys survive the roundtrip");
+    }
+
+    // ── restore_statusline ────────────────────────────────────────────────────
+
+    #[test]
+    fn restore_writes_previous_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        wire_statusline(&path, INVOCATION).unwrap(); // Balanze is wired
+        restore_statusline(&path, Some("cship prompt")).unwrap();
+        assert_eq!(
+            read_wire_status(&path).unwrap(),
+            WireStatus::OccupiedBy("cship prompt".to_string())
+        );
+    }
+
+    #[test]
+    fn restore_none_unwires() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        wire_statusline(&path, INVOCATION).unwrap();
+        restore_statusline(&path, None).unwrap();
+        assert_eq!(read_wire_status(&path).unwrap(), WireStatus::Unwired);
     }
 }
