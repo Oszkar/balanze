@@ -22,4 +22,5 @@ export interface Settings {
 export interface StatuslineWire {
   status: 'wired' | 'unwired' | 'occupied';
   command: string | null;
+  replaced_command: string | null;
 }

@@ -231,4 +231,8 @@ export const DEMO_SETTINGS: Settings = {
   seen_welcome: true,
 };
 
-export const DEMO_STATUSLINE: StatuslineWire = { status: 'unwired', command: null };
+export const DEMO_STATUSLINE: StatuslineWire = {
+  status: 'unwired',
+  command: null,
+  replaced_command: null,
+};
