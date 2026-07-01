@@ -8,8 +8,12 @@ use crate::style::apply_style;
 pub struct CrossProvider {
     pub codex_used_percent: Option<f32>,
     pub openai_cost_micro_usd: Option<i64>,
-    /// True when this cross-provider data is stale (drives the staleness mark).
-    pub stale: bool,
+    /// True when the Codex figure is stale (e.g. an old snapshot). The
+    /// self-compose path reads Codex locally each turn, so it is false there.
+    pub codex_stale: bool,
+    /// True when the OpenAI figure is stale (old snapshot, or a cached value
+    /// served because a fresh fetch failed / is in cooldown).
+    pub openai_stale: bool,
 }
 
 /// Everything `render` needs. Borrowed; `render` is pure and allocates only the
@@ -127,7 +131,7 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             let pct = cross.codex_used_percent?;
             let c = &segs.codex;
             let tone = tone_pct(pct, c.warn, c.critical);
-            let mark = if cross.stale { " ⚠" } else { "" };
+            let mark = if cross.codex_stale { " ⚠" } else { "" };
             Some(paint(
                 &format!("◇Codex {pct:.0}%{mark}"),
                 resolve(&c.style, theme, "codex", Tone::Base),
@@ -140,7 +144,7 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
         "openai_cost" => {
             let cross = input.cross?;
             let micro = cross.openai_cost_micro_usd?;
-            let mark = if cross.stale { " ⚠" } else { "" };
+            let mark = if cross.openai_stale { " ⚠" } else { "" };
             Some(paint(
                 &format!("OpenAI {}{mark}", fmt_money(micro)),
                 resolve(&segs.openai_cost.style, theme, "openai_cost", Tone::Base),

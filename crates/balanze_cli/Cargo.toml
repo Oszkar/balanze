@@ -83,3 +83,7 @@ tempfile = "3"  # used by statusline snapshot write tests
 # contract test, not the CLI binary). The binary accesses window fields only
 # through state_coordinator::Snapshot public fields - no direct window:: call.
 window = { path = "../window" }
+# integration_statusline_self_compose.rs: subprocess invocation via assert_cmd
+# and a wiremock Admin Costs API server to gate-prove the 300s cache.
+assert_cmd = "2"
+wiremock = { workspace = true }

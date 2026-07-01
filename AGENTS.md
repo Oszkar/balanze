@@ -64,6 +64,7 @@ There is no internal rate-limit gate - the only thing being rate-limited is *us*
 - Claude JSONL: local file I/O - read **incrementally** via per-file byte cursor (`HashMap<PathBuf, FileCursor { byte_pos, mtime, size }>`). Full reparse only on launch or `refresh_now()`. Detect atomic rewrites (size unchanged but mtime changed) and truncations (size < cursor).
 - Tray icon repaint: driven by coordinator snapshot updates (the 60s safety poll is the idle floor - there is no separate fixed-cadence ticker), **deduped** by `(ColorBucket, title_text)` in the sink (`TauriSink`). Never call `tray.set_icon`/`set_title` if the bucket and title haven't changed.
 - HTTP retry/backoff: implemented in `anthropic_oauth` + `openai_client` via the `backoff` crate. Idempotent GETs retry on 429 + 5xx + transport; the token-rotating `refresh_access_token` POST retries 429-only. CLI passes `BackoffPolicy::fail_fast()` (0 retries); the watcher passes `BackoffPolicy::standard()` (30s start, 10-min cap).
+- Statusline self-compose path: when `balanze-cli statusline` runs without a fresh `snapshot.json`, it fetches OpenAI costs directly through a 300s on-disk cache (key-fingerprinted, 60s negative cooldown, stale-while-updating) and a short 3s client timeout - honoring the 5-minute OpenAI gate machine-wide across concurrent turns. It never calls the Anthropic OAuth usage endpoint (see `docs/ARCHITECTURE.md` "Self-compose fallback cache").
 
 ### 3.2 Error handling & logging
 

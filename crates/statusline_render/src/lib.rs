@@ -6,6 +6,9 @@
 //! Cross-provider segments (codex, openai_cost) and the per-turn cache arrive
 //! in later PRs; their placeholders render empty until then.
 
+pub mod cache;
 mod render;
+mod self_compose;
 pub mod style;
 pub use render::{CrossProvider, RenderInput, render};
+pub use self_compose::{CrossSources, self_compose};

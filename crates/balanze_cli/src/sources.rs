@@ -285,28 +285,46 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
     }
 }
 
+/// Resolve the OpenAI admin key: `BALANZE_OPENAI_KEY` (trimmed; empty -> None)
+/// takes precedence, else the OS keychain entry. `Ok(None)` = not configured;
+/// `Err` = a real keychain failure (not just "absent"). Single source of truth
+/// for both the snapshot fetch and the statusline self-compose fingerprint.
+pub(crate) fn resolve_openai_key() -> Result<Option<String>> {
+    if let Ok(env_key) = env::var("BALANZE_OPENAI_KEY") {
+        let trimmed = env_key.trim();
+        return Ok(if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        });
+    }
+    match keychain::get(keychain::keys::OPENAI_API_KEY) {
+        Ok(k) => Ok(Some(k)),
+        Err(keychain::KeychainError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Production OpenAI base, overridable via `BALANZE_OPENAI_API_BASE` (a test
+/// seam; lets integration tests point the self-compose fetch at wiremock).
+fn openai_api_base() -> String {
+    std::env::var("BALANZE_OPENAI_API_BASE").unwrap_or_else(|_| OPENAI_API_BASE.to_string())
+}
+
 /// Fetch this-month OpenAI costs if the user has configured an admin key.
 ///
 /// Source order:
 ///   1. `BALANZE_OPENAI_KEY` env var (documented override; takes precedence
 ///      over the keychain - see AGENTS.md §3.4)
 ///   2. OS keychain entry `openai_api_key`
-///   3. None → "not configured"
+///   3. None -> "not configured"
 ///
 /// Returns `Ok(None)` when nothing is configured; `Err` only for real
 /// fetch failures (401, 403, network, etc.).
 async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
-    let key = if let Ok(env_key) = env::var("BALANZE_OPENAI_KEY") {
-        if env_key.trim().is_empty() {
-            return Ok(None);
-        }
-        env_key.trim().to_string()
-    } else {
-        match keychain::get(keychain::keys::OPENAI_API_KEY) {
-            Ok(k) => k,
-            Err(keychain::KeychainError::NotFound(_)) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        }
+    let key = match resolve_openai_key()? {
+        Some(k) => k,
+        None => return Ok(None),
     };
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
@@ -337,6 +355,46 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
             "OpenAI returned 403. organization/costs requires an admin API key (`sk-admin-...`), not a project or service-account key. Generate one at https://platform.openai.com/settings/organization/admin-keys."
         )),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// The real cross-provider sources for the statusline self-compose path.
+/// Codex = local files; OpenAI = Admin Costs API behind a short timeout. Calls
+/// NEITHER the Anthropic OAuth path NOR `snapshot_composer::compose` (AGENTS.md §3.1).
+pub(crate) struct LiveCrossSources;
+
+impl statusline_render::CrossSources for LiveCrossSources {
+    async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String> {
+        // Absent key -> no OpenAI cell (`Ok(None)`). A real resolver failure ->
+        // `Err`, so self_compose serves the last-known value marked stale and
+        // starts the cooldown instead of silently dropping the cell. Either way
+        // the statusline never errors: self_compose handles both outcomes.
+        let key = match resolve_openai_key() {
+            Ok(Some(k)) => k,
+            Ok(None) => return Ok(None),
+            Err(e) => return Err(e.to_string()),
+        };
+        // Short timeout: the statusline runs every turn; never hang the prompt.
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let costs = openai_client::costs_this_month(
+            &client,
+            &openai_api_base(),
+            &key,
+            &backoff::BackoffPolicy::fail_fast(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(Some(costs.total_micro_usd))
+    }
+
+    fn codex_used_percent(&self) -> Option<f32> {
+        match codex_local::read_codex_quota() {
+            Ok(Some(q)) => Some(q.primary.used_percent as f32),
+            _ => None,
+        }
     }
 }
 
