@@ -294,12 +294,19 @@ pub fn get_statusline_status() -> Result<StatuslineWire, String> {
 #[tauri::command]
 pub fn replace_statusline() -> Result<(), String> {
     let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+    let mut s = settings::load().unwrap_or_default();
     if let WireStatus::OccupiedBy(cmd) = read_wire_status(&path).map_err(|e| e.to_string())? {
-        let mut s = settings::load().unwrap_or_default();
         s.statusline.replaced_command = Some(cmd);
         settings::save(&s).map_err(|e| e.to_string())?;
     }
-    wire_statusline(&path, STATUSLINE_INVOCATION).map_err(|e| e.to_string())
+    if let Err(e) = wire_statusline(&path, STATUSLINE_INVOCATION) {
+        // Roll back the backup so the UI does not show a phantom Restore button
+        // for a replace that never completed (mirrors the setup.rs flow).
+        s.statusline.replaced_command = None;
+        let _ = settings::save(&s);
+        return Err(e.to_string());
+    }
+    Ok(())
 }
 
 /// Restore the foreign `statusLine.command` that Balanze displaced via
@@ -312,6 +319,7 @@ pub fn restore_statusline() -> Result<(), String> {
     let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
     let mut s = settings::load().unwrap_or_default();
     let previous = s.statusline.replaced_command.take();
+    // Fully-qualified to disambiguate from this Tauri command of the same name.
     claude_statusline::restore_statusline(&path, previous.as_deref()).map_err(|e| e.to_string())?;
     settings::save(&s).map_err(|e| e.to_string())
 }
