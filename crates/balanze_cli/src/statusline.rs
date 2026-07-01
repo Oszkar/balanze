@@ -61,15 +61,9 @@ fn statusline_cross_provider() -> Option<statusline_render::CrossProvider> {
         }
     }
 
-    // 2. Self-compose, seeded from the snapshot's OpenAI fetch so a recent
-    //    watcher poll suppresses an immediate re-fetch at the handoff (3.1).
-    let openai_seed = payload
-        .as_ref()
-        .and_then(|p| p.snapshot.openai.as_ref())
-        .map(|c| (c.total_micro_usd, c.fetched_at));
-
-    // 3. Merge composed cells over the (stale) snapshot cells; never-blank.
-    pick_cross(self_compose_cross(now, openai_seed), snapshot_cross)
+    // 2. Self-compose; then merge composed cells over the (stale) snapshot
+    //    cells per cell so a last-known value stays visible (never-blank).
+    pick_cross(self_compose_cross(now), snapshot_cross)
 }
 
 /// Merge the self-composed result with a (possibly stale) snapshot, once the
@@ -104,15 +98,13 @@ fn pick_cross(
         .then_some(merged)
 }
 
-/// Run the self-compose path: resolve cache dir + key fingerprint, optionally
-/// seed the OpenAI gate from a recent watcher fetch, build a one-shot runtime,
-/// and call `statusline_render::self_compose` with the OAuth-free
-/// `LiveCrossSources`. `None` if there is no cache dir or the runtime cannot be
-/// built; never panics when called from a synchronous context (the `block_on`
-/// below would panic if called from within an async runtime).
+/// Run the self-compose path: resolve cache dir + key fingerprint, build a
+/// one-shot runtime, and call `statusline_render::self_compose` with the
+/// OAuth-free `LiveCrossSources`. `None` if there is no cache dir or the runtime
+/// cannot be built; never panics when called from a synchronous context (the
+/// `block_on` below would panic if called from within an async runtime).
 fn self_compose_cross(
     now: chrono::DateTime<chrono::Utc>,
-    openai_seed: Option<(i64, chrono::DateTime<chrono::Utc>)>,
 ) -> Option<statusline_render::CrossProvider> {
     let cache_dir = statusline_render::cache::cache_dir_path()?;
     let fingerprint = statusline_render::cache::key_fingerprint(
@@ -121,17 +113,6 @@ fn self_compose_cross(
             .flatten()
             .as_deref(),
     );
-    // Honor the watcher's last OpenAI fetch: seeding the cache makes the
-    // machine-wide 300s gate span the watcher-to-statusline handoff instead of
-    // treating the two caches as independent (avoids a double-fetch).
-    if let Some((total_micro_usd, fetched_at)) = openai_seed {
-        statusline_render::cache::seed_if_newer(
-            &cache_dir,
-            &fingerprint,
-            total_micro_usd,
-            fetched_at,
-        );
-    }
     // One-shot CLI: a fresh per-turn runtime is acceptable; the OpenAI fetch
     // inside self_compose is cache-gated (300s), so the network is not hit every
     // turn even though the runtime is built every turn.

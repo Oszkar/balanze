@@ -100,37 +100,6 @@ pub fn write_failure(dir: &Path, fingerprint: &str, now: DateTime<Utc>) {
     );
 }
 
-/// Seed the cache from an OpenAI value fetched elsewhere (the watcher's
-/// `snapshot.json`), so the machine-wide 300s gate accounts for that fetch and
-/// the statusline does not immediately re-poll at the watcher handoff (AGENTS.md
-/// 3.1). No-op if the stored entry was already fetched at or after `fetched_at`
-/// (never regress a fresher statusline-side fetch). Any active failure cooldown
-/// is preserved so seeding a watcher value cannot bypass the gate.
-pub fn seed_if_newer(
-    dir: &Path,
-    fingerprint: &str,
-    total_micro_usd: i64,
-    fetched_at: DateTime<Utc>,
-) {
-    let existing = read(dir, fingerprint);
-    if existing
-        .as_ref()
-        .and_then(|e| e.fetched_at)
-        .is_some_and(|t| t >= fetched_at)
-    {
-        return;
-    }
-    write(
-        dir,
-        &OpenAiCostEntry {
-            fingerprint: fingerprint.to_string(),
-            total_micro_usd: Some(total_micro_usd),
-            fetched_at: Some(fetched_at),
-            last_failure_at: existing.and_then(|e| e.last_failure_at),
-        },
-    );
-}
-
 /// Best-effort atomic write (tmp + rename). Errors are logged at debug and
 /// swallowed - a cache write failure must never break the statusline.
 fn write(dir: &Path, entry: &OpenAiCostEntry) {
@@ -225,41 +194,6 @@ mod tests {
             !in_cooldown(&e, t0() + Duration::seconds(300)),
             "exactly the cooldown window is not in cooldown (< not <=)"
         );
-    }
-
-    #[test]
-    fn seed_if_newer_seeds_when_empty_and_reads_fresh() {
-        let dir = tempdir().unwrap();
-        seed_if_newer(dir.path(), "fp", 4_200_000, t0());
-        let e = read(dir.path(), "fp").expect("entry");
-        assert_eq!(e.total_micro_usd, Some(4_200_000));
-        assert_eq!(e.fetched_at, Some(t0()));
-        assert!(is_fresh(&e, t0() + Duration::seconds(120)));
-    }
-
-    #[test]
-    fn seed_if_newer_does_not_regress_a_fresher_entry() {
-        let dir = tempdir().unwrap();
-        // A newer statusline-side fetch is already recorded.
-        write_success(dir.path(), "fp", 999, t0() + Duration::seconds(100));
-        // Seeding an OLDER watcher value must not overwrite it.
-        seed_if_newer(dir.path(), "fp", 1, t0());
-        let e = read(dir.path(), "fp").expect("entry");
-        assert_eq!(e.total_micro_usd, Some(999));
-        assert_eq!(e.fetched_at, Some(t0() + Duration::seconds(100)));
-    }
-
-    #[test]
-    fn seed_if_newer_preserves_active_failure_cooldown() {
-        let dir = tempdir().unwrap();
-        // A recent statusline-side failure -> cooldown active.
-        write_failure(dir.path(), "fp", t0() + Duration::seconds(250));
-        // An earlier watcher value is seeded; the value lands but the cooldown
-        // must survive so seeding cannot bypass the gate.
-        seed_if_newer(dir.path(), "fp", 500, t0());
-        let e = read(dir.path(), "fp").expect("entry");
-        assert_eq!(e.total_micro_usd, Some(500), "watcher value seeded");
-        assert!(in_cooldown(&e, t0() + Duration::seconds(300)));
     }
 
     #[test]
