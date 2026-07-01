@@ -5,6 +5,27 @@
 use anyhow::Result;
 use std::io::Write;
 
+/// `balanze-cli statusline restore`: put back the foreign statusLine Balanze
+/// displaced via a replace (or unwire if none was stored), then clear the
+/// backup. Does NOT read stdin - distinct from the frozen render contract.
+pub(crate) fn cmd_statusline_restore() -> Result<()> {
+    let path = match claude_statusline::locate_settings_path() {
+        Ok(p) => p,
+        Err(_) => claude_statusline::default_settings_path(),
+    };
+    let mut settings = settings::load().unwrap_or_default();
+    let previous = settings.statusline.replaced_command.take();
+    claude_statusline::restore_statusline(&path, previous.as_deref())
+        .map_err(|e| anyhow::anyhow!("failed to restore statusLine at {}: {e}", path.display()))?;
+    settings::save(&settings)
+        .map_err(|e| anyhow::anyhow!("statusLine restored, but clearing the backup failed: {e}"))?;
+    match previous {
+        Some(ref cmd) => println!("Restored the previous statusLine command: {cmd}"),
+        None => println!("No replaced command was stored; unwired Balanze's statusLine."),
+    }
+    Ok(())
+}
+
 pub(crate) fn cmd_statusline() -> Result<()> {
     use std::io::Read as _;
     let mut stdout = std::io::stdout().lock();

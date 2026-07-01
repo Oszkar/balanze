@@ -66,8 +66,21 @@ pub enum Commands {
     ClearOpenaiKey,
     /// Print current settings.json contents
     Settings,
-    /// Claude Code statusLine command (reads stdin) - FROZEN external contract
-    Statusline,
+    /// Claude Code statusLine command. No args = the FROZEN stdin render contract
+    /// Claude Code invokes; `statusline restore` restores a replaced foreign line.
+    Statusline(StatuslineArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct StatuslineArgs {
+    #[command(subcommand)]
+    pub action: Option<StatuslineAction>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum StatuslineAction {
+    /// Restore the foreign statusLine Balanze replaced (or unwire if none).
+    Restore,
 }
 
 #[derive(clap::Args, Default, Debug)]
@@ -171,10 +184,27 @@ mod tests {
     }
 
     #[test]
-    fn statusline_routes_to_stdin_handler_variant() {
-        // The frozen external contract: Claude Code invokes this exact name.
+    fn statusline_no_arg_stays_the_stdin_contract() {
+        // The frozen external contract: Claude Code invokes this exact name with
+        // no args. The no-arg parse must yield action == None so main routes to
+        // the stdin handler unchanged.
         let cli = Cli::parse_from(["balanze-cli", "statusline"]);
-        assert!(matches!(cli.command, Some(Commands::Statusline)));
+        let Some(Commands::Statusline(args)) = cli.command else {
+            panic!("expected Statusline");
+        };
+        assert!(
+            args.action.is_none(),
+            "no-arg statusline must route to the stdin handler"
+        );
+    }
+
+    #[test]
+    fn statusline_restore_parses() {
+        let cli = Cli::parse_from(["balanze-cli", "statusline", "restore"]);
+        let Some(Commands::Statusline(args)) = cli.command else {
+            panic!("expected Statusline");
+        };
+        assert!(matches!(args.action, Some(StatuslineAction::Restore)));
     }
 
     #[test]
