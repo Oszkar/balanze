@@ -313,7 +313,7 @@ fn setup_statusline() {
             let _ = std::io::stdin().read_line(&mut answer);
             if answer.trim().eq_ignore_ascii_case("y") {
                 let mut settings = settings::load().unwrap_or_default();
-                settings.statusline.replaced_command = Some(cmd.clone());
+                settings.statusline.replaced_command = Some(cmd);
                 if let Err(e) = settings::save(&settings) {
                     eprintln!(
                         "  ✗ Could not back up your command ({e}); leaving statusLine untouched."
@@ -325,7 +325,13 @@ fn setup_statusline() {
                         "  ✓ Replaced. Restore anytime with `balanze-cli statusline restore`. \
                          Restart Claude Code to apply."
                     ),
-                    Err(e) => eprintln!("  ✗ Failed to write {} ({e}); not wired.", path.display()),
+                    Err(e) => {
+                        // Wiring failed - roll back the backup so Balanze settings
+                        // match reality (nothing was displaced).
+                        settings.statusline.replaced_command = None;
+                        let _ = settings::save(&settings);
+                        eprintln!("  ✗ Failed to write {} ({e}); not wired.", path.display());
+                    }
                 }
             } else {
                 eprintln!("  ○ Left untouched.");
