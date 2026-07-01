@@ -66,9 +66,15 @@ async fn self_compose_renders_openai_and_gates_to_one_fetch() {
         .await
         .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "balanze-cli statusline exited {:?};\nstderr: {stderr}\nstdout: {stdout}",
+            out.status,
+        );
         assert!(
             stdout.contains("OpenAI $"),
-            "self-composed OpenAI segment missing; got: {stdout}"
+            "self-composed OpenAI segment missing;\nstdout: {stdout}\nstderr: {stderr}"
         );
     }
     // `server` drops here; `.expect(1)` is verified on drop ->
