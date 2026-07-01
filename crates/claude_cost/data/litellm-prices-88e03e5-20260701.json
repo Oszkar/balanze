@@ -1,8 +1,8 @@
 {
   "_meta": {
     "source": "https://github.com/BerriAI/litellm",
-    "commit": "1ccc1e5b23bfb65aeb935b95caf44e5a0bbd62dc",
-    "fetched_at": "2026-06-18",
+    "commit": "88e03e548716a45284597edf2b7f47a7e6a66d5f",
+    "fetched_at": "2026-07-01",
     "source_file": "model_prices_and_context_window.json",
     "filter": "bare claude-* keys, anthropic provider only (no vendor prefix, no slashes, no Bedrock -v1:0 variants)",
     "license": "MIT (see LICENSE-LITELLM)"
@@ -203,6 +203,15 @@
     "cache_read_input_token_cost": 3E-07,
     "max_input_tokens": 1000000,
     "max_output_tokens": 64000,
+    "litellm_provider": "anthropic"
+  },
+  "claude-sonnet-5": {
+    "input_cost_per_token": 3E-06,
+    "output_cost_per_token": 1.5E-05,
+    "cache_creation_input_token_cost": 3.75E-06,
+    "cache_read_input_token_cost": 3E-07,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
     "litellm_provider": "anthropic"
   }
 }

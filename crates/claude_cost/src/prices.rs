@@ -54,7 +54,7 @@ pub struct ModelPrices {
 /// table, update both the data filename and this line. The build script
 /// validates the filename pattern but cannot rewrite this `include_str!`
 /// because `include_str!` requires a string literal at parse time.
-const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-1ccc1e5-20260618.json");
+const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-88e03e5-20260701.json");
 
 /// Load the compile-time-embedded vendored price table.
 ///
@@ -201,12 +201,28 @@ mod tests {
         assert!(table.models.contains_key("claude-sonnet-4-6"));
         assert!(table.models.contains_key("claude-opus-4-7"));
         assert!(table.models.contains_key("claude-haiku-4-5"));
+        assert!(table.models.contains_key("claude-sonnet-5"));
     }
 
     #[test]
     fn load_bundled_prices_has_expected_values_for_sonnet_4_6() {
         let table = load_bundled_prices().unwrap();
         let prices = table.models.get("claude-sonnet-4-6").unwrap();
+        assert_eq!(prices.input_nano_per_token, 3000);
+        assert_eq!(prices.output_nano_per_token, 15000);
+        assert_eq!(prices.cache_creation_nano_per_token, Some(3750));
+        assert_eq!(prices.cache_read_nano_per_token, Some(300));
+    }
+
+    #[test]
+    fn load_bundled_prices_has_expected_values_for_sonnet_5() {
+        // Sourced from litellm's bare `claude-sonnet-5` entry (added 2026-06-30,
+        // commit a126cdf5b793) — standard post-introductory pricing, matching
+        // claude-sonnet-4-6's rate. Does not reflect Anthropic's $2/$10-per-M
+        // introductory price in effect through 2026-08-31: neither litellm's
+        // table nor `ModelPrices` has a time-boundary concept.
+        let table = load_bundled_prices().unwrap();
+        let prices = table.models.get("claude-sonnet-5").unwrap();
         assert_eq!(prices.input_nano_per_token, 3000);
         assert_eq!(prices.output_nano_per_token, 15000);
         assert_eq!(prices.cache_creation_nano_per_token, Some(3750));
