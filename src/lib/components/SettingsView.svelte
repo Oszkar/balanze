@@ -241,7 +241,9 @@
               <div class="hint">This overwrites it with Balanze's line. You can restore it anytime.</div>
               <div class="row">
                 <button class="save" onclick={replace} disabled={busy}>Replace</button>
-                <button onclick={() => (confirmingReplace = false)} disabled={busy}>Cancel</button>
+                <button class="save" onclick={() => (confirmingReplace = false)} disabled={busy}
+                  >Cancel</button
+                >
               </div>
             {:else}
               <div class="row">
@@ -253,7 +255,9 @@
           {/if}
           {#if wire.replaced_command}
             <div class="row">
-              <button onclick={restore} disabled={busy}>Restore "{wire.replaced_command}"</button>
+              <button class="save" onclick={restore} disabled={busy}
+                >Restore "{wire.replaced_command}"</button
+              >
             </div>
           {/if}
         </section>
