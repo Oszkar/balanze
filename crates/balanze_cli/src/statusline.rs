@@ -42,46 +42,77 @@ const SNAPSHOT_FRESHNESS_SECS: i64 = 120;
 
 /// Resolve cross-provider data (Codex %, OpenAI $) for the statusline.
 ///
-/// Precedence (see PR3 plan): a fresh host-written `snapshot.json` wins (zero
-/// network); otherwise self-compose Codex + OpenAI directly (AGENTS.md §3.1: never via the
-/// OAuth-touching composer); otherwise fall back to a stale snapshot so the
+/// Precedence: a fresh host-written `snapshot.json` wins (zero network);
+/// otherwise self-compose Codex + OpenAI directly (AGENTS.md §3.1: never via the
+/// OAuth-touching composer), then merge with a stale snapshot per cell so the
 /// line never blanks; otherwise Claude-only.
 fn statusline_cross_provider() -> Option<statusline_render::CrossProvider> {
     let now = chrono::Utc::now();
 
+    // Read the host snapshot once: it feeds both the fresh-path short-circuit and
+    // the seed that lets the self-compose OpenAI gate honor the watcher's fetch.
+    let payload = read_snapshot_payload();
+    let snapshot_cross = payload.as_ref().map(|p| cross_from_payload(p, now));
+
     // 1. Fresh snapshot wins (zero network).
-    let snapshot_cross = read_snapshot_cross(now);
     if let Some(cross) = &snapshot_cross {
         if !cross.openai_stale && !cross.codex_stale {
             return snapshot_cross;
         }
     }
 
-    // 2. Self-compose; 3. stale snapshot is the never-blank fallback.
-    pick_cross(self_compose_cross(now), snapshot_cross)
+    // 2. Self-compose, seeded from the snapshot's OpenAI fetch so a recent
+    //    watcher poll suppresses an immediate re-fetch at the handoff (3.1).
+    let openai_seed = payload
+        .as_ref()
+        .and_then(|p| p.snapshot.openai.as_ref())
+        .map(|c| (c.total_micro_usd, c.fetched_at));
+
+    // 3. Merge composed cells over the (stale) snapshot cells; never-blank.
+    pick_cross(self_compose_cross(now, openai_seed), snapshot_cross)
 }
 
-/// Choose between a self-composed result and a (possibly stale) snapshot, once
-/// the fresh-snapshot short-circuit has been ruled out. Prefer composed data
-/// that has at least one cell; otherwise keep the snapshot so the line never
-/// blanks. Pure - unit-tested.
+/// Merge the self-composed result with a (possibly stale) snapshot, once the
+/// fresh-snapshot short-circuit has been ruled out. Each cell is taken from
+/// self-compose when present (current) and otherwise from the stale snapshot
+/// (shown with its `⚠` marker), so a last-known value stays visible when only
+/// one source has it. `None` when neither has any cell. Pure - unit-tested.
 fn pick_cross(
     composed: Option<statusline_render::CrossProvider>,
     stale_snapshot: Option<statusline_render::CrossProvider>,
 ) -> Option<statusline_render::CrossProvider> {
-    match composed {
-        Some(c) if c.codex_used_percent.is_some() || c.openai_cost_micro_usd.is_some() => Some(c),
-        _ => stale_snapshot,
-    }
+    let merged = match (composed, stale_snapshot) {
+        (Some(c), Some(s)) => statusline_render::CrossProvider {
+            codex_used_percent: c.codex_used_percent.or(s.codex_used_percent),
+            openai_cost_micro_usd: c.openai_cost_micro_usd.or(s.openai_cost_micro_usd),
+            codex_stale: if c.codex_used_percent.is_some() {
+                c.codex_stale
+            } else {
+                s.codex_stale
+            },
+            openai_stale: if c.openai_cost_micro_usd.is_some() {
+                c.openai_stale
+            } else {
+                s.openai_stale
+            },
+        },
+        (Some(c), None) => c,
+        (None, Some(s)) => s,
+        (None, None) => return None,
+    };
+    (merged.codex_used_percent.is_some() || merged.openai_cost_micro_usd.is_some())
+        .then_some(merged)
 }
 
-/// Run the self-compose path: resolve cache dir + key fingerprint, build a
-/// one-shot runtime, and call `statusline_render::self_compose` with the
-/// OAuth-free `LiveCrossSources`. `None` if there is no cache dir or the runtime
-/// cannot be built; never panics when called from a synchronous context (the
-/// `block_on` below would panic if called from within an async runtime).
+/// Run the self-compose path: resolve cache dir + key fingerprint, optionally
+/// seed the OpenAI gate from a recent watcher fetch, build a one-shot runtime,
+/// and call `statusline_render::self_compose` with the OAuth-free
+/// `LiveCrossSources`. `None` if there is no cache dir or the runtime cannot be
+/// built; never panics when called from a synchronous context (the `block_on`
+/// below would panic if called from within an async runtime).
 fn self_compose_cross(
     now: chrono::DateTime<chrono::Utc>,
+    openai_seed: Option<(i64, chrono::DateTime<chrono::Utc>)>,
 ) -> Option<statusline_render::CrossProvider> {
     let cache_dir = statusline_render::cache::cache_dir_path()?;
     let fingerprint = statusline_render::cache::key_fingerprint(
@@ -90,6 +121,17 @@ fn self_compose_cross(
             .flatten()
             .as_deref(),
     );
+    // Honor the watcher's last OpenAI fetch: seeding the cache makes the
+    // machine-wide 300s gate span the watcher-to-statusline handoff instead of
+    // treating the two caches as independent (avoids a double-fetch).
+    if let Some((total_micro_usd, fetched_at)) = openai_seed {
+        statusline_render::cache::seed_if_newer(
+            &cache_dir,
+            &fingerprint,
+            total_micro_usd,
+            fetched_at,
+        );
+    }
     // One-shot CLI: a fresh per-turn runtime is acceptable; the OpenAI fetch
     // inside self_compose is cache-gated (300s), so the network is not hit every
     // turn even though the runtime is built every turn.
@@ -102,14 +144,12 @@ fn self_compose_cross(
     )))
 }
 
-/// Read `snapshot.json` and map it to a `CrossProvider` (cells may be stale).
-/// `None` only when the file is absent/unreadable.
-fn read_snapshot_cross(
-    now: chrono::DateTime<chrono::Utc>,
-) -> Option<statusline_render::CrossProvider> {
+/// Read the host-written `snapshot.json` payload. `None` only when the file is
+/// absent or unreadable.
+fn read_snapshot_payload() -> Option<state_coordinator::SnapshotFilePayload> {
     let path = state_coordinator::snapshot_file_path()?;
     match state_coordinator::read_snapshot_file(&path) {
-        Ok(payload) => Some(cross_from_payload(&payload, now)),
+        Ok(payload) => Some(payload),
         Err(state_coordinator::SnapshotFileError::FileMissing { .. }) => None,
         Err(e) => {
             tracing::debug!(
@@ -410,34 +450,56 @@ mod statusline_tests {
         }
     }
 
+    fn cp_stale(codex: Option<f32>, openai: Option<i64>) -> statusline_render::CrossProvider {
+        statusline_render::CrossProvider {
+            codex_used_percent: codex,
+            openai_cost_micro_usd: openai,
+            codex_stale: true,
+            openai_stale: true,
+        }
+    }
+
     #[test]
-    fn pick_cross_prefers_composed_with_cells() {
-        let composed = cp(Some(5.0), None);
-        let snap = cp(None, Some(99));
-        let got = super::pick_cross(Some(composed), Some(snap)).unwrap();
+    fn pick_cross_merges_composed_over_stale_snapshot_cells() {
+        // Composed has fresh Codex; the stale snapshot has an OpenAI value. The
+        // merge keeps the fresh Codex AND surfaces the stale OpenAI (with its
+        // marker) rather than dropping it.
+        let got =
+            super::pick_cross(Some(cp(Some(5.0), None)), Some(cp_stale(None, Some(99)))).unwrap();
         assert_eq!(got.codex_used_percent, Some(5.0));
-        assert_eq!(got.openai_cost_micro_usd, None);
+        assert!(!got.codex_stale, "composed Codex is current");
+        assert_eq!(got.openai_cost_micro_usd, Some(99));
+        assert!(got.openai_stale, "snapshot OpenAI is stale");
+    }
+
+    #[test]
+    fn pick_cross_prefers_composed_cell_when_both_have_it() {
+        // Both sources have OpenAI; the composed (current) value wins.
+        let got =
+            super::pick_cross(Some(cp(None, Some(42))), Some(cp_stale(None, Some(99)))).unwrap();
+        assert_eq!(got.openai_cost_micro_usd, Some(42));
+        assert!(!got.openai_stale);
     }
 
     #[test]
     fn pick_cross_falls_back_to_stale_snapshot_when_composed_empty() {
-        let composed = cp(None, None);
-        let snap = cp(None, Some(99));
-        let got = super::pick_cross(Some(composed), Some(snap)).unwrap();
+        let got = super::pick_cross(Some(cp(None, None)), Some(cp_stale(None, Some(99)))).unwrap();
         assert_eq!(got.openai_cost_micro_usd, Some(99));
+        assert!(got.openai_stale);
     }
 
     #[test]
     fn pick_cross_falls_back_when_composed_absent() {
-        let snap = cp(Some(1.0), None);
-        let got = super::pick_cross(None, Some(snap)).unwrap();
+        let got = super::pick_cross(None, Some(cp_stale(Some(1.0), None))).unwrap();
         assert_eq!(got.codex_used_percent, Some(1.0));
+        assert!(got.codex_stale);
     }
 
     #[test]
     fn pick_cross_none_when_nothing_available() {
         assert!(super::pick_cross(Some(cp(None, None)), None).is_none());
         assert!(super::pick_cross(None, None).is_none());
+        assert!(super::pick_cross(Some(cp(None, None)), Some(cp_stale(None, None))).is_none());
     }
 
     #[test]

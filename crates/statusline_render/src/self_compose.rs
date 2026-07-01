@@ -189,4 +189,22 @@ mod tests {
         // key caches nothing, so no cooldown starts.
         assert_eq!(f.calls.get(), 1);
     }
+
+    #[tokio::test]
+    async fn seeded_cache_gates_fetch() {
+        // A watcher OpenAI fetch seeded into the cache (via seed_if_newer) must
+        // suppress a self-compose fetch within the TTL - the machine-wide 300s
+        // gate spanning the watcher-to-statusline handoff.
+        let dir = tempdir().unwrap();
+        cache::seed_if_newer(dir.path(), "fp", 500, t0());
+        let f = Fake {
+            openai: Ok(Some(999)),
+            codex: None,
+            calls: Cell::new(0),
+        };
+        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(120)).await;
+        assert_eq!(cp.openai_cost_micro_usd, Some(500));
+        assert!(!cp.openai_stale);
+        assert_eq!(f.calls.get(), 0, "seed within TTL gates the fetch");
+    }
 }
