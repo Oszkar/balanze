@@ -78,7 +78,8 @@ fn pick_cross(
 /// Run the self-compose path: resolve cache dir + key fingerprint, build a
 /// one-shot runtime, and call `statusline_render::self_compose` with the
 /// OAuth-free `LiveCrossSources`. `None` if there is no cache dir or the runtime
-/// cannot be built (never panics).
+/// cannot be built; never panics when called from a synchronous context (the
+/// `block_on` below would panic if called from within an async runtime).
 fn self_compose_cross(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<statusline_render::CrossProvider> {
@@ -89,6 +90,9 @@ fn self_compose_cross(
             .flatten()
             .as_deref(),
     );
+    // One-shot CLI: a fresh per-turn runtime is acceptable; the OpenAI fetch
+    // inside self_compose is cache-gated (300s), so the network is not hit every
+    // turn even though the runtime is built every turn.
     let rt = tokio::runtime::Runtime::new().ok()?;
     Some(rt.block_on(statusline_render::self_compose(
         &crate::sources::LiveCrossSources,
@@ -356,6 +360,9 @@ mod statusline_tests {
             Self { vars, _lock }
         }
     }
+    // `_lock` is declared last in the struct, so it drops after `Drop::drop`
+    // returns: the restore runs first, then the lock releases last (matching
+    // the single-var EnvGuard's drop-order invariant).
     impl Drop for MultiEnvGuard {
         fn drop(&mut self) {
             // SAFETY: ENV_LOCK is still held (self._lock), so the restore is serialized.
