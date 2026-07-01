@@ -365,10 +365,14 @@ pub(crate) struct LiveCrossSources;
 
 impl statusline_render::CrossSources for LiveCrossSources {
     async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String> {
-        // A missing OR unreadable key -> no OpenAI cell (a statusline never errors).
+        // Absent key -> no OpenAI cell (`Ok(None)`). A real resolver failure ->
+        // `Err`, so self_compose serves the last-known value marked stale and
+        // starts the cooldown instead of silently dropping the cell. Either way
+        // the statusline never errors: self_compose handles both outcomes.
         let key = match resolve_openai_key() {
             Ok(Some(k)) => k,
-            _ => return Ok(None),
+            Ok(None) => return Ok(None),
+            Err(e) => return Err(e.to_string()),
         };
         // Short timeout: the statusline runs every turn; never hang the prompt.
         let client = reqwest::Client::builder()
