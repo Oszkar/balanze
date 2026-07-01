@@ -562,7 +562,9 @@ pub fn run() {
             commands::has_api_key,
             commands::clear_api_key,
             commands::get_statusline_status,
-            commands::set_statusline_wired
+            commands::set_statusline_wired,
+            commands::replace_statusline,
+            commands::restore_statusline
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Focused(false) = event {

@@ -246,33 +246,74 @@ fn prepare_api_key<'a>(provider: &str, key: &'a str) -> Result<&'a str, String> 
 }
 
 /// Whether Claude Code's `statusLine` is wired to Balanze, free, or taken by
-/// another command. Serialized to the frontend as `{ status, command }`.
+/// another command. Serialized to the frontend as `{ status, command,
+/// replaced_command }`.
 #[derive(serde::Serialize)]
 pub struct StatuslineWire {
     /// `"wired"` (ours) | `"unwired"` (free) | `"occupied"` (another command).
     status: &'static str,
     /// The occupying command when `status == "occupied"`, else `null`.
     command: Option<String>,
+    /// The foreign command Balanze displaced (from Balanze settings), if any.
+    /// Non-null means a restore is available via `restore_statusline`.
+    replaced_command: Option<String>,
 }
 
 /// Report whether Claude Code's `statusLine` is wired to Balanze.
 #[tauri::command]
 pub fn get_statusline_status() -> Result<StatuslineWire, String> {
     let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-    Ok(match read_wire_status(&path).map_err(|e| e.to_string())? {
+    let status = read_wire_status(&path).map_err(|e| e.to_string())?;
+    let replaced_command = settings::load()
+        .ok()
+        .and_then(|s| s.statusline.replaced_command);
+    Ok(match status {
         WireStatus::WiredToBalanze => StatuslineWire {
             status: "wired",
             command: None,
+            replaced_command,
         },
         WireStatus::Unwired => StatuslineWire {
             status: "unwired",
             command: None,
+            replaced_command,
         },
         WireStatus::OccupiedBy(cmd) => StatuslineWire {
             status: "occupied",
             command: Some(cmd),
+            replaced_command,
         },
     })
+}
+
+/// Replace a foreign `statusLine.command` with Balanze's, backing the foreign
+/// command up to `settings.statusline.replaced_command` so it can be restored
+/// later. If the statusLine is already Balanze's or unwired, wires it directly.
+/// Provider-agnostic: keys only off `OccupiedBy(cmd)` - never reads or touches
+/// the foreign tool's own config files.
+#[tauri::command]
+pub fn replace_statusline() -> Result<(), String> {
+    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+    if let WireStatus::OccupiedBy(cmd) = read_wire_status(&path).map_err(|e| e.to_string())? {
+        let mut s = settings::load().unwrap_or_default();
+        s.statusline.replaced_command = Some(cmd);
+        settings::save(&s).map_err(|e| e.to_string())?;
+    }
+    wire_statusline(&path, STATUSLINE_INVOCATION).map_err(|e| e.to_string())
+}
+
+/// Restore the foreign `statusLine.command` that Balanze displaced via
+/// `replace_statusline`. Reads the backup from
+/// `settings.statusline.replaced_command`, writes it back (or unwires if the
+/// backup is `None`), then clears the backup. Idempotent: calling with no
+/// backup silently unwires Balanze's line.
+#[tauri::command]
+pub fn restore_statusline() -> Result<(), String> {
+    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+    let mut s = settings::load().unwrap_or_default();
+    let previous = s.statusline.replaced_command.take();
+    claude_statusline::restore_statusline(&path, previous.as_deref()).map_err(|e| e.to_string())?;
+    settings::save(&s).map_err(|e| e.to_string())
 }
 
 /// Wire (`wired = true`) or unwire (`wired = false`) Balanze's `statusLine` in
