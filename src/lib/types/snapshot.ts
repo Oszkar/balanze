@@ -78,8 +78,8 @@ export interface OpenAiCosts {
   fetched_at: string;
 }
 
-export interface RateWindow { used_percent: number; resets_at: string; }
-export interface RateLimits { five_hour: RateWindow | null; seven_day: RateWindow | null; }
+export interface RateWindow { key: string; label: string; used_percent: number; resets_at: string; }
+export interface RateLimits { windows: RateWindow[]; }
 export interface StatuslineSnapshot {
   rate_limits: RateLimits | null;
   session_cost_micro_usd: number | null;

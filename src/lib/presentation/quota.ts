@@ -26,15 +26,15 @@ export interface AnthropicQuota {
 }
 
 export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
-  const sl = s.claude_statusline?.payload.rate_limits;
-  if (sl?.five_hour) {
-    const five = sl.five_hour;
-    const seven = sl.seven_day;
+  const slWindows = s.claude_statusline?.payload.rate_limits?.windows ?? [];
+  const slFive = slWindows.find((w) => w.key === 'five_hour');
+  if (slFive) {
+    const slSeven = slWindows.find((w) => w.key === 'seven_day');
     return {
-      headline: { pct: five.used_percent, resetsAt: five.resets_at, label: '5h' },
-      secondary: seven ? { pct: seven.used_percent, resetsAt: seven.resets_at, label: '7-day' } : null,
+      headline: { pct: slFive.used_percent, resetsAt: slFive.resets_at, label: '5h' },
+      secondary: slSeven ? { pct: slSeven.used_percent, resetsAt: slSeven.resets_at, label: '7-day' } : null,
       source: 'statusline',
-      tone: quotaTone(five.used_percent),
+      tone: quotaTone(slFive.used_percent),
     };
   }
   const cad = s.claude_oauth?.cadences ?? [];

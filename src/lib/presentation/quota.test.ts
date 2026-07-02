@@ -28,8 +28,11 @@ describe('quota', () => {
   });
   it('prefers statusline over oauth', () => {
     const s: Snapshot = { ...base,
-      claude_statusline: { schema_version: 1, captured_at: '2026-06-03T12:00:00Z',
-        payload: { rate_limits: { five_hour: { used_percent: 62, resets_at: '2026-06-03T14:41:00Z' }, seven_day: { used_percent: 48, resets_at: '2026-06-06T16:00:00Z' } }, session_cost_micro_usd: null, claude_code_version: null } },
+      claude_statusline: { schema_version: 2, captured_at: '2026-06-03T12:00:00Z',
+        payload: { rate_limits: { windows: [
+          { key: 'five_hour', label: '5-hour', used_percent: 62, resets_at: '2026-06-03T14:41:00Z' },
+          { key: 'seven_day', label: '7-day', used_percent: 48, resets_at: '2026-06-06T16:00:00Z' },
+        ] }, session_cost_micro_usd: null, claude_code_version: null } },
       claude_oauth: { cadences: [{ key: 'five_hour', display_label: '5h', utilization_percent: 10, resets_at: '2026-06-03T14:41:00Z' }], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: '2026-06-03T12:00:00Z' },
     };
     const q = anthropicQuota(s)!;
