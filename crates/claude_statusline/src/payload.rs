@@ -6,7 +6,7 @@ use crate::types::StatuslineSnapshot;
 /// Current schema version. Any change to the on-disk JSON shape is a §8
 /// (Change Control) event that requires bumping this constant AND adding a
 /// `from_v<N>` migration path in `file_io::read_snapshot`.
-pub const SCHEMA_VERSION: u8 = 1;
+pub const SCHEMA_VERSION: u8 = 2;
 
 /// Envelope written to disk by `balanze-cli statusline` and read by the
 /// watcher. `captured_at` is the producer's wall-clock at write
@@ -62,18 +62,18 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_one() {
+    fn schema_version_is_two() {
         let captured_at = Utc.with_ymd_and_hms(2026, 5, 21, 12, 0, 0).unwrap();
         let p = StatuslineFilePayload::new(sample_snapshot(), captured_at);
         assert_eq!(p.schema_version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 1);
+        assert_eq!(SCHEMA_VERSION, 2);
     }
 
     #[test]
     fn new_stamps_schema_version() {
         let captured_at = Utc.with_ymd_and_hms(2026, 5, 21, 0, 0, 0).unwrap();
         let p = StatuslineFilePayload::new(sample_snapshot(), captured_at);
-        assert_eq!(p.schema_version, 1);
+        assert_eq!(p.schema_version, 2);
         assert_eq!(p.captured_at, captured_at);
     }
 }

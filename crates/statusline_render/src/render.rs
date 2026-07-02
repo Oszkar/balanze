@@ -163,10 +163,10 @@ fn render_usage(input: &RenderInput) -> Option<String> {
     let rl = input.snapshot.rate_limits.as_ref()?;
     let c = &input.config.segments.usage;
     let mut windows: Vec<String> = Vec::new();
-    if let Some(w) = &rl.five_hour {
+    if let Some(w) = rl.five_hour() {
         windows.push(render_window("⌛5h", w, Duration::hours(5), c, input));
     }
-    if let Some(w) = &rl.seven_day {
+    if let Some(w) = rl.seven_day() {
         windows.push(render_window("📅7d", w, Duration::days(7), c, input));
     }
     if windows.is_empty() {
@@ -339,14 +339,20 @@ mod tests {
     fn snap() -> claude_statusline::StatuslineSnapshot {
         claude_statusline::StatuslineSnapshot {
             rate_limits: Some(claude_statusline::RateLimits {
-                five_hour: Some(claude_statusline::RateWindow {
-                    used_percent: 82.0,
-                    resets_at: now() + chrono::Duration::minutes(83),
-                }),
-                seven_day: Some(claude_statusline::RateWindow {
-                    used_percent: 88.0,
-                    resets_at: now() + chrono::Duration::days(5),
-                }),
+                windows: vec![
+                    claude_statusline::RateWindow {
+                        key: "five_hour".to_string(),
+                        label: "5-hour".to_string(),
+                        used_percent: 82.0,
+                        resets_at: now() + chrono::Duration::minutes(83),
+                    },
+                    claude_statusline::RateWindow {
+                        key: "seven_day".to_string(),
+                        label: "7-day".to_string(),
+                        used_percent: 88.0,
+                        resets_at: now() + chrono::Duration::days(5),
+                    },
+                ],
             }),
             session_cost_micro_usd: Some(2_500_000),
             claude_code_version: None,
@@ -423,8 +429,9 @@ mod tests {
         s.rate_limits
             .as_mut()
             .unwrap()
-            .five_hour
-            .as_mut()
+            .windows
+            .iter_mut()
+            .find(|w| w.key == "five_hour")
             .unwrap()
             .used_percent = 82.5;
         let out = render(&RenderInput {
@@ -450,8 +457,16 @@ mod tests {
         let mut s = snap();
         {
             let rl = s.rate_limits.as_mut().unwrap();
-            rl.five_hour.as_mut().unwrap().resets_at = n + chrono::Duration::hours(5);
-            rl.seven_day.as_mut().unwrap().resets_at = n + chrono::Duration::days(7);
+            rl.windows
+                .iter_mut()
+                .find(|w| w.key == "five_hour")
+                .unwrap()
+                .resets_at = n + chrono::Duration::hours(5);
+            rl.windows
+                .iter_mut()
+                .find(|w| w.key == "seven_day")
+                .unwrap()
+                .resets_at = n + chrono::Duration::days(7);
         }
         let out = render(&RenderInput {
             snapshot: &s,
@@ -512,8 +527,9 @@ mod tests {
         s.rate_limits
             .as_mut()
             .unwrap()
-            .five_hour
-            .as_mut()
+            .windows
+            .iter_mut()
+            .find(|w| w.key == "five_hour")
             .unwrap()
             .used_percent = 95.0;
         let out = render(&RenderInput {
@@ -613,8 +629,9 @@ mod tests {
         s.rate_limits
             .as_mut()
             .unwrap()
-            .five_hour
-            .as_mut()
+            .windows
+            .iter_mut()
+            .find(|w| w.key == "five_hour")
             .unwrap()
             .used_percent = 75.0;
         let out = render(&RenderInput {

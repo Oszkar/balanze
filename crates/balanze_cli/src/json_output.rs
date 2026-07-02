@@ -315,6 +315,11 @@ struct JsonClaudeStatusline {
     captured_at: DateTime<Utc>,
     five_hour: Option<JsonRateWindow>,
     seven_day: Option<JsonRateWindow>,
+    /// Every rate-limit window from the payload, in parser order (known keys
+    /// first, unrecognized keys after). Mirrors `claude_oauth.cadences` -
+    /// gives the CLI `--json` consumer full parity with the OAuth path
+    /// instead of being capped at the two named windows above.
+    windows: Vec<JsonRateWindow>,
     /// Session cost converted from i64 micro-USD to f64 dollars at the JSON
     /// boundary (AGENTS.md §2.1 - f64 only at display).
     session_cost_usd: Option<f64>,
@@ -325,8 +330,21 @@ struct JsonClaudeStatusline {
 
 #[derive(Serialize)]
 struct JsonRateWindow {
+    key: String,
+    label: String,
     used_percent: f32,
     resets_at: DateTime<Utc>,
+}
+
+impl From<&claude_statusline::RateWindow> for JsonRateWindow {
+    fn from(w: &claude_statusline::RateWindow) -> Self {
+        Self {
+            key: w.key.clone(),
+            label: w.label.clone(),
+            used_percent: w.used_percent,
+            resets_at: w.resets_at,
+        }
+    }
 }
 
 impl From<&StatuslineFilePayload> for JsonClaudeStatusline {
@@ -335,18 +353,21 @@ impl From<&StatuslineFilePayload> for JsonClaudeStatusline {
         Self {
             schema_version: p.schema_version,
             captured_at: p.captured_at,
-            five_hour: snap.rate_limits.as_ref().and_then(|rl| {
-                rl.five_hour.as_ref().map(|w| JsonRateWindow {
-                    used_percent: w.used_percent,
-                    resets_at: w.resets_at,
-                })
-            }),
-            seven_day: snap.rate_limits.as_ref().and_then(|rl| {
-                rl.seven_day.as_ref().map(|w| JsonRateWindow {
-                    used_percent: w.used_percent,
-                    resets_at: w.resets_at,
-                })
-            }),
+            five_hour: snap
+                .rate_limits
+                .as_ref()
+                .and_then(|rl| rl.five_hour())
+                .map(JsonRateWindow::from),
+            seven_day: snap
+                .rate_limits
+                .as_ref()
+                .and_then(|rl| rl.seven_day())
+                .map(JsonRateWindow::from),
+            windows: snap
+                .rate_limits
+                .as_ref()
+                .map(|rl| rl.windows.iter().map(JsonRateWindow::from).collect())
+                .unwrap_or_default(),
             session_cost_usd: snap
                 .session_cost_micro_usd
                 .map(|micro| micro as f64 / 1_000_000.0),
@@ -665,16 +686,72 @@ mod tests {
         s.claude_statusline = Some(sample_statusline_payload());
         let v = render_to_value(&s, false);
         let cell = &v["claude_statusline"];
-        assert_eq!(cell["schema_version"], 1);
+        assert_eq!(cell["schema_version"], 2);
         assert_eq!(cell["source"], "claude_code_statusline");
         assert_eq!(cell["confidence"], "estimate");
         // session_cost_usd: 3_420_000 µ$ → $3.42
         let cost = cell["session_cost_usd"].as_f64().unwrap();
         assert!((cost - 3.42).abs() < 1e-9, "session_cost_usd = {cost}");
         assert_eq!(cell["claude_code_version"], "v2.1.144");
-        // rate_limits not set → five_hour and seven_day are null
+        // rate_limits not set → five_hour, seven_day, and windows are empty
         assert!(cell["five_hour"].is_null());
         assert!(cell["seven_day"].is_null());
+        assert_eq!(cell["windows"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn claude_statusline_windows_carries_every_window_including_unknown_keys() {
+        let n = fixed_now();
+        let snap = StatuslineSnapshot {
+            rate_limits: Some(claude_statusline::RateLimits {
+                windows: vec![
+                    claude_statusline::RateWindow {
+                        key: "five_hour".to_string(),
+                        label: "5-hour".to_string(),
+                        used_percent: 17.0,
+                        resets_at: n + chrono::Duration::hours(4),
+                    },
+                    claude_statusline::RateWindow {
+                        key: "seven_day".to_string(),
+                        label: "7-day".to_string(),
+                        used_percent: 2.0,
+                        resets_at: n + chrono::Duration::days(3),
+                    },
+                    claude_statusline::RateWindow {
+                        key: "seven_day_fable".to_string(),
+                        label: "Seven Day Fable".to_string(),
+                        used_percent: 0.0,
+                        resets_at: n + chrono::Duration::days(3),
+                    },
+                ],
+            }),
+            session_cost_micro_usd: Some(1_000_000),
+            claude_code_version: Some("v2.1.144".to_string()),
+            model_display_name: None,
+            context_used_percent: None,
+        };
+        let mut s = Snapshot::empty(n);
+        s.claude_statusline = Some(StatuslineFilePayload::new(snap, n));
+        let v = render_to_value(&s, false);
+        let cell = &v["claude_statusline"];
+
+        assert_eq!(cell["five_hour"]["key"], "five_hour");
+        assert_eq!(cell["five_hour"]["label"], "5-hour");
+        assert_eq!(cell["seven_day"]["key"], "seven_day");
+
+        let windows = cell["windows"].as_array().expect("windows array present");
+        assert_eq!(
+            windows.len(),
+            3,
+            "all 3 windows present, not just the 2 named ones"
+        );
+        let keys: Vec<&str> = windows.iter().map(|w| w["key"].as_str().unwrap()).collect();
+        assert_eq!(keys, vec!["five_hour", "seven_day", "seven_day_fable"]);
+        let fable = windows
+            .iter()
+            .find(|w| w["key"] == "seven_day_fable")
+            .expect("unknown-key window present");
+        assert_eq!(fable["label"], "Seven Day Fable");
     }
 
     #[test]

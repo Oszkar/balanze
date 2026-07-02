@@ -15,10 +15,10 @@ fn real_captured_payload_parses_with_rate_limits() {
     let rl = s
         .rate_limits
         .expect("Claude Code 2.1.144 emits rate_limits (Pro/Max, post-first-response)");
-    let fh = rl.five_hour.expect("five_hour window present");
+    let fh = rl.five_hour().expect("five_hour window present");
     assert!((fh.used_percent - 45.0).abs() < 1e-4);
     assert_eq!(fh.resets_at.timestamp(), 1779209400);
-    let sd = rl.seven_day.expect("seven_day window present");
+    let sd = rl.seven_day().expect("seven_day window present");
     assert!((sd.used_percent - 54.0).abs() < 1e-4);
     assert_eq!(sd.resets_at.timestamp(), 1779458400);
     // $100.03923590000005 × 1e6 = 100_039_235.9... -> round-half-away -> 100_039_236 micro-USD

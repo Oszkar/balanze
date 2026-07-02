@@ -14,12 +14,19 @@
     { snapshot: Snapshot; openaiEnabled?: boolean; degraded?: Record<string, string>;
       onDismissOpenai?: () => void; onSettings?: () => void } = $props();
 
-  // Source order matches GridView's anthropicQuota(): the live statusline (5h/7d)
-  // is preferred, the OAuth cadences are the fallback - so the two views never
-  // disagree on which source they render. `anthStale` mirrors GridView: the
-  // statusline went degraded and we are on the OAuth fallback, so Cards shows the
-  // same stale cue (per-window "stale" instead of the reset countdown).
-  const anthSource = $derived(snapshot.claude_statusline?.payload.rate_limits?.five_hour ? 'statusline' : 'oauth');
+  // Single source of truth for "which source is active": anthropicQuota()
+  // already computes this (headline/tone/source) for GridView, so Cards
+  // derives its own source-selection from the same call instead of
+  // re-implementing the "has a five_hour window" gate independently. Three
+  // independent copies of that gate (this file had two, quota.ts had a
+  // third) is exactly what let a prior change desync CardsView from
+  // GridView - reusing one computed value removes that risk class rather
+  // than relying on the copies happening to agree. `anthStale` mirrors
+  // GridView: the statusline went degraded and we are on the OAuth
+  // fallback, so Cards shows the same stale cue (per-window "stale"
+  // instead of the reset countdown).
+  const anthQuota = $derived(anthropicQuota(snapshot));
+  const anthSource = $derived(anthQuota?.source ?? 'oauth');
   const anthStale = $derived(!!degraded['claude_statusline'] && anthSource === 'oauth');
 
   const paceElapsed = (key: string): number | null => {
@@ -32,14 +39,15 @@
   // deliberate density difference, not a parity bug.
   const anthWindows = $derived.by<CardWindow[]>(() => {
     const rl = snapshot.claude_statusline?.payload.rate_limits;
-    if (rl?.five_hour) {
-      const out: CardWindow[] = [];
-      out.push({ label: '5-hour', used: rl.five_hour.used_percent, elapsed: paceElapsed('five_hour'),
-        tone: quotaTone(rl.five_hour.used_percent), resetsAt: rl.five_hour.resets_at, title: PROV.anthropicQuotaStatusline.title });
-      if (rl.seven_day)
-        out.push({ label: '7-day', used: rl.seven_day.used_percent, elapsed: paceElapsed('seven_day'),
-          tone: quotaTone(rl.seven_day.used_percent), resetsAt: rl.seven_day.resets_at, title: PROV.anthropicQuotaStatusline.title });
-      return out;
+    if (anthSource === 'statusline' && rl) {
+      return rl.windows.map((w) => ({
+        label: w.label,
+        used: w.used_percent,
+        elapsed: paceElapsed(w.key),
+        tone: quotaTone(w.used_percent),
+        resetsAt: w.resets_at,
+        title: PROV.anthropicQuotaStatusline.title,
+      }));
     }
     const cad = snapshot.claude_oauth?.cadences ?? [];
     return cad.map((c) => ({
@@ -56,13 +64,13 @@
   // Cold-start / error / not-configured states for the Anthropic quota area,
   // mirroring GridView's anthState branches (same selector, same copy via
   // ANTH_QUOTA_COPY). The overage billed row still renders underneath regardless
-  // of quota state. `hasQuota` uses Grid's exact gate (`!!anthropicQuota()`,
-  // which requires a five_hour cadence) so the two views agree on data-vs-loading
-  // even when only a seven_day / model-specific cadence is present; the
-  // all-cadence bar rendering (anthWindows) is unaffected.
+  // of quota state. `hasQuota` reuses the same `anthQuota` computed above (Grid's
+  // exact gate, which requires a five_hour cadence) so the two views agree on
+  // data-vs-loading even when only a seven_day / model-specific cadence is
+  // present; the all-cadence bar rendering (anthWindows) is unaffected.
   const anthErr = $derived(snapshot.claude_oauth_error ?? snapshot.claude_statusline_error ?? null);
   const anthQuotaState = $derived.by<CardQuotaState>(() => {
-    const s = anthropicQuotaState({ hasQuota: !!anthropicQuota(snapshot), error: anthErr, unavailable: snapshot.claude_oauth_unavailable });
+    const s = anthropicQuotaState({ hasQuota: !!anthQuota, error: anthErr, unavailable: snapshot.claude_oauth_unavailable });
     switch (s.kind) {
       case 'error':
         return { kind: 'error', note: ANTH_QUOTA_COPY.error.note, title: ANTH_QUOTA_COPY.error.title(s.message) };

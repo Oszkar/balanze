@@ -71,10 +71,7 @@ pub(crate) fn worst_utilization(s: &Snapshot) -> f32 {
     }
     if let Some(sl) = &s.claude_statusline {
         if let Some(rl) = &sl.payload.rate_limits {
-            if let Some(w) = &rl.five_hour {
-                worst = worst.max(w.used_percent);
-            }
-            if let Some(w) = &rl.seven_day {
+            for w in &rl.windows {
                 worst = worst.max(w.used_percent);
             }
         }
@@ -99,7 +96,7 @@ fn has_quota_data(s: &Snapshot) -> bool {
         .claude_statusline
         .as_ref()
         .and_then(|sl| sl.payload.rate_limits.as_ref())
-        .is_some_and(|rl| rl.five_hour.is_some() || rl.seven_day.is_some());
+        .is_some_and(|rl| !rl.windows.is_empty());
     oauth || statusline || s.codex_quota.is_some()
 }
 
@@ -243,6 +240,45 @@ mod tests {
         assert_eq!(worst_utilization(&s), 0.0);
         s.claude_oauth = Some(oauth_with_util(62.0));
         assert_eq!(worst_utilization(&s), 62.0);
+    }
+
+    /// A statusline window beyond five_hour/seven_day (e.g. a per-model
+    /// weekly bucket) must still drive the tray color - the OAuth cadence
+    /// loop above already considers every cadence generically; the
+    /// statusline branch must match, not stay capped at the two named
+    /// windows. Regression for a real gap: a critical Fable-style window at
+    /// 95% while the named windows are low previously left the tray green.
+    #[test]
+    fn statusline_window_beyond_named_ones_drives_worst_utilization() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        s.claude_statusline = Some(claude_statusline::StatuslineFilePayload::new(
+            claude_statusline::StatuslineSnapshot {
+                rate_limits: Some(claude_statusline::RateLimits {
+                    windows: vec![
+                        claude_statusline::RateWindow {
+                            key: "five_hour".to_string(),
+                            label: "5-hour".to_string(),
+                            used_percent: 10.0,
+                            resets_at: Utc::now(),
+                        },
+                        claude_statusline::RateWindow {
+                            key: "seven_day_fable".to_string(),
+                            label: "Seven Day Fable".to_string(),
+                            used_percent: 95.0,
+                            resets_at: Utc::now(),
+                        },
+                    ],
+                }),
+                session_cost_micro_usd: None,
+                claude_code_version: None,
+                model_display_name: None,
+                context_used_percent: None,
+            },
+            Utc::now(),
+        ));
+        assert_eq!(worst_utilization(&s), 95.0);
+        assert!(has_quota_data(&s));
     }
 
     #[test]

@@ -162,6 +162,57 @@ function overageBilled(): Snapshot {
   return s;
 }
 
+/** Statusline-sourced Anthropic quota with 3 windows (5h, 7d, and an
+ * unrecognized 3rd window) - the states gallery previously had zero
+ * coverage of the statusline branch at all, even for the 2-window case. */
+function statuslineThreeWindows(): Snapshot {
+  const s = clone(baseSnapshot());
+  s.claude_oauth = null;
+  s.claude_oauth_error = null;
+  s.claude_statusline = {
+    schema_version: 2,
+    captured_at: iso(0),
+    payload: {
+      rate_limits: {
+        windows: [
+          { key: 'five_hour', label: '5-hour', used_percent: 17, resets_at: iso(4 * H) },
+          { key: 'seven_day', label: '7-day', used_percent: 2, resets_at: iso(120 * H) },
+          { key: 'seven_day_fable', label: 'Seven Day Fable', used_percent: 0, resets_at: iso(120 * H) },
+        ],
+      },
+      session_cost_micro_usd: 4_200_000,
+      claude_code_version: '2.1.144',
+    },
+  };
+  s.claude_statusline_error = null;
+  return s;
+}
+
+/** Regression fixture: statusline present but missing its five_hour window
+ * (only seven_day), with OAuth ALSO configured. anthSource/anthWindows must
+ * fall through to the OAuth cadences here, matching quota.ts's own gate -
+ * NOT render the incomplete statusline windows. Pins the source-selection
+ * agreement documented in CardsView.svelte's own comment ("the two views
+ * never disagree on which source they render"), which a broader "any window"
+ * gate would silently break. Expect: Cards shows the OAuth 5-hour/7-day pair
+ * (62%/41%, from baseSnapshot), not the statusline's lone 7-day 5% window. */
+function statuslineMissingFiveHour(): Snapshot {
+  const s = clone(baseSnapshot());
+  s.claude_statusline = {
+    schema_version: 2,
+    captured_at: iso(0),
+    payload: {
+      rate_limits: {
+        windows: [{ key: 'seven_day', label: '7-day', used_percent: 5, resets_at: iso(120 * H) }],
+      },
+      session_cost_micro_usd: 1_000_000,
+      claude_code_version: '2.1.144',
+    },
+  };
+  s.claude_statusline_error = null;
+  return s;
+}
+
 export interface GalleryState {
   label: string;
   view: 'grid' | 'cards' | 'settings' | 'empty';
@@ -206,6 +257,18 @@ export const GALLERY_STATES: GalleryState[] = [
     openaiEnabled: true,
     snapshot: anthFallback(),
     degraded: { claude_statusline: 'statusline payload is stale' },
+  },
+  {
+    label: 'Cards - statusline 3 windows (Fable)',
+    view: 'cards',
+    openaiEnabled: true,
+    snapshot: statuslineThreeWindows(),
+  },
+  {
+    label: 'Cards - statusline missing 5h, OAuth fallback (regression)',
+    view: 'cards',
+    openaiEnabled: true,
+    snapshot: statuslineMissingFiveHour(),
   },
 
   { label: 'Settings - configured', view: 'settings' },
