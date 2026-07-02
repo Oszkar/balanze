@@ -338,7 +338,9 @@ mod tests {
         let path = dir.path().join("missing_field.json");
         std::fs::write(
             &path,
-            r#"{"schema_version":1,"captured_at":"2026-05-21T00:00:00Z"}"#,
+            format!(
+                r#"{{"schema_version":{SCHEMA_VERSION},"captured_at":"2026-05-21T00:00:00Z"}}"#
+            ),
         )
         .unwrap();
         let err = read_snapshot(&path).unwrap_err();
