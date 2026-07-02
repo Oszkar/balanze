@@ -304,14 +304,19 @@ pub fn get_statusline_status() -> Result<StatuslineWire, String> {
 pub fn replace_statusline() -> Result<(), String> {
     let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
     let mut s = settings::load().unwrap_or_default();
+    let prior = s.statusline.replaced_command.clone();
     if let WireStatus::OccupiedBy(cmd) = read_wire_status(&path).map_err(|e| e.to_string())? {
-        s.statusline.replaced_command = Some(cmd);
-        settings::save(&s).map_err(|e| e.to_string())?;
+        // Don't back up the "statusLine present but no usable command" sentinel;
+        // it is not restorable.
+        if cmd != claude_statusline::NON_STRING_STATUSLINE_COMMAND {
+            s.statusline.replaced_command = Some(cmd);
+            settings::save(&s).map_err(|e| e.to_string())?;
+        }
     }
     if let Err(e) = wire_statusline(&path, STATUSLINE_INVOCATION) {
-        // Roll back the backup so the UI does not show a phantom Restore button
-        // for a replace that never completed (mirrors the setup.rs flow).
-        s.statusline.replaced_command = None;
+        // Roll back to the PRIOR backup (not None) so a failed replace never wipes
+        // an existing one, and the UI shows no phantom Restore for this attempt.
+        s.statusline.replaced_command = prior;
         let _ = settings::save(&s);
         return Err(e.to_string());
     }
@@ -319,18 +324,28 @@ pub fn replace_statusline() -> Result<(), String> {
 }
 
 /// Restore the foreign `statusLine.command` that Balanze displaced via
-/// `replace_statusline`. Reads the backup from
-/// `settings.statusline.replaced_command`, writes it back (or unwires if the
-/// backup is `None`), then clears the backup. Idempotent: calling with no
-/// backup silently unwires Balanze's line.
+/// `replace_statusline`: write the backup back (or unwire Balanze's own line if
+/// the backup is `None`), then clear the backup. If a foreign command now
+/// occupies the stanza (one Balanze did not displace), it is left untouched and
+/// the backup is KEPT, surfaced as an error to the caller.
 #[tauri::command]
 pub fn restore_statusline() -> Result<(), String> {
     let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
     let mut s = settings::load().unwrap_or_default();
     let previous = s.statusline.replaced_command.take();
     // Fully-qualified to disambiguate from this Tauri command of the same name.
-    claude_statusline::restore_statusline(&path, previous.as_deref()).map_err(|e| e.to_string())?;
-    settings::save(&s).map_err(|e| e.to_string())
+    let wrote = claude_statusline::restore_statusline(&path, previous.as_deref())
+        .map_err(|e| e.to_string())?;
+    if wrote {
+        // Backup consumed - persist the cleared value.
+        settings::save(&s).map_err(|e| e.to_string())
+    } else if previous.is_some() {
+        // A foreign command owns the stanza; keep the backup (do not save the
+        // cleared value) and tell the caller.
+        Err("Claude Code's statusLine is set to another command; not overwriting it. Your backup is kept.".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 /// Wire (`wired = true`) or unwire (`wired = false`) Balanze's `statusLine` in

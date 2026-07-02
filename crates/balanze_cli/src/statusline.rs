@@ -15,13 +15,26 @@ pub(crate) fn cmd_statusline_restore() -> Result<()> {
     };
     let mut settings = settings::load().unwrap_or_default();
     let previous = settings.statusline.replaced_command.take();
-    claude_statusline::restore_statusline(&path, previous.as_deref())
+    let wrote = claude_statusline::restore_statusline(&path, previous.as_deref())
         .map_err(|e| anyhow::anyhow!("failed to restore statusLine at {}: {e}", path.display()))?;
-    settings::save(&settings)
-        .map_err(|e| anyhow::anyhow!("statusLine restored, but clearing the backup failed: {e}"))?;
-    match previous {
-        Some(ref cmd) => println!("Restored the previous statusLine command: {cmd}"),
-        None => println!("No replaced command was stored; unwired Balanze's statusLine."),
+    if wrote {
+        // The backup was consumed - persist the now-cleared value.
+        settings::save(&settings).map_err(|e| {
+            anyhow::anyhow!("statusLine restored, but clearing the backup failed: {e}")
+        })?;
+        match previous {
+            Some(cmd) => println!("Restored the previous statusLine command: {cmd}"),
+            None => println!("Unwired Balanze's statusLine."),
+        }
+    } else if previous.is_some() {
+        // A foreign command occupies the stanza; leave it and KEEP the backup
+        // (do not save the cleared value) so it can be restored later.
+        println!(
+            "Claude Code's statusLine is set to another command; not overwriting it. \
+             Your backup is kept - restore once Balanze owns the statusLine again."
+        );
+    } else {
+        println!("No replaced command was stored; nothing to restore.");
     }
     Ok(())
 }

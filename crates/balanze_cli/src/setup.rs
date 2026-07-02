@@ -313,7 +313,12 @@ fn setup_statusline() {
             let _ = std::io::stdin().read_line(&mut answer);
             if answer.trim().eq_ignore_ascii_case("y") {
                 let mut settings = settings::load().unwrap_or_default();
-                settings.statusline.replaced_command = Some(cmd);
+                let prior = settings.statusline.replaced_command.clone();
+                // Only back up a real command, not the "statusLine present but no
+                // usable command" sentinel (which is not restorable).
+                if cmd != claude_statusline::NON_STRING_STATUSLINE_COMMAND {
+                    settings.statusline.replaced_command = Some(cmd);
+                }
                 if let Err(e) = settings::save(&settings) {
                     eprintln!(
                         "  ✗ Could not back up your command ({e}); leaving statusLine untouched."
@@ -326,9 +331,9 @@ fn setup_statusline() {
                          Restart Claude Code to apply."
                     ),
                     Err(e) => {
-                        // Wiring failed - roll back the backup so Balanze settings
-                        // match reality (nothing was displaced).
-                        settings.statusline.replaced_command = None;
+                        // Wiring failed - roll back to the PRIOR backup (not None)
+                        // so a failed replace never wipes an existing one.
+                        settings.statusline.replaced_command = prior;
                         let _ = settings::save(&settings);
                         eprintln!("  ✗ Failed to write {} ({e}); not wired.", path.display());
                     }
