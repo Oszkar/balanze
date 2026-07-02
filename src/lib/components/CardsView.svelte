@@ -19,7 +19,11 @@
   // disagree on which source they render. `anthStale` mirrors GridView: the
   // statusline went degraded and we are on the OAuth fallback, so Cards shows the
   // same stale cue (per-window "stale" instead of the reset countdown).
-  const anthSource = $derived(snapshot.claude_statusline?.payload.rate_limits?.windows.length ? 'statusline' : 'oauth');
+  const anthSource = $derived(
+    snapshot.claude_statusline?.payload.rate_limits?.windows.some((w) => w.key === 'five_hour')
+      ? 'statusline'
+      : 'oauth',
+  );
   const anthStale = $derived(!!degraded['claude_statusline'] && anthSource === 'oauth');
 
   const paceElapsed = (key: string): number | null => {
@@ -32,7 +36,7 @@
   // deliberate density difference, not a parity bug.
   const anthWindows = $derived.by<CardWindow[]>(() => {
     const rl = snapshot.claude_statusline?.payload.rate_limits;
-    if (rl?.windows.length) {
+    if (rl?.windows.some((w) => w.key === 'five_hour')) {
       return rl.windows.map((w) => ({
         label: w.label,
         used: w.used_percent,
