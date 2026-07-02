@@ -10,11 +10,15 @@
 //! is never logged or echoed, and `get_settings` returns only the non-secret
 //! `Settings` shape - the key itself never crosses back to the frontend.
 //!
-//! statusLine: `get_statusline_status` / `set_statusline_wired` are sync
-//! commands that delegate to `claude_statusline` (the only owner/writer of the
-//! `statusLine` stanza in Claude Code's `settings.json`, boundary #12). They
-//! enforce a no-clobber policy - Balanze never overwrites or strips another
-//! tool's `statusLine`.
+//! statusLine: `get_statusline_status` / `set_statusline_wired` /
+//! `replace_statusline` / `restore_statusline` are sync commands that delegate
+//! to `claude_statusline` (the only owner/writer of the `statusLine` stanza in
+//! Claude Code's `settings.json`, boundary #12). `set_statusline_wired` enforces
+//! a no-clobber policy - it never overwrites or strips another tool's
+//! `statusLine`. `replace_statusline` is the explicit, consent-driven override:
+//! it backs the foreign command up to `settings.statusline.replaced_command`
+//! before wiring (rolling back on failure); `restore_statusline` writes that
+//! backup back (or unwires only Balanze's own line), then clears it.
 //!
 //! All commands return `Result<_, String>` derived from `anyhow`/error
 //! `to_string()`.
