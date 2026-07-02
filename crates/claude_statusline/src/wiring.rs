@@ -197,14 +197,22 @@ pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineEr
 }
 
 /// Restore a previously-displaced `statusLine.command`. `Some(cmd)` writes that
-/// command back (the inverse of a Balanze "replace"); `None` unwires Balanze's
-/// statusLine entirely. Provider-agnostic: `cmd` is whatever string was
-/// displaced. The foreign tool's own config files are never touched - only
-/// Claude Code's `settings.json` statusLine stanza.
+/// command back (the inverse of a Balanze "replace"). `None` removes Balanze's
+/// own statusLine ONLY when Balanze is currently wired; if a foreign command
+/// occupies the stanza (one we never displaced) it is left untouched, upholding
+/// the never-touch-foreign-config invariant symmetric with the no-clobber wire
+/// path. Provider-agnostic: `cmd` is whatever string was displaced. Only Claude
+/// Code's `settings.json` statusLine stanza is ever written.
 pub fn restore_statusline(path: &Path, previous: Option<&str>) -> Result<(), StatuslineError> {
     match previous {
         Some(cmd) => wire_statusline(path, cmd),
-        None => unwire_statusline(path),
+        None => {
+            if read_wire_status(path)? == WireStatus::WiredToBalanze {
+                unwire_statusline(path)
+            } else {
+                Ok(())
+            }
+        }
     }
 }
 
@@ -596,5 +604,19 @@ mod tests {
         wire_statusline(&path, INVOCATION).unwrap();
         restore_statusline(&path, None).unwrap();
         assert_eq!(read_wire_status(&path).unwrap(), WireStatus::Unwired);
+    }
+
+    #[test]
+    fn restore_none_leaves_foreign_command_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // A foreign tool owns the statusLine and Balanze never displaced it.
+        wire_statusline(&path, "cship prompt").unwrap();
+        // No backup + not Balanze-wired -> the foreign command must be left intact.
+        restore_statusline(&path, None).unwrap();
+        assert_eq!(
+            read_wire_status(&path).unwrap(),
+            WireStatus::OccupiedBy("cship prompt".to_string())
+        );
     }
 }

@@ -107,11 +107,16 @@ pub fn set_settings(
     coord: State<'_, StateCoordinatorHandle>,
     reload: State<'_, WatcherReload>,
 ) -> Result<(), String> {
-    // `seen_welcome` is backend-owned first-run state, not a user setting; never
-    // let a frontend settings write (provider toggles) reset it and re-trigger
-    // the first-run welcome. Preserve the on-disk value over the inbound one.
+    // `seen_welcome` and `statusline` are backend-owned, not user settings the
+    // frontend edits: `seen_welcome` is first-run state, and `statusline` (incl.
+    // the `replaced_command` backup) is mutated out of band by the replace /
+    // restore commands and has no frontend editor. A frontend settings write
+    // (provider toggles) round-trips a stale copy, so preserve the on-disk
+    // values over the inbound ones - otherwise a toggle after a Replace would
+    // silently wipe the backup.
     if let Ok(current) = settings::load() {
         settings.seen_welcome = current.seen_welcome;
+        settings.statusline = current.statusline;
     }
     settings::save(&settings).map_err(|e| e.to_string())?;
     apply_settings_live(&coord, &reload, settings);
