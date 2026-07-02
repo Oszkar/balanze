@@ -4,7 +4,7 @@
     {
       "id": 0,
       "subject": "Task 1: claude_statusline generic RateLimits data model + parser",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** RateWindow gains key/label; RateLimits becomes { windows: Vec<RateWindow> } with .five_hour()/.seven_day() accessors; parse.rs generalizes to accept any named window in the rate_limits object while preserving every existing drop/degrade/schema-drift rule; SCHEMA_VERSION bumps to 2.\n\n**Files:**\n- Modify: crates/claude_statusline/src/types.rs\n- Modify: crates/claude_statusline/src/parse.rs\n- Modify: crates/claude_statusline/src/payload.rs\n- Modify: crates/claude_statusline/tests/real_payload.rs\n\n**Acceptance Criteria:**\n- RateLimits::five_hour()/.seven_day() return the matching window by key, None if absent\n- A rate_limits key other than five_hour/seven_day parses into a RateWindow in .windows, with a titlecased fallback label\n- All 5 existing per-window semantics generalize to any key\n- SCHEMA_VERSION is 2\n\n**Verify:** cargo test -p claude_statusline\n\n```json:metadata\n{\"files\": [\"crates/claude_statusline/src/types.rs\", \"crates/claude_statusline/src/parse.rs\", \"crates/claude_statusline/src/payload.rs\", \"crates/claude_statusline/tests/real_payload.rs\"], \"verifyCommand\": \"cargo test -p claude_statusline\", \"acceptanceCriteria\": [\"RateLimits::five_hour()/seven_day() return the matching window by key, None if absent\", \"An unknown rate_limits key parses into a RateWindow with a titlecased fallback label\", \"All 5 existing per-window semantics generalize to any key\", \"SCHEMA_VERSION is 2\"]}\n```"
     },
     {
@@ -50,5 +50,5 @@
       "description": "**Goal:** Document the new windows field on both the on-disk IPC file and the CLI --json schema, per AGENTS.md's change-control rule for schema changes.\n\n**Files:**\n- Modify: docs/ARCHITECTURE.md\n\n**Acceptance Criteria:**\n- The on-disk IPC files table's statusline.snapshot.json row mentions the schema version bump / generic windows\n- The CLI --json schema paragraph mentions the new windows field\n\n**Verify:** manual read-through (docs-only change)\n\n```json:metadata\n{\"files\": [\"docs/ARCHITECTURE.md\"], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"CLI --json schema paragraph mentions the new windows field\", \"on-disk IPC files table row mentions schema_version 2 / generic windows\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-07-02T00:00:00Z"
+  "lastUpdated": "2026-07-02T04:00:00Z"
 }
