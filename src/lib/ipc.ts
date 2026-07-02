@@ -54,6 +54,8 @@ export const getStatuslineStatus = (): Promise<StatuslineWire> =>
   invoke<StatuslineWire>('get_statusline_status');
 export const setStatuslineWired = (wired: boolean): Promise<void> =>
   invoke<void>('set_statusline_wired', { wired });
+export const replaceStatusline = (): Promise<void> => invoke<void>('replace_statusline');
+export const restoreStatusline = (): Promise<void> => invoke<void>('restore_statusline');
 
 // Fires each time the popover window gains focus, i.e. every tray-click show
 // (the backend shows via `window.show()` + `set_focus()`; blur hides it). The

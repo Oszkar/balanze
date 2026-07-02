@@ -9,6 +9,8 @@
     clearApiKey,
     getStatuslineStatus,
     setStatuslineWired,
+    replaceStatusline,
+    restoreStatusline,
     openExternal,
   } from '$lib/ipc';
   import type { Settings, StatuslineWire } from '$lib/types/settings';
@@ -23,6 +25,7 @@
   let status = $state<string | null>(null);
   let busy = $state(false);
   let canSaveAnyway = $state(false);
+  let confirmingReplace = $state(false);
 
   async function load() {
     try {
@@ -57,6 +60,35 @@
         : 'statusLine unwired.';
     } catch (e) {
       // e.g. the no-clobber refusal when another command owns the stanza.
+      status = `${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function replace() {
+    busy = true;
+    status = null;
+    confirmingReplace = false;
+    try {
+      await replaceStatusline();
+      wire = await getStatuslineStatus();
+      status = 'statusLine replaced. Restore anytime. Restart Claude Code to see it.';
+    } catch (e) {
+      status = `${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function restore() {
+    busy = true;
+    status = null;
+    try {
+      await restoreStatusline();
+      wire = await getStatuslineStatus();
+      status = 'Restored your previous statusLine. Restart Claude Code to apply.';
+    } catch (e) {
       status = `${e}`;
     } finally {
       busy = false;
@@ -203,8 +235,30 @@
               <button class="save" onclick={() => setWire(true)} disabled={busy}>Wire</button>
             </div>
           {:else}
-            <div class="hint">Set to another command - Balanze won't overwrite it:</div>
+            <div class="hint">Claude Code's statusLine is set to another command:</div>
             <div class="occupied">{wire.command}</div>
+            {#if confirmingReplace}
+              <div class="hint">This overwrites it with Balanze's line. You can restore it anytime.</div>
+              <div class="row">
+                <button class="save" onclick={replace} disabled={busy}>Replace</button>
+                <button class="save" onclick={() => (confirmingReplace = false)} disabled={busy}
+                  >Cancel</button
+                >
+              </div>
+            {:else}
+              <div class="row">
+                <button class="save" onclick={() => (confirmingReplace = true)} disabled={busy}
+                  >Replace with Balanze's</button
+                >
+              </div>
+            {/if}
+          {/if}
+          {#if wire.replaced_command}
+            <div class="row">
+              <button class="save" onclick={restore} disabled={busy}
+                >Restore "{wire.replaced_command}"</button
+              >
+            </div>
           {/if}
         </section>
       {/if}

@@ -27,6 +27,11 @@ use crate::errors::StatuslineError;
 /// so the two can't drift.
 pub const STATUSLINE_INVOCATION: &str = "balanze-cli statusline";
 
+/// Sentinel `OccupiedBy` payload for a `statusLine` whose `.command` is absent
+/// or not a JSON string. It is not a runnable command, so callers must not back
+/// it up as a displaced command to restore later.
+pub const NON_STRING_STATUSLINE_COMMAND: &str = "<non-string statusLine>";
+
 /// Whether the `statusLine` stanza is owned by Balanze, absent, or taken by
 /// something else.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,7 +137,7 @@ pub fn read_wire_status(path: &Path) -> Result<WireStatus, StatuslineError> {
         }
         Some(cmd) => Ok(WireStatus::OccupiedBy(cmd.to_string())),
         None => Ok(WireStatus::OccupiedBy(
-            "<non-string statusLine>".to_string(),
+            NON_STRING_STATUSLINE_COMMAND.to_string(),
         )),
     }
 }
@@ -194,6 +199,35 @@ pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineEr
     );
 
     atomic_write_json(path, &root)
+}
+
+/// Restore a previously-displaced `statusLine.command`.
+///
+/// Writes the stanza only when doing so cannot clobber a foreign command Balanze
+/// did not displace: `Some(cmd)` rewrites the stanza when it is Balanze's own
+/// line or empty; `None` removes Balanze's own line. If a foreign command
+/// currently occupies the stanza it is left untouched, upholding the
+/// never-touch-foreign-config invariant symmetric with the no-clobber wire path.
+/// Provider-agnostic: `cmd` is whatever string was displaced. Only Claude Code's
+/// `settings.json` statusLine stanza is ever written.
+///
+/// Returns `true` if the stanza was written (restored or unwired), `false` if a
+/// foreign command was left in place - so the caller can keep its backup.
+pub fn restore_statusline(path: &Path, previous: Option<&str>) -> Result<bool, StatuslineError> {
+    let status = read_wire_status(path)?;
+    match previous {
+        // A foreign command owns the stanza now - never overwrite it.
+        Some(_) if matches!(status, WireStatus::OccupiedBy(_)) => Ok(false),
+        Some(cmd) => {
+            wire_statusline(path, cmd)?;
+            Ok(true)
+        }
+        None if status == WireStatus::WiredToBalanze => {
+            unwire_statusline(path)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 /// Remove the `statusLine` stanza from `settings.json`, preserving every other
@@ -561,5 +595,62 @@ mod tests {
         assert_eq!(read_wire_status(&path).unwrap(), WireStatus::Unwired);
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["keep"], true, "unrelated keys survive the roundtrip");
+    }
+
+    // ── restore_statusline ────────────────────────────────────────────────────
+
+    #[test]
+    fn restore_writes_previous_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        wire_statusline(&path, INVOCATION).unwrap(); // Balanze is wired
+        assert!(
+            restore_statusline(&path, Some("cship prompt")).unwrap(),
+            "wrote the restored command"
+        );
+        assert_eq!(
+            read_wire_status(&path).unwrap(),
+            WireStatus::OccupiedBy("cship prompt".to_string())
+        );
+    }
+
+    #[test]
+    fn restore_none_unwires() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        wire_statusline(&path, INVOCATION).unwrap();
+        assert!(restore_statusline(&path, None).unwrap(), "wrote (unwired)");
+        assert_eq!(read_wire_status(&path).unwrap(), WireStatus::Unwired);
+    }
+
+    #[test]
+    fn restore_none_leaves_foreign_command_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // A foreign tool owns the statusLine and Balanze never displaced it.
+        wire_statusline(&path, "cship prompt").unwrap();
+        // No backup + not Balanze-wired -> the foreign command must be left intact.
+        assert!(!restore_statusline(&path, None).unwrap(), "did not write");
+        assert_eq!(
+            read_wire_status(&path).unwrap(),
+            WireStatus::OccupiedBy("cship prompt".to_string())
+        );
+    }
+
+    #[test]
+    fn restore_some_leaves_foreign_command_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // A different foreign tool now owns the statusLine (e.g. the user re-set
+        // it after a Balanze replace). Restoring the backup must NOT clobber it.
+        wire_statusline(&path, "other-tool prompt").unwrap();
+        assert!(
+            !restore_statusline(&path, Some("cship prompt")).unwrap(),
+            "did not write over a foreign command"
+        );
+        assert_eq!(
+            read_wire_status(&path).unwrap(),
+            WireStatus::OccupiedBy("other-tool prompt".to_string())
+        );
     }
 }

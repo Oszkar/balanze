@@ -10,11 +10,15 @@
 //! is never logged or echoed, and `get_settings` returns only the non-secret
 //! `Settings` shape - the key itself never crosses back to the frontend.
 //!
-//! statusLine: `get_statusline_status` / `set_statusline_wired` are sync
-//! commands that delegate to `claude_statusline` (the only owner/writer of the
-//! `statusLine` stanza in Claude Code's `settings.json`, boundary #12). They
-//! enforce a no-clobber policy - Balanze never overwrites or strips another
-//! tool's `statusLine`.
+//! statusLine: `get_statusline_status` / `set_statusline_wired` /
+//! `replace_statusline` / `restore_statusline` are sync commands that delegate
+//! to `claude_statusline` (the only owner/writer of the `statusLine` stanza in
+//! Claude Code's `settings.json`, boundary #12). `set_statusline_wired` enforces
+//! a no-clobber policy - it never overwrites or strips another tool's
+//! `statusLine`. `replace_statusline` is the explicit, consent-driven override:
+//! it backs the foreign command up to `settings.statusline.replaced_command`
+//! before wiring (rolling back on failure); `restore_statusline` writes that
+//! backup back (or unwires only Balanze's own line), then clears it.
 //!
 //! All commands return `Result<_, String>` derived from `anyhow`/error
 //! `to_string()`.
@@ -107,11 +111,16 @@ pub fn set_settings(
     coord: State<'_, StateCoordinatorHandle>,
     reload: State<'_, WatcherReload>,
 ) -> Result<(), String> {
-    // `seen_welcome` is backend-owned first-run state, not a user setting; never
-    // let a frontend settings write (provider toggles) reset it and re-trigger
-    // the first-run welcome. Preserve the on-disk value over the inbound one.
+    // `seen_welcome` and `statusline` are backend-owned, not user settings the
+    // frontend edits: `seen_welcome` is first-run state, and `statusline` (incl.
+    // the `replaced_command` backup) is mutated out of band by the replace /
+    // restore commands and has no frontend editor. A frontend settings write
+    // (provider toggles) round-trips a stale copy, so preserve the on-disk
+    // values over the inbound ones - otherwise a toggle after a Replace would
+    // silently wipe the backup.
     if let Ok(current) = settings::load() {
         settings.seen_welcome = current.seen_welcome;
+        settings.statusline = current.statusline;
     }
     settings::save(&settings).map_err(|e| e.to_string())?;
     apply_settings_live(&coord, &reload, settings);
@@ -246,33 +255,97 @@ fn prepare_api_key<'a>(provider: &str, key: &'a str) -> Result<&'a str, String> 
 }
 
 /// Whether Claude Code's `statusLine` is wired to Balanze, free, or taken by
-/// another command. Serialized to the frontend as `{ status, command }`.
+/// another command. Serialized to the frontend as `{ status, command,
+/// replaced_command }`.
 #[derive(serde::Serialize)]
 pub struct StatuslineWire {
     /// `"wired"` (ours) | `"unwired"` (free) | `"occupied"` (another command).
     status: &'static str,
     /// The occupying command when `status == "occupied"`, else `null`.
     command: Option<String>,
+    /// The foreign command Balanze displaced (from Balanze settings), if any.
+    /// Non-null means a restore is available via `restore_statusline`.
+    replaced_command: Option<String>,
 }
 
 /// Report whether Claude Code's `statusLine` is wired to Balanze.
 #[tauri::command]
 pub fn get_statusline_status() -> Result<StatuslineWire, String> {
     let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-    Ok(match read_wire_status(&path).map_err(|e| e.to_string())? {
+    let status = read_wire_status(&path).map_err(|e| e.to_string())?;
+    let replaced_command = settings::load()
+        .ok()
+        .and_then(|s| s.statusline.replaced_command);
+    Ok(match status {
         WireStatus::WiredToBalanze => StatuslineWire {
             status: "wired",
             command: None,
+            replaced_command,
         },
         WireStatus::Unwired => StatuslineWire {
             status: "unwired",
             command: None,
+            replaced_command,
         },
         WireStatus::OccupiedBy(cmd) => StatuslineWire {
             status: "occupied",
             command: Some(cmd),
+            replaced_command,
         },
     })
+}
+
+/// Replace a foreign `statusLine.command` with Balanze's, backing the foreign
+/// command up to `settings.statusline.replaced_command` so it can be restored
+/// later. If the statusLine is already Balanze's or unwired, wires it directly.
+/// Provider-agnostic: keys only off `OccupiedBy(cmd)` - never reads or touches
+/// the foreign tool's own config files.
+#[tauri::command]
+pub fn replace_statusline() -> Result<(), String> {
+    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+    let mut s = settings::load().unwrap_or_default();
+    let prior = s.statusline.replaced_command.clone();
+    if let WireStatus::OccupiedBy(cmd) = read_wire_status(&path).map_err(|e| e.to_string())? {
+        // Don't back up the "statusLine present but no usable command" sentinel;
+        // it is not restorable.
+        if cmd != claude_statusline::NON_STRING_STATUSLINE_COMMAND {
+            s.statusline.replaced_command = Some(cmd);
+            settings::save(&s).map_err(|e| e.to_string())?;
+        }
+    }
+    if let Err(e) = wire_statusline(&path, STATUSLINE_INVOCATION) {
+        // Roll back to the PRIOR backup (not None) so a failed replace never wipes
+        // an existing one, and the UI shows no phantom Restore for this attempt.
+        s.statusline.replaced_command = prior;
+        let _ = settings::save(&s);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+/// Restore the foreign `statusLine.command` that Balanze displaced via
+/// `replace_statusline`: write the backup back (or unwire Balanze's own line if
+/// the backup is `None`), then clear the backup. If a foreign command now
+/// occupies the stanza (one Balanze did not displace), it is left untouched and
+/// the backup is KEPT, surfaced as an error to the caller.
+#[tauri::command]
+pub fn restore_statusline() -> Result<(), String> {
+    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+    let mut s = settings::load().unwrap_or_default();
+    let previous = s.statusline.replaced_command.take();
+    // Fully-qualified to disambiguate from this Tauri command of the same name.
+    let wrote = claude_statusline::restore_statusline(&path, previous.as_deref())
+        .map_err(|e| e.to_string())?;
+    if wrote {
+        // Backup consumed - persist the cleared value.
+        settings::save(&s).map_err(|e| e.to_string())
+    } else if previous.is_some() {
+        // A foreign command owns the stanza; keep the backup (do not save the
+        // cleared value) and tell the caller.
+        Err("Claude Code's statusLine is set to another command; not overwriting it. Your backup is kept.".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 /// Wire (`wired = true`) or unwire (`wired = false`) Balanze's `statusLine` in

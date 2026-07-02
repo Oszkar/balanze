@@ -302,10 +302,45 @@ fn setup_statusline() {
             return;
         }
         Ok(WireStatus::OccupiedBy(cmd)) => {
-            eprintln!("  ○ Claude Code statusLine is already set to a different command:");
+            eprintln!("  ○ Claude Code statusLine is set to a different command:");
             eprintln!("      {cmd}");
-            eprintln!("    Leaving it untouched. To use Balanze, set statusLine.command to");
-            eprintln!("    `{invocation}` in {} yourself.", path.display());
+            eprint!(
+                "  Replace it with Balanze's? Your command is backed up and restorable \
+                 anytime with `balanze-cli statusline restore`. [y/N]: "
+            );
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+            let mut answer = String::new();
+            let _ = std::io::stdin().read_line(&mut answer);
+            if answer.trim().eq_ignore_ascii_case("y") {
+                let mut settings = settings::load().unwrap_or_default();
+                let prior = settings.statusline.replaced_command.clone();
+                // Only back up a real command, not the "statusLine present but no
+                // usable command" sentinel (which is not restorable).
+                if cmd != claude_statusline::NON_STRING_STATUSLINE_COMMAND {
+                    settings.statusline.replaced_command = Some(cmd);
+                }
+                if let Err(e) = settings::save(&settings) {
+                    eprintln!(
+                        "  ✗ Could not back up your command ({e}); leaving statusLine untouched."
+                    );
+                    return;
+                }
+                match wire_statusline(&path, invocation) {
+                    Ok(()) => eprintln!(
+                        "  ✓ Replaced. Restore anytime with `balanze-cli statusline restore`. \
+                         Restart Claude Code to apply."
+                    ),
+                    Err(e) => {
+                        // Wiring failed - roll back to the PRIOR backup (not None)
+                        // so a failed replace never wipes an existing one.
+                        settings.statusline.replaced_command = prior;
+                        let _ = settings::save(&settings);
+                        eprintln!("  ✗ Failed to write {} ({e}); not wired.", path.display());
+                    }
+                }
+            } else {
+                eprintln!("  ○ Left untouched.");
+            }
             return;
         }
         Ok(WireStatus::Unwired) => {}

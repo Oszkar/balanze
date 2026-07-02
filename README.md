@@ -86,6 +86,10 @@ balanze-cli statusline            Claude Code statusLine command: reads the
                                   Also atomically writes the snapshot file
                                   <ProjectDirs.data>/statusline.snapshot.json -
                                   the IPC bridge the watcher reads.
+balanze-cli statusline restore    Restore the foreign statusLine command that
+                                  Balanze replaced (via setup consent), or
+                                  unwire if no backup is stored. Does not
+                                  read stdin; safe to run at any time.
 balanze-cli help [cmd]            Built-in clap help (also --help / -h).
 
 Global flags (apply to every subcommand, before or after it):
@@ -117,7 +121,7 @@ keychain; handy for CI/headless or a locked keychain).
 | 4 | network: a provider was unreachable |
 | 5 | degraded: a source was stale or errored (only with `--strict`) |
 
-`balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) - shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit.
+`balanze-cli statusline` is Claude Code's statusLine command (offered by `balanze-cli setup`) - shows live 5h/7d subscription quota + session cost in your shell; zero-auth, no rate limit. If another tool was already set as `statusLine.command`, `balanze-cli setup` offers to replace it with consent, backing the previous command up to Balanze's own `settings.json`. `balanze-cli statusline restore` puts the previous command back (or unwires Balanze if no backup exists) and clears the backup.
 
 ```text
 === Balanze status (2026-05-20 04:27:42 UTC) ===

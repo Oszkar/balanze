@@ -31,7 +31,7 @@ use anstream::ColorChoice;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::cli::{Cli, Commands, StatusArgs};
+use crate::cli::{Cli, Commands, StatusArgs, StatuslineAction};
 use crate::exit::{ExitClass, classify_snapshot};
 
 mod cli;
@@ -130,8 +130,11 @@ fn run(cli: &Cli) -> Result<ExitClass> {
             cmd_settings()?;
             Ok(ExitClass::Ok)
         }
-        Some(Commands::Statusline) => {
-            statusline::cmd_statusline()?;
+        Some(Commands::Statusline(args)) => {
+            match args.action {
+                None => statusline::cmd_statusline()?,
+                Some(StatuslineAction::Restore) => statusline::cmd_statusline_restore()?,
+            }
             Ok(ExitClass::Ok)
         }
         Some(Commands::Export(args)) => {
