@@ -820,7 +820,7 @@ to:
 - [ ] **Step 6: Run the full crate test suite**
 
 Run: `cargo test -p claude_statusline`
-Expected: all tests pass (24 in `parse.rs`, 5 in `types.rs`, 3 in `payload.rs`, plus `file_io.rs`/`wiring.rs` tests unaffected, plus `real_payload.rs`)
+Expected: all tests pass (20 in `parse.rs`, 5 in `types.rs`, 3 in `payload.rs`, plus `file_io.rs`/`wiring.rs` tests unaffected, plus `real_payload.rs`)
 
 - [ ] **Step 7: Commit**
 
