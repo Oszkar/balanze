@@ -321,14 +321,18 @@ mod tests {
 
     #[test]
     fn valid_json_with_missing_required_field_is_parse_error() {
-        // Passes the version probe (schema_version 2), then fails the full
-        // SnapshotFilePayload parse because `snapshot` is missing - exercises
-        // the second from_slice path.
+        // Passes the version probe (schema_version tracks SNAPSHOT_SCHEMA_VERSION,
+        // not a hardcoded literal - a stale literal here would silently start
+        // exercising the SchemaDrift branch instead on the next version bump),
+        // then fails the full SnapshotFilePayload parse because `snapshot` is
+        // missing - exercises the second from_slice path.
         let dir = tempdir().unwrap();
         let path = dir.path().join("snapshot.json");
         std::fs::write(
             &path,
-            br#"{"schema_version":2,"captured_at":"2026-06-30T12:00:00Z"}"#,
+            format!(
+                r#"{{"schema_version":{SNAPSHOT_SCHEMA_VERSION},"captured_at":"2026-06-30T12:00:00Z"}}"#
+            ),
         )
         .unwrap();
         assert!(matches!(

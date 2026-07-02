@@ -87,7 +87,7 @@ pub fn pace_for_oauth(oauth: &ClaudeOAuthSnapshot, now: DateTime<Utc>) -> Vec<Wi
 /// carries its own version (see `balanze_cli::json_output`). Durable
 /// `UsageEvent` / history versioning is intentionally deferred to the SQLite
 /// persistence work, where the on-disk format is actually designed.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 3;
 
 fn default_snapshot_schema_version() -> u32 {
     SNAPSHOT_SCHEMA_VERSION
