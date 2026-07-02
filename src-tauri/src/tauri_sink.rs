@@ -71,10 +71,10 @@ pub(crate) fn worst_utilization(s: &Snapshot) -> f32 {
     }
     if let Some(sl) = &s.claude_statusline {
         if let Some(rl) = &sl.payload.rate_limits {
-            if let Some(w) = &rl.five_hour {
+            if let Some(w) = rl.five_hour() {
                 worst = worst.max(w.used_percent);
             }
-            if let Some(w) = &rl.seven_day {
+            if let Some(w) = rl.seven_day() {
                 worst = worst.max(w.used_percent);
             }
         }
@@ -99,7 +99,7 @@ fn has_quota_data(s: &Snapshot) -> bool {
         .claude_statusline
         .as_ref()
         .and_then(|sl| sl.payload.rate_limits.as_ref())
-        .is_some_and(|rl| rl.five_hour.is_some() || rl.seven_day.is_some());
+        .is_some_and(|rl| rl.five_hour().is_some() || rl.seven_day().is_some());
     oauth || statusline || s.codex_quota.is_some()
 }
 
