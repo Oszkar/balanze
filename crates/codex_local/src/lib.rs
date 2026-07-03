@@ -79,13 +79,16 @@ pub use walker::{
 /// quota state.
 pub fn read_codex_quota() -> Result<Option<CodexQuotaSnapshot>, ParseError> {
     let dir = find_codex_sessions_dir()?;
-    match try_latest_quota_snapshot(&dir)? {
-        LatestQuotaProbe::HasSnapshot(snap) => return Ok(Some(snap)),
+    let already_probed = match try_latest_quota_snapshot(&dir)? {
+        LatestQuotaProbe::HasSnapshot { snapshot, .. } => return Ok(Some(snapshot)),
         LatestQuotaProbe::NoSessions => return Ok(None),
-        LatestQuotaProbe::NoSnapshotInLatest => {}
-    }
+        LatestQuotaProbe::NoSnapshotInLatest(path) => path,
+    };
     let sessions = collect_sessions_newest_first(&dir)?;
     for path in sessions {
+        if path == already_probed {
+            continue;
+        }
         // ? propagates SchemaDrift / IoError immediately so a Codex schema
         // change isn't hidden behind older sessions. Ok(None) ("session has
         // no token_count yet") falls through to the next-older candidate.
@@ -98,8 +101,11 @@ pub fn read_codex_quota() -> Result<Option<CodexQuotaSnapshot>, ParseError> {
 
 #[derive(Debug, PartialEq)]
 enum LatestQuotaProbe {
-    HasSnapshot(CodexQuotaSnapshot),
-    NoSnapshotInLatest,
+    HasSnapshot {
+        path: std::path::PathBuf,
+        snapshot: CodexQuotaSnapshot,
+    },
+    NoSnapshotInLatest(std::path::PathBuf),
     NoSessions,
 }
 
@@ -108,8 +114,8 @@ fn try_latest_quota_snapshot(dir: &std::path::Path) -> Result<LatestQuotaProbe, 
         return Ok(LatestQuotaProbe::NoSessions);
     };
     match read_latest_quota_snapshot(&path)? {
-        Some(snap) => Ok(LatestQuotaProbe::HasSnapshot(snap)),
-        None => Ok(LatestQuotaProbe::NoSnapshotInLatest),
+        Some(snapshot) => Ok(LatestQuotaProbe::HasSnapshot { path, snapshot }),
+        None => Ok(LatestQuotaProbe::NoSnapshotInLatest(path)),
     }
 }
 
@@ -156,8 +162,23 @@ mod tests {
         );
 
         match try_latest_quota_snapshot(root).expect("latest shortcut succeeds") {
-            LatestQuotaProbe::HasSnapshot(snap) => assert_eq!(snap.primary.used_percent, 5.0),
+            LatestQuotaProbe::HasSnapshot { snapshot, .. } => {
+                assert_eq!(snapshot.primary.used_percent, 5.0);
+            }
             other => panic!("expected latest quota snapshot, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn latest_quota_snapshot_shortcut_reports_probe_path_when_empty() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let newest = root.join("2026/05/15/rollout-newer.jsonl");
+        touch_jsonl(&newest, SESSION_META, -60);
+
+        assert_eq!(
+            try_latest_quota_snapshot(root).expect("latest shortcut succeeds"),
+            LatestQuotaProbe::NoSnapshotInLatest(newest)
+        );
     }
 }

@@ -18,6 +18,7 @@ use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHan
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
+use crate::tasks::get_or_build_client;
 
 /// Spawn the OpenAI cost poll task and return its `JoinHandle`.
 ///
@@ -59,31 +60,17 @@ pub(crate) fn spawn(
         loop {
             ticker.tick().await;
 
-            let client = match client.as_ref() {
-                Some(c) => c,
-                None => {
-                    // Build once on first use and reuse the connection pool. If
-                    // construction fails, keep the task alive so the degraded
-                    // cell stays visible and the next tick can retry.
-                    match reqwest::Client::builder()
-                        .user_agent("balanze-watcher/0.1.0")
-                        .timeout(std::time::Duration::from_secs(30))
-                        .build()
-                    {
-                        Ok(c) => client.insert(c),
-                        Err(e) => {
-                            tracing::error!(
-                                "watcher/openai_poll: reqwest client build failed: {e}"
-                            );
-                            let _ = coord
-                                .send(StateMsg::Update(SourceUpdate {
-                                    source: Source::OpenAiCosts,
-                                    result: Err(format!("reqwest client build failed: {e}")),
-                                }))
-                                .await;
-                            continue;
-                        }
-                    }
+            let client = match get_or_build_client(&mut client) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("watcher/openai_poll: reqwest client build failed: {e}");
+                    let _ = coord
+                        .send(StateMsg::Update(SourceUpdate {
+                            source: Source::OpenAiCosts,
+                            result: Err(format!("reqwest client build failed: {e}")),
+                        }))
+                        .await;
+                    continue;
                 }
             };
 

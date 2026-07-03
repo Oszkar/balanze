@@ -8,8 +8,9 @@
 //! 5. Emits `Update(ClaudeOAuth, ...)` to the state coordinator.
 //!
 //! Mirrors `balanze_cli::live_fetch_oauth` and
-//! `balanze_cli::refresh_and_persist`. TODO: extract a shared live-fetch
-//! helper so the CLI and watcher share one implementation.
+//! `balanze_cli::refresh_and_persist`. Keep drift visible here until a shared
+//! extraction can preserve the CLI's fail-fast policy, the watcher's standard
+//! backoff policy, and the Anthropic credential write-back boundary.
 
 use anthropic_oauth::{
     CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, CredentialsClaudeAiOauth,
@@ -21,6 +22,7 @@ use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHan
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
+use crate::tasks::get_or_build_client;
 
 /// Pre-flight refresh margin: refresh the bearer if it expires within this window.
 /// Mirrors `REFRESH_MARGIN` in `balanze_cli`.
@@ -97,29 +99,17 @@ pub(crate) fn spawn(
         loop {
             ticker.tick().await;
 
-            let client = match client.as_ref() {
-                Some(c) => c,
-                None => {
-                    // Build once on first use and reuse the connection pool. If
-                    // construction fails, keep the task alive so the degraded
-                    // cell stays visible and the next tick can retry.
-                    match reqwest::Client::builder()
-                        .user_agent("balanze-watcher/0.1.0")
-                        .timeout(std::time::Duration::from_secs(30))
-                        .build()
-                    {
-                        Ok(c) => client.insert(c),
-                        Err(e) => {
-                            tracing::error!("watcher/oauth_poll: reqwest client build failed: {e}");
-                            let _ = coord
-                                .send(StateMsg::Update(SourceUpdate {
-                                    source: Source::ClaudeOAuth,
-                                    result: Err(format!("reqwest client build failed: {e}")),
-                                }))
-                                .await;
-                            continue;
-                        }
-                    }
+            let client = match get_or_build_client(&mut client) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("watcher/oauth_poll: reqwest client build failed: {e}");
+                    let _ = coord
+                        .send(StateMsg::Update(SourceUpdate {
+                            source: Source::ClaudeOAuth,
+                            result: Err(format!("reqwest client build failed: {e}")),
+                        }))
+                        .await;
+                    continue;
                 }
             };
 

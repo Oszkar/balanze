@@ -126,8 +126,7 @@ pub enum SettingsError {
 /// Conventional settings.json path for this user. Lazy: doesn't create the
 /// directory.
 pub fn default_path() -> Result<PathBuf, SettingsError> {
-    let pd = directories::ProjectDirs::from("me", "oszkar", "Balanze")
-        .ok_or(SettingsError::NoConfigDir)?;
+    let pd = project_dirs().ok_or(SettingsError::NoConfigDir)?;
     Ok(pd.config_dir().join("settings.json"))
 }
 
@@ -140,8 +139,11 @@ pub fn statusline_snapshot_path() -> Option<PathBuf> {
     if let Ok(env_path) = std::env::var("BALANZE_DATA_DIR_OVERRIDE") {
         return Some(PathBuf::from(env_path).join("statusline.snapshot.json"));
     }
+    project_dirs().map(|d| d.data_dir().join("statusline.snapshot.json"))
+}
+
+fn project_dirs() -> Option<directories::ProjectDirs> {
     directories::ProjectDirs::from("me", "oszkar", "Balanze")
-        .map(|d| d.data_dir().join("statusline.snapshot.json"))
 }
 
 /// Load settings from the conventional path, returning `Settings::default()`
@@ -239,6 +241,9 @@ fn tmp_path(target: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_settings_have_current_schema_version() {
@@ -308,6 +313,19 @@ mod tests {
         assert!(!path.parent().unwrap().exists());
         save_to(&Settings::default(), &path).expect("save");
         assert!(path.exists());
+    }
+
+    #[test]
+    fn statusline_snapshot_path_honors_env_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: this env-mutating test is serialized via ENV_MUTEX; the
+        // override is test-only and removed before assertions run.
+        unsafe { std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", dir.path()) };
+        let path = statusline_snapshot_path();
+        unsafe { std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE") };
+
+        assert_eq!(path, Some(dir.path().join("statusline.snapshot.json")));
     }
 
     #[test]

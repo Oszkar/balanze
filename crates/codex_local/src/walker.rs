@@ -143,7 +143,8 @@ fn walk(dir: &Path, best: &mut Option<(SystemTime, PathBuf)>) -> Result<(), Pars
         }
         let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         match best {
-            Some((best_mtime, _)) if *best_mtime >= mtime => {}
+            Some((best_mtime, _)) if *best_mtime > mtime => {}
+            Some((best_mtime, best_path)) if *best_mtime == mtime && *best_path <= path => {}
             _ => *best = Some((mtime, path.clone())),
         }
     }
@@ -301,6 +302,32 @@ mod tests {
             "got {}",
             latest.display()
         );
+    }
+
+    #[test]
+    fn find_latest_session_ties_by_path_like_collect_sessions() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let first = root.join("a/rollout-first.jsonl");
+        let second = root.join("b/rollout-second.jsonl");
+        touch_jsonl(&first, "{}", -60);
+        touch_jsonl(&second, "{}", -60);
+        let mtime = SystemTime::now() - Duration::from_secs(60);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&first)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&second)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+
+        assert_eq!(find_latest_session(root).unwrap(), Some(first.clone()));
+        assert_eq!(collect_sessions_newest_first(root).unwrap()[0], first);
     }
 
     #[test]
