@@ -12,7 +12,7 @@
 //! 1. Run the example. Verify the session file path matches a
 //!    recent file under `~/.codex/sessions/`.
 //! 2. Verify `used_percent` is plausible vs Codex CLI's own
-//!    self-reporting (`codex usage` or equivalent — currently no
+//!    self-reporting (`codex usage` or equivalent - currently no
 //!    user-facing CLI command for this, so eyeball it).
 //! 3. Verify the reset countdown is in the future (negative
 //!    countdown = stale data or system-clock issue).

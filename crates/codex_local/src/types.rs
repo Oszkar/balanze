@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// One Codex rate-limit window — `primary` is always present in
+/// One Codex rate-limit window - `primary` is always present in
 /// observed data (7-day rolling); `secondary` may carry a 5-hour
 /// sub-window on higher-tier plans (not observed on the "go" plan
 /// but documented in the Codex CLI schema as `Option`).
@@ -51,7 +51,7 @@ pub struct CodexQuotaSnapshot {
     /// have a 5-hour sub-limit.
     pub secondary: Option<RateLimitWindow>,
     /// Plan-type string from Codex CLI. Observed: "go". Other values
-    /// in the wild may include "pro", "team", "enterprise" — display
+    /// in the wild may include "pro", "team", "enterprise" - display
     /// only, don't gate logic on this string.
     pub plan_type: String,
     /// True when Codex has actively rate-limited the user (server

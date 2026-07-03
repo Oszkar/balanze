@@ -32,7 +32,7 @@ fn window_len_for(key: &str) -> Option<Duration> {
     // Cadence keys come in a bare form (`five_hour`, `seven_day`) AND
     // model-specific variants (`seven_day_sonnet`, `seven_day_opus`,
     // `seven_day_oauth_apps`, …). Match by family prefix so both forms map to
-    // their window — otherwise real Max-account 7-day windows are silently
+    // their window - otherwise real Max-account 7-day windows are silently
     // dropped from the pace view.
     if key.starts_with("five_hour") {
         Some(DEFAULT_WINDOW)
@@ -133,7 +133,7 @@ pub struct Snapshot {
     /// `codex_local::read_codex_quota`. None means Codex isn't installed
     /// or no sessions have been recorded yet.
     pub codex_quota: Option<CodexQuotaSnapshot>,
-    /// Most recent codex_local failure. `None` for "Codex not installed" — the
+    /// Most recent codex_local failure. `None` for "Codex not installed" - the
     /// `codex_quota` slot just stays None; we only set this when Codex IS
     /// installed but reading failed (permission denied, schema drift, etc.).
     pub codex_quota_error: Option<String>,

@@ -7,7 +7,7 @@ latest rate-limit quota snapshot.
 Fills the "Codex %" cell of Balanze's 4-quadrant matrix
 (`primary.used_percent` from the latest `token_count` event). The
 schema details that drove the design live in `SCHEMA-NOTES.md` (this
-directory) — re-read those if Codex CLI changes its JSONL format.
+directory) - re-read those if Codex CLI changes its JSONL format.
 
 ## Public API
 
@@ -22,7 +22,7 @@ match read_codex_quota() {
         snap.primary.resets_at,
     ),
     Ok(None) => {
-        // Codex installed, scanned cleanly, just no quota data yet —
+        // Codex installed, scanned cleanly, just no quota data yet -
         // session probably crashed before any `token_count` event fired.
         println!("No Codex quota data in the latest session.");
     }
@@ -34,7 +34,7 @@ match read_codex_quota() {
         // Codex CLI shipped a breaking schema change. Surface to the
         // user as "Codex data temporarily unavailable"; log the path/
         // line for the maintainer to debug.
-        eprintln!("Codex schema drift at {}:{} — {}", path.display(), line, message);
+        eprintln!("Codex schema drift at {}:{} - {}", path.display(), line, message);
     }
     Err(ParseError::IoError { path, source }) => {
         // Filesystem broke (permission denied, disk error). Loud.
@@ -70,7 +70,7 @@ match read_codex_quota() {
   4-quadrant matrix's "OpenAI API $" cell is filled by `openai_client`
   (Admin Costs API). If a "Codex API spend (estimated)" cell ever
   becomes a v0.2+ goal, the per-turn `last_token_usage` fields are
-  available in the JSONL — that's a different crate's problem.
+  available in the JSONL - that's a different crate's problem.
 
 ## `CODEX_CONFIG_DIR`
 

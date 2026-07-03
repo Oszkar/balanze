@@ -10,7 +10,7 @@
 //! committed` writes Criterion's output to
 //! `target/criterion/compute_cost_10k_events/committed/estimates.json`.
 //! The committed `crates/claude_cost/benches/baseline.json` is a **manual
-//! copy** of that file — a reference snapshot of what the bench looked like.
+//! copy** of that file - a reference snapshot of what the bench looked like.
 //! Criterion does NOT auto-consume the committed
 //! file; on a fresh checkout, `cargo bench -- --baseline committed`
 //! finds nothing because `target/criterion/` is empty. To compare against

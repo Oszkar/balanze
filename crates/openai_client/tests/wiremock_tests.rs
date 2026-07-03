@@ -242,5 +242,5 @@ async fn costs_403_does_not_retry() {
         out,
         Err(openai_client::OpenAiError::InsufficientScope { .. })
     ));
-    // server drop verifies .expect(1) — 403 was NOT retried.
+    // server drop verifies .expect(1) - 403 was NOT retried.
 }

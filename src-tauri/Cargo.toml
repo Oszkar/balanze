@@ -1,6 +1,6 @@
 [package]
 name = "balanze"
-description = "Local-first AI usage tracker — tray-first desktop app for Claude + OpenAI usage on Windows and macOS."
+description = "Local-first AI usage tracker - tray-first desktop app for Claude + OpenAI usage on Windows and macOS."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -2,7 +2,7 @@ name: release
 
 on:
   # Manual-only until v0.4 (Distribution). v0.1–v0.3 ship from source
-  # (`cargo install --git … balanze_cli`) — no binaries, no GitHub Releases
+  # (`cargo install --git … balanze_cli`) - no binaries, no GitHub Releases
   # (see README "Install" / docs/prd.md phasing). The `push: tags` auto-trigger
   # is intentionally NOT enabled yet: it would build/publish the src-tauri
   # *scaffold* (placeholder, not the CLI deliverable) on every vX.Y.Z tag.
@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: Validate tag input
-        # Reject anything that isn't v*.*.* — a manual dispatch from a feature
+        # Reject anything that isn't v*.*.* - a manual dispatch from a feature
         # branch or `main` would otherwise draft a release named
         # "Balanze main" with `github.ref_name`. Forcing the tag to be supplied
         # AND well-formed is the only sane gate for a manual-only workflow.

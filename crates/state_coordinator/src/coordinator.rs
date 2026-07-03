@@ -21,13 +21,13 @@ use crate::snapshot::{
 
 /// Mutable state owned by the coordinator's single tokio task. Grouped
 /// into one struct so `handle_msg` takes one `&mut` instead of threading
-/// several. Never crosses a thread boundary — only `StateCoordinatorHandle`
+/// several. Never crosses a thread boundary - only `StateCoordinatorHandle`
 /// (a clone of the mpsc `Sender`) is shared.
 struct CoordinatorState {
     snapshot: Snapshot,
     last_settings: Option<Settings>,
     /// Most recent deduped JSONL event slice (from the `ClaudeJsonl` source).
-    /// Cached so an OAuth update — which carries the authoritative 5h reset —
+    /// Cached so an OAuth update - which carries the authoritative 5h reset -
     /// can re-derive the window with the correct anchor without the producer
     /// having to re-send the events. `None` until the first JSONL update.
     jsonl_events: Option<Arc<Vec<UsageEvent>>>,
@@ -60,7 +60,7 @@ impl StateCoordinatorHandle {
     }
 
     /// Non-blocking send. Returns `Err(TrySendError::Full)` if the channel
-    /// is saturated — caller should log and continue rather than queue.
+    /// is saturated - caller should log and continue rather than queue.
     ///
     /// `TrySendError` is large because it includes the un-sent `StateMsg`
     /// payload; we box it so this `Result` stays cheap at the call site.
@@ -83,7 +83,7 @@ impl StateCoordinatorHandle {
 /// Errors that can surface from [`StateCoordinatorHandle::query`].
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
-    /// The coordinator's tokio task has exited — usually because all handle
+    /// The coordinator's tokio task has exited - usually because all handle
     /// clones were dropped (graceful shutdown) or the task panicked.
     #[error("coordinator task has shut down")]
     CoordinatorClosed,
@@ -92,8 +92,8 @@ pub enum QueryError {
 /// Spawn the coordinator actor on the current tokio runtime.
 ///
 /// Returns `(handle, join)`:
-/// - `handle` — clone to get more senders.
-/// - `join` — the JoinHandle for the spawned task. AGENTS.md §3.2 says
+/// - `handle` - clone to get more senders.
+/// - `join` - the JoinHandle for the spawned task. AGENTS.md §3.2 says
 ///   long-running tasks should be supervised with this in a `tokio::select!`.
 ///   Tests can drop the handle to shut down the coordinator and await `join`.
 pub fn spawn<S: Sink>(sink: S) -> (StateCoordinatorHandle, JoinHandle<()>) {
@@ -113,7 +113,7 @@ pub fn spawn_with_capacity<S: Sink>(
 
 async fn run_loop<S: Sink>(mut rx: mpsc::Receiver<StateMsg>, mut sink: S) {
     // Load the bundled LiteLLM price table once for the coordinator's lifetime.
-    // The table is embedded and never changes; a load failure (corrupt embed —
+    // The table is embedded and never changes; a load failure (corrupt embed -
     // shouldn't happen on a release build) degrades only the cost cell, not the
     // window.
     let prices = match claude_cost::load_bundled_prices() {
@@ -279,7 +279,7 @@ fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) -> Option
 /// Re-derive the two JSONL-fed cells (`claude_jsonl` window + `anthropic_api_cost`)
 /// from the cached event slice, anchoring the rolling window to the OAuth 5-hour
 /// reset when one is known. Called on every JSONL update (fresh events) AND on
-/// every OAuth update (the anchor may have changed) — this is the fix for the
+/// every OAuth update (the anchor may have changed) - this is the fix for the
 /// CLI≢watcher window divergence: both paths now run `summarize_jsonl` with the
 /// same anchor. No-op until the first JSONL events arrive.
 ///
@@ -289,7 +289,7 @@ fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) -> Option
 ///
 /// Returns `Some(err)` when the derived cost failed (no price table). The caller
 /// (`handle_msg`) surfaces it through `Sink::on_degraded` in addition to setting
-/// the snapshot's `anthropic_api_cost_error` slot — so sinks that emit the
+/// the snapshot's `anthropic_api_cost_error` slot - so sinks that emit the
 /// `degraded_state` event (the Tauri UI) don't miss a cost degradation now
 /// that the cost is derived here rather than arriving as its own `Err` update.
 #[must_use]
@@ -491,7 +491,7 @@ mod tests {
         // A regression here reintroduces the CLI≢watcher divergence.
         let (handle, _join) = spawn(NullSink);
 
-        // 1) JSONL events arrive first — no OAuth yet ⇒ now-relative window.
+        // 1) JSONL events arrive first - no OAuth yet ⇒ now-relative window.
         handle
             .send(StateMsg::Update(SourceUpdate {
                 source: Source::ClaudeJsonl,
@@ -631,7 +631,7 @@ mod tests {
     fn cost_failure_sets_error_and_is_returned_for_on_degraded() {
         // When the bundled price table is unavailable, the JSONL-derived cost
         // fails. `recompute_jsonl_cells` must set `anthropic_api_cost_error` AND
-        // return the error so `handle_msg` fires `on_degraded` — the cost
+        // return the error so `handle_msg` fires `on_degraded` - the cost
         // degradation must not be silently buried in the snapshot (pre-refactor
         // it arrived as its own `Err` update that reached `on_degraded`).
         let mut state = CoordinatorState {

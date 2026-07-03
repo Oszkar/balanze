@@ -10,7 +10,7 @@ If the handler is attached correctly (above) and clicks still don't fire on macO
 
 ## "JSONL parser eats 100% CPU during an active Claude session"
 
-The incremental-read cursor isn't working — the parser is doing a full re-parse on every notify event. Check `crates/claude_parser/`: on each watch event the parser should seek to the saved `byte_pos`, read to EOF, parse new lines only, then update the cursor. Full reparse happens only on launch and on explicit `refresh_now()`. Detect atomic rewrites via `(current.size, current.mtime)` vs the stored cursor — never just file size.
+The incremental-read cursor isn't working - the parser is doing a full re-parse on every notify event. Check `crates/claude_parser/`: on each watch event the parser should seek to the saved `byte_pos`, read to EOF, parse new lines only, then update the cursor. Full reparse happens only on launch and on explicit `refresh_now()`. Detect atomic rewrites via `(current.size, current.mtime)` vs the stored cursor - never just file size.
 
 ## "Two app instances running simultaneously"
 
@@ -34,7 +34,7 @@ The `settings` crate must use the atomic-write pattern: write to `settings.json.
 
 ## "Anthropic Console scrape stopped working overnight"
 
-Expected. Console UI changes will break scrapes regularly — that's why the design defers this to v0.3 (now opt-in) and treats it as best-effort. Mark the data stale via `DegradedState::parse_error` and inform the user. Don't try to "make the scrape more robust" by spending a week on it; if the official endpoint isn't there, that's the answer.
+Expected. Console UI changes will break scrapes regularly - that's why the design defers this to v0.3 (now opt-in) and treats it as best-effort. Mark the data stale via `DegradedState::parse_error` and inform the user. Don't try to "make the scrape more robust" by spending a week on it; if the official endpoint isn't there, that's the answer.
 
 ## "balanze-cli statusline is wired but the Claude Code status line is blank (Windows)"
 

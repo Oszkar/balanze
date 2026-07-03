@@ -23,7 +23,7 @@ use crate::errors::CostError;
 pub struct PriceTable {
     /// Per-model price entries, keyed by Anthropic model name (e.g.
     /// `claude-sonnet-4-6`). The map is sorted because `BTreeMap`
-    /// preserves key order — relevant for deterministic iteration in
+    /// preserves key order - relevant for deterministic iteration in
     /// downstream consumers.
     pub models: BTreeMap<String, ModelPrices>,
     /// Short LiteLLM commit hash the snapshot was vendored from. Set by
@@ -50,7 +50,7 @@ pub struct ModelPrices {
     pub cache_read_nano_per_token: Option<i64>,
 }
 
-/// Embedded JSON snapshot. **Hardcoded path** — when refreshing the price
+/// Embedded JSON snapshot. **Hardcoded path** - when refreshing the price
 /// table, update both the data filename and this line. The build script
 /// validates the filename pattern but cannot rewrite this `include_str!`
 /// because `include_str!` requires a string literal at parse time.
@@ -59,7 +59,7 @@ const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-88e03e5-2
 /// Load the compile-time-embedded vendored price table.
 ///
 /// Returns `Err(CostError::PricesMissing)` only if the embedded JSON is
-/// malformed or has zero model entries — both of which are compile-time
+/// malformed or has zero model entries - both of which are compile-time
 /// impossible for the data this repo ships. The error variant exists for
 /// the parser helper, which is also exercised on synthetic input in
 /// unit tests.
@@ -118,7 +118,7 @@ pub(crate) fn parse_prices(json: &str) -> Result<PriceTable, CostError> {
     Ok(PriceTable {
         models,
         // load_bundled_prices overwrites these; tests that use parse_prices
-        // directly observe empty strings, which is intentional — provenance
+        // directly observe empty strings, which is intentional - provenance
         // is bound to the bundled file, not to arbitrary input.
         commit: "",
         fetched_at: "",
@@ -161,7 +161,7 @@ fn optional_f64(
 ///
 /// The `$1/token` upper bound is a sanity guard against typos and unit errors
 /// (e.g. someone vendoring `3` instead of `3e-6` for $3/M tokens). No real
-/// Anthropic price is anywhere near this magnitude — Opus output is
+/// Anthropic price is anywhere near this magnitude - Opus output is
 /// `$75/M = 7.5e-5 USD/token`, so the bound leaves ~4 orders of magnitude of
 /// headroom for any plausibly-priced future model. A price of `1.0` USD per
 /// single token would imply a million-dollar prompt for a million tokens; if
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn load_bundled_prices_has_expected_values_for_sonnet_5() {
         // Sourced from litellm's bare `claude-sonnet-5` entry (added 2026-06-30,
-        // commit a126cdf5b793) — standard post-introductory pricing, matching
+        // commit a126cdf5b793) - standard post-introductory pricing, matching
         // claude-sonnet-4-6's rate. Does not reflect Anthropic's $2/$10-per-M
         // introductory price in effect through 2026-08-31: neither litellm's
         // table nor `ModelPrices` has a time-boundary concept.
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn parse_prices_rejects_implausibly_large_price() {
         // 1.5 USD/token would mean $1.5M for a 1M-token conversation.
-        // The validation bound is `>= 1.0` USD/token (strict — matches the
+        // The validation bound is `>= 1.0` USD/token (strict - matches the
         // "below $1/token" doc + the bundled_prices_pass_sanity_scan check
         // which asserts nano values `< 1_000_000_000`).
         let json = r#"{

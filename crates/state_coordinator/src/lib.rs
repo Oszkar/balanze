@@ -1,4 +1,4 @@
-//! State coordinator — the actor that owns Balanze's in-memory `Snapshot`.
+//! State coordinator - the actor that owns Balanze's in-memory `Snapshot`.
 //!
 //! Per AGENTS.md §4 #7: this crate is the ONLY writer of the in-memory
 //! `Snapshot` AND (when wired with a `TauriSink`) the ONLY caller of OS tray

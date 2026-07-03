@@ -3,12 +3,12 @@ use state_coordinator::Source;
 /// Errors that a watcher task can return via its `JoinHandle`.
 ///
 /// Task 5b will add `TaskPanicked { affected, message }` for the supervisor
-/// restart logic — do not pre-add it here.
+/// restart logic - do not pre-add it here.
 #[derive(Debug, thiserror::Error)]
 pub enum WatcherError {
     /// Kernel inotify (Linux) / Win32 directory-change handle (Windows) /
     /// FSEvents (macOS) exhausted. The affected task should fall back to
-    /// polling — in 5a this is just reported via the JoinHandle; 5b's
+    /// polling - in 5a this is just reported via the JoinHandle; 5b's
     /// supervisor decides the restart-or-poll-fallback policy.
     ///
     /// The field is named `affected` (not `source`) to avoid `thiserror`'s

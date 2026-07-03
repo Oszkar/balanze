@@ -7,12 +7,12 @@
 //!
 //! Search order (first existing path wins):
 //!   1. `$XDG_CONFIG_HOME/claude/settings.json` (if XDG_CONFIG_HOME is set)
-//!   2. `~/.claude/settings.json` — legacy, still used on Windows + many macOS installs
-//!   3. `~/.config/claude/settings.json` — Claude Code v1.0.30+ on some platforms
+//!   2. `~/.claude/settings.json` - legacy, still used on Windows + many macOS installs
+//!   3. `~/.config/claude/settings.json` - Claude Code v1.0.30+ on some platforms
 //!
 //! `wire_statusline` is the ONLY writer and uses atomic tmp+rename, preserves
 //! all other keys, and creates the file+parent dir if absent (AGENTS.md §3.4
-//! pattern — no secret so no 0o600 requirement; plain ACL inheritance is fine).
+//! pattern - no secret so no 0o600 requirement; plain ACL inheritance is fine).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -54,7 +54,7 @@ pub fn locate_settings_path() -> Result<PathBuf, StatuslineError> {
             return Ok(path.clone());
         }
     }
-    // candidate_paths() is empty only when no home/XDG var is set — unreachable on a normal desktop; mirrors anthropic_oauth::locate_credentials.
+    // candidate_paths() is empty only when no home/XDG var is set - unreachable on a normal desktop; mirrors anthropic_oauth::locate_credentials.
     Err(StatuslineError::SettingsMissing {
         searched: candidates,
     })
@@ -147,14 +147,14 @@ pub fn read_wire_status(path: &Path) -> Result<WireStatus, StatuslineError> {
 /// via atomic tmp+fsync+rename. If the file does not exist, creates it
 /// (mkdir -p parent) as `{"statusLine":{...}}`.
 ///
-/// Unconditionally sets `statusLine` — the no-clobber policy belongs to the
+/// Unconditionally sets `statusLine` - the no-clobber policy belongs to the
 /// caller (Task 5 will call `read_wire_status` first). Safe to call repeatedly
 /// (idempotent).
 ///
 /// Note: the file is rewritten via `serde_json::to_vec_pretty`, so it is
 /// normalized to pretty-printed JSON with object keys sorted
 /// (`serde_json::Value` is a `BTreeMap`; the workspace does not enable
-/// `preserve_order`). Semantically safe — Claude Code re-parses by key —
+/// `preserve_order`). Semantically safe - Claude Code re-parses by key -
 /// but a user who hand-ordered their settings.json will see keys sorted
 /// after the first wire. Same accepted trade-off as `anthropic_oauth`'s
 /// credentials write-back.
@@ -334,7 +334,7 @@ fn atomic_write_json(path: &Path, root: &serde_json::Value) -> Result<(), Status
     })?;
 
     // Unix: fsync the parent directory so the rename itself is durable.
-    // Best-effort — dir-fsync failure must not fail the write since data is
+    // Best-effort - dir-fsync failure must not fail the write since data is
     // already renamed into place.
     #[cfg(unix)]
     {
@@ -471,7 +471,7 @@ mod tests {
         wire_statusline(&path, INVOCATION).unwrap();
         assert_eq!(read_wire_status(&path).unwrap(), WireStatus::WiredToBalanze);
 
-        // Wire again — must still be WiredToBalanze and content must be stable.
+        // Wire again - must still be WiredToBalanze and content must be stable.
         wire_statusline(&path, INVOCATION).unwrap();
         assert_eq!(read_wire_status(&path).unwrap(), WireStatus::WiredToBalanze);
 
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn default_path_or_missing_creates_minimal() {
-        // Wire into a non-existent path under a tempdir — parent dir also absent.
+        // Wire into a non-existent path under a tempdir - parent dir also absent.
         let base = tempfile::tempdir().unwrap();
         let path = base.path().join("subdir").join("settings.json");
 
@@ -491,7 +491,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["statusLine"]["command"], INVOCATION);
         assert_eq!(v["statusLine"]["type"], "command");
-        // Only the statusLine key — nothing else.
+        // Only the statusLine key - nothing else.
         assert_eq!(
             v.as_object().unwrap().len(),
             1,

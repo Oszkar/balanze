@@ -1,4 +1,4 @@
-# Normalize line endings. Text files are LF in the repo AND on checkout —
+# Normalize line endings. Text files are LF in the repo AND on checkout -
 # `eol=lf` overrides a contributor's `core.autocrlf`, so Windows/WSL stop
 # fighting and the "LF will be replaced by CRLF" warnings disappear for good.
 # Git auto-detects text vs binary; the explicit `binary` lines below are
@@ -7,12 +7,12 @@
 # zero-content-change normalization (verified via `git add --renormalize`).
 * text=auto eol=lf
 
-# Raster icon assets (Tauri scaffold) — never treat as text.
+# Raster icon assets (Tauri scaffold) - never treat as text.
 *.png  binary
 *.ico  binary
 *.icns binary
 
-# SVG is XML/text — keep it LF (the default covers it; explicit for clarity).
+# SVG is XML/text - keep it LF (the default covers it; explicit for clarity).
 *.svg  text eol=lf
 
 # Committed lockfiles: LF text, but collapse them in PR diffs and exclude

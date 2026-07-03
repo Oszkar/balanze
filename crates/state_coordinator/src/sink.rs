@@ -1,4 +1,4 @@
-//! The `Sink` trait — coordinator's side-effect boundary.
+//! The `Sink` trait - coordinator's side-effect boundary.
 //!
 //! The coordinator notifies the sink on every snapshot change and on every
 //! source-level error. Concrete sinks decide what to do: log, emit a Tauri
@@ -16,7 +16,7 @@ use crate::snapshot::Snapshot;
 pub trait Sink: Send + 'static {
     /// Called after a successful merge into the snapshot, AND on every
     /// `Refresh` message. Implementations that need to dedup repaints
-    /// (e.g., the production tray sink — `(ColorBucket, title_text)` per
+    /// (e.g., the production tray sink - `(ColorBucket, title_text)` per
     /// AGENTS.md §3.1) should track their own `last_painted` state and
     /// no-op when unchanged.
     fn on_snapshot(&mut self, snapshot: &Snapshot);

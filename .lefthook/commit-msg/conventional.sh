@@ -5,12 +5,12 @@
 # validate the first line (the subject). ASCII-only output so the message is
 # safe in any terminal / git GUI on Windows + WSL + macOS + Linux.
 #
-# Why a script file and not an inline lefthook `run:` — lefthook mangles a
+# Why a script file and not an inline lefthook `run:` - lefthook mangles a
 # multi-line shell `case` passed through a YAML block scalar; a real script
 # sidesteps all the quoting/templating ambiguity. POSIX sh, no Node/commitlint
 # dependency (matches the project's lean ethos).
 
-# `tr -d '\r'`: defensive — a commit message authored in a Windows editor
+# `tr -d '\r'`: defensive - a commit message authored in a Windows editor
 # can carry a trailing CR that would otherwise defeat the `: .+` / `*` match.
 # (The script file itself is kept LF by .gitattributes; see README.)
 msg=$(head -n1 "$1" | tr -d '\r')

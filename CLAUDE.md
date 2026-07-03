@@ -1,4 +1,4 @@
-# Claude Code — Project Instructions
+# Claude Code - Project Instructions
 
 See @AGENTS.md for the operational contract: prime rule, engineering principles, project conventions, non-negotiables, repo map, architectural boundaries, validation matrix, test discipline, change control, communication style, and troubleshooting.
 

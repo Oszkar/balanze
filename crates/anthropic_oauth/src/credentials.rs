@@ -226,8 +226,8 @@ pub enum WriteBack {
 /// Note: the file is rewritten via `serde_json::to_vec_pretty`, so it is
 /// normalized to pretty-printed JSON with object keys in sorted order
 /// (`serde_json::Value` is a `BTreeMap`; the workspace does not enable the
-/// `preserve_order` feature). This is semantically safe — Claude Code and
-/// Balanze both re-parse by key — but the rewritten file is intentionally
+/// `preserve_order` feature). This is semantically safe - Claude Code and
+/// Balanze both re-parse by key - but the rewritten file is intentionally
 /// not byte-identical to Claude Code's original compact layout.
 ///
 /// TODO: the read→refresh→write race with Claude Code's own refresh is
@@ -235,7 +235,7 @@ pub enum WriteBack {
 /// refreshes and re-read on `SkippedDiskNewer`; for the one-shot CLI the race
 /// window is ~1s and benign.
 pub fn write_back(path: &Path, refreshed: &RefreshedTokens) -> Result<WriteBack, OAuthError> {
-    // Re-read fresh — Claude Code may have rewritten the file since we loaded.
+    // Re-read fresh - Claude Code may have rewritten the file since we loaded.
     // Parse as generic JSON so every unknown key round-trips untouched.
     let bytes = std::fs::read(path).map_err(|e| OAuthError::Io {
         path: path.to_path_buf(),
@@ -349,7 +349,7 @@ pub fn write_back(path: &Path, refreshed: &RefreshedTokens) -> Result<WriteBack,
     })?;
 
     // Fix 1: fsync the parent directory on Unix so the rename itself is
-    // durable. Best-effort — a dir-fsync failure must not fail the write
+    // durable. Best-effort - a dir-fsync failure must not fail the write
     // since the data is already renamed into place.
     // On Windows, opening a directory as a File for sync is not supported;
     // the file fsync + rename is the portable durability guarantee.

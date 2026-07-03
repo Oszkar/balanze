@@ -1,6 +1,6 @@
 [package]
 name = "window"
-description = "Pure rolling-window math over UsageEvent slices — 5h cap window + short-term burn rate. No I/O."
+description = "Pure rolling-window math over UsageEvent slices - 5h cap window + short-term burn rate. No I/O."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

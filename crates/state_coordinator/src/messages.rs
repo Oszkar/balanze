@@ -32,17 +32,17 @@ use crate::snapshot::Snapshot;
 /// `balanze-cli statusline` and read by the watcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
-    /// `anthropic_oauth::fetch_usage` — the 5h / 7d / per-model cadence bars.
+    /// `anthropic_oauth::fetch_usage` - the 5h / 7d / per-model cadence bars.
     ClaudeOAuth,
-    /// `claude_parser` + `window::summarize_window` — local JSONL activity.
+    /// `claude_parser` + `window::summarize_window` - local JSONL activity.
     ClaudeJsonl,
-    /// `claude_cost::compute_cost` — Anthropic API-rate cost estimate.
+    /// `claude_cost::compute_cost` - Anthropic API-rate cost estimate.
     AnthropicApiCost,
-    /// `codex_local::read_codex_quota` — OpenAI Codex CLI rate-limit snapshot.
+    /// `codex_local::read_codex_quota` - OpenAI Codex CLI rate-limit snapshot.
     CodexQuota,
-    /// `openai_client::costs_this_month` — month-to-date OpenAI spend.
+    /// `openai_client::costs_this_month` - month-to-date OpenAI spend.
     OpenAiCosts,
-    /// `claude_statusline` — parsed statusLine payload from the statusline snapshot file.
+    /// `claude_statusline` - parsed statusLine payload from the statusline snapshot file.
     ClaudeStatusline,
 }
 
@@ -53,7 +53,7 @@ pub enum Source {
 ///
 /// Carrying raw events (rather than a pre-summarized `JsonlSnapshot`) is what
 /// lets the coordinator re-anchor the window when a later OAuth update arrives
-/// with the authoritative reset — the producer (CLI / watcher) no longer owns
+/// with the authoritative reset - the producer (CLI / watcher) no longer owns
 /// the window math, so the two paths can't diverge (AGENTS.md §4 #8). `Arc` so
 /// caching + re-anchoring never clones the vector.
 #[derive(Debug, Clone)]
@@ -110,12 +110,12 @@ pub struct SourceUpdate {
 /// path; see AGENTS.md §4 #7 for the data-flow diagram.
 #[derive(Debug)]
 pub enum StateMsg {
-    /// A poller has finished a fetch — apply the result.
+    /// A poller has finished a fetch - apply the result.
     Update(SourceUpdate),
     /// Tauri command (or test): read the current Snapshot via the oneshot reply.
     Query(oneshot::Sender<Snapshot>),
     /// Popover open or manual refresh: re-notify the Sink with current state
-    /// so it can repaint. The coordinator itself does NOT fetch — refreshes are
+    /// so it can repaint. The coordinator itself does NOT fetch - refreshes are
     /// re-paints, not re-fetches. Pollers run on their own cadence.
     Refresh,
     /// Settings file changed. Scaffold stores the value; future pollers will

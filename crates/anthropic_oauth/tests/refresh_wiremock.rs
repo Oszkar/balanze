@@ -72,7 +72,7 @@ async fn refresh_non_200_is_refresh_failed_with_redacted_body() {
     }
 }
 
-/// Fix 4 (TDD): non-positive `expires_in` must be rejected — a malformed or
+/// Fix 4 (TDD): non-positive `expires_in` must be rejected - a malformed or
 /// hostile response must not yield an already-expired credential.
 #[tokio::test]
 async fn refresh_zero_expires_in_is_response_shape_error() {
@@ -142,13 +142,13 @@ async fn fetch_usage_401_does_not_retry() {
     let std_pol = backoff::BackoffPolicy::standard();
     let out = fetch_usage(&client, &server.uri(), "tok", None, None, &std_pol).await;
     assert!(matches!(out, Err(OAuthError::AuthExpired)));
-    // server drop verifies .expect(1) — 401 was NOT retried.
+    // server drop verifies .expect(1) - 401 was NOT retried.
 }
 
 /// Safety guard: a 5xx response must NOT be retried for the refresh POST.
 /// A retry of a token-rotation POST could consume the refresh token on the
 /// server side and strand the user into re-`claude login`. Uses the
-/// RETRYING `standard()` policy — if the classifier wrongly allowed 5xx
+/// RETRYING `standard()` policy - if the classifier wrongly allowed 5xx
 /// retries this would send more than one request and the `.expect(1)` on
 /// MockServer drop would fail.
 #[tokio::test]

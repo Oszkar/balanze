@@ -145,7 +145,7 @@ fn io_to_parse_err(path: &Path, e: std::io::Error) -> ParseError {
 ///   subtler partial-trailing-line case where the cursor was parked at
 ///   `byte_pos` and the file then shrank to a value between `byte_pos` and
 ///   the previous `size` (the bytes between were rewritten in a same-or-
-///   smaller atomic write — resuming at `byte_pos` would read stale
+///   smaller atomic write - resuming at `byte_pos` would read stale
 ///   overlap). Read from 0.
 /// - Cursor exists, `current_size == cursor.size`, and `mtime != cursor.mtime`
 ///   → same-size atomic rewrite; read from 0.
@@ -228,7 +228,7 @@ mod tests {
     fn shrink_between_byte_pos_and_size_resets_to_zero() {
         // Cursor parked before a partial trailing line: byte_pos=100 (end of
         // last complete line), size=120 (the 20-byte partial line). If the
-        // file shrinks to 110 — still >= byte_pos but < size — the bytes
+        // file shrinks to 110 - still >= byte_pos but < size - the bytes
         // between 100 and 120 may have been rewritten. Resuming at 100 would
         // re-read overlap that the writer no longer intends; must reset.
         let c = cursor(100, 120, 100);
@@ -398,7 +398,7 @@ mod tests {
         //    first read, the cursor parks at byte_pos = end-of-complete-line,
         //    size = full file (including the partial bytes).
         // 2. Rewrite the file to a size strictly between byte_pos and the
-        //    previous size — emulating a same-process recovery where the
+        //    previous size - emulating a same-process recovery where the
         //    writer truncated and re-appended a *different* partial+complete
         //    line. The new bytes overlap the cursor's recorded byte_pos.
         // 3. The next read MUST start at byte 0; resuming at byte_pos would
@@ -420,7 +420,7 @@ mod tests {
             "precondition: cursor parked before the partial trailing line"
         );
 
-        // Rewrite to a size between byte_pos and the original size — the
+        // Rewrite to a size between byte_pos and the original size - the
         // shrink the pre-fix code would have missed (current_size >= byte_pos).
         let mut rewritten = String::new();
         write_assistant_line(&mut rewritten, "msg_b", "req_2", 222);

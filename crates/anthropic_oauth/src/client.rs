@@ -100,7 +100,7 @@ pub async fn fetch_usage(
             backoff::RetryDecision::RetryAfter(None)
         }
         // AuthExpired / RefreshFailed / ResponseShape / CredentialsMissing / etc.
-        // must NOT be retried — especially AuthExpired, which triggers the
+        // must NOT be retried - especially AuthExpired, which triggers the
         // caller's refresh+retry-once path.
         _ => backoff::RetryDecision::DoNotRetry,
     };
@@ -239,7 +239,7 @@ fn parse_response(
                     // string: for a type-mismatch the message can quote the
                     // offending value, and `extra_usage` carries the user's
                     // billing figures (monthly_limit / used_credits), which
-                    // §3.4 treats as sensitive — never logged at any level.
+                    // §3.4 treats as sensitive - never logged at any level.
                     warn!(
                         "oauth/usage: failed to parse extra_usage block \
                          (serde category: {:?}; raw values suppressed)",
@@ -416,7 +416,7 @@ mod tests {
         // Real Max-5x payload at $0 this month: `utilization` is null (nothing
         // accrued) and a `disabled_reason` field is present. A non-optional
         // `utilization: f32` rejected this shape, so an enabled-but-$0 block
-        // silently dropped to None and the cell read "— not available".
+        // silently dropped to None and the cell read "- not available".
         // Regression pin for the Option<f32> + unwrap_or(0.0) fix.
         let body = r#"{
             "five_hour": {"utilization": 12.0, "resets_at": "2026-06-02T18:30:00Z"},
@@ -575,7 +575,7 @@ mod tests {
     fn parse_retry_after_past_http_date_clamps_to_zero() {
         // A stale server clock could push the HTTP-date into the past. The
         // retry loop must not interpret that as a huge negative wait or an
-        // out-of-range u64 — clamp to zero ("retry immediately").
+        // out-of-range u64 - clamp to zero ("retry immediately").
         use reqwest::header::{HeaderMap, HeaderValue};
         let mut h = HeaderMap::new();
         h.insert(

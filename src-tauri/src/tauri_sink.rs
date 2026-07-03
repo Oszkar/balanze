@@ -1,4 +1,4 @@
-//! Production sink for the `state_coordinator` actor (AGENTS.md §4 #7 — the
+//! Production sink for the `state_coordinator` actor (AGENTS.md §4 #7 - the
 //! only crate that may call Tauri tray APIs). Emits `usage_updated` /
 //! `degraded_state` to the Svelte UI and repaints the gauge tray icon,
 //! deduped by `(ColorBucket, title)` per AGENTS.md §3.1.
@@ -145,7 +145,7 @@ impl TauriSink {
 }
 
 /// True if any source's error slot is set. Used to keep the tray on the
-/// warning bucket while ANY source is degraded — a later success from a
+/// warning bucket while ANY source is degraded - a later success from a
 /// different source must not clear the warning while another source is still
 /// failing (the bug: `on_snapshot` previously hard-coded `degraded = false`).
 fn any_source_degraded(s: &Snapshot) -> bool {

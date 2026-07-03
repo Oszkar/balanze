@@ -3,7 +3,7 @@
 //! This module reads/writes the data file at
 //! `<data_dir>/statusline.snapshot.json`, where `<data_dir>` is what
 //! `directories::ProjectDirs::from("me", "oszkar", "Balanze").data_dir()`
-//! returns on the host platform — that path already includes the per-OS
+//! returns on the host platform - that path already includes the per-OS
 //! Balanze subpath (e.g. `~/.local/share/balanze/` on Linux,
 //! `~/Library/Application Support/me.oszkar.Balanze/` on macOS,
 //! `%LOCALAPPDATA%\oszkar\Balanze\data\` on Windows). The caller
@@ -14,7 +14,7 @@
 //!
 //! Both functions follow the atomic tmp+fsync+rename discipline mirrored from
 //! `anthropic_oauth::credentials::write_back` (AGENTS.md §3.4).  Error
-//! messages include the file path only — never file contents (defense in
+//! messages include the file path only - never file contents (defense in
 //! depth).
 
 use std::io::Write as _;
@@ -53,7 +53,7 @@ pub enum FileIoError {
     /// Defense-in-depth note: `serde_json::Error::Display` on a `data`-class
     /// failure can echo the offending VALUE (e.g. `invalid type: string
     /// "abc" at line 1 column 18`). The statusline snapshot file is
-    /// non-secret (no tokens, no keys — see crate-level doc), so the modest
+    /// non-secret (no tokens, no keys - see crate-level doc), so the modest
     /// leak surface is acceptable here. The same trade-off would NOT apply
     /// to the OAuth credentials file; see `anthropic_oauth::credentials`.
     #[error("statusline snapshot parse error in {path}")]
@@ -159,7 +159,7 @@ pub fn atomic_write_snapshot(
     // Option<RateLimits>). This arm is unreachable in practice. If a non-
     // serializable type is ever added to the envelope, introduce a distinct
     // `WriteSerializeError` variant on `FileIoError` rather than reusing
-    // `ParseError` (which is a read-path concept) — naming the variant for the
+    // `ParseError` (which is a read-path concept) - naming the variant for the
     // failure mode matters when the branch ever becomes reachable.
     let bytes = serde_json::to_vec_pretty(payload).map_err(|e| FileIoError::ParseError {
         path: path.to_path_buf(),
@@ -218,7 +218,7 @@ pub fn atomic_write_snapshot(
     })?;
 
     // Unix: fsync the parent directory so the rename itself is durable.
-    // Best-effort — dir-fsync failure must not fail the write since data is
+    // Best-effort - dir-fsync failure must not fail the write since data is
     // already renamed into place.  Windows does not support opening a
     // directory as a File for sync; the file fsync + rename is the portable
     // guarantee.
@@ -264,7 +264,7 @@ mod tests {
     }
 
     /// Regression test for the case where a relative-path argument has either
-    /// no parent component or an empty one — both must fall back to the
+    /// no parent component or an empty one - both must fall back to the
     /// current directory (mirroring `wiring::wire_statusline`'s behavior)
     /// rather than erroring out. We verify the write succeeds against a
     /// tempdir-prefixed path; the bare-filename case is exercised by the

@@ -4,7 +4,7 @@
 //! Scan strategy: linear pass through the file. The first line is
 //! expected to be a `session_meta` (carrying the session UUID); each
 //! subsequent line is one event. We accumulate `token_count`
-//! event_msgs and return the LAST one parsed — that's the most recent
+//! event_msgs and return the LAST one parsed - that's the most recent
 //! quota state.
 //!
 //! # Error policy (sharper than "silently tolerate")
@@ -13,15 +13,15 @@
 //!   between walk and read, or caller fabricated a path). Mapped from
 //!   `std::io::ErrorKind::NotFound` on `File::open`.
 //! - **`IoError`**: any other open / read failure (permission denied,
-//!   disk error). Loud signal — distinguish "Codex isn't installed"
+//!   disk error). Loud signal - distinguish "Codex isn't installed"
 //!   (FileMissing) from "filesystem is broken" (IoError) for the
 //!   caller.
 //! - **`SchemaDrift`**: the file contained one or more `token_count`
 //!   event_msgs but the parser couldn't extract a valid quota from
-//!   any of them — Codex CLI may have shipped a breaking schema
+//!   any of them - Codex CLI may have shipped a breaking schema
 //!   change. Reported with the line number of the last drift event
 //!   and a count in the message. Distinct from `Ok(None)` (no
-//!   `token_count` events at all — session crashed before quota
+//!   `token_count` events at all - session crashed before quota
 //!   accounting fired).
 //! - **`Ok(None)`**: the file is well-formed but contains zero
 //!   `token_count` event_msgs.
@@ -80,7 +80,7 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
         }
         let value: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
-            Err(_) => continue, // unparseable line — not a token_count event by definition
+            Err(_) => continue, // unparseable line - not a token_count event by definition
         };
 
         // Capture session_id from the session_meta line (typically line 1).
@@ -163,7 +163,7 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
             plan_type,
             rate_limit_reached,
         });
-        // Don't break — keep scanning so the LAST valid token_count wins.
+        // Don't break - keep scanning so the LAST valid token_count wins.
     }
 
     match latest {
@@ -173,7 +173,7 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
             line: last_drift_line,
             message: format!(
                 "saw {token_count_attempts} token_count event(s) but extracted no valid \
-                 quota snapshot — Codex CLI may have shipped a breaking schema change"
+                 quota snapshot - Codex CLI may have shipped a breaking schema change"
             ),
         }),
         None => Ok(None),
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn zero_token_count_events_returns_none() {
-        // Session_meta only — the rest of the session crashed before any
+        // Session_meta only - the rest of the session crashed before any
         // token accounting fired.
         let f = write_jsonl(&[SESSION_META]);
         let snap = read_latest_quota_snapshot(f.path()).unwrap();
@@ -288,7 +288,7 @@ mod tests {
     fn missing_session_meta_yields_empty_session_id() {
         // No session_meta line; only a token_count event. Should still
         // return a snapshot, just with empty session_id (defensive
-        // behavior — session_id is for traceability, not load-bearing).
+        // behavior - session_id is for traceability, not load-bearing).
         let f = write_jsonl(&[TOKEN_COUNT_3PCT]);
         let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
         assert_eq!(snap.session_id, "");
@@ -300,7 +300,7 @@ mod tests {
         // File has ≥1 token_count event_msg but every one of them is
         // missing the primary block. Per the post-review error policy,
         // this is a SchemaDrift signal (Codex CLI likely changed its
-        // schema) — distinct from Ok(None) which means "no token_count
+        // schema) - distinct from Ok(None) which means "no token_count
         // events at all" (session crashed before quota accounting).
         let drift_a = r#"{"timestamp":"2026-05-14T08:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"plan_type":"go"}}}"#;
         let drift_b = r#"{"timestamp":"2026-05-14T08:05:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"plan_type":"go"}}}"#;
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn nonexistent_path_returns_file_missing_not_io_error() {
         // File::open's NotFound case must surface as FileMissing per
-        // the error contract — callers distinguish "Codex isn't
+        // the error contract - callers distinguish "Codex isn't
         // installed" (graceful) from "filesystem is broken" (loud).
         let tmp = tempfile::TempDir::new().unwrap();
         let nonexistent = tmp.path().join("does-not-exist.jsonl");

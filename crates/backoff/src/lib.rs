@@ -1,5 +1,5 @@
 //! Pure exponential-backoff policy + a generic async retry combinator.
-//! No HTTP/provider types here — the caller supplies a `classify` closure
+//! No HTTP/provider types here - the caller supplies a `classify` closure
 //! that inspects its own error. AGENTS.md §3.1 (start 30s, cap 10 min).
 //! Single-user tool ⇒ no jitter (no thundering herd to spread).
 
@@ -16,7 +16,7 @@ pub struct BackoffPolicy {
 
 impl BackoffPolicy {
     /// §3.1 background-poller schedule: 30s, 60s, 120s, … capped at 10 min,
-    /// 6 retries. For the future watcher's safety poll — NOT the one-shot CLI.
+    /// 6 retries. For the future watcher's safety poll - NOT the one-shot CLI.
     pub fn standard() -> Self {
         Self {
             base: Duration::from_secs(30),
@@ -27,7 +27,7 @@ impl BackoffPolicy {
     }
 
     /// One-shot CLI: never block a user-facing invocation on provider
-    /// rate-limit backoff. Zero retries — surface the error immediately.
+    /// rate-limit backoff. Zero retries - surface the error immediately.
     pub fn fail_fast() -> Self {
         Self {
             base: Duration::from_secs(0),
@@ -39,7 +39,7 @@ impl BackoffPolicy {
 
     /// Escape hatch / test affordance. Note: `base = 0` (or `cap = 0`) with
     /// `RetryDecision::RetryAfter(None)` yields immediate (zero-delay) retries
-    /// bounded by `max_retries` — intended for tests, not production polling.
+    /// bounded by `max_retries` - intended for tests, not production polling.
     pub fn custom(base: Duration, factor: u32, cap: Duration, max_retries: u32) -> Self {
         Self {
             base,
@@ -75,9 +75,9 @@ impl BackoffPolicy {
 /// What `retry` should do with a given error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryDecision {
-    /// Permanent failure — return it immediately.
+    /// Permanent failure - return it immediately.
     DoNotRetry,
-    /// Transient — retry. `Some(d)` = server-suggested delay (e.g. parsed
+    /// Transient - retry. `Some(d)` = server-suggested delay (e.g. parsed
     /// `Retry-After`), used instead of the schedule (clamped to the cap).
     /// `None` = use the policy schedule.
     RetryAfter(Option<Duration>),
@@ -214,7 +214,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn server_retry_after_exceeding_cap_is_clamped_to_cap() {
         // A hostile/large `Retry-After: 86400` must not park the watcher for
-        // a day — the server delay is clamped to the policy cap.
+        // a day - the server delay is clamped to the policy cap.
         let start = tokio::time::Instant::now();
         let calls = std::sync::atomic::AtomicU32::new(0);
         let policy = BackoffPolicy::standard(); // cap = 600s

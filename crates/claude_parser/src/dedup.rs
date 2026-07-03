@@ -13,7 +13,7 @@ use crate::types::UsageEvent;
 /// `(message_id, request_id)` pair and discarding subsequent ones.
 ///
 /// Events where either `message_id` or `request_id` is `None` are never
-/// deduped — without a complete key we can't safely identify duplicates, so
+/// deduped - without a complete key we can't safely identify duplicates, so
 /// they pass through unchanged.
 ///
 /// Stable: original ordering of retained events is preserved. O(n) time,

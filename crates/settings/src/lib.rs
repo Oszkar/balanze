@@ -34,7 +34,7 @@ pub struct Settings {
     #[serde(default)]
     pub providers: ProviderSettings,
     /// Cadence (seconds) for the watcher's OAuth + OpenAI pollers.
-    /// Default 300 — the §3.1 5-min API-politeness floor for provider
+    /// Default 300 - the §3.1 5-min API-politeness floor for provider
     /// usage/billing endpoints. Each poller (`watcher::tasks::oauth_poll`
     /// and `watcher::tasks::openai_poll`) clamps to a 300s minimum inside
     /// its own `spawn`, so a corrupt or malicious `settings.json` cannot
@@ -126,9 +126,24 @@ pub enum SettingsError {
 /// Conventional settings.json path for this user. Lazy: doesn't create the
 /// directory.
 pub fn default_path() -> Result<PathBuf, SettingsError> {
-    let pd = directories::ProjectDirs::from("me", "oszkar", "Balanze")
-        .ok_or(SettingsError::NoConfigDir)?;
+    let pd = project_dirs().ok_or(SettingsError::NoConfigDir)?;
     Ok(pd.config_dir().join("settings.json"))
+}
+
+/// Statusline bridge file path for this user. Lazy: doesn't create the
+/// directory.
+///
+/// `BALANZE_DATA_DIR_OVERRIDE` is intended for tests that need an isolated
+/// bridge file location.
+pub fn statusline_snapshot_path() -> Option<PathBuf> {
+    if let Ok(env_path) = std::env::var("BALANZE_DATA_DIR_OVERRIDE") {
+        return Some(PathBuf::from(env_path).join("statusline.snapshot.json"));
+    }
+    project_dirs().map(|d| d.data_dir().join("statusline.snapshot.json"))
+}
+
+fn project_dirs() -> Option<directories::ProjectDirs> {
+    directories::ProjectDirs::from("me", "oszkar", "Balanze")
 }
 
 /// Load settings from the conventional path, returning `Settings::default()`
@@ -226,6 +241,9 @@ fn tmp_path(target: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_settings_have_current_schema_version() {
@@ -298,6 +316,19 @@ mod tests {
     }
 
     #[test]
+    fn statusline_snapshot_path_honors_env_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: this env-mutating test is serialized via ENV_MUTEX; the
+        // override is test-only and removed before assertions run.
+        unsafe { std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", dir.path()) };
+        let path = statusline_snapshot_path();
+        unsafe { std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE") };
+
+        assert_eq!(path, Some(dir.path().join("statusline.snapshot.json")));
+    }
+
+    #[test]
     fn load_corrupt_file_returns_malformed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -327,7 +358,7 @@ mod tests {
     #[test]
     fn loads_file_with_unknown_extra_fields() {
         // serde's default behavior is to ignore unknown fields, which is what
-        // we want — a settings file written by a newer Balanze should still
+        // we want - a settings file written by a newer Balanze should still
         // load on an older binary, with the new fields dropped silently.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -381,7 +412,7 @@ mod tests {
         // Old settings.json without the field must deserialize with the 300s default.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        // File only has version + providers — no oauth_poll_interval_secs.
+        // File only has version + providers - no oauth_poll_interval_secs.
         fs::write(
             &path,
             br#"{"version":1,"providers":{"openai_enabled":false}}"#,

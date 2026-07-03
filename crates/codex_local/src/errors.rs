@@ -30,8 +30,8 @@ pub enum ParseError {
     /// A JSONL line failed to parse, or a `token_count` event was
     /// present but its `rate_limits.primary` block had unexpected shape.
     /// `line` is 1-indexed (matches the file when grepping). The parser
-    /// continues past schema drift on individual lines — the latest
-    /// well-formed `token_count` event still gets extracted — but
+    /// continues past schema drift on individual lines - the latest
+    /// well-formed `token_count` event still gets extracted - but
     /// callers can use the count of drift events for telemetry if they
     /// care.
     #[error("schema drift on line {line} of {path:?}: {message}")]

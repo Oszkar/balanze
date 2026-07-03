@@ -238,7 +238,7 @@ fn render_with(
 /// call must not fail because Balanze's IPC file failed (which would cause the
 /// user's statusLine to disappear from their terminal).
 fn write_statusline_snapshot(snap: &claude_statusline::StatuslineSnapshot) {
-    let Some(path) = statusline_snapshot_path() else {
+    let Some(path) = settings::statusline_snapshot_path() else {
         tracing::warn!("statusline: could not resolve data dir; skipping snapshot write");
         return;
     };
@@ -246,20 +246,6 @@ fn write_statusline_snapshot(snap: &claude_statusline::StatuslineSnapshot) {
     if let Err(e) = claude_statusline::atomic_write_snapshot(&path, &envelope) {
         tracing::warn!("statusline: snapshot write failed: {e}");
     }
-}
-
-/// Resolves the path to the watcher IPC file.
-///
-/// When `BALANZE_DATA_DIR_OVERRIDE` is set, the snapshot file lands at
-/// `<override>/statusline.snapshot.json` - intended for tests only.
-/// In normal operation, the path follows `directories::ProjectDirs` so all
-/// persistent locations go through the same crate (AGENTS.md §2.1 convention).
-fn statusline_snapshot_path() -> Option<std::path::PathBuf> {
-    if let Ok(env_path) = std::env::var("BALANZE_DATA_DIR_OVERRIDE") {
-        return Some(std::path::PathBuf::from(env_path).join("statusline.snapshot.json"));
-    }
-    directories::ProjectDirs::from("me", "oszkar", "Balanze")
-        .map(|d| d.data_dir().join("statusline.snapshot.json"))
 }
 
 #[cfg(test)]
@@ -567,7 +553,7 @@ mod statusline_tests {
     #[test]
     fn statusline_snapshot_path_honors_env_override() {
         let _guard = EnvGuard::set("BALANZE_DATA_DIR_OVERRIDE", "/tmp/balanze-test");
-        let p = super::statusline_snapshot_path().unwrap();
+        let p = settings::statusline_snapshot_path().unwrap();
         assert_eq!(
             p,
             std::path::PathBuf::from("/tmp/balanze-test/statusline.snapshot.json")

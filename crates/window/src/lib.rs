@@ -11,7 +11,7 @@ use chrono::{DateTime, Duration, Utc};
 use claude_parser::UsageEvent;
 use serde::{Deserialize, Serialize};
 
-/// Default rolling window — matches Anthropic's 5-hour subscription cadence.
+/// Default rolling window - matches Anthropic's 5-hour subscription cadence.
 pub const DEFAULT_WINDOW: Duration = Duration::hours(5);
 
 /// Length of the Claude "7-day" rolling quota window. (`DEFAULT_WINDOW` is the
@@ -37,7 +37,7 @@ pub struct ByModel {
     pub total_tokens: u64,
 }
 
-/// Result of [`summarize_window`] — aggregated state for one rolling window
+/// Result of [`summarize_window`] - aggregated state for one rolling window
 /// of `UsageEvent`s. Pure data, derivable from `(events, now, window,
 /// burn_window, min_burn_events, window_anchor)`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ pub struct WindowSummary {
     pub total_events_in_window: usize,
     pub total_tokens_in_window: u64,
     /// Tokens-per-minute averaged across the short burn window. `None` when
-    /// fewer than `min_burn_events` events fall in the burn window — keeps
+    /// fewer than `min_burn_events` events fall in the burn window - keeps
     /// callers away from "1 event, 5000 tokens/min, ship it" noise.
     pub recent_burn_tokens_per_min: Option<f64>,
     /// Per-model breakdown across the main window, sorted by total tokens
@@ -56,15 +56,15 @@ pub struct WindowSummary {
 
 /// Where a quota window stands right now: how much is used vs. how much of the
 /// window's wall-clock has elapsed. The honest replacement for a forward
-/// prediction — two measured facts plus their ratio, no forecast.
+/// prediction - two measured facts plus their ratio, no forecast.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Pace {
-    /// Fraction of the quota consumed (`used_percent / 100`). NOT clamped —
+    /// Fraction of the quota consumed (`used_percent / 100`). NOT clamped -
     /// can exceed 1.0 when an account is over cap.
     pub used_fraction: f64,
     /// Fraction of the window's wall-clock elapsed, clamped to `[0.0, 1.0]`.
     pub elapsed_fraction: f64,
-    /// `used_fraction / elapsed_fraction` — > 1.0 means burning faster than a
+    /// `used_fraction / elapsed_fraction` - > 1.0 means burning faster than a
     /// linear pace, < 1.0 means comfortably behind. `None` right after a reset
     /// (no time elapsed yet), where no honest verdict is possible.
     pub ratio: Option<f64>,
@@ -72,7 +72,7 @@ pub struct Pace {
 
 /// Compute the current pace of a quota window from its server-reported
 /// utilization and reset time. Pure: a function of `(used_percent, resets_at,
-/// window_len, now)` only — no warm-up state, no history, never lies after a
+/// window_len, now)` only - no warm-up state, no history, never lies after a
 /// reset (it just reports `ratio: None` until the clock moves).
 pub fn pace(
     used_percent: f64,
@@ -109,7 +109,7 @@ pub fn pace(
 /// when at least `min_burn_events` events fall in the burn window.
 ///
 /// `window_anchor`: when `Some(reset)` and `reset > now`, the main window is
-/// `[reset - window, reset)` — pinned to Anthropic's server-reported reset
+/// `[reset - window, reset)` - pinned to Anthropic's server-reported reset
 /// timestamp so the cap math is not skewed by local clock drift. A non-future
 /// reset (clock skew near the 5h boundary, or the server briefly echoing the
 /// just-passed reset right after rollover) is ignored and the function
@@ -145,7 +145,7 @@ pub fn summarize_window(
     // When anchored, the cap window is the half-open interval
     // [reset - window, reset): events at or after the server reset belong to
     // the NEXT window, not this one. Unanchored (`None`) uses the closed
-    // upper bound `[now - window, now]` — future-dated events (clock
+    // upper bound `[now - window, now]` - future-dated events (clock
     // rollback, JSONL timestamps from a skewed writer) would otherwise
     // inflate utilization and burn rate.
     let window_end = effective_anchor; // Some(reset) => exclusive upper bound
@@ -448,7 +448,7 @@ mod tests {
         let reset = n + Duration::hours(2);
         // One event 4h ago: INSIDE the legacy now-5h window [n - 5h, n) but
         // OUTSIDE the anchored window (which starts at n - 3h). Same input,
-        // both code paths — the only difference is the anchor.
+        // both code paths - the only difference is the anchor.
         let evs = [ev(n - Duration::hours(4), "sonnet", 100, 50)];
 
         let anchored = summarize_window(
@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(now_based.window_start, n - DEFAULT_WINDOW);
         assert_eq!(
             now_based.total_events_in_window, 1,
-            "legacy now-window [n-5h, ..) INCLUDES it — the two paths genuinely differ"
+            "legacy now-window [n-5h, ..) INCLUDES it - the two paths genuinely differ"
         );
     }
 
@@ -502,7 +502,7 @@ mod tests {
         // Server reports a reset 1h in the PAST (skew / rollover-echo).
         let stale_reset = n - Duration::hours(1);
         // A fresh event 30 min ago: inside the legacy now-5h window, and it is
-        // AFTER stale_reset — the buggy half-open bound would drop it.
+        // AFTER stale_reset - the buggy half-open bound would drop it.
         let e = ev(n - Duration::minutes(30), "sonnet", 100, 50);
         let s = summarize_window(
             &[e],
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn unanchored_window_excludes_future_dated_events() {
         // Clock rollback or a skewed JSONL writer can produce events with
-        // ts > now. The unanchored window must NOT count them — otherwise
+        // ts > now. The unanchored window must NOT count them - otherwise
         // a single misdated event inflates utilization and burn rate.
         let n = now();
         let evs = [
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn unanchored_event_exactly_at_now_is_included() {
-        // The unanchored upper bound is closed at `now` — an event with
+        // The unanchored upper bound is closed at `now` - an event with
         // ts == now is the most recent observable, and excluding it would
         // create a one-instant gap at every call.
         let n = now();
@@ -609,7 +609,7 @@ mod tests {
         // The anchored upper bound is `min(reset, now)` (half-open at reset
         // AND capped at `now` per the skew guard). For the half-open-at-reset
         // half to be meaningful here, the "in-window" event must already be
-        // in the past relative to `now` — otherwise the skew guard alone
+        // in the past relative to `now` - otherwise the skew guard alone
         // would exclude it. The post-reset events are still excluded by both
         // rules.
         let n = now(); // 2026-05-14 12:00:00

@@ -27,7 +27,7 @@
 //! committed` writes Criterion's output to
 //! `target/criterion/incremental_parser_100_new_lines/committed/estimates.json`.
 //! The committed `crates/claude_parser/benches/baseline.json` is a
-//! **manual copy** of that file — a reference snapshot. Criterion does NOT
+//! **manual copy** of that file - a reference snapshot. Criterion does NOT
 //! auto-consume the committed file; on a fresh
 //! checkout, `cargo bench -- --baseline committed` finds nothing
 //! because `target/criterion/` is empty. To compare against the committed
@@ -78,7 +78,7 @@ fn bench_incremental_100_new_lines(c: &mut Criterion) {
                     .read_incremental(file.path())
                     .expect("initial parse seeds the cursor");
 
-                // Append exactly 100 new lines — the unit the budget is
+                // Append exactly 100 new lines - the unit the budget is
                 // expressed in.
                 for i in 500..600 {
                     file.write_all(jsonl_line(i).as_bytes()).unwrap();

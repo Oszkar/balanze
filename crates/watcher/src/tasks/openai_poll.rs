@@ -9,7 +9,7 @@
 //!   2. OS keychain entry `openai_api_key`.
 //!   3. Neither configured → log at `info!` and exit `Ok(())` immediately.
 //!
-//! MIRRORS balanze_cli::live_fetch_openai — see
+//! MIRRORS balanze_cli::live_fetch_openai - see
 //! TODO: extract a shared live-fetch helper so CLI and watcher share
 //! one implementation.
 
@@ -18,16 +18,17 @@ use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHan
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
+use crate::tasks::get_or_build_client;
 
 /// Spawn the OpenAI cost poll task and return its `JoinHandle`.
 ///
-/// If no key is configured the task exits `Ok(())` immediately — the OpenAI
+/// If no key is configured the task exits `Ok(())` immediately - the OpenAI
 /// cell stays blank (no `Update` emitted). Subsequent ticks are never reached
 /// because the task has exited; the OpenAI cell only populates if the user adds
 /// a key and restarts the watcher (or the Tauri app).
 ///
 /// `interval_secs` is clamped to a minimum of 300 (the 5-minute
-/// API-politeness floor per AGENTS.md §3.1 — OpenAI billing data updates
+/// API-politeness floor per AGENTS.md §3.1 - OpenAI billing data updates
 /// infrequently and aggressive polling burns the user's rate quota for
 /// no gain).
 pub(crate) fn spawn(
@@ -54,20 +55,12 @@ pub(crate) fn spawn(
         // can't queue up multiple missed ticks and fire a burst on recovery.
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut client: Option<reqwest::Client> = None;
 
         loop {
             ticker.tick().await;
 
-            // Build the client per tick. A build failure (e.g. TLS backend
-            // init) previously `return Ok(())`'d — which the supervisor reads
-            // as a clean exit, silently freezing the OpenAI cell until restart.
-            // Emitting the error + `continue` instead keeps the task alive: the
-            // cell shows a persistent degraded state and the next tick retries.
-            let client = match reqwest::Client::builder()
-                .user_agent("balanze-watcher/0.1.0")
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-            {
+            let client = match get_or_build_client(&mut client) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("watcher/openai_poll: reqwest client build failed: {e}");
@@ -82,7 +75,7 @@ pub(crate) fn spawn(
             };
 
             let update = match costs_this_month(
-                &client,
+                client,
                 OPENAI_API_BASE,
                 &key,
                 &backoff::BackoffPolicy::standard(),
@@ -129,7 +122,7 @@ pub(crate) fn spawn(
 }
 
 /// Resolve the OpenAI admin key from env var or keychain.
-/// Returns `None` if not configured (no error — just not set up).
+/// Returns `None` if not configured (no error - just not set up).
 /// Errors from the keychain other than `NotFound` are logged but treated as
 /// "not configured" to avoid a boot failure blocking the rest of the watcher.
 async fn resolve_key() -> Option<String> {

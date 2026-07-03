@@ -2,41 +2,29 @@
 //! `statusline.snapshot.json` (written by `balanze-cli statusline`), debounces
 //! bursts for 100ms, then re-reads and emits the snapshot on each batch.
 //!
-//! The watch is non-recursive on the data directory — only direct children
+//! The watch is non-recursive on the data directory - only direct children
 //! generate events. On notify init failure the task returns
 //! `Err(WatcherError::NotifyExhausted { affected: Source::ClaudeStatusline })`.
 //! If the file does not exist (`FileIoError::FileMissing`) no event is emitted;
 //! this is the normal state for users who haven't wired the statusLine yet.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use claude_statusline::{FileIoError, read_snapshot};
 use notify::{RecursiveMode, Watcher as _};
+use settings::statusline_snapshot_path;
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
 
-/// Debounce window for statusline file changes — shorter than the JSONL
+/// Debounce window for statusline file changes - shorter than the JSONL
 /// debounce (300ms) because the statusline file is a single small JSON blob
 /// written once per `balanze-cli statusline` invocation, not a stream of
 /// many small appends.
 const DEBOUNCE: Duration = Duration::from_millis(100);
-
-// MIRRORS balanze_cli::statusline_snapshot_path — see
-// TODO: extract into a shared `paths` helper (either in
-// `settings` or a small new `balanze_paths` crate) so CLI and watcher
-// resolve the same path via one code path.
-fn statusline_snapshot_path() -> Option<PathBuf> {
-    if let Ok(env_path) = std::env::var("BALANZE_DATA_DIR_OVERRIDE") {
-        return Some(PathBuf::from(env_path).join("statusline.snapshot.json"));
-    }
-    directories::ProjectDirs::from("me", "oszkar", "Balanze")
-        .map(|d| d.data_dir().join("statusline.snapshot.json"))
-}
 
 /// Spawn the statusline notify task and return its `JoinHandle`.
 ///
@@ -49,7 +37,7 @@ fn statusline_snapshot_path() -> Option<PathBuf> {
 ///    from a prior `balanze-cli statusline` run).
 /// 4. On each debounced event, re-reads and emits.
 ///
-/// `FileMissing` is not emitted — it's the expected state for users who
+/// `FileMissing` is not emitted - it's the expected state for users who
 /// haven't wired `statusLine` in their Claude Code settings yet.
 pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
@@ -76,12 +64,12 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
         // beyond an empty directory on disk.
         //
         // Use `tokio::fs::create_dir_all` (async) rather than `std::fs::*`
-        // so this startup I/O doesn't block a tokio worker — consistent
+        // so this startup I/O doesn't block a tokio worker - consistent
         // with the `spawn_blocking` discipline used elsewhere in the
         // watcher for sync FS work. On a slow / remote filesystem this
         // can actually take a measurable moment.
         if let Err(e) = tokio::fs::create_dir_all(&watch_dir).await {
-            // `Io(e)` is the right variant — this is a plain filesystem
+            // `Io(e)` is the right variant - this is a plain filesystem
             // failure (permissions, read-only FS, parent missing on a
             // weird mount), NOT kernel notify resource exhaustion.
             // `NotifyExhausted` would mislead the supervisor's fallback
@@ -115,7 +103,7 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
 
         // Non-recursive: we only care about the data dir's direct children.
         // `create_dir_all` above guarantees the dir exists, so a watch
-        // failure here is a real error (permissions, exhaustion) — treat
+        // failure here is a real error (permissions, exhaustion) - treat
         // it the same way as the JSONL task (consistency).
         if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
             tracing::error!(
@@ -127,7 +115,7 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
             });
         }
 
-        // Initial read on task startup — covers the file already existing.
+        // Initial read on task startup - covers the file already existing.
         emit_statusline_snapshot(&coord, &snapshot_path).await;
 
         loop {
@@ -139,7 +127,7 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
 }
 
 /// Read the statusline snapshot from disk (sync) and emit an update to the
-/// coordinator. `FileMissing` is silently swallowed — it means the user hasn't
+/// coordinator. `FileMissing` is silently swallowed - it means the user hasn't
 /// wired statusLine yet and is not an error state.
 async fn emit_statusline_snapshot(coord: &StateCoordinatorHandle, path: &std::path::Path) {
     let path_owned = path.to_path_buf();
@@ -169,7 +157,7 @@ async fn emit_statusline_snapshot(coord: &StateCoordinatorHandle, path: &std::pa
                 .await;
         }
         Err(FileIoError::FileMissing { .. }) => {
-            // Not an error — user hasn't wired statusLine yet. No emit.
+            // Not an error - user hasn't wired statusLine yet. No emit.
             tracing::debug!("watcher/statusline: snapshot file absent; skipping emit");
         }
         Err(e) => {

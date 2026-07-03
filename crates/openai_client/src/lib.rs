@@ -1,6 +1,6 @@
 //! OpenAI Platform API client.
 //!
-//! Calls `GET https://api.openai.com/v1/organization/costs` — the
+//! Calls `GET https://api.openai.com/v1/organization/costs` - the
 //! documented Admin API endpoint for monthly spend. Requires an Admin API
 //! key (`sk-admin-…`), which only org owners can create at
 //! <https://platform.openai.com/settings/organization/admin-keys>.
