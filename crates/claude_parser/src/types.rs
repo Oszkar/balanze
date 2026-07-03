@@ -9,7 +9,7 @@ pub enum Provider {
     OpenAi,
 }
 
-/// How the event was billed — Anthropic subscription (Claude Max etc.) or
+/// How the event was billed - Anthropic subscription (Claude Max etc.) or
 /// metered API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AccountType {
@@ -21,7 +21,7 @@ pub enum AccountType {
 /// distinguish authoritative sources from inferred / scraped ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DataSource {
-    /// `~/.claude/projects/**/*.jsonl` — local Claude Code session files.
+    /// `~/.claude/projects/**/*.jsonl` - local Claude Code session files.
     Jsonl,
     /// OpenAI Admin Costs API (`/v1/organization/costs`).
     OpenAiBilling,
@@ -62,7 +62,7 @@ pub struct UsageEvent {
 }
 
 impl UsageEvent {
-    /// All tokens billed by Anthropic for this turn — input + output + both
+    /// All tokens billed by Anthropic for this turn - input + output + both
     /// cache categories. This is the unit the Claude subscription 5-hour cap
     /// is denominated in; cache reads count even though they're cheaper at
     /// the API-billing layer.

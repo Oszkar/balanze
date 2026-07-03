@@ -15,11 +15,11 @@
 //!    `~/.claude/projects/`.
 //! 2. Verify "Grand total" is plausible vs. your subjective sense of usage.
 //! 3. Verify "Skipped models" is empty (or surfaces a brand-new model name
-//!    that genuinely isn't in the vendored table yet — that's a real find).
+//!    that genuinely isn't in the vendored table yet - that's a real find).
 //! 4. Verify "Unparsed events" is small or zero (claude_parser only emits
 //!    these when the JSONL line legitimately omits the model field).
 //! 5. Verify the per-model breakdown's totals add up to the grand total
-//!    (within saturation bounds — see `Cost` docs).
+//!    (within saturation bounds - see `Cost` docs).
 
 use std::fs;
 
@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<()> {
     println!("Found {} JSONL files", files.len());
 
     if files.is_empty() {
-        println!("No JSONL files found — nothing to compute cost for.");
+        println!("No JSONL files found - nothing to compute cost for.");
         return Ok(());
     }
 
@@ -106,7 +106,7 @@ fn main() -> anyhow::Result<()> {
     println!();
     println!("NOTE: This is what your Claude Code usage WOULD cost if billed at");
     println!("Anthropic's direct API rates. If you're on a Pro/Max subscription,");
-    println!("your actual spend is the fixed monthly fee — this number is a");
+    println!("your actual spend is the fixed monthly fee - this number is a");
     println!("\"subscription leverage\" indicator (how much API-equivalent value");
     println!("you're getting from the plan). For direct-API users (no subscription),");
     println!("this approximates your actual spend, modulo price-table freshness.");
@@ -135,7 +135,7 @@ fn main() -> anyhow::Result<()> {
         }
         println!(
             "(if any of these are real current models, refresh the vendored price \
-             table — see crates/claude_cost/README.md)"
+             table - see crates/claude_cost/README.md)"
         );
     }
 

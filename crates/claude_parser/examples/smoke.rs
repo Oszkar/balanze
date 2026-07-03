@@ -4,7 +4,7 @@
 //!   cargo run --release -p claude_parser --example claude_parser_smoke
 //!
 //! Prints a summary (files, events, total tokens) and a per-model breakdown.
-//! Parse errors are logged but don't abort — we want to see whether the
+//! Parse errors are logged but don't abort - we want to see whether the
 //! parser tolerates the real-world JSONL distribution.
 
 use std::collections::HashMap;

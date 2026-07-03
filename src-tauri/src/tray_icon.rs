@@ -45,7 +45,7 @@ pub(crate) fn render_gauge(bucket: ColorBucket, size: u32) -> Vec<u8> {
     buf
 }
 
-/// Paint the tray icon + tooltip. Logs and no-ops on any Tauri error — a
+/// Paint the tray icon + tooltip. Logs and no-ops on any Tauri error - a
 /// failed repaint must never crash the coordinator task.
 pub(crate) fn paint(app: &AppHandle, bucket: ColorBucket, title: &str) {
     let Some(tray) = app.tray_by_id("main") else {

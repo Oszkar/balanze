@@ -10,7 +10,7 @@
 //! committed` writes Criterion's output to
 //! `target/criterion/summarize_window_10k_5h/committed/estimates.json`.
 //! The committed `crates/window/benches/baseline.json` is a **manual copy**
-//! of that file — a reference snapshot. Criterion
+//! of that file - a reference snapshot. Criterion
 //! does NOT auto-consume the committed file; on a fresh checkout,
 //! `cargo bench -- --baseline committed` finds nothing because
 //! `target/criterion/` is empty. To compare against the committed
@@ -55,7 +55,7 @@ fn synthetic_events(n: usize, base: chrono::DateTime<Utc>) -> Vec<UsageEvent> {
 fn bench_summarize_window(c: &mut Criterion) {
     let now = Utc.with_ymd_and_hms(2026, 1, 1, 18, 0, 0).unwrap();
     // Anchor `now` at the END of the 5h slice so every event lands inside
-    // the cap window — the worst-case path for the inner loop.
+    // the cap window - the worst-case path for the inner loop.
     let base = now - Duration::hours(5);
     let events = synthetic_events(10_000, base);
     let window = Duration::hours(5);

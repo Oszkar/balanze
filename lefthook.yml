@@ -1,4 +1,4 @@
-# Lefthook — git hooks runner. https://github.com/evilmartians/lefthook
+# Lefthook - git hooks runner. https://github.com/evilmartians/lefthook
 #
 # Installed automatically via the `prepare` script in package.json on
 # `bun install`. To install manually:  bun run lefthook install
@@ -59,7 +59,7 @@ commit-msg:
     "conventional.sh":
       runner: sh
       fail_text: |
-        Commit message must follow Conventional Commits — see the message above.
+        Commit message must follow Conventional Commits - see the message above.
 
 # Skip hooks for any command in an emergency:   git commit --no-verify
 # (Or:   LEFTHOOK=0 git commit  to disable hooks for one invocation.)

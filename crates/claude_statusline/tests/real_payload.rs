@@ -5,7 +5,7 @@
 //! `cost.total_cost_usd` parses on a real large value, and that the parser
 //! tolerates the real payload's extra fields (effort, fast_mode, thinking,
 //! context_window, …). rate_limits was identical across two independent
-//! sessions (different model + cwd) — it is account-global, not per-session.
+//! sessions (different model + cwd) - it is account-global, not per-session.
 use claude_statusline::parse;
 
 #[test]

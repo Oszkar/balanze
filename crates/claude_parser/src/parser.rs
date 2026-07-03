@@ -39,7 +39,7 @@ struct RawUsage {
 /// Returns:
 /// - `Ok(Some(event))` for a usage-bearing assistant message.
 /// - `Ok(None)` for any other recognized line (session metadata, hooks,
-///   user messages, file snapshots, blank lines) — these are intentional skips.
+///   user messages, file snapshots, blank lines) - these are intentional skips.
 /// - `Err(SchemaDrift)` for invalid JSON or for an assistant line that lacks
 ///   a top-level timestamp (a real shape violation worth surfacing).
 ///
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn malformed_json_is_schema_drift_with_line_number() {
-        // Truncated mid-string — typical "partial line being written" failure.
+        // Truncated mid-string - typical "partial line being written" failure.
         let line = r#"{"type":"assistant","timestamp":"2026-05-06T14:28:06.800Z""#;
         match parse_line(line, 42) {
             Err(ParseError::SchemaDrift { line, .. }) => assert_eq!(line, 42),
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn partial_last_line_is_schema_drift_not_silent() {
         // Simulates the parser tailing a JSONL file mid-write. The last line
-        // is incomplete. The parser must NOT silently drop it — silent drops
+        // is incomplete. The parser must NOT silently drop it - silent drops
         // would hide real schema drift. Caller decides whether to retry.
         let input = "\
                      {\"type\":\"last-prompt\"}\n\

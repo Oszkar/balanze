@@ -24,7 +24,7 @@ use crate::prices::PriceTable;
 /// Saturation caveat: `total_micro_usd` is computed via `saturating_add`
 /// across `per_model.total_micro_usd`. When one or more rows saturate at
 /// `i64::MAX`, `total_micro_usd` also caps at `i64::MAX` rather than
-/// overflowing — so the conceptual "sum of saturated rows" can exceed
+/// overflowing - so the conceptual "sum of saturated rows" can exceed
 /// what `total_micro_usd` reports. Callers asserting
 /// `per_model.iter().map(|m| m.total_micro_usd).sum::<i64>() == total_micro_usd`
 /// will be surprised at saturation. The test
@@ -33,7 +33,7 @@ use crate::prices::PriceTable;
 pub struct Cost {
     pub per_model: Vec<ModelCost>,
     /// Grand total in i64 micro-USD. **This is API-rate equivalent**, not
-    /// actual subscription spend — see the crate-level docs. UIs rendering
+    /// actual subscription spend - see the crate-level docs. UIs rendering
     /// this value MUST label it as "estimated" / "API-rate equivalent" /
     /// "subscription leverage" or similar; presenting it as "total spend"
     /// to a Max-plan user is misleading.
@@ -42,12 +42,12 @@ pub struct Cost {
     /// Total events the function saw, regardless of whether their model was
     /// found in the price table, was an unknown model, or had an empty model
     /// string. Use this for "events processed" metrics. **Do NOT sum
-    /// `per_model.iter().map(|m| m.event_count)`** for that purpose —
+    /// `per_model.iter().map(|m| m.event_count)`** for that purpose -
     /// `event_count` only counts events whose model was known at price-table
     /// lookup time.
     pub total_event_count: usize,
     /// Events whose `event.model` was an empty string. `claude_parser` emits
-    /// an empty model string when the JSONL line omits the model field —
+    /// an empty model string when the JSONL line omits the model field -
     /// this is a parser-quirk count, not a price-table-gap count, so it
     /// lives separate from `skipped_models`.
     pub unparsed_event_count: usize,
@@ -178,7 +178,7 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
 
 /// Multiply (tokens, optional nano-per-token) → i64 micro-USD with
 /// `i128` intermediate to avoid overflow, **rounding nano→micro to nearest
-/// (half up — correct here only because the product is non-negative; this
+/// (half up - correct here only because the product is non-negative; this
 /// is NOT general half-away-from-zero, which would need a sign check)**
 /// before the final cast, and saturating at
 /// `i64::MAX` / `i64::MIN` on the cast itself. Returns 0 when the
@@ -191,7 +191,7 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
 /// nearest eliminates that bias on average. `validate_price` rejects
 /// negative prices, so the product is always non-negative in practice
 /// and the simple "+500 then truncate" idiom is correct (rounds half
-/// up for ties). The `saturating_add(500)` is defensive — for an already-
+/// up for ties). The `saturating_add(500)` is defensive - for an already-
 /// saturated product the +500 is a no-op past i128::MAX.
 fn component_micro(tokens: u64, nano_per_token: Option<i64>) -> i64 {
     let nano = nano_per_token.unwrap_or(0);
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn huge_token_count_saturates_without_panic() {
         // u64::MAX / 4 = ~4.6e18 input tokens × 3000 nano/token = ~1.4e22 nano
-        // = ~1.4e19 micro; i64::MAX is ~9.2e18 — saturation expected.
+        // = ~1.4e19 micro; i64::MAX is ~9.2e18 - saturation expected.
         let cost = compute_cost(
             &[event("claude-sonnet-4-6", u64::MAX / 4, 0, 0, 0)],
             &fixture_prices(),
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn empty_model_event_counted_as_unparsed_not_skipped() {
         // claude_parser emits "" for `model` when the JSONL omits the field.
-        // It must NOT show up in skipped_models — that list is for genuinely
+        // It must NOT show up in skipped_models - that list is for genuinely
         // unknown model NAMES; empty-string is a parser-quirk separate channel.
         let events = vec![event("", 1000, 100, 0, 0), event("", 2000, 200, 0, 0)];
         let cost = compute_cost(&events, &fixture_prices());
@@ -685,7 +685,7 @@ mod tests {
         assert_eq!(cost.per_model.len(), 2);
         assert_eq!(cost.per_model[0].total_micro_usd, i64::MAX);
         assert_eq!(cost.per_model[1].total_micro_usd, i64::MAX);
-        // Grand total saturates at i64::MAX — NOT i64::MAX * 2.
+        // Grand total saturates at i64::MAX - NOT i64::MAX * 2.
         assert_eq!(cost.total_micro_usd, i64::MAX);
         // Documenting that the naive sum is meaningless at saturation:
         // sum(saturating) would overflow without saturating_add. We rely

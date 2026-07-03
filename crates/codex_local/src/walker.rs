@@ -4,7 +4,7 @@
 //! Codex CLI nests session files by date (year / month / day), unlike
 //! Claude Code which nests by project slug. The walker recurses
 //! arbitrarily deep so future Codex CLI versions that reorganize the
-//! tree don't immediately break us — anything matching the
+//! tree don't immediately break us - anything matching the
 //! `rollout-*.jsonl` filename pattern is considered a session file.
 
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ pub const CODEX_CONFIG_DIR_ENV: &str = "CODEX_CONFIG_DIR";
 ///
 /// Resolution order:
 /// 1. `CODEX_CONFIG_DIR` env var (if set and non-empty), interpreted
-///    as the path to `sessions/`'s **parent** — so the function appends
+///    as the path to `sessions/`'s **parent** - so the function appends
 ///    `sessions` to it. (Matches Codex CLI's own `$CODEX_HOME` semantic.)
 /// 2. `~/.codex/sessions/` via `directories::UserDirs::home_dir()`.
 ///
@@ -45,7 +45,7 @@ pub fn find_codex_sessions_dir() -> Result<PathBuf, ParseError> {
         }
     }
 
-    // 2. Default: ~/.codex/sessions/ via UserDirs (NOT ProjectDirs —
+    // 2. Default: ~/.codex/sessions/ via UserDirs (NOT ProjectDirs -
     //    those are for Balanze's own app data, not Codex's user data).
     let user = directories::UserDirs::new()
         .ok_or_else(|| ParseError::FileMissing(PathBuf::from("$HOME (unresolvable)")))?;
@@ -68,7 +68,7 @@ pub fn find_codex_sessions_dir() -> Result<PathBuf, ParseError> {
 /// Codex in a week still gets back their last session file, and a user
 /// who opens Balanze at 00:00:30 local (before today's
 /// `YYYY/MM/DD/` directory has been created) gets back yesterday's
-/// last session — which IS the latest data Codex has produced.
+/// last session - which IS the latest data Codex has produced.
 ///
 /// Callers that need a freshness gate should compare
 /// [`CodexQuotaSnapshot::observed_at`](crate::CodexQuotaSnapshot::observed_at)
@@ -77,8 +77,8 @@ pub fn find_codex_sessions_dir() -> Result<PathBuf, ParseError> {
 /// - Codex's `primary` rate-limit window is 7 days, so a 6-day-old
 ///   snapshot is still semantically valid.
 /// - Hiding stale data is a renderer-policy concern, not a parser one
-///   — the snapshot crate (`codex_local`) sits below the renderer in
-///   the dependency graph and should expose the signal, not gate it.
+///   because the snapshot crate (`codex_local`) sits below the renderer
+///   in the dependency graph and should expose the signal, not gate it.
 ///
 /// # Error policy
 ///
@@ -87,7 +87,7 @@ pub fn find_codex_sessions_dir() -> Result<PathBuf, ParseError> {
 ///   denied on the user's `~/.codex/`), returns `Err(IoError)`.
 /// - **Per-subdirectory failure is loud too.** If `read_dir` on any
 ///   descendant fails, the whole walk returns `Err(IoError)` rather
-///   than partial results — a single unreadable subtree shouldn't
+///   than partial results - a single unreadable subtree shouldn't
 ///   silently produce a stale "latest" file from elsewhere.
 /// - **Per-entry failure is best-effort.** Entries we can't stat (e.g.
 ///   dangling symlinks, transient races where a file is removed
@@ -96,7 +96,7 @@ pub fn find_codex_sessions_dir() -> Result<PathBuf, ParseError> {
 ///   data crates") but the choice is intentional: a single unreadable
 ///   entry should not break the whole snapshot.
 ///
-/// Walks arbitrarily deep — the YYYY/MM/DD nesting Codex CLI uses
+/// Walks arbitrarily deep - the YYYY/MM/DD nesting Codex CLI uses
 /// today is not assumed; any depth works.
 pub fn find_latest_session(root: &Path) -> Result<Option<PathBuf>, ParseError> {
     if !root.exists() {
@@ -113,7 +113,7 @@ fn walk(dir: &Path, best: &mut Option<(SystemTime, PathBuf)>) -> Result<(), Pars
         source,
     })?;
     for entry_result in entries {
-        // Per-entry DirEntry failure is best-effort skip — see the
+        // Per-entry DirEntry failure is best-effort skip - see the
         // function's doc-comment "Per-entry failure" clause. read_dir
         // errors on the whole directory already propagated above.
         let entry = match entry_result {
@@ -217,7 +217,7 @@ mod tests {
 
     /// Serializes tests that mutate `CODEX_CONFIG_DIR`. Rust's test
     /// harness runs tests within a single binary concurrently by
-    /// default, and `set_var` / `remove_var` are process-global —
+    /// default, and `set_var` / `remove_var` are process-global -
     /// without this gate, the two env-touching tests can race and
     /// observe each other's writes.
     static ENV_MUTEX: Mutex<()> = Mutex::new(());

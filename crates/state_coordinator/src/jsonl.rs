@@ -3,8 +3,8 @@
 //! This is the ONE place the JSONL pipeline math lives (AGENTS.md §4 #8): the
 //! one-shot CLI path (`snapshot_composer::compose`) and the live path (the
 //! coordinator merge, watcher-driven) both call [`summarize_jsonl`], so the two
-//! cannot drift. In particular the rolling-window anchor — Anthropic's
-//! server-reported 5-hour reset — is applied identically on both paths. The
+//! cannot drift. In particular the rolling-window anchor - Anthropic's
+//! server-reported 5-hour reset - is applied identically on both paths. The
 //! watcher used to compute its own window with a hard-coded `None` anchor and
 //! silently diverged from the CLI here; centralizing the math fixes that.
 
@@ -18,7 +18,7 @@ use crate::snapshot::JsonlSnapshot;
 /// Both JSONL-fed snapshot cells, derived from one deduped event slice.
 ///
 /// `cost` is `Err` only when no price table was available (the bundled table
-/// failed to load — shouldn't happen on a release build); the `window` is
+/// failed to load - shouldn't happen on a release build); the `window` is
 /// always produced. Mirrors the independent-cells model in `Snapshot`: a
 /// price-table failure must not suppress the window summary.
 pub struct JsonlCells {

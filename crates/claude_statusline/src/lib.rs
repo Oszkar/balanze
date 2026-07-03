@@ -3,8 +3,8 @@
 //!
 //! Sits in the schema-owning data-source tier alongside `claude_parser`
 //! (§4 #1) and `codex_local` (§4 #11): it is the ONLY code that knows the
-//! statusLine wire format, and — mirroring `anthropic_oauth` for
-//! `.credentials.json` — also the only code that reads/writes the
+//! statusLine wire format, and - mirroring `anthropic_oauth` for
+//! `.credentials.json` - also the only code that reads/writes the
 //! `statusLine` key in Claude's `settings.json`.
 //!
 //! `rate_limits` is Pro/Max-only and only present after the first API

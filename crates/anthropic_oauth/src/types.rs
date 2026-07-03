@@ -7,7 +7,7 @@ use thiserror::Error;
 ///
 /// `Debug` is hand-written (NOT derived) so `access_token` / `refresh_token`
 /// cannot leak via a stray `{:?}` / `tracing::debug!(?creds)`. Per AGENTS.md
-/// §3.4 these are secrets identical to OpenAI keys — never logged at any
+/// §3.4 these are secrets identical to OpenAI keys - never logged at any
 /// level. `Credentials` keeps a derived `Debug`; it delegates to this impl,
 /// so the wrapper is safe too.
 #[derive(Clone, Deserialize)]
@@ -31,7 +31,7 @@ impl std::fmt::Debug for CredentialsClaudeAiOauth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CredentialsClaudeAiOauth")
             .field("access_token", &"<redacted>")
-            // Reveal presence (Some/None) but never the value — useful for
+            // Reveal presence (Some/None) but never the value - useful for
             // diagnosing "no refresh token" without leaking the token.
             .field(
                 "refresh_token",
@@ -65,14 +65,14 @@ pub struct CadenceBar {
     pub resets_at: DateTime<Utc>,
 }
 
-/// The `extra_usage` block — Anthropic's opt-in **pay-as-you-go overage**
+/// The `extra_usage` block - Anthropic's opt-in **pay-as-you-go overage**
 /// meter (the claude.ai/settings/usage "Extra usage" section). Separate
 /// from cadence bars because it is a billed-money counter, not a
 /// utilization %.
 ///
 /// **Semantics** (reconciled against a real OAuth payload):
 /// Raw `monthly_limit` / `used_credits` are integer **cents**; this block
-/// is the claude.ai "Extra usage" pay-as-you-go overage meter — **real
+/// is the claude.ai "Extra usage" pay-as-you-go overage meter - **real
 /// money billed** beyond the subscription, exact, first-party. Reconciled
 /// 3/3 against a Max-5x screenshot (`monthly_limit 2500 = $25.00`,
 /// `used_credits 2092 = $20.92`, `utilization 83.7 ≈ "84% used"`). It is
@@ -89,10 +89,10 @@ pub struct CadenceBar {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtraUsage {
     pub is_enabled: bool,
-    /// Raw `monthly_limit` is in cents (resolved — see struct doc); stored
+    /// Raw `monthly_limit` is in cents (resolved - see struct doc); stored
     /// as i64 micro-USD (× 10_000).
     pub monthly_limit_micro_usd: i64,
-    /// Raw `used_credits` is in cents (resolved — see struct doc); stored
+    /// Raw `used_credits` is in cents (resolved - see struct doc); stored
     /// as i64 micro-USD (× 10_000).
     pub used_credits_micro_usd: i64,
     pub utilization_percent: f32,
@@ -105,7 +105,7 @@ pub struct ClaudeOAuthSnapshot {
     pub extra_usage: Option<ExtraUsage>,
     pub subscription_type: Option<String>,
     pub rate_limit_tier: Option<String>,
-    /// From the `anthropic-organization-id` response header — identifies the
+    /// From the `anthropic-organization-id` response header - identifies the
     /// Claude consumer subscription org (distinct from any platform.claude.com
     /// API org for the same user).
     pub org_uuid: Option<String>,
@@ -135,7 +135,7 @@ impl ClaudeOAuthSnapshot {
 }
 
 /// Result of a successful refresh-token grant. Hand-written `Debug` (NOT
-/// derived) so the tokens cannot leak via `{:?}` — identical discipline to
+/// derived) so the tokens cannot leak via `{:?}` - identical discipline to
 /// `CredentialsClaudeAiOauth` (AGENTS.md §3.4).
 #[derive(Clone)]
 pub struct RefreshedTokens {
@@ -174,7 +174,7 @@ pub enum OAuthError {
     },
 
     #[error(
-        "oauth bearer expired or invalid (HTTP 401) — user must re-run `claude login` or refresh token must be exchanged"
+        "oauth bearer expired or invalid (HTTP 401) - user must re-run `claude login` or refresh token must be exchanged"
     )]
     AuthExpired,
 
@@ -187,7 +187,7 @@ pub enum OAuthError {
     },
 
     #[error(
-        "credentials file has no refreshToken — cannot refresh; user must re-run `claude login`"
+        "credentials file has no refreshToken - cannot refresh; user must re-run `claude login`"
     )]
     RefreshTokenMissing,
 

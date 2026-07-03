@@ -8,8 +8,8 @@ use crate::types::ParseError;
 ///
 /// Search order matches ccusage / Claude Code itself:
 ///   1. `$XDG_CONFIG_HOME/claude/projects` (only when `xdg` is `Some` and non-empty)
-///   2. `<home>/.claude/projects`            — the most common case
-///   3. `<home>/.config/claude/projects`     — newer Claude Code installs on Linux
+///   2. `<home>/.claude/projects`            - the most common case
+///   3. `<home>/.config/claude/projects`     - newer Claude Code installs on Linux
 fn candidate_claude_projects_dirs_in(home: &Path, xdg: Option<&Path>) -> Vec<PathBuf> {
     let mut candidates = Vec::with_capacity(3);
     if let Some(x) = xdg {
@@ -49,12 +49,12 @@ pub fn candidate_claude_projects_dirs() -> Vec<PathBuf> {
 ///
 /// Returns the first candidate from [`candidate_claude_projects_dirs`] that
 /// exists. If none exist, returns `ParseError::FileMissing` with the canonical
-/// `<home>/.claude/projects` path (the expected default — XDG / `.config`
+/// `<home>/.claude/projects` path (the expected default - XDG / `.config`
 /// candidates are fallbacks, not the default).
 ///
 /// To read events from EVERY existing root (a dual-install machine can have
 /// both `~/.claude/projects` and `~/.config/claude/projects`), use
-/// [`find_all_claude_projects_dirs`] instead — this single-root accessor is for
+/// [`find_all_claude_projects_dirs`] instead - this single-root accessor is for
 /// callers that just need the one preferred directory.
 pub fn find_claude_projects_dir() -> Result<PathBuf, ParseError> {
     let candidates = candidate_claude_projects_dirs();
@@ -77,8 +77,8 @@ pub fn find_claude_projects_dir() -> Result<PathBuf, ParseError> {
 ///
 /// Unlike [`find_claude_projects_dir`] (which returns only the FIRST existing
 /// candidate), this returns ALL of them. A machine that has both
-/// `~/.claude/projects` and `~/.config/claude/projects` — e.g. after Claude
-/// Code's path migration, or a dual install — would otherwise have the events
+/// `~/.claude/projects` and `~/.config/claude/projects` - e.g. after Claude
+/// Code's path migration, or a dual install - would otherwise have the events
 /// under the non-preferred root silently undercounted. Callers walk every
 /// returned root and concatenate; `dedup_events` collapses any session that
 /// appears under more than one root by `(message_id, request_id)`.
@@ -113,7 +113,7 @@ fn existing_unique_dirs(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
 
 /// Recursively find all `*.jsonl` files under `root`.
 ///
-/// Returned paths are sorted by modification time, newest first — callers
+/// Returned paths are sorted by modification time, newest first - callers
 /// that want recent events can stop early. Subagent JSONLs (under
 /// `<session>/subagents/agent-*.jsonl`) are included; they carry the same
 /// schema as the parent session.
@@ -228,7 +228,7 @@ mod tests {
         // non-root CI/dev machines, so skip the assertion rather than fail.
         if fs::read_dir(&locked).is_ok() {
             fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
-            eprintln!("running as root — permission bits bypassed; skipping");
+            eprintln!("running as root - permission bits bypassed; skipping");
             return;
         }
 

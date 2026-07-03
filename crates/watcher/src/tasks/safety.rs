@@ -13,28 +13,13 @@
 //! All sync I/O (`read_snapshot`, `read_codex_quota`) runs under
 //! `tokio::task::spawn_blocking` so it doesn't block tokio worker threads.
 
-use std::path::PathBuf;
-
 use claude_statusline::{FileIoError, read_snapshot};
 use codex_local::{ParseError, read_codex_quota};
+use settings::statusline_snapshot_path;
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
-
-// Re-export of the statusline snapshot-path helper — mirrored here so the
-// safety task doesn't cross-import the private function from the statusline
-// module. Both are identical.
-// MIRRORS balanze_cli::statusline_snapshot_path and
-//         watcher::tasks::statusline::statusline_snapshot_path — see
-// TODO: extract a shared live-fetch / paths helper.
-fn statusline_snapshot_path() -> Option<PathBuf> {
-    if let Ok(env_path) = std::env::var("BALANZE_DATA_DIR_OVERRIDE") {
-        return Some(PathBuf::from(env_path).join("statusline.snapshot.json"));
-    }
-    directories::ProjectDirs::from("me", "oszkar", "Balanze")
-        .map(|d| d.data_dir().join("statusline.snapshot.json"))
-}
 
 /// Spawn the 60-second safety poll task and return its `JoinHandle`.
 ///

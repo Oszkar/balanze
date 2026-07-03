@@ -390,7 +390,7 @@ fn window_or_drop(key: &str, raw: RawWindow) -> Option<RateWindow> {
         }
         _ => {
             tracing::warn!(
-                "claude_statusline: dropping `{key}` rate-limit window — present but \
+                "claude_statusline: dropping `{key}` rate-limit window - present but \
                  missing used_percentage/resets_at (statusLine schema drift?)"
             );
             None

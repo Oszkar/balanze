@@ -1,6 +1,6 @@
 # Dependabot configuration.
 #
-# Weekly cadence — high enough to catch security advisories quickly, low enough
+# Weekly cadence - high enough to catch security advisories quickly, low enough
 # not to drown a single-developer side project in version-bump PRs. The
 # `open-pull-requests-limit` further caps noise.
 #
@@ -24,7 +24,7 @@ updates:
       prefix: chore
       include: scope
     ignore:
-      # `keyring` v4 is a sample app — the credential-store API moved to the
+      # `keyring` v4 is a sample app - the credential-store API moved to the
       # `keyring-core` crate. Migrating to keyring-core v1 is a deliberate
       # v0.2 code change (explicit `set_default_store` init), not a drop-in
       # bump. Keep Dependabot quiet on the major until then; minor/patch on

@@ -1,4 +1,4 @@
-# Codex JSONL — Schema Notes
+# Codex JSONL - Schema Notes
 
 **Spike date**: 2026-05-14
 **Spike type**: Phase A pre-implementation, mandated by /plan-eng-review outside voice
@@ -39,9 +39,9 @@ Each JSONL line has a top-level `type` field:
 |---|---|---|
 | `session_meta` | First line; session id, cwd, originator, cli_version, model_provider, base_instructions | Metadata only |
 | `event_msg` (subtype `task_started`) | One per turn start; turn_id, started_at, model_context_window | Maybe (for window math) |
-| `event_msg` (subtype `token_count`) | **Per-turn token counts + rate limits** | **YES — load-bearing** |
+| `event_msg` (subtype `token_count`) | **Per-turn token counts + rate limits** | **YES - load-bearing** |
 | `event_msg` (subtype `task_complete`) | One per turn end | Maybe |
-| `response_item` (subtype `message`) | Actual conversation turns; role: developer/user/assistant/system | No — content, not billing |
+| `response_item` (subtype `message`) | Actual conversation turns; role: developer/user/assistant/system | No - content, not billing |
 
 The `token_count` event_msg is the only line with billing-relevant data.
 
@@ -91,16 +91,16 @@ The `token_count` event_msg is the only line with billing-relevant data.
 
 ### Key fields for v0.1's "Codex quota %" cell
 
-- `payload.rate_limits.primary.used_percent` — **the value the user sees** (e.g. 3.0 means 3%).
-- `payload.rate_limits.primary.window_minutes` — 10080 = 7 days. This is Codex CLI's only rolling window.
-- `payload.rate_limits.primary.resets_at` — unix timestamp; convert to `DateTime<Utc>` for "resets in 4d 7h" display.
-- `payload.rate_limits.plan_type` — "go" (ChatGPT Go), probably "pro" (ChatGPT Pro), etc. Display only.
-- `payload.rate_limits.secondary` — null in this sample. May contain a sub-window (5h?) for higher-tier plans. Treat as `Option<RateLimitWindow>`.
+- `payload.rate_limits.primary.used_percent` - **the value the user sees** (e.g. 3.0 means 3%).
+- `payload.rate_limits.primary.window_minutes` - 10080 = 7 days. This is Codex CLI's only rolling window.
+- `payload.rate_limits.primary.resets_at` - unix timestamp; convert to `DateTime<Utc>` for "resets in 4d 7h" display.
+- `payload.rate_limits.plan_type` - "go" (ChatGPT Go), probably "pro" (ChatGPT Pro), etc. Display only.
+- `payload.rate_limits.secondary` - null in this sample. May contain a sub-window (5h?) for higher-tier plans. Treat as `Option<RateLimitWindow>`.
 
 ### Fields possibly useful for v0.2+
 
-- `last_token_usage.input_tokens` etc. — per-turn token counts. Useful if/when we ever compute "if Codex were billed by API rates, this is what you'd spend" (not in v0.1 — Codex side is quota %, not $).
-- `total_token_usage` — cumulative per session. Useful for per-session reports.
+- `last_token_usage.input_tokens` etc. - per-turn token counts. Useful if/when we ever compute "if Codex were billed by API rates, this is what you'd spend" (not in v0.1 - Codex side is quota %, not $).
+- `total_token_usage` - cumulative per session. Useful for per-session reports.
 
 ### Fields NOT in Codex JSONL
 
@@ -111,19 +111,19 @@ The `token_count` event_msg is the only line with billing-relevant data.
 
 ---
 
-## Critical findings — what changes for `codex_local`
+## Critical findings - what changes for `codex_local`
 
 ### 1. No dedup module needed.
 
-Claude Code's `(message_id, request_id)` dedup exists because Anthropic streams each assistant message multiple times — `claude_parser::dedup_events` collapses ~50% redundancy. **Codex does not stream-duplicate.** Each event_msg has a unique `turn_id`; no fields match the (msg_id, req_id) shape because Codex doesn't even have those fields. **Drop the planned `dedup` module from codex_local v0.1 entirely.** Save the 8 dedup tests; they'd be asserting the identity function.
+Claude Code's `(message_id, request_id)` dedup exists because Anthropic streams each assistant message multiple times - `claude_parser::dedup_events` collapses ~50% redundancy. **Codex does not stream-duplicate.** Each event_msg has a unique `turn_id`; no fields match the (msg_id, req_id) shape because Codex doesn't even have those fields. **Drop the planned `dedup` module from codex_local v0.1 entirely.** Save the 8 dedup tests; they'd be asserting the identity function.
 
 ### 2. The data model is "quota snapshot", not "stream of events".
 
-`claude_parser` produces `Vec<UsageEvent>` because every assistant message is a billable event. `codex_local` should produce a `CodexQuotaSnapshot` — a single value extracted from the most recent `token_count` event in the most recent session file. The 4-quadrant cell ("Codex %") needs ONE number, not a stream.
+`claude_parser` produces `Vec<UsageEvent>` because every assistant message is a billable event. `codex_local` should produce a `CodexQuotaSnapshot` - a single value extracted from the most recent `token_count` event in the most recent session file. The 4-quadrant cell ("Codex %") needs ONE number, not a stream.
 
 ### 3. Walker is simpler but deeper.
 
-claude_parser walks `~/.claude/projects/{project-slug}/*.jsonl` (1 level). codex_local must walk `~/.codex/sessions/{YYYY}/{MM}/{DD}/*.jsonl` (3 levels). The pattern is "find the most recent file by mtime" — order matters, but recursion is straightforward.
+claude_parser walks `~/.claude/projects/{project-slug}/*.jsonl` (1 level). codex_local must walk `~/.codex/sessions/{YYYY}/{MM}/{DD}/*.jsonl` (3 levels). The pattern is "find the most recent file by mtime" - order matters, but recursion is straightforward.
 
 ### 4. IncrementalParser is probably unnecessary.
 
@@ -137,7 +137,7 @@ The Issue 1 decision (separate type, not UsageEvent) is even more justified than
 pub struct CodexQuotaSnapshot {
     pub observed_at: DateTime<Utc>,         // from event_msg.timestamp
     pub session_id: String,                 // from session_meta.payload.id
-    pub primary: RateLimitWindow,           // nested — see below
+    pub primary: RateLimitWindow,           // nested - see below
     pub secondary: Option<RateLimitWindow>, // for higher-tier plans
     pub plan_type: String,                  // "go", "pro", etc.
     pub rate_limit_reached: bool,           // from rate_limit_reached_type
@@ -150,7 +150,7 @@ pub struct RateLimitWindow {
 }
 ```
 
-**Note**: the spike originally proposed flattening primary's fields onto the snapshot directly (`used_percent`, `window_duration_minutes`, `resets_at` at the top level). The implementation nests them under `primary: RateLimitWindow` so `primary` and `secondary` share the same shape — symmetric, less branching at the call site. Earlier drafts of this doc showed the flat shape; updated to match the shipped code after Copilot caught the drift on PR #12.
+**Note**: the spike originally proposed flattening primary's fields onto the snapshot directly (`used_percent`, `window_duration_minutes`, `resets_at` at the top level). The implementation nests them under `primary: RateLimitWindow` so `primary` and `secondary` share the same shape - symmetric, less branching at the call site. Earlier drafts of this doc showed the flat shape; updated to match the shipped code after Copilot caught the drift on PR #12.
 
 ### 6. Public API shrinks dramatically.
 
@@ -179,7 +179,7 @@ Post-spike plan:
 
 **Plus 1 smoke example** (gated behind `examples/`, not `tests/`): run against real `~/.codex/sessions/` on the author's machine, print the snapshot.
 
-**Total target: ~8 tests + 1 smoke.** Actual shipped: 15 tests across walker (5) + parser (10) — the extra coverage came from the eng-review's drift discipline + Copilot's PR review (secondary-window, file-not-found vs IoError, all-drift SchemaDrift).
+**Total target: ~8 tests + 1 smoke.** Actual shipped: 15 tests across walker (5) + parser (10) - the extra coverage came from the eng-review's drift discipline + Copilot's PR review (secondary-window, file-not-found vs IoError, all-drift SchemaDrift).
 
 ---
 

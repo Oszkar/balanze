@@ -4,7 +4,7 @@
 //! and emits `PRICE_TABLE_COMMIT` and `PRICE_TABLE_DATE` env vars that
 //! `lib.rs` exposes as `pub const`s via `env!()`. This keeps the const
 //! values in lockstep with the vendored data file: a refresh swaps the
-//! file, the build script picks up the new name, and the consts update —
+//! file, the build script picks up the new name, and the consts update -
 //! no manual editing required.
 
 use std::path::Path;

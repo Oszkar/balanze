@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mins_left = (oauth.expires_at - now_ms) / 60_000;
     println!(
-        "Credentials loaded — subscription={:?} tier={:?} token expires in {} min",
+        "Credentials loaded - subscription={:?} tier={:?} token expires in {} min",
         oauth.subscription_type, oauth.rate_limit_tier, mins_left
     );
 

@@ -1,6 +1,6 @@
 [package]
 name = "settings"
-description = "Non-secret Balanze settings — config file at OS-conventional path, atomic save (tmp + rename), schema-versioned for future migration. Secrets live in `crates/keychain`, not here."
+description = "Non-secret Balanze settings - config file at OS-conventional path, atomic save (tmp + rename), schema-versioned for future migration. Secrets live in `crates/keychain`, not here."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,7 +1,7 @@
 //! Shared source-orchestration policy. This is the SINGLE composition path
 //! (AGENTS.md §4 #8): `balanze_cli` runs it via `LiveSources`, the future
 //! watcher will run it via its own `SnapshotSources` impl, and the
-//! integration test runs it via `FixtureSources` — so the policy cannot
+//! integration test runs it via `FixtureSources` - so the policy cannot
 //! silently diverge between entry-points. Pure orchestration: it does no
 //! network/filesystem I/O itself (that is the `SnapshotSources` impl's job)
 //! and never imports `reqwest`.
@@ -23,7 +23,7 @@ use tracing::{info, warn};
 /// `async fn` in a trait is stable since Rust 1.75 (MSRV here is 1.77). We
 /// only ever use STATIC dispatch (`compose<S: SnapshotSources>`), never
 /// `dyn SnapshotSources`. With static dispatch the future's `Send`-ness is
-/// inferred at the concrete call site — e.g. the watcher's `tokio::spawn` on
+/// inferred at the concrete call site - e.g. the watcher's `tokio::spawn` on
 /// the multi-thread runtime resolves it automatically, since the watcher's own
 /// `SnapshotSources` impl returns `Send` futures and `compose` holds nothing
 /// non-`Send` across an `.await`. Note: a *generic* `tokio::spawn` helper over
@@ -66,7 +66,7 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
     // JSONL events power BOTH the window summary and the API-rate cost
     // synthesis. Read once, summarize twice. If the load fails entirely,
     // both downstream slots stay None and only claude_jsonl_error carries
-    // the reason — we don't duplicate it into anthropic_api_cost_error.
+    // the reason - we don't duplicate it into anthropic_api_cost_error.
     let mut claude_jsonl: Option<JsonlSnapshot> = None;
     let mut claude_jsonl_error: Option<String> = None;
     let mut anthropic_api_cost: Option<claude_cost::Cost> = None;
@@ -277,7 +277,7 @@ mod tests {
     #[tokio::test]
     async fn codex_error_sets_only_its_own_error_slot() {
         // A codex_local failure must populate codex_quota_error and leave
-        // codex_quota None, WITHOUT touching any other cell — the
+        // codex_quota None, WITHOUT touching any other cell - the
         // Anthropic cells still come from a successful JSONL load, and
         // OpenAI stays at its "not configured" Ok(None) baseline.
         let f = Fake {
@@ -312,7 +312,7 @@ mod tests {
         // bleeds into any other cell.
         let f = Fake {
             events: Some(Ok((vec![one_event(now())], 1))),
-            openai: Some(Err(anyhow::anyhow!("HTTP 403 — admin scope required"))),
+            openai: Some(Err(anyhow::anyhow!("HTTP 403 - admin scope required"))),
             ..Default::default()
         };
         let snap = compose(&f, now()).await;
@@ -320,7 +320,7 @@ mod tests {
         assert!(snap.openai.is_none());
         assert_eq!(
             snap.openai_error.as_deref(),
-            Some("HTTP 403 — admin scope required")
+            Some("HTTP 403 - admin scope required")
         );
 
         // No cross-contamination.

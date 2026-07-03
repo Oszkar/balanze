@@ -13,7 +13,7 @@
 # By default cargo-deny only checks the host platform. We ship for
 # Windows + macOS today; Linux comes in a later phase per PRD
 # Phasing. Targeting only the platforms we actually build for keeps
-# the dep graph honest — e.g., Tauri pulls GTK3 transitively on
+# the dep graph honest - e.g., Tauri pulls GTK3 transitively on
 # Linux, which is RustSec-unmaintained, but we don't ship that path
 # so we shouldn't fail CI on it.
 targets = [
@@ -27,12 +27,12 @@ targets = [
 [advisories]
 version = 2
 yanked = "warn"
-# Specific RUSTSEC IDs to ignore — leave empty until something actually
+# Specific RUSTSEC IDs to ignore - leave empty until something actually
 # justifies it; record the reason inline when adding.
 ignore = []
 # Only check WORKSPACE crates for unmaintained status. Transitive
 # unmaintained crates (e.g., Unicode helpers Tauri pulls in via Windows
-# Webview2 deps) aren't actionable from this repo — Dependabot tracks
+# Webview2 deps) aren't actionable from this repo - Dependabot tracks
 # upstream advisories for us. Tighten to "all" once we have direct
 # control over the dep graph.
 unmaintained = "workspace"
@@ -77,7 +77,7 @@ exceptions = []
 # baseline is clean.
 multiple-versions = "warn"
 # Wildcard version requirements (`*`) are a footgun for external deps but
-# unavoidable for intra-workspace `path = "../foo"` dependencies — those
+# unavoidable for intra-workspace `path = "../foo"` dependencies - those
 # appear as wildcards in Cargo.lock because they have no version
 # constraint. Allow them; deny external wildcards.
 wildcards = "deny"

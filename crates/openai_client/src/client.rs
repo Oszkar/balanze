@@ -115,7 +115,7 @@ pub async fn fetch_costs(
     policy: &backoff::BackoffPolicy,
 ) -> Result<OpenAiCosts, OpenAiError> {
     // Hoist url and actual_end outside the retry closure so every attempt
-    // queries the same window — deterministic regardless of clock drift.
+    // queries the same window - deterministic regardless of clock drift.
     let url = format!("{}/v1/organization/costs", base_url.trim_end_matches('/'));
     let actual_end = end_time.unwrap_or_else(Utc::now);
 
@@ -476,7 +476,7 @@ mod tests {
         let (start, end) = fixed_window();
         let parsed = parse_response(body, start, end, Utc::now()).expect("parse");
         assert!(parsed.truncated);
-        // Total is still computed from what we did get — it's just flagged partial.
+        // Total is still computed from what we did get - it's just flagged partial.
         assert_eq!(parsed.total_micro_usd, 1_000_000);
     }
 

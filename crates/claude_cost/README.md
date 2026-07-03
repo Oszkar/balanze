@@ -8,13 +8,13 @@ Sits in the same architectural slot as the `window` crate per `docs/ARCHITECTURE
 
 ## What "cost" means in this crate
 
-The output is a synthetic dollar figure — what your Claude Code sessions
+The output is a synthetic dollar figure - what your Claude Code sessions
 WOULD cost if every event were billed at Anthropic's published direct-API
 prices. Three honest framings depending on the user:
 
 - **Pro / Max subscription user** (modal Claude Code user): this is NOT
   actual spend. Actual spend is the fixed monthly subscription fee. The
-  figure is useful as a **"subscription leverage"** indicator — how much
+  figure is useful as a **"subscription leverage"** indicator - how much
   API-rate value you extracted from the plan this month.
 - **Direct-API user** (rare for Claude Code): approximates actual spend,
   modulo vendored-price-table freshness.
@@ -48,7 +48,7 @@ println!(
   synthetic input in tests, and to leave a useful error path if a future
   refresh ever produces an unparseable file.
 - **Price validation**: every parsed price must be finite, non-negative,
-  and below `$1/token`. The `$1/token` upper bound is a typo guard — no
+  and below `$1/token`. The `$1/token` upper bound is a typo guard - no
   real Anthropic price is anywhere near (Opus is `$75/M = 7.5e-5/token`).
 - Currency math: `i64` micro-USD outputs, `i64` nano-USD per-token
   storage, `i128` intermediate products to avoid overflow. Saturates at
@@ -62,11 +62,11 @@ println!(
 `Cost` exposes three event-count signals because "how many events did we
 see?" has three honest answers:
 
-- `Cost.total_event_count` — every event the function saw (priced +
+- `Cost.total_event_count` - every event the function saw (priced +
   skipped + unparsed). Use this for "events processed" metrics.
-- `ModelCost.event_count` (per-row) — events whose model was found in
+- `ModelCost.event_count` (per-row) - events whose model was found in
   the price table. Sum across rows gives the priced subset only.
-- `Cost.unparsed_event_count` — events whose `event.model` was empty.
+- `Cost.unparsed_event_count` - events whose `event.model` was empty.
   `claude_parser` emits empty strings when the JSONL line omits the
   field; counted separately from `skipped_models` because it's a parser
   quirk, not a price-table gap.
@@ -80,7 +80,7 @@ the data file can never drift.
 
 ## Refresh procedure (manual, v0.1)
 
-A script to automate this refresh is planned — see the v0.4 "Price-table refresh script" item in `docs/PRD.md`.
+A script to automate this refresh is planned - see the v0.4 "Price-table refresh script" item in `docs/PRD.md`.
 
 1. Fetch `model_prices_and_context_window.json` from a chosen LiteLLM
    commit:
