@@ -70,6 +70,10 @@ pub fn clamp_popover_height(requested: u32) -> u32 {
     requested.clamp(POPOVER_MIN_H, POPOVER_MAX_H)
 }
 
+fn resized_outer_height(logical_height: u32, scale_factor: f64) -> u32 {
+    (logical_height as f64 * scale_factor).round().max(1.0) as u32
+}
+
 /// Resize the popover to hug its content height, then re-anchor it to the
 /// tray/dock. Window manipulation lives in Rust (like `hide_window`), so the
 /// webview holds no window capability. The width is preserved (only the height
@@ -83,14 +87,16 @@ pub fn resize_popover(window: tauri::WebviewWindow, height: u32) -> Result<(), S
     // Capture the OLD outer height before resizing: `reanchor_after_resize`
     // needs it to pin the pre-resize bottom edge on Windows/Linux (set_size
     // leaves the top-left fixed, so the bottom would otherwise drift down).
-    let old_outer_h = window.outer_size().map_err(|e| e.to_string())?.height;
+    let old_outer = window.outer_size().map_err(|e| e.to_string())?;
+    let new_outer = tauri::PhysicalSize::new(old_outer.width, resized_outer_height(h, scale));
     window
         .set_size(tauri::LogicalSize::new(
             (size.width as f64 / scale).round(),
             h as f64,
         ))
         .map_err(|e| e.to_string())?;
-    crate::reanchor_after_resize(&window, old_outer_h).map_err(|e| e.to_string())?;
+    crate::reanchor_after_resize(&window, old_outer.height, new_outer)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -403,6 +409,13 @@ mod tests {
         assert_eq!(clamp_popover_height(99_999), POPOVER_MAX_H);
         let mid = (POPOVER_MIN_H + POPOVER_MAX_H) / 2;
         assert_eq!(clamp_popover_height(mid), mid);
+    }
+
+    #[test]
+    fn resized_outer_height_uses_requested_logical_height() {
+        assert_eq!(super::resized_outer_height(333, 1.0), 333);
+        assert_eq!(super::resized_outer_height(333, 1.5), 500);
+        assert_eq!(super::resized_outer_height(333, 2.0), 666);
     }
 
     #[test]

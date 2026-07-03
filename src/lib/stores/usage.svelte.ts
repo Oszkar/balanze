@@ -25,6 +25,21 @@ class UsageStore {
   loading = $state(true);
   lastError = $state<string | null>(null);
   #unlisten: UnlistenFn[] = [];
+  #frontendEventError: string | null = null;
+
+  #applySnapshot(s: Snapshot) {
+    this.snapshot = s;
+    const degraded = degradedFromSnapshot(s);
+    if (this.#frontendEventError) degraded.frontend_events = this.#frontendEventError;
+    this.degraded = degraded;
+  }
+
+  #recordFrontendEventError(e: unknown) {
+    const msg = String(e);
+    this.lastError = msg;
+    this.#frontendEventError = msg;
+    this.degraded = { ...this.degraded, frontend_events: msg };
+  }
 
   async init() {
     // Register listeners BEFORE the initial fetch so a live emit during init
@@ -34,9 +49,8 @@ class UsageStore {
     // rejects - record it rather than throwing an uncaught promise rejection.
     try {
       this.#unlisten.push(await onUsageUpdated((s) => {
-        this.snapshot = s;
         // Reconcile from the snapshot's error slots so recovered sources clear.
-        this.degraded = degradedFromSnapshot(s);
+        this.#applySnapshot(s);
       }));
       this.#unlisten.push(await onDegraded((d) => {
         // Immediate marker for a failure that didn't ride a snapshot (the
@@ -48,16 +62,16 @@ class UsageStore {
       // listener; without this the UI would stay frozen until the next emit
       // that happens to land on a live listener - which never comes).
       this.#unlisten.push(await onWindowShown(() => void this.refresh()));
+      this.#frontendEventError = null;
     } catch (e) {
-      this.lastError = String(e);
+      this.#recordFrontendEventError(e);
     }
 
     // Seed first paint. A late-arriving live emit overwrites this; an emit
     // that arrives during the await is already captured by the listeners above.
     try {
       const s = await getSnapshot();
-      this.snapshot = s;
-      this.degraded = degradedFromSnapshot(s);
+      this.#applySnapshot(s);
     } catch (e) {
       this.lastError = String(e);
     } finally {
@@ -74,8 +88,7 @@ class UsageStore {
   async refresh() {
     try {
       const s = await getSnapshot();
-      this.snapshot = s;
-      this.degraded = degradedFromSnapshot(s);
+      this.#applySnapshot(s);
     } catch (e) {
       this.lastError = String(e);
     }
@@ -84,6 +97,7 @@ class UsageStore {
   destroy() {
     for (const u of this.#unlisten) u();
     this.#unlisten = [];
+    this.#frontendEventError = null;
   }
 }
 

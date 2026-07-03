@@ -11,6 +11,7 @@
     codex_quota: 'Codex quota',
     openai_costs: 'OpenAI cost',
     claude_statusline: 'Claude statusLine',
+    frontend_events: 'Popover event channel',
   };
 
   const entries = $derived(Object.entries(degraded));

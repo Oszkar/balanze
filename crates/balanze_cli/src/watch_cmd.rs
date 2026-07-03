@@ -25,7 +25,8 @@ use crate::tui::{ChannelSink, TuiExit, run_tui};
 /// when `--watch` is present.
 ///
 /// * `json` - if `true`, uses [`JsonlSink`]; otherwise uses [`StdoutSink`].
-pub(crate) fn run_watch_mode(json: bool) -> Result<()> {
+/// * `verbose` - when `json=true`, controls identifier redaction in JSONL.
+pub(crate) fn run_watch_mode(json: bool, verbose: bool) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -39,7 +40,7 @@ pub(crate) fn run_watch_mode(json: bool) -> Result<()> {
     if tui {
         rt.block_on(run_tui_mode())
     } else if json {
-        rt.block_on(run_with_sink(JsonlSink))
+        rt.block_on(run_with_sink(JsonlSink::new(verbose)))
     } else {
         rt.block_on(run_with_sink(StdoutSink::new()))
     }

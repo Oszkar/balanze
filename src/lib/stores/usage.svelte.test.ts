@@ -5,11 +5,14 @@ import type { Snapshot } from '../types/snapshot';
 // getSnapshot (the self-healing path), NOT re-emit through refresh_now: a
 // regression to the event-only path is exactly the freeze this guards against.
 const getSnapshot = vi.fn<() => Promise<Snapshot>>();
+const onUsageUpdated = vi.fn(async (_cb: (s: Snapshot) => void) => () => {});
+const onDegraded = vi.fn(async (_cb: (d: { source: string; error: string }) => void) => () => {});
+const onWindowShown = vi.fn(async (_cb: () => void) => () => {});
 vi.mock('../ipc', () => ({
   getSnapshot: () => getSnapshot(),
-  onUsageUpdated: vi.fn(async () => () => {}),
-  onDegraded: vi.fn(async () => () => {}),
-  onWindowShown: vi.fn(async () => () => {}),
+  onUsageUpdated: (cb: (s: Snapshot) => void) => onUsageUpdated(cb),
+  onDegraded: (cb: (d: { source: string; error: string }) => void) => onDegraded(cb),
+  onWindowShown: (cb: () => void) => onWindowShown(cb),
 }));
 
 import { usage } from './usage.svelte';
@@ -36,6 +39,19 @@ function snapshotWith(error: string | null = null): Snapshot {
 describe('UsageStore.refresh', () => {
   beforeEach(() => {
     getSnapshot.mockReset();
+    onUsageUpdated.mockReset();
+    onUsageUpdated.mockImplementation(async (_cb: (s: Snapshot) => void) => () => {});
+    onDegraded.mockReset();
+    onDegraded.mockImplementation(
+      async (_cb: (d: { source: string; error: string }) => void) => () => {},
+    );
+    onWindowShown.mockReset();
+    onWindowShown.mockImplementation(async (_cb: () => void) => () => {});
+    usage.destroy();
+    usage.snapshot = null;
+    usage.degraded = {};
+    usage.loading = true;
+    usage.lastError = null;
   });
 
   it('updates the snapshot directly from getSnapshot (not via the event channel)', async () => {
@@ -67,5 +83,17 @@ describe('UsageStore.refresh', () => {
     await usage.refresh();
 
     expect(usage.lastError).toContain('IPC down');
+  });
+
+  it('surfaces listener registration failure even when initial snapshot succeeds', async () => {
+    const s = snapshotWith(null);
+    onUsageUpdated.mockRejectedValueOnce(new Error('listen down'));
+    getSnapshot.mockResolvedValue(s);
+
+    await usage.init();
+
+    expect(usage.snapshot).toBe(s);
+    expect(usage.lastError).toContain('listen down');
+    expect(usage.degraded.frontend_events).toContain('listen down');
   });
 });

@@ -174,12 +174,17 @@ fn reanchored_position(
     (x.clamp(mon_left, max_x), y.clamp(mon_top, max_y))
 }
 
-/// Re-anchor the popover after a content resize, reading live window/monitor
-/// geometry and applying [`reanchored_position`]. macOS keeps the top edge fixed
+/// Re-anchor the popover after a content resize, reading live position/monitor
+/// geometry and applying [`reanchored_position`]. The new size is passed in by
+/// the resize command because OS window managers may not report the post-resize
+/// outer size synchronously after `set_size`. macOS keeps the top edge fixed
 /// (menu-bar drop); Windows/Linux keep the bottom edge fixed (taskbar pop-up).
-fn reanchor_after_resize(window: &tauri::WebviewWindow, old_outer_h: u32) -> tauri::Result<()> {
+fn reanchor_after_resize(
+    window: &tauri::WebviewWindow,
+    old_outer_h: u32,
+    new_outer: tauri::PhysicalSize<u32>,
+) -> tauri::Result<()> {
     let pos = window.outer_position()?; // top-left unchanged by set_size
-    let size = window.outer_size()?; // NEW outer size (post-resize)
     let Some(monitor) = window.current_monitor()? else {
         return Ok(());
     };
@@ -190,8 +195,8 @@ fn reanchor_after_resize(window: &tauri::WebviewWindow, old_outer_h: u32) -> tau
         pos.x,
         pos.y,
         old_outer_h,
-        size.width as i32,
-        size.height as i32,
+        new_outer.width as i32,
+        new_outer.height as i32,
         mp.x,
         mp.y,
         mp.x + ms.width as i32,
