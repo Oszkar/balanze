@@ -152,10 +152,9 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                         partial.source()
                     );
                 }
-                let merged_source = partial.source();
                 let derived_cost_error = apply_partial(state, partial);
                 state.snapshot.fetched_at = Utc::now();
-                recompute_pace(state, merged_source);
+                recompute_pace(state);
                 sink.on_snapshot(&state.snapshot);
                 // The JSONL-derived cost can fail (no price table) inside an
                 // otherwise-successful JSONL/OAuth merge. Its error slot is set
@@ -177,6 +176,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
         StateMsg::Refresh => {
             // Re-notify with current state. Sinks that need to repaint will
             // do so; sinks that dedup against `last_painted` will no-op.
+            recompute_pace(state);
             sink.on_snapshot(&state.snapshot);
         }
         StateMsg::SettingsChanged(s) => {
@@ -325,22 +325,24 @@ fn recompute_jsonl_cells(state: &mut CoordinatorState) -> Option<String> {
     }
 }
 
-/// Recompute `snapshot.pace` from the current OAuth cadence bars. Only an OAuth
-/// merge changes the cadence data, so other sources are a no-op.
+/// Recompute `snapshot.pace` from the current OAuth cadence bars. OAuth merges
+/// change the cadence data, but every successful snapshot emission can advance
+/// the elapsed fraction because it is wall-clock derived.
 ///
 // TODO: also derive pace from the statusline feed. During an active Claude Code
 // session the statusline payload carries fresh `rate_limits` and is the live
 // backbone (OAuth is the backoff'd, 429-prone fallback), so OAuth-only pace can
 // go stale or empty exactly when the user is most active. Not yet wired.
-fn recompute_pace(state: &mut CoordinatorState, merged_source: Source) {
-    if merged_source != Source::ClaudeOAuth {
-        return;
-    }
+fn recompute_pace(state: &mut CoordinatorState) {
+    recompute_pace_at(state, Utc::now());
+}
+
+fn recompute_pace_at(state: &mut CoordinatorState, now: chrono::DateTime<Utc>) {
     state.snapshot.pace = state
         .snapshot
         .claude_oauth
         .as_ref()
-        .map(|o| pace_for_oauth(o, Utc::now()))
+        .map(|o| pace_for_oauth(o, now))
         .unwrap_or_default();
 }
 
@@ -349,9 +351,9 @@ mod tests {
     use super::*;
     use crate::messages::{ClaudeJsonlInput, Source, SourcePartial, SourceUpdate};
     use crate::sink::{NullSink, Sink};
-    use crate::snapshot::Snapshot;
+    use crate::snapshot::{Snapshot, WindowPace};
     use crate::test_support::{
-        oauth_snapshot, oauth_snapshot_with_reset, openai_costs, sample_events,
+        fixture_now, oauth_snapshot, oauth_snapshot_with_reset, openai_costs, sample_events,
     };
     use chrono::Duration;
     use std::sync::{Arc, Mutex};
@@ -375,6 +377,9 @@ mod tests {
         }
         fn last_error(&self) -> Option<(Source, String)> {
             self.inner.lock().unwrap().errors.last().cloned()
+        }
+        fn last_snapshot(&self) -> Option<Snapshot> {
+            self.inner.lock().unwrap().snapshots.last().cloned()
         }
     }
     impl Sink for RecordingSink {
@@ -819,10 +824,126 @@ mod tests {
         );
     }
 
+    #[test]
+    fn recompute_pace_at_advances_elapsed_fraction_from_existing_oauth() {
+        let now = fixture_now();
+        let reset = now + Duration::hours(3);
+        let mut state = CoordinatorState {
+            snapshot: Snapshot::empty(now),
+            last_settings: None,
+            jsonl_events: None,
+            files_scanned: 0,
+            prices: None,
+        };
+        state.snapshot.claude_oauth = Some(oauth_snapshot_with_reset(reset));
+
+        recompute_pace_at(&mut state, now);
+        let first_elapsed = state
+            .snapshot
+            .pace
+            .iter()
+            .find(|wp| wp.key == "five_hour")
+            .expect("five_hour pace after first recompute")
+            .elapsed_fraction;
+
+        recompute_pace_at(&mut state, now + Duration::hours(1));
+        let second_elapsed = state
+            .snapshot
+            .pace
+            .iter()
+            .find(|wp| wp.key == "five_hour")
+            .expect("five_hour pace after second recompute")
+            .elapsed_fraction;
+
+        assert!(
+            second_elapsed > first_elapsed,
+            "elapsed_fraction must advance when wall-clock time advances; \
+             first={first_elapsed}, second={second_elapsed}"
+        );
+    }
+
+    #[test]
+    fn jsonl_update_recomputes_existing_oauth_pace_before_notifying_sink() {
+        let mut state = CoordinatorState {
+            snapshot: Snapshot::empty(Utc::now()),
+            last_settings: None,
+            jsonl_events: None,
+            files_scanned: 0,
+            prices: None,
+        };
+        state.snapshot.claude_oauth =
+            Some(oauth_snapshot_with_reset(Utc::now() + Duration::hours(3)));
+        state.snapshot.pace = vec![WindowPace {
+            key: "five_hour".to_string(),
+            used_fraction: 0.99,
+            elapsed_fraction: 0.99,
+            ratio: Some(1.0),
+        }];
+        let mut sink = RecordingSink::default();
+
+        handle_msg(
+            &mut state,
+            &mut sink,
+            StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeJsonl,
+                result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                    events: Arc::new(sample_events()),
+                    files_scanned: 3,
+                })),
+            }),
+        );
+
+        let snap = sink.last_snapshot().expect("JSONL update emits snapshot");
+        let five = snap
+            .pace
+            .iter()
+            .find(|wp| wp.key == "five_hour")
+            .expect("five_hour pace emitted after JSONL update");
+        assert!(
+            (five.used_fraction - 0.10).abs() < 1e-9,
+            "JSONL updates must recompute pace from cached OAuth, not emit stale pace; got {}",
+            five.used_fraction
+        );
+    }
+
+    #[test]
+    fn refresh_recomputes_existing_oauth_pace_before_notifying_sink() {
+        let mut state = CoordinatorState {
+            snapshot: Snapshot::empty(Utc::now()),
+            last_settings: None,
+            jsonl_events: None,
+            files_scanned: 0,
+            prices: None,
+        };
+        state.snapshot.claude_oauth =
+            Some(oauth_snapshot_with_reset(Utc::now() + Duration::hours(3)));
+        state.snapshot.pace = vec![WindowPace {
+            key: "five_hour".to_string(),
+            used_fraction: 0.99,
+            elapsed_fraction: 0.99,
+            ratio: Some(1.0),
+        }];
+        let mut sink = RecordingSink::default();
+
+        handle_msg(&mut state, &mut sink, StateMsg::Refresh);
+
+        let snap = sink.last_snapshot().expect("Refresh emits snapshot");
+        let five = snap
+            .pace
+            .iter()
+            .find(|wp| wp.key == "five_hour")
+            .expect("five_hour pace emitted after refresh");
+        assert!(
+            (five.used_fraction - 0.10).abs() < 1e-9,
+            "Refresh must recompute pace from cached OAuth, not emit stale pace; got {}",
+            five.used_fraction
+        );
+    }
+
     #[tokio::test]
     async fn jsonl_only_update_does_not_populate_pace() {
-        // `recompute_pace` is guarded to OAuth merges. A JSONL-only update must
-        // leave `pace` empty (no OAuth cadence data is available to derive from).
+        // A JSONL-only update must leave `pace` empty when no OAuth cadence data
+        // is available to derive from.
         let (handle, _join) = spawn(NullSink);
 
         handle

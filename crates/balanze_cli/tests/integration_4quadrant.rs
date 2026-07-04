@@ -283,13 +283,11 @@ impl SnapshotSources for FixtureSources {
     }
 }
 
-// NOTE: despite the name, this currently exercises only the CLI's `compose()`
-// path - it does NOT assert CLI ≡ watcher parity. The watcher builds snapshots
-// through its own `scan_and_compute` pipeline (crates/watcher/src/tasks/jsonl.rs)
-// and notably passes `window_anchor: None` where `compose()` anchors to the
-// OAuth 5h reset, so the two paths can diverge on the JSONL rolling window.
-// A true parity assertion (or routing the watcher through `compose()`) is a
-// tracked follow-up.
+// This exercises the one-shot `compose()` path and asserts it matches the
+// shared `state_coordinator::summarize_jsonl` helper used by the live
+// coordinator on watcher updates. The watcher still owns file notification and
+// incremental parsing, but raw events are folded through the same window/cost
+// math after they reach the coordinator.
 #[tokio::test]
 async fn compose_parity_against_fixtures() {
     // Same fixed `now` as `full_pipeline_populates_claude_jsonl_in_snapshot`
@@ -329,8 +327,8 @@ async fn compose_parity_against_fixtures() {
     // events/now/anchor - and that is the SAME helper the live coordinator runs
     // on the watcher path. This is what actually prevents the CLI and watcher
     // composition paths from drifting (the earlier version of this test only
-    // checked that compose populated cells, which is why a `window_anchor: None`
-    // divergence in the watcher went uncaught). OAuth errored here ⇒ anchor None.
+    // checked that compose populated cells, so live-path anchor divergence went
+    // uncaught). OAuth errored here ⇒ anchor None.
     let events = load_fixture_events();
     let prices = load_bundled_prices().expect("bundled prices load");
     let expected = summarize_jsonl(&events, now, 1, None, Some(&prices));
