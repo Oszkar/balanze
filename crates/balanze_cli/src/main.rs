@@ -97,21 +97,7 @@ fn run(cli: &Cli) -> Result<ExitClass> {
             doctor::cmd_doctor(args, cli.quiet, cli.strict, cli.no_color)
         }
         Some(Commands::Watch(args)) => {
-            // verbose is not yet threaded into watch mode; `watch --json -v`
-            // would need JsonlSink to accept a verbose flag so the JSONL stream
-            // surfaces org_uuid / session_id. Warn so the user does not quietly
-            // get redacted output and wonder why their jq filters do not see the
-            // identifiers.
-            // TODO: pass verbose to JsonlSink so `watch --json -v` surfaces
-            //       org_uuid / codex session_id.
-            if cli.verbose && args.json {
-                eprintln!(
-                    "warning: -v / --verbose is not yet threaded into `watch --json`; \
-                     org_uuid and codex.session_id will be redacted as if -v were absent. \
-                     Use `balanze-cli status --json -v` (one-shot) if you need identifiers."
-                );
-            }
-            watch_cmd::run_watch_mode(args.json)?;
+            watch_cmd::run_watch_mode(args.json, cli.verbose)?;
             Ok(ExitClass::Ok)
         }
         Some(Commands::Setup) => {

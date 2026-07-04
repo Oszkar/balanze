@@ -41,12 +41,9 @@
 //! the coordinator's loop keeps running. This is a deliberate trade-off:
 //! returning an error from the sync `Sink::on_snapshot` boundary would require
 //! a trait extension, while the broken-pipe condition itself isn't fatal -
-//! the coordinator stays alive and `Ctrl-C` still exits cleanly. The leftover
-//! tokio runtime (CPU-idle, just spinning on intervals) is bounded; if you
-//! want strict broken-pipe-exits-process behavior, run `--watch --json | head`
-//! → SIGPIPE → the process exits on the next write attempt (matches the
-//! standard Unix pattern). `JsonlSink` inherits the same `println!` panic-
-//! on-broken-pipe behavior the rest of the project relies on.
+//! the coordinator stays alive and `Ctrl-C` still exits cleanly. The JSONL
+//! path writes directly to stdout and drops write errors at the sync boundary
+//! for the same reason.
 
 use std::io::{Stderr, Write, stderr};
 use std::time::{Duration, Instant};
@@ -196,7 +193,24 @@ impl Sink for StdoutSink {
 /// `on_degraded` is intentionally a no-op: errors ride in the next snapshot's
 /// `*_error` slots, and emitting a separate line on degraded events would break
 /// the "one JSON object per line" invariant that jq and similar tools rely on.
-pub struct JsonlSink;
+pub struct JsonlSink {
+    out: Box<dyn Write + Send>,
+    verbose: bool,
+}
+
+impl JsonlSink {
+    pub fn new(verbose: bool) -> Self {
+        Self {
+            out: Box::new(std::io::stdout()),
+            verbose,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with(out: Box<dyn Write + Send>, verbose: bool) -> Self {
+        Self { out, verbose }
+    }
+}
 
 impl Sink for JsonlSink {
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
@@ -204,11 +218,12 @@ impl Sink for JsonlSink {
         // (`to_string_pretty` - multi-line with embedded newlines).
         // `--watch --json` must produce exactly one JSON object per
         // line so `jq` and other line-oriented consumers work.
-        // verbose=false: machine consumers don't need org_uuid /
-        // session_id; a future `--watch --json -v` flag can construct
-        // JsonlSink differently and pass verbose=true.
-        match json_output::render_jsonl(snapshot, /* verbose */ false) {
-            Ok(line) => println!("{line}"),
+        match json_output::render_jsonl(snapshot, self.verbose) {
+            Ok(line) => {
+                if writeln!(self.out, "{line}").is_ok() {
+                    let _ = self.out.flush();
+                }
+            }
             Err(e) => eprintln!("[json render error] {e}"),
         }
     }
@@ -254,6 +269,32 @@ mod tests {
         Snapshot::empty(Utc::now())
     }
 
+    fn identifiable_snapshot() -> Snapshot {
+        let now = Utc::now();
+        let mut snap = Snapshot::empty(now);
+        snap.claude_oauth = Some(anthropic_oauth::ClaudeOAuthSnapshot {
+            cadences: Vec::new(),
+            extra_usage: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            org_uuid: Some("org_test_123".to_string()),
+            fetched_at: now,
+        });
+        snap.codex_quota = Some(codex_local::CodexQuotaSnapshot {
+            observed_at: now,
+            session_id: "session_test_456".to_string(),
+            primary: codex_local::RateLimitWindow {
+                used_percent: 12.5,
+                window_duration_minutes: 10_080,
+                resets_at: now,
+            },
+            secondary: None,
+            plan_type: "go".to_string(),
+            rate_limit_reached: false,
+        });
+        snap
+    }
+
     #[test]
     fn stdout_sink_non_tty_writes_separator_and_compact_view() {
         let (mut sink, buf) = make_sink_and_buf(false);
@@ -290,6 +331,34 @@ mod tests {
             text.contains("=== Balanze status"),
             "compact header missing"
         );
+    }
+
+    #[test]
+    fn jsonl_sink_verbose_reveals_identifiers() {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let writer = TestWriter(Arc::clone(&buf));
+        let mut sink = JsonlSink::new_with(Box::new(writer), true);
+
+        sink.on_snapshot(&identifiable_snapshot());
+
+        let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(output.contains(r#""org_uuid":"org_test_123""#));
+        assert!(output.contains(r#""session_id":"session_test_456""#));
+        assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn jsonl_sink_default_redacts_identifiers() {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let writer = TestWriter(Arc::clone(&buf));
+        let mut sink = JsonlSink::new_with(Box::new(writer), false);
+
+        sink.on_snapshot(&identifiable_snapshot());
+
+        let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(!output.contains("org_test_123"));
+        assert!(!output.contains("session_test_456"));
+        assert!(output.ends_with('\n'));
     }
 
     /// `Write` impl that returns `BrokenPipe` on every `write` call - used

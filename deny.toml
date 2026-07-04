@@ -29,7 +29,13 @@ version = 2
 yanked = "warn"
 # Specific RUSTSEC IDs to ignore - leave empty until something actually
 # justifies it; record the reason inline when adding.
-ignore = []
+# RUSTSEC-2026-0194 and RUSTSEC-2026-0195: quick-xml <0.41 is pulled
+# transitively through Tauri 2.11.5 by plist 1.9.0 and
+# tauri-winrt-notification 0.7.2. There is no crates.io upgrade path yet
+# because plist requires quick-xml ^0.39.2 and tauri-winrt-notification
+# requires quick-xml ^0.37. Balanze does not parse untrusted XML through
+# these paths; remove once upstream Tauri deps can take quick-xml >=0.41.0.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
 # Only check WORKSPACE crates for unmaintained status. Transitive
 # unmaintained crates (e.g., Unicode helpers Tauri pulls in via Windows
 # Webview2 deps) aren't actionable from this repo - Dependabot tracks
