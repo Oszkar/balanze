@@ -347,6 +347,20 @@ mod tests {
         assert!(output.ends_with('\n'));
     }
 
+    #[test]
+    fn jsonl_sink_default_redacts_identifiers() {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let writer = TestWriter(Arc::clone(&buf));
+        let mut sink = JsonlSink::new_with(Box::new(writer), false);
+
+        sink.on_snapshot(&identifiable_snapshot());
+
+        let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(!output.contains("org_test_123"));
+        assert!(!output.contains("session_test_456"));
+        assert!(output.ends_with('\n'));
+    }
+
     /// `Write` impl that returns `BrokenPipe` on every `write` call - used
     /// to verify `StdoutSink` latches into broken-pipe state and stops
     /// trying to write.

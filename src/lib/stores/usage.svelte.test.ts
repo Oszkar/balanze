@@ -96,4 +96,32 @@ describe('UsageStore.refresh', () => {
     expect(usage.lastError).toContain('listen down');
     expect(usage.degraded.frontend_events).toContain('listen down');
   });
+
+  it('cleans up partial listener registrations when init listener setup fails', async () => {
+    const unlistenUsage = vi.fn();
+    onUsageUpdated.mockResolvedValueOnce(unlistenUsage);
+    onDegraded.mockRejectedValueOnce(new Error('degraded listen down'));
+    getSnapshot.mockResolvedValue(snapshotWith(null));
+
+    await usage.init();
+
+    expect(unlistenUsage).toHaveBeenCalledOnce();
+    expect(onWindowShown).not.toHaveBeenCalled();
+    expect(usage.degraded.frontend_events).toContain('degraded listen down');
+
+    usage.destroy();
+    expect(unlistenUsage).toHaveBeenCalledOnce();
+  });
+
+  it('clears the public frontend event marker on destroy', () => {
+    usage.degraded = {
+      claude_oauth: 'AuthExpired',
+      frontend_events: 'listen down',
+    };
+
+    usage.destroy();
+
+    expect(usage.degraded.frontend_events).toBeUndefined();
+    expect(usage.degraded.claude_oauth).toBe('AuthExpired');
+  });
 });

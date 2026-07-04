@@ -41,18 +41,31 @@ class UsageStore {
     this.degraded = { ...this.degraded, frontend_events: msg };
   }
 
+  #unlistenAll(unlistenFns: UnlistenFn[]) {
+    for (const u of unlistenFns) {
+      try {
+        u();
+      } catch {
+        // Best-effort cleanup: a failed unlisten should not mask the original
+        // listener registration failure or prevent the remaining handlers from
+        // being removed.
+      }
+    }
+  }
+
   async init() {
     // Register listeners BEFORE the initial fetch so a live emit during init
     // can't be lost (the OpenAI-only startup race: a `usage_updated` fired
     // between fetch and listen would be missed). Guarded separately: outside
     // the Tauri runtime (e.g. the page opened in a plain browser), `listen()`
     // rejects - record it rather than throwing an uncaught promise rejection.
+    const pendingUnlisten: UnlistenFn[] = [];
     try {
-      this.#unlisten.push(await onUsageUpdated((s) => {
+      pendingUnlisten.push(await onUsageUpdated((s) => {
         // Reconcile from the snapshot's error slots so recovered sources clear.
         this.#applySnapshot(s);
       }));
-      this.#unlisten.push(await onDegraded((d) => {
+      pendingUnlisten.push(await onDegraded((d) => {
         // Immediate marker for a failure that didn't ride a snapshot (the
         // coordinator emits degraded_state without a usage_updated on error).
         this.degraded = { ...this.degraded, [d.source]: d.error };
@@ -61,9 +74,11 @@ class UsageStore {
       // live event channel above ever dies (a webview reload orphans the
       // listener; without this the UI would stay frozen until the next emit
       // that happens to land on a live listener - which never comes).
-      this.#unlisten.push(await onWindowShown(() => void this.refresh()));
+      pendingUnlisten.push(await onWindowShown(() => void this.refresh()));
+      this.#unlisten.push(...pendingUnlisten);
       this.#frontendEventError = null;
     } catch (e) {
+      this.#unlistenAll(pendingUnlisten);
       this.#recordFrontendEventError(e);
     }
 
@@ -95,9 +110,14 @@ class UsageStore {
   }
 
   destroy() {
-    for (const u of this.#unlisten) u();
+    this.#unlistenAll(this.#unlisten);
     this.#unlisten = [];
     this.#frontendEventError = null;
+    if ('frontend_events' in this.degraded) {
+      const degraded = { ...this.degraded };
+      delete degraded.frontend_events;
+      this.degraded = degraded;
+    }
   }
 }
 
