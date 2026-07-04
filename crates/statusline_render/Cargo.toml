@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "Renders the Balanze statusline: segment model, line layout, and threshold coloring. Later PRs add the per-turn cache and cross-provider composition."
+description = "Renders the Balanze statusline: segment model, line layout, threshold coloring, fallback cache, and cross-provider composition."
 
 [dependencies]
 claude_statusline = { path = "../claude_statusline" }

@@ -47,7 +47,7 @@ balanze/
 │   ├── window/                 pure rolling-window math (5h + 30m burn + per-model) and pace (used vs elapsed)
 │   ├── openai_client/          only HTTP client for /v1/organization/costs
 │   ├── codex_local/            only reader of ~/.codex/; latest rate_limits.primary
-│   ├── snapshot_composer/      single source-orchestration policy; CLI and watcher both run compose()
+│   ├── snapshot_composer/      one-shot source-orchestration policy for `balanze-cli status`; shares JSONL window/cost math with the live coordinator via `state_coordinator::summarize_jsonl`
 │   ├── state_coordinator/      actor: owns Snapshot; bounded-mpsc StateMsg loop; Sink-notified; owns the snapshot.json IPC file (snapshot_file + SnapshotFileSink)
 │   ├── watcher/                only importer of notify; spawns jsonl/statusline/openai_poll/safety/oauth_poll tasks
 │   ├── backoff/                pure exponential-backoff policy + generic async retry combinator

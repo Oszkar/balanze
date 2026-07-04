@@ -3,8 +3,8 @@
 //! prints. Threshold coloring, the line-template layout, and the style-string
 //! parser live here; the config DATA lives in the `settings` crate.
 //!
-//! Cross-provider segments (codex, openai_cost) and the per-turn cache arrive
-//! in later PRs; their placeholders render empty until then.
+//! Cross-provider self-compose lives here too: Codex is read locally, while
+//! OpenAI billed spend goes through the machine-wide 300s fallback cache.
 
 pub mod cache;
 mod render;
