@@ -75,3 +75,4 @@ balanze.log*
 *.har
 
 /references/
+.gstack/

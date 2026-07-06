@@ -199,6 +199,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 clear_source(&mut state.snapshot, Source::CodexQuota);
             }
             state.last_settings = Some(*s);
+            recompute_pace(state);
             sink.on_snapshot(&state.snapshot);
         }
         StateMsg::SourceUnavailable { source, reason } => match source {
@@ -735,6 +736,66 @@ mod tests {
         assert!(
             after.openai.is_some(),
             "still-enabled OpenAI cell preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn settings_change_recomputes_pace() {
+        let sink = RecordingSink::default();
+        let (handle, _join) = spawn(sink.clone());
+
+        let future_reset = chrono::Utc::now() + chrono::Duration::hours(5);
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot_with_reset(
+                    future_reset,
+                ))),
+            }))
+            .await
+            .unwrap();
+
+        let _ = handle.query().await.unwrap();
+
+        assert_eq!(sink.snapshot_count(), 1);
+        let first_elapsed = sink.inner.lock().unwrap().snapshots[0]
+            .pace
+            .iter()
+            .find(|wp| wp.key == "five_hour")
+            .unwrap()
+            .elapsed_fraction;
+
+        // Sleep to let system clock tick forward by at least one full second
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+        let s = Settings {
+            providers: settings::ProviderSettings {
+                anthropic_enabled: true,
+                openai_enabled: false,
+                codex_enabled: false,
+            },
+            ..Settings::default()
+        };
+        handle
+            .send(StateMsg::SettingsChanged(Box::new(s)))
+            .await
+            .unwrap();
+
+        let _ = handle.query().await.unwrap();
+
+        assert_eq!(sink.snapshot_count(), 2);
+        let second_elapsed = sink.inner.lock().unwrap().snapshots[1]
+            .pace
+            .iter()
+            .find(|wp| wp.key == "five_hour")
+            .unwrap()
+            .elapsed_fraction;
+
+        assert!(
+            second_elapsed > first_elapsed,
+            "SettingsChanged must recompute pace, advancing elapsed_fraction (got first: {}, second: {})",
+            first_elapsed,
+            second_elapsed
         );
     }
 
