@@ -247,13 +247,15 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
         return Ok(OpenAiKeyStatus::KeychainBroken);
     }
 
-    // Mirror `cmd_set_openai_key`'s pattern: load-or-default (corrupt
-    // settings.json shouldn't block the setup wizard), but save errors
-    // propagate loudly. A silent save failure here would leave
-    // `settings.providers.openai_enabled = false` while the key IS in
-    // the keychain - exactly the kind of desync that makes "why doesn't
-    // it show up in `balanze-cli status`?" debugging painful.
-    let mut s = settings::load().unwrap_or_default();
+    // Mirror `cmd_set_openai_key`'s pattern: on a corrupt settings.json, bail
+    // rather than reset it to defaults - a reset would silently wipe the user's
+    // real settings (incl. the statusline backup). Both the load and the save
+    // errors propagate loudly here. Yes, that leaves the key in the keychain
+    // while `openai_enabled` stays unset; that transient desync is the same one
+    // a save failure already produced, and it clears when the user fixes
+    // settings.json and re-runs. Losing their settings would not clear.
+    let mut s =
+        settings::load_for_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     s.providers.openai_enabled = true;
     settings::save(&s)?;
     eprintln!("  ✓ Key validated and saved to the OS keychain.");
@@ -312,7 +314,17 @@ fn setup_statusline() {
             let mut answer = String::new();
             let _ = std::io::stdin().read_line(&mut answer);
             if answer.trim().eq_ignore_ascii_case("y") {
-                let mut settings = settings::load().unwrap_or_default();
+                // Bail rather than clobber: a corrupt settings.json would
+                // otherwise be reset to defaults and the save below would wipe
+                // any existing replaced_command backup.
+                let mut settings = match settings::load_for_update() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("  ✗ {}: {e}", settings::UPDATE_LOAD_HINT);
+                        eprintln!("    Leaving statusLine untouched.");
+                        return;
+                    }
+                };
                 let prior = settings.statusline.replaced_command.clone();
                 // Only back up a real command, not the "statusLine present but no
                 // usable command" sentinel (which is not restorable).

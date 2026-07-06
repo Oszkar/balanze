@@ -50,7 +50,8 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
 
     keychain::set(keychain::keys::OPENAI_API_KEY, &key)?;
 
-    let mut s = settings::load().unwrap_or_default();
+    let mut s =
+        settings::load_for_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     s.providers.openai_enabled = true;
     settings::save(&s)?;
 
@@ -66,7 +67,8 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
 
 pub(crate) fn cmd_clear_openai_key() -> Result<()> {
     keychain::delete(keychain::keys::OPENAI_API_KEY)?;
-    let mut s = settings::load().unwrap_or_default();
+    let mut s =
+        settings::load_for_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     s.providers.openai_enabled = false;
     settings::save(&s)?;
     eprintln!("Removed OpenAI key from the keychain.");
