@@ -89,6 +89,17 @@ pub fn pace_for_oauth(oauth: &ClaudeOAuthSnapshot, now: DateTime<Utc>) -> Vec<Wi
 /// persistence work, where the on-disk format is actually designed.
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 3;
 
+/// Staleness ceiling for the statusLine snapshot, in seconds. Producer writes
+/// `captured_at` on every `balanze-cli statusline` invocation; when the elapsed
+/// time since that stamp exceeds this bound the payload is no longer trustworthy
+/// as live (e.g. another tool owns the single `statusLine` slot so Balanze's
+/// writer never refreshes the file). Chosen larger than the cross-provider
+/// snapshot bound (`balanze_cli`'s 120s) because the statusLine file only
+/// rewrites on prompt submission - a user reading output between turns must not
+/// false-trip. Kept in lockstep with `STATUSLINE_FRESHNESS_MS` in
+/// `src/lib/presentation/quota.ts`.
+pub const STATUSLINE_FRESHNESS_SECS: i64 = 900;
+
 fn default_snapshot_schema_version() -> u32 {
     SNAPSHOT_SCHEMA_VERSION
 }
@@ -145,9 +156,12 @@ pub struct Snapshot {
     /// Most recent successful Claude Code statusLine file payload. `None`
     /// until the first successful read (populated by the live watcher).
     pub claude_statusline: Option<StatuslineFilePayload>,
-    /// Most recent failure from the statusline reader (file missing, schema
-    /// drift). Coexists with `claude_statusline` when a previously-good read
-    /// is now stale.
+    /// Most recent degradation of the statusline feed: reader failure (file
+    /// missing, schema drift) OR a freshness violation (the on-disk payload's
+    /// `captured_at` is older than `STATUSLINE_FRESHNESS_SECS`). Coexists with
+    /// `claude_statusline` when a previously-good read is now stale - the stale
+    /// payload is retained (stale-with-indicator, AGENTS.md §3.2) so consumers
+    /// can render it with a marker rather than have it vanish.
     pub claude_statusline_error: Option<String>,
     /// Per-window pace (used vs elapsed) derived from the OAuth cadence bars.
     /// Empty until an OAuth snapshot with a known cadence is present.

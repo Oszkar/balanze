@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use anthropic_oauth::ClaudeOAuthSnapshot;
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use claude_cost::PriceTable;
 use claude_parser::UsageEvent;
 use settings::Settings;
@@ -16,7 +16,8 @@ use crate::jsonl::summarize_jsonl;
 use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg};
 use crate::sink::Sink;
 use crate::snapshot::{
-    Snapshot, clear_source, pace_for_oauth, record_error, record_oauth_unavailable,
+    STATUSLINE_FRESHNESS_SECS, Snapshot, clear_source, pace_for_oauth, record_error,
+    record_oauth_unavailable,
 };
 
 /// Mutable state owned by the coordinator's single tokio task. Grouped
@@ -270,8 +271,29 @@ fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) -> Option
             None
         }
         SourcePartial::ClaudeStatusline(p) => {
+            // Freshness guard: the watcher emits whatever is on disk (initial
+            // read, notify debounce, AND the safety poll re-read) with no age
+            // check. When another tool owns the single `statusLine` slot,
+            // Balanze's writer never refreshes the file, so the payload freezes
+            // while `captured_at` stays put. Compare against `Utc::now()` here -
+            // the sole ingest choke point all three emit sites converge on - so
+            // a stale payload is marked regardless of which path delivered it,
+            // and the safety-poll re-emit re-runs this every cycle so the marker
+            // self-heals once the producer resumes writing.
+            let age = Utc::now().signed_duration_since(p.captured_at);
+            if age > Duration::seconds(STATUSLINE_FRESHNESS_SECS) {
+                // Keep the payload (stale-with-indicator, AGENTS.md §3.2) but
+                // flag it: this lights `degraded['claude_statusline']` in the UI
+                // (OAuth-fallback cue + banner) and trips the tray's
+                // `is_degraded` -> Warn path, so nothing renders it as live.
+                state.snapshot.claude_statusline_error = Some(format!(
+                    "statusline payload is stale ({} min old)",
+                    age.num_minutes()
+                ));
+            } else {
+                state.snapshot.claude_statusline_error = None;
+            }
             state.snapshot.claude_statusline = Some(p);
-            state.snapshot.claude_statusline_error = None;
             None
         }
     }
@@ -438,6 +460,86 @@ mod tests {
         let (src, msg) = sink.last_error().unwrap();
         assert_eq!(src, Source::OpenAiCosts);
         assert_eq!(msg, "network unreachable");
+    }
+
+    /// Build a statusLine partial stamped `captured_at`, with a single 5h
+    /// window so a consumer that (wrongly) trusted it as live would show 62%.
+    fn statusline_update(captured_at: chrono::DateTime<Utc>) -> SourceUpdate {
+        use claude_statusline::{
+            RateLimits, RateWindow, StatuslineFilePayload, StatuslineSnapshot,
+        };
+        let payload = StatuslineFilePayload::new(
+            StatuslineSnapshot {
+                rate_limits: Some(RateLimits {
+                    windows: vec![RateWindow {
+                        key: "five_hour".to_string(),
+                        label: "5-hour".to_string(),
+                        used_percent: 62.0,
+                        resets_at: captured_at + Duration::hours(2),
+                    }],
+                }),
+                session_cost_micro_usd: Some(3_420_000),
+                claude_code_version: None,
+                model_display_name: None,
+                context_used_percent: None,
+            },
+            captured_at,
+        );
+        SourceUpdate {
+            source: Source::ClaudeStatusline,
+            result: Ok(SourcePartial::ClaudeStatusline(payload)),
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_statusline_is_marked_but_payload_retained() {
+        // A payload captured 100h ago (the "another tool owns the statusLine
+        // slot, file froze" case) must be flagged, not presented as live.
+        let (handle, _join) = spawn(NullSink);
+        handle
+            .send(StateMsg::Update(statusline_update(
+                Utc::now() - Duration::hours(100),
+            )))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        // Stale-with-indicator: payload retained AND the error slot set so the
+        // UI degrade path + tray Warn engage.
+        assert!(
+            snap.claude_statusline.is_some(),
+            "stale payload is retained, not dropped"
+        );
+        let err = snap
+            .claude_statusline_error
+            .as_deref()
+            .expect("stale payload sets the error slot");
+        assert!(err.contains("stale"), "error names staleness: {err}");
+    }
+
+    #[tokio::test]
+    async fn fresh_statusline_clears_error() {
+        // A just-captured payload is live: no error, payload present. Also
+        // proves the guard self-heals - a fresh emit after a stale one clears
+        // the marker (the safety-poll recovery path).
+        let (handle, _join) = spawn(NullSink);
+        handle
+            .send(StateMsg::Update(statusline_update(
+                Utc::now() - Duration::hours(100),
+            )))
+            .await
+            .unwrap();
+        handle
+            .send(StateMsg::Update(statusline_update(Utc::now())))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        assert!(snap.claude_statusline.is_some());
+        assert!(
+            snap.claude_statusline_error.is_none(),
+            "fresh payload clears any prior stale marker"
+        );
     }
 
     #[tokio::test]

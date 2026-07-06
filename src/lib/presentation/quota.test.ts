@@ -40,6 +40,34 @@ describe('quota', () => {
     expect(q.headline.pct).toBe(62);
     expect(q.secondary?.pct).toBe(48);
   });
+  it('falls back to oauth when the statusline payload is stale', () => {
+    // Same data as above, but captured_at is >15min before fetched_at (a frozen
+    // statusline file). The live OAuth source must win rather than the 62%
+    // statusline reading being shown as current.
+    const s: Snapshot = { ...base,
+      fetched_at: '2026-06-03T12:00:00Z',
+      claude_statusline: { schema_version: 2, captured_at: '2026-06-03T11:00:00Z', // 60min stale
+        payload: { rate_limits: { windows: [
+          { key: 'five_hour', label: '5-hour', used_percent: 62, resets_at: '2026-06-03T14:41:00Z' },
+        ] }, session_cost_micro_usd: null, claude_code_version: null } },
+      claude_oauth: { cadences: [{ key: 'five_hour', display_label: '5h', utilization_percent: 10, resets_at: '2026-06-03T14:41:00Z' }], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: '2026-06-03T12:00:00Z' },
+    };
+    const q = anthropicQuota(s)!;
+    expect(q.source).toBe('oauth');
+    expect(q.headline.pct).toBe(10);
+  });
+  it('returns null when statusline is stale and no oauth is present', () => {
+    // Frozen statusline, OAuth absent (the 429 cold-start case): show nothing
+    // live rather than a stale reading. The caller renders the stale/error state.
+    const s: Snapshot = { ...base,
+      fetched_at: '2026-06-03T12:00:00Z',
+      claude_statusline: { schema_version: 2, captured_at: '2026-06-01T12:00:00Z', // 48h stale
+        payload: { rate_limits: { windows: [
+          { key: 'five_hour', label: '5-hour', used_percent: 62, resets_at: '2026-06-03T14:41:00Z' },
+        ] }, session_cost_micro_usd: null, claude_code_version: null } },
+    };
+    expect(anthropicQuota(s)).toBeNull();
+  });
   it('codex elapsed fraction', () => {
     const f = codexElapsedFraction({ resets_at: '2026-06-03T13:00:00Z', window_duration_minutes: 120 }, '2026-06-03T12:00:00Z');
     expect(f).toBeCloseTo(0.5, 5);

@@ -4,7 +4,7 @@
 //! deduped by `(ColorBucket, title)` per AGENTS.md §3.1.
 
 use serde::Serialize;
-use state_coordinator::{Sink, Snapshot, Source};
+use state_coordinator::{STATUSLINE_FRESHNESS_SECS, Sink, Snapshot, Source};
 use tauri::{AppHandle, Emitter};
 
 use crate::tray_icon;
@@ -62,6 +62,27 @@ fn source_key(source: Source) -> &'static str {
     }
 }
 
+/// The statusLine payload feeds the tray only while fresh. Mirrors the
+/// coordinator's ingest guard and the popover's render-time check
+/// (`STATUSLINE_FRESHNESS_MS` in `quota.ts`): a frozen file (another tool owns
+/// the single `statusLine` slot, so Balanze's writer never refreshes it) must
+/// not drive the tray heat as if live. Age is `fetched_at - captured_at` -
+/// `fetched_at` is re-stamped on every coordinator emit, so this is a pure,
+/// wall-clock-free measure consistent with both peer checks. This is the tray's
+/// own guard, independent of the coordinator's error slot (belt-and-suspenders):
+/// even if the ingest marker regressed, a stale window still can't heat the tray.
+fn statusline_fresh(s: &Snapshot) -> bool {
+    s.claude_statusline.as_ref().is_some_and(|sl| {
+        // `.num_seconds()` on the TimeDelta keeps this free of a direct `chrono`
+        // dependency (chrono is dev-only in src-tauri); the method resolves via
+        // the re-exported `DateTime<Utc>` fields on `Snapshot`.
+        s.fetched_at
+            .signed_duration_since(sl.captured_at)
+            .num_seconds()
+            <= STATUSLINE_FRESHNESS_SECS
+    })
+}
+
 pub(crate) fn worst_utilization(s: &Snapshot) -> f32 {
     let mut worst = 0.0_f32;
     if let Some(o) = &s.claude_oauth {
@@ -69,10 +90,12 @@ pub(crate) fn worst_utilization(s: &Snapshot) -> f32 {
             worst = worst.max(c.utilization_percent);
         }
     }
-    if let Some(sl) = &s.claude_statusline {
-        if let Some(rl) = &sl.payload.rate_limits {
-            for w in &rl.windows {
-                worst = worst.max(w.used_percent);
+    if statusline_fresh(s) {
+        if let Some(sl) = &s.claude_statusline {
+            if let Some(rl) = &sl.payload.rate_limits {
+                for w in &rl.windows {
+                    worst = worst.max(w.used_percent);
+                }
             }
         }
     }
@@ -92,11 +115,11 @@ fn has_quota_data(s: &Snapshot) -> bool {
         .claude_oauth
         .as_ref()
         .is_some_and(|o| !o.cadences.is_empty());
-    let statusline = s
-        .claude_statusline
-        .as_ref()
-        .and_then(|sl| sl.payload.rate_limits.as_ref())
-        .is_some_and(|rl| !rl.windows.is_empty());
+    let statusline = statusline_fresh(s)
+        && s.claude_statusline
+            .as_ref()
+            .and_then(|sl| sl.payload.rate_limits.as_ref())
+            .is_some_and(|rl| !rl.windows.is_empty());
     oauth || statusline || s.codex_quota.is_some()
 }
 
@@ -279,6 +302,44 @@ mod tests {
         ));
         assert_eq!(worst_utilization(&s), 95.0);
         assert!(has_quota_data(&s));
+    }
+
+    /// A stale statusLine payload (frozen file - another tool owns the slot)
+    /// must NOT heat the tray or count as a live quota signal, even at 95%.
+    /// The tray's own freshness guard, independent of the coordinator's error
+    /// slot (belt-and-suspenders).
+    #[test]
+    fn stale_statusline_does_not_drive_worst_utilization() {
+        use chrono::{Duration, Utc};
+        let now = Utc::now();
+        let mut s = Snapshot::empty(now);
+        s.claude_statusline = Some(claude_statusline::StatuslineFilePayload::new(
+            claude_statusline::StatuslineSnapshot {
+                rate_limits: Some(claude_statusline::RateLimits {
+                    windows: vec![claude_statusline::RateWindow {
+                        key: "five_hour".to_string(),
+                        label: "5-hour".to_string(),
+                        used_percent: 95.0,
+                        resets_at: now,
+                    }],
+                }),
+                session_cost_micro_usd: None,
+                claude_code_version: None,
+                model_display_name: None,
+                context_used_percent: None,
+            },
+            // Captured 100h before this snapshot's fetched_at -> stale.
+            now - Duration::hours(100),
+        ));
+        assert_eq!(
+            worst_utilization(&s),
+            0.0,
+            "stale statusline must not heat the tray"
+        );
+        assert!(
+            !has_quota_data(&s),
+            "stale statusline is not a live quota signal"
+        );
     }
 
     #[test]
