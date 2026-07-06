@@ -23,7 +23,7 @@ No bug-bounty program. I'll credit you in the fix commit / release notes if you 
 
 In scope:
 
-- Anything that exposes a user's API keys (`sk-admin-…`, OpenAI project keys) outside the OS keychain or the user's own `BALANZE_OPENAI_KEY` env var.
+- Anything that exposes a user's API keys (`sk-admin-...`, OpenAI project keys) outside the OS keychain or the user's own `BALANZE_OPENAI_KEY` env var.
 - Anything that exposes the contents of `~/.claude/.credentials.json` - the OAuth `accessToken`, `refreshToken`, or any sub-field.
 - Logging or telemetry that includes secrets (none should exist; AGENTS.md §3.4 forbids it).
 - Code paths in `crates/keychain`, `crates/anthropic_oauth::credentials`, `crates/settings`, or the CLI's `set-openai-key` flow.
