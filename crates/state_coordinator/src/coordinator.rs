@@ -280,15 +280,26 @@ fn apply_partial(state: &mut CoordinatorState, partial: SourcePartial) -> Option
             // a stale payload is marked regardless of which path delivered it,
             // and the safety-poll re-emit re-runs this every cycle so the marker
             // self-heals once the producer resumes writing.
+            // Fresh iff the age is within `[0, threshold]`. A NEGATIVE age
+            // (captured_at in the future - the clock moved backward after the
+            // write, or skew) is untrustworthy: an upper-bound-only check would
+            // clear the marker and let a since-frozen payload read as live until
+            // wall-clock reached `captured_at + threshold`. Treat it as not-fresh
+            // and fall back to the live source instead. Keep the payload either
+            // way (stale-with-indicator, AGENTS.md §3.2); the marker lights
+            // `degraded['claude_statusline']` in the UI (OAuth-fallback cue +
+            // banner) and trips the tray's `is_degraded` -> Warn path, so nothing
+            // renders it as live.
             let age = Utc::now().signed_duration_since(p.captured_at);
             if age > Duration::seconds(STATUSLINE_FRESHNESS_SECS) {
-                // Keep the payload (stale-with-indicator, AGENTS.md §3.2) but
-                // flag it: this lights `degraded['claude_statusline']` in the UI
-                // (OAuth-fallback cue + banner) and trips the tray's
-                // `is_degraded` -> Warn path, so nothing renders it as live.
                 state.snapshot.claude_statusline_error = Some(format!(
                     "statusline payload is stale ({} min old)",
                     age.num_minutes()
+                ));
+            } else if age < Duration::zero() {
+                state.snapshot.claude_statusline_error = Some(format!(
+                    "statusline payload is future-dated ({} min ahead; clock skew?)",
+                    age.abs().num_minutes()
                 ));
             } else {
                 state.snapshot.claude_statusline_error = None;
@@ -515,6 +526,31 @@ mod tests {
             .as_deref()
             .expect("stale payload sets the error slot");
         assert!(err.contains("stale"), "error names staleness: {err}");
+    }
+
+    #[tokio::test]
+    async fn future_dated_statusline_is_marked() {
+        // captured_at ahead of now (clock moved backward after the write) must
+        // not clear the marker via the upper-bound-only path - the payload could
+        // be frozen yet read as live until wall-clock caught up.
+        let (handle, _join) = spawn(NullSink);
+        handle
+            .send(StateMsg::Update(statusline_update(
+                Utc::now() + Duration::hours(100),
+            )))
+            .await
+            .unwrap();
+
+        let snap = handle.query().await.unwrap();
+        assert!(snap.claude_statusline.is_some(), "payload retained");
+        let err = snap
+            .claude_statusline_error
+            .as_deref()
+            .expect("future-dated payload sets the error slot");
+        assert!(
+            err.contains("future-dated"),
+            "error names the clock skew: {err}"
+        );
     }
 
     #[tokio::test]

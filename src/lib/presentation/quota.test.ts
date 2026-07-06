@@ -56,6 +56,21 @@ describe('quota', () => {
     expect(q.source).toBe('oauth');
     expect(q.headline.pct).toBe(10);
   });
+  it('treats a future-dated statusline as stale and falls back to oauth', () => {
+    // captured_at AFTER fetched_at (clock moved backward): negative age must
+    // fail the freshness check, not slip through the upper bound as "fresh".
+    const s: Snapshot = { ...base,
+      fetched_at: '2026-06-03T12:00:00Z',
+      claude_statusline: { schema_version: 2, captured_at: '2026-06-03T18:00:00Z', // 6h in the future
+        payload: { rate_limits: { windows: [
+          { key: 'five_hour', label: '5-hour', used_percent: 62, resets_at: '2026-06-03T14:41:00Z' },
+        ] }, session_cost_micro_usd: null, claude_code_version: null } },
+      claude_oauth: { cadences: [{ key: 'five_hour', display_label: '5h', utilization_percent: 10, resets_at: '2026-06-03T14:41:00Z' }], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: '2026-06-03T12:00:00Z' },
+    };
+    const q = anthropicQuota(s)!;
+    expect(q.source).toBe('oauth');
+    expect(q.headline.pct).toBe(10);
+  });
   it('returns null when statusline is stale and no oauth is present', () => {
     // Frozen statusline, OAuth absent (the 429 cold-start case): show nothing
     // live rather than a stale reading. The caller renders the stale/error state.

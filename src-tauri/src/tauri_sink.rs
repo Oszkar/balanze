@@ -75,11 +75,14 @@ fn statusline_fresh(s: &Snapshot) -> bool {
     s.claude_statusline.as_ref().is_some_and(|sl| {
         // `.num_seconds()` on the TimeDelta keeps this free of a direct `chrono`
         // dependency (chrono is dev-only in src-tauri); the method resolves via
-        // the re-exported `DateTime<Utc>` fields on `Snapshot`.
-        s.fetched_at
+        // the re-exported `DateTime<Utc>` fields on `Snapshot`. Fresh iff the age
+        // is within `[0, threshold]` - a negative age (future-dated captured_at,
+        // clock skew) is not trusted, matching the coordinator/popover guards.
+        let age_secs = s
+            .fetched_at
             .signed_duration_since(sl.captured_at)
-            .num_seconds()
-            <= STATUSLINE_FRESHNESS_SECS
+            .num_seconds();
+        (0..=STATUSLINE_FRESHNESS_SECS).contains(&age_secs)
     })
 }
 
@@ -340,6 +343,36 @@ mod tests {
             !has_quota_data(&s),
             "stale statusline is not a live quota signal"
         );
+    }
+
+    /// A future-dated payload (captured_at ahead of fetched_at - the clock moved
+    /// backward after the write) is equally untrusted: an upper-bound-only check
+    /// would treat it as fresh and let it heat the tray.
+    #[test]
+    fn future_dated_statusline_does_not_drive_worst_utilization() {
+        use chrono::{Duration, Utc};
+        let now = Utc::now();
+        let mut s = Snapshot::empty(now);
+        s.claude_statusline = Some(claude_statusline::StatuslineFilePayload::new(
+            claude_statusline::StatuslineSnapshot {
+                rate_limits: Some(claude_statusline::RateLimits {
+                    windows: vec![claude_statusline::RateWindow {
+                        key: "five_hour".to_string(),
+                        label: "5-hour".to_string(),
+                        used_percent: 95.0,
+                        resets_at: now,
+                    }],
+                }),
+                session_cost_micro_usd: None,
+                claude_code_version: None,
+                model_display_name: None,
+                context_used_percent: None,
+            },
+            // Captured 100h AFTER this snapshot's fetched_at -> negative age.
+            now + Duration::hours(100),
+        ));
+        assert_eq!(worst_utilization(&s), 0.0, "future-dated must not heat");
+        assert!(!has_quota_data(&s), "future-dated is not a live signal");
     }
 
     #[test]

@@ -41,12 +41,14 @@ export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
   // fetched_at - captured_at (NOT wall-clock now) so this stays a pure function
   // of the snapshot and matches codexWindowExpired's fetched_at anchor;
   // fetched_at is re-stamped on every coordinator emit, so it tracks "now"
-  // within the safety-poll cadence. Unparseable timestamps -> NaN -> treated as
-  // stale (fall back to the live OAuth source rather than trust a bad stamp).
+  // within the safety-poll cadence. Fresh iff the age is within [0, threshold]:
+  // unparseable timestamps -> NaN and a future-dated captured_at -> negative age
+  // both fail the check, so we fall back to the live OAuth source rather than
+  // trust a bad or clock-skewed stamp (mirrors the coordinator's ingest guard).
   const sl = s.claude_statusline;
   const slAgeMs = sl ? Date.parse(s.fetched_at) - Date.parse(sl.captured_at) : Infinity;
-  const slFresh = Number.isFinite(slAgeMs) && slAgeMs <= STATUSLINE_FRESHNESS_MS;
-  const slWindows = slFresh ? (sl?.payload.rate_limits?.windows ?? []) : [];
+  const slFresh = Number.isFinite(slAgeMs) && slAgeMs >= 0 && slAgeMs <= STATUSLINE_FRESHNESS_MS;
+  const slWindows = slFresh && sl ? (sl.payload.rate_limits?.windows ?? []) : [];
   const slFive = slWindows.find((w) => w.key === 'five_hour');
   if (slFive) {
     const slSeven = slWindows.find((w) => w.key === 'seven_day');
