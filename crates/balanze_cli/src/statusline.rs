@@ -13,7 +13,11 @@ pub(crate) fn cmd_statusline_restore() -> Result<()> {
         Ok(p) => p,
         Err(_) => claude_statusline::default_settings_path(),
     };
-    let mut settings = settings::load().unwrap_or_default();
+    // A malformed settings.json here holds the very backup we are trying to
+    // restore; defaulting would discard it. Bail so the file stays intact and
+    // the user can fix it (or hand-copy the command back).
+    let mut settings = settings::load_for_update()
+        .map_err(|e| anyhow::anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     let previous = settings.statusline.replaced_command.take();
     let wrote = claude_statusline::restore_statusline(&path, previous.as_deref())
         .map_err(|e| anyhow::anyhow!("failed to restore statusLine at {}: {e}", path.display()))?;

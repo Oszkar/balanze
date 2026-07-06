@@ -124,10 +124,14 @@ pub fn set_settings(
     // (provider toggles) round-trips a stale copy, so preserve the on-disk
     // values over the inbound ones - otherwise a toggle after a Replace would
     // silently wipe the backup.
-    if let Ok(current) = settings::load() {
-        settings.seen_welcome = current.seen_welcome;
-        settings.statusline = current.statusline;
-    }
+    // Load the on-disk copy to preserve the backend-owned fields. On a corrupt
+    // settings.json, bail instead of proceeding: the inbound copy carries a
+    // stale/default `statusline`, so saving it would wipe the replaced_command
+    // backup - the same clobber the read-only save paths guard against.
+    let current =
+        settings::load_for_update().map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
+    settings.seen_welcome = current.seen_welcome;
+    settings.statusline = current.statusline;
     settings::save(&settings).map_err(|e| e.to_string())?;
     apply_settings_live(&coord, &reload, settings);
     Ok(())
@@ -309,7 +313,8 @@ pub fn get_statusline_status() -> Result<StatuslineWire, String> {
 #[tauri::command]
 pub fn replace_statusline() -> Result<(), String> {
     let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-    let mut s = settings::load().unwrap_or_default();
+    let mut s =
+        settings::load_for_update().map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     let prior = s.statusline.replaced_command.clone();
     if let WireStatus::OccupiedBy(cmd) = read_wire_status(&path).map_err(|e| e.to_string())? {
         // Don't back up the "statusLine present but no usable command" sentinel;
@@ -337,7 +342,8 @@ pub fn replace_statusline() -> Result<(), String> {
 #[tauri::command]
 pub fn restore_statusline() -> Result<(), String> {
     let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-    let mut s = settings::load().unwrap_or_default();
+    let mut s =
+        settings::load_for_update().map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     let previous = s.statusline.replaced_command.take();
     // Fully-qualified to disambiguate from this Tauri command of the same name.
     let wrote = claude_statusline::restore_statusline(&path, previous.as_deref())

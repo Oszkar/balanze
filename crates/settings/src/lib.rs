@@ -189,6 +189,33 @@ pub fn load_from(path: &Path) -> Result<Settings, SettingsError> {
     Ok(parsed)
 }
 
+/// Load settings for a read-modify-**save** path. Identical to [`load`] on the
+/// happy path, but the distinct name is a guard rail: a save-path caller must
+/// never `.unwrap_or_default()` the result. A missing file still yields
+/// `Settings::default()` (a first-ever save is not data loss), but a `Malformed`
+/// or `Io` error is propagated so the caller bails instead of resetting. If a
+/// caller collapsed a corrupt file to defaults here, the following [`save`]
+/// would overwrite the user's real settings - including the
+/// `statusline.replaced_command` backup - with a blank default, silently and
+/// unrecoverably. See [`UPDATE_LOAD_HINT`] for the caller-facing message.
+pub fn load_for_update() -> Result<Settings, SettingsError> {
+    let path = default_path()?;
+    load_for_update_from(&path)
+}
+
+/// Explicit-path variant of [`load_for_update`], for tests and any future
+/// `--config` override path.
+pub fn load_for_update_from(path: &Path) -> Result<Settings, SettingsError> {
+    load_from(path)
+}
+
+/// Shared caller-facing hint when [`load_for_update`] errors: a save-path
+/// caller refuses to overwrite a malformed/unreadable `settings.json` with
+/// defaults. Kept here so the CLI and the Tauri commands surface one consistent
+/// message; callers append the propagated error for the path + reason.
+pub const UPDATE_LOAD_HINT: &str =
+    "refusing to overwrite settings.json with defaults; fix or remove it and retry";
+
 /// Save settings atomically: write to `<path>.tmp`, fsync, rename over `<path>`.
 /// Creates parent directories as needed.
 pub fn save(settings: &Settings) -> Result<(), SettingsError> {
@@ -340,6 +367,49 @@ mod tests {
             }
             other => panic!("expected Malformed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn load_for_update_errors_on_malformed_and_leaves_file_intact() {
+        // A read-modify-SAVE path must never collapse a corrupt file to
+        // defaults: doing so lets the following save() overwrite the user's
+        // real settings (incl. the statusline replaced_command backup) with a
+        // blank default. load_for_update must error and touch nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original: &[u8] = b"{ hand-edited into broken json ";
+        fs::write(&path, original).unwrap();
+        match load_for_update_from(&path) {
+            Err(SettingsError::Malformed { path: p, .. }) => assert_eq!(p, path),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            original,
+            "load_for_update must leave the corrupt file byte-for-byte intact"
+        );
+    }
+
+    #[test]
+    fn load_for_update_defaults_when_file_missing() {
+        // A missing file is not corruption - a first-ever save is legitimate,
+        // so update paths still get defaults here (this is the one case where
+        // the old unwrap_or_default() was a correct no-op).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let s = load_for_update_from(&path).expect("missing file must default");
+        assert_eq!(s, Settings::default());
+    }
+
+    #[test]
+    fn load_for_update_loads_a_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut s = Settings::default();
+        s.providers.openai_enabled = true;
+        s.statusline.replaced_command = Some("original --statusline".to_string());
+        save_to(&s, &path).expect("save");
+        assert_eq!(load_for_update_from(&path).expect("load"), s);
     }
 
     #[test]
