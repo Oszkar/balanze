@@ -3,6 +3,8 @@ use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconEvent},
 };
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod commands;
 mod tauri_sink;
@@ -526,11 +528,55 @@ async fn supervise_watcher(
     }
 }
 
+/// Installs the `tracing` subscriber: `BALANZE_LOG` (AGENTS.md §3.2/§3.4)
+/// drives verbosity, defaulting to `info` when unset. Emits to stderr and,
+/// when a data directory is resolvable, to a daily-rotating file under
+/// `<data_dir>/logs/` (kept 3 days) - a GUI launched by double-click has
+/// nowhere for stderr to go, so the file sink is this binary's only
+/// post-mortem diagnostics surface. The returned guard must be held for the
+/// process lifetime; dropping it early stops the non-blocking file writer
+/// from flushing.
+fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_env("BALANZE_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+
+    let (file_layer, guard) = match settings::log_dir() {
+        Some(dir) => match tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("balanze")
+            .filename_suffix("log")
+            .max_log_files(3)
+            .build(&dir)
+        {
+            Ok(appender) => {
+                let (writer, guard) = tracing_appender::non_blocking(appender);
+                let layer = tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(writer);
+                (Some(layer), Some(guard))
+            }
+            Err(e) => {
+                eprintln!("warning: could not open log file in {}: {e}", dir.display());
+                (None, None)
+            }
+        },
+        None => (None, None),
+    };
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stderr_layer)
+        .with(file_layer)
+        .init();
+
+    guard
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // Held for the process lifetime (see `init_tracing` doc comment).
+    let _log_guard = init_tracing();
 
     // keyring-core has no default credential store until one is registered;
     // do it once here before the watcher (booted in `setup`) reads the key.

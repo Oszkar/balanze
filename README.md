@@ -87,7 +87,7 @@ balanze-cli setup               interactive wizard - run this first
 balanze-cli statusline          Claude Code statusLine command (see below)
 ```
 
-Run `balanze-cli help` (or `--help` / `-h` on any subcommand) for the full reference - including `set-openai-key` / `clear-openai-key` / `settings` / `completions <shell>` and the global flags `-v` / `--quiet` / `--no-color` / `--strict`. `BALANZE_OPENAI_KEY=sk-admin-...` overrides the keychain for CI or headless use.
+Run `balanze-cli help` (or `--help` / `-h` on any subcommand) for the full reference - including `set-openai-key` / `clear-openai-key` / `settings` / `completions <shell>` and the global flags `-v` / `--quiet` / `--no-color` / `--strict`. `BALANZE_OPENAI_KEY=sk-admin-...` overrides the keychain for CI or headless use. `BALANZE_LOG` (e.g. `BALANZE_LOG=debug`) controls log verbosity for both the CLI and the desktop app, in the same syntax as `RUST_LOG`; logs go to stderr and to a daily-rotating file (kept 3 days) under the OS-conventional data directory's `logs/` folder.
 
 `status --json` (and `watch --json`) emit a document keyed by a top-level `schema_version`, where every money cell is tagged `{ value_micro_usd, source, confidence, details }` (i64 micro-USD throughout) - so a consumer tells an `estimate` from `real` billed spend straight from the wire shape, no label parsing. The full schema is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 

@@ -173,7 +173,7 @@ fn parse_rate_limits(obj: Map<String, Value>) -> Result<RateLimits, StatuslineEr
 /// A dropped window is logged at `warn!`. `balanze-cli` installs a `tracing`
 /// subscriber for every subcommand (including `statusline`), so the warning is
 /// observable on stderr when the env filter enables warn-level (e.g.
-/// `RUST_LOG=warn`); it goes to stderr, never the statusLine's stdout, so it
+/// `BALANZE_LOG=warn`); it goes to stderr, never the statusLine's stdout, so it
 /// can't pollute the prompt. With no subscriber installed (a library embedding
 /// the parser) it is a silent no-op.
 fn window_or_drop(key: &str, raw: RawWindow) -> Option<RateWindow> {
