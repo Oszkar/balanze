@@ -1,7 +1,7 @@
 //! Production sink for the `state_coordinator` actor (AGENTS.md §4 #7 - the
 //! only crate that may call Tauri tray APIs). Emits `usage_updated` /
 //! `degraded_state` to the Svelte UI and repaints the gauge tray icon,
-//! deduped by `(ColorBucket, title)` per AGENTS.md §3.1.
+//! deduped by `(ColorBucket, title, tooltip)` per AGENTS.md §3.1.
 
 use serde::Serialize;
 use state_coordinator::{STATUSLINE_FRESHNESS_SECS, Sink, Snapshot, Source};
@@ -12,7 +12,7 @@ use crate::tray_icon;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ColorBucket {
     /// No quota signal from any source yet (cold start, or no provider
-    /// configured). Painted grey by `select_bucket` so an empty state never
+    /// configured). Painted grey by `bucket_for_view` so an empty state never
     /// reads as a healthy green.
     Neutral,
     Green,
@@ -22,26 +22,24 @@ pub(crate) enum ColorBucket {
     Warn,
 }
 
-/// Canonical quota-color thresholds (percent utilization). The popover mirrors
-/// the WARN and BAD boundaries in `src/lib/presentation/quota.ts` (`quotaTone`);
-/// that surface uses a coarser 3-tone palette and folds this ORANGE band into
-/// "warn". Keep the shared boundary values (50, 90) in lockstep across the two
-/// files.
-const QUOTA_WARN_PCT: f32 = 50.0;
-const QUOTA_ORANGE_PCT: f32 = 75.0;
-const QUOTA_BAD_PCT: f32 = 90.0;
+impl From<window::Severity> for ColorBucket {
+    fn from(sev: window::Severity) -> Self {
+        match sev {
+            window::Severity::Green => ColorBucket::Green,
+            window::Severity::Yellow => ColorBucket::Yellow,
+            window::Severity::Orange => ColorBucket::Orange,
+            window::Severity::Red => ColorBucket::Red,
+        }
+    }
+}
 
 impl ColorBucket {
+    /// Heat color for a utilization percentage, via the shared `window::Severity`
+    /// classifier (50 / 75 / 90) - the same one the popover, CLI, and statusline
+    /// use, so every surface agrees. `Neutral` (cold start) and `Warn` (a
+    /// degraded source) are tray-only overlays applied in `bucket_for_view`.
     pub(crate) fn from_util(util_percent: f32) -> Self {
-        if util_percent >= QUOTA_BAD_PCT {
-            ColorBucket::Red
-        } else if util_percent >= QUOTA_ORANGE_PCT {
-            ColorBucket::Orange
-        } else if util_percent >= QUOTA_WARN_PCT {
-            ColorBucket::Yellow
-        } else {
-            ColorBucket::Green
-        }
+        window::Severity::from_util(util_percent).into()
     }
 }
 
@@ -86,75 +84,161 @@ fn statusline_fresh(s: &Snapshot) -> bool {
     })
 }
 
-pub(crate) fn worst_utilization(s: &Snapshot) -> f32 {
-    let mut worst = 0.0_f32;
-    if let Some(o) = &s.claude_oauth {
-        for c in &o.cadences {
-            worst = worst.max(c.utilization_percent);
-        }
-    }
-    if statusline_fresh(s) {
-        if let Some(sl) = &s.claude_statusline {
-            if let Some(rl) = &sl.payload.rate_limits {
-                for w in &rl.windows {
-                    worst = worst.max(w.used_percent);
+/// The tray's canonical windows, per provider: Claude 5h, Claude weekly (7d =
+/// the worst of every non-5h cadence), and Codex primary. The ring color, the
+/// menu-bar title, and the tooltip ALL derive from this one view, so a red ring
+/// always corresponds to a number the user can see. (The old bug: the ring came
+/// from the worst window across everything, but the title only ever printed the
+/// 5h - a red icon could sit next to "C 20%".) Folds OAuth cadences and fresh
+/// statusline windows; a stale statusline is excluded (see `statusline_fresh`).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct TrayView {
+    claude_5h: Option<f32>,
+    claude_7d: Option<f32>,
+    codex: Option<f32>,
+}
+
+fn fold_max(slot: &mut Option<f32>, v: f32) {
+    *slot = Some(slot.map_or(v, |cur| cur.max(v)));
+}
+
+impl TrayView {
+    fn from_snapshot(s: &Snapshot) -> Self {
+        let mut v = TrayView::default();
+        if let Some(o) = &s.claude_oauth {
+            for c in &o.cadences {
+                if c.key == "five_hour" {
+                    fold_max(&mut v.claude_5h, c.utilization_percent);
+                } else {
+                    // Every non-5h cadence is a weekly variant; folding them all
+                    // into 7d guarantees no window can hide from the ring/title.
+                    fold_max(&mut v.claude_7d, c.utilization_percent);
                 }
             }
         }
-    }
-    if let Some(c) = &s.codex_quota {
-        worst = worst.max(c.primary.used_percent as f32);
-    }
-    worst
-}
-
-/// True when any source carries an actual quota signal - the same leaves
-/// `worst_utilization` reads. This distinguishes a real 0% utilization (paint
-/// the heat color) from a cold-start / not-configured snapshot with no signal
-/// at all (paint Neutral). Without it, an empty snapshot's 0.0 worst-util would
-/// map to Green and read as "all good" before any data has arrived.
-fn has_quota_data(s: &Snapshot) -> bool {
-    let oauth = s
-        .claude_oauth
-        .as_ref()
-        .is_some_and(|o| !o.cadences.is_empty());
-    let statusline = statusline_fresh(s)
-        && s.claude_statusline
+        if statusline_fresh(s) {
+            if let Some(rl) = s
+                .claude_statusline
+                .as_ref()
+                .and_then(|sl| sl.payload.rate_limits.as_ref())
+            {
+                for w in &rl.windows {
+                    if w.key == "five_hour" {
+                        fold_max(&mut v.claude_5h, w.used_percent);
+                    } else {
+                        fold_max(&mut v.claude_7d, w.used_percent);
+                    }
+                }
+            }
+        }
+        v.codex = s
+            .codex_quota
             .as_ref()
-            .and_then(|sl| sl.payload.rate_limits.as_ref())
-            .is_some_and(|rl| !rl.windows.is_empty());
-    oauth || statusline || s.codex_quota.is_some()
+            .map(|q| q.primary.used_percent as f32);
+        v
+    }
+
+    /// Any live quota signal at all - distinguishes real data (paint a heat
+    /// color) from a cold-start snapshot (paint Neutral).
+    fn has_data(&self) -> bool {
+        self.claude_5h.is_some() || self.claude_7d.is_some() || self.codex.is_some()
+    }
+
+    /// Claude's worst window (max of 5h and 7d) - the single Claude figure shown
+    /// in the menu-bar title.
+    fn claude_worst(&self) -> Option<f32> {
+        match (self.claude_5h, self.claude_7d) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// The single worst window across providers, labeled - drives the ring color
+    /// and the tooltip header. Compared on the raw value; callers round for
+    /// display. Because every cadence folds into 5h/7d/Codex, this is the same
+    /// maximum the ring paints, so color and shown number cannot disagree.
+    fn worst(&self) -> Option<(&'static str, f32)> {
+        [
+            ("Claude 5h", self.claude_5h),
+            ("Claude 7d", self.claude_7d),
+            ("Codex", self.codex),
+        ]
+        .into_iter()
+        .filter_map(|(label, pct)| pct.map(|p| (label, p)))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// Rounded utilization of the worst window; the ring classifies THIS so its
+    /// color matches the largest number the title/tooltip display (89.6 shows
+    /// "90%" and must read Red, not Orange).
+    fn worst_rounded(&self) -> f32 {
+        self.worst().map_or(0.0, |(_, p)| p.round())
+    }
 }
 
-/// Pick the tray color for a snapshot. A degraded source forces the warning
-/// bucket; an empty snapshot (no quota signal yet) is Neutral; otherwise the
-/// worst-case utilization across sources maps to a heat color.
-fn select_bucket(s: &Snapshot, degraded: bool) -> ColorBucket {
+/// Pick the tray color for a view. A degraded source forces the warning bucket;
+/// a view with no quota signal yet is Neutral; otherwise the worst window's
+/// rounded utilization maps to a heat color.
+fn bucket_for_view(view: &TrayView, degraded: bool) -> ColorBucket {
     if degraded {
         ColorBucket::Warn
-    } else if !has_quota_data(s) {
+    } else if !view.has_data() {
         ColorBucket::Neutral
     } else {
-        ColorBucket::from_util(worst_utilization(s))
+        ColorBucket::from_util(view.worst_rounded())
     }
 }
 
-fn tray_title(s: &Snapshot) -> String {
-    let c = s
-        .claude_oauth
-        .as_ref()
-        .and_then(|o| o.cadences.iter().find(|c| c.key == "five_hour"))
-        .map(|c| format!("C {:.0}%", c.utilization_percent));
-    let o = s
-        .codex_quota
-        .as_ref()
-        .map(|q| format!("O {:.0}%", q.primary.used_percent));
+/// Menu-bar title (macOS) / tooltip line 1: `Claude X% · Codex Y%`, both
+/// providers in fixed slots, each showing that provider's worst window. The ring
+/// color matches the larger of the two shown numbers. An unconfigured provider
+/// is omitted.
+fn tray_title(view: &TrayView) -> String {
+    let c = view
+        .claude_worst()
+        .map(|p| format!("Claude {}%", p.round() as i64));
+    let o = view.codex.map(|p| format!("Codex {}%", p.round() as i64));
     [c, o].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+}
+
+/// Tooltip: a fixed-layout status panel. A header names the worst window so the
+/// ring color is explained, then both providers in stable slots. Kept compact
+/// for the Windows ~128-char tooltip cap - per-window reset times live in the
+/// popover, not here.
+fn tray_tooltip(view: &TrayView, degraded: bool) -> String {
+    if !view.has_data() {
+        return if degraded {
+            "Balanze - quota unavailable".to_string()
+        } else {
+            "Balanze - connecting...".to_string()
+        };
+    }
+    let mut lines: Vec<String> = Vec::new();
+    if let Some((label, pct)) = view.worst() {
+        lines.push(format!("Balanze - worst: {label} {}%", pct.round() as i64));
+    }
+    let mut claude = Vec::new();
+    if let Some(p) = view.claude_5h {
+        claude.push(format!("5h {}%", p.round() as i64));
+    }
+    if let Some(p) = view.claude_7d {
+        claude.push(format!("7d {}%", p.round() as i64));
+    }
+    if !claude.is_empty() {
+        lines.push(format!("Claude  {}", claude.join("  ")));
+    }
+    if let Some(p) = view.codex {
+        lines.push(format!("Codex   {}%", p.round() as i64));
+    }
+    if degraded {
+        lines.push("(some data may be stale)".to_string());
+    }
+    lines.join("\n")
 }
 
 pub(crate) struct TauriSink {
     app: AppHandle,
-    last_painted: Option<(ColorBucket, String)>,
+    last_painted: Option<(ColorBucket, String, String)>,
 }
 
 impl TauriSink {
@@ -165,8 +249,13 @@ impl TauriSink {
         }
     }
 
-    fn paint_target(&self, s: &Snapshot, degraded: bool) -> (ColorBucket, String) {
-        (select_bucket(s, degraded), tray_title(s))
+    fn paint_target(&self, s: &Snapshot, degraded: bool) -> (ColorBucket, String, String) {
+        let view = TrayView::from_snapshot(s);
+        (
+            bucket_for_view(&view, degraded),
+            tray_title(&view),
+            tray_tooltip(&view, degraded),
+        )
     }
 }
 
@@ -190,7 +279,7 @@ impl Sink for TauriSink {
         }
         let target = self.paint_target(snapshot, any_source_degraded(snapshot));
         if self.last_painted.as_ref() != Some(&target) {
-            tray_icon::paint(&self.app, target.0, &target.1);
+            tray_icon::paint(&self.app, target.0, &target.1, &target.2);
             self.last_painted = Some(target);
         }
     }
@@ -203,14 +292,14 @@ impl Sink for TauriSink {
         if let Err(e) = self.app.emit("degraded_state", payload) {
             tracing::warn!("tauri_sink: emit degraded_state failed: {e}");
         }
-        let title = self
+        let (title, tooltip) = self
             .last_painted
             .as_ref()
-            .map(|(_, t)| t.clone())
+            .map(|(_, t, tip)| (t.clone(), tip.clone()))
             .unwrap_or_default();
-        let target = (ColorBucket::Warn, title);
+        let target = (ColorBucket::Warn, title, tooltip);
         if self.last_painted.as_ref() != Some(&target) {
-            tray_icon::paint(&self.app, target.0, &target.1);
+            tray_icon::paint(&self.app, target.0, &target.1, &target.2);
             self.last_painted = Some(target);
         }
     }
@@ -219,6 +308,19 @@ impl Sink for TauriSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Test-only convenience wrappers over the TrayView API. The prod paint path
+    // builds the view once in `paint_target`; these keep the coloring/quota
+    // tests reading against `&Snapshot`.
+    fn worst_utilization(s: &Snapshot) -> f32 {
+        TrayView::from_snapshot(s).worst().map_or(0.0, |(_, p)| p)
+    }
+    fn has_quota_data(s: &Snapshot) -> bool {
+        TrayView::from_snapshot(s).has_data()
+    }
+    fn select_bucket(s: &Snapshot, degraded: bool) -> ColorBucket {
+        bucket_for_view(&TrayView::from_snapshot(s), degraded)
+    }
 
     #[test]
     fn any_source_error_keeps_warning() {
@@ -417,5 +519,140 @@ mod tests {
             select_bucket(&Snapshot::empty(Utc::now()), true),
             ColorBucket::Warn
         );
+    }
+
+    // --- tray title + tooltip (PR2) ---
+
+    fn oauth_5h_7d(five: f32, seven: f32) -> anthropic_oauth::ClaudeOAuthSnapshot {
+        use chrono::Utc;
+        anthropic_oauth::ClaudeOAuthSnapshot {
+            cadences: vec![
+                anthropic_oauth::CadenceBar {
+                    key: "five_hour".into(),
+                    display_label: "5h".into(),
+                    utilization_percent: five,
+                    resets_at: Utc::now(),
+                },
+                anthropic_oauth::CadenceBar {
+                    key: "seven_day".into(),
+                    display_label: "7d".into(),
+                    utilization_percent: seven,
+                    resets_at: Utc::now(),
+                },
+            ],
+            extra_usage: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+            org_uuid: None,
+            fetched_at: Utc::now(),
+        }
+    }
+
+    fn codex_with_util(util: f64) -> codex_local::CodexQuotaSnapshot {
+        use chrono::Utc;
+        codex_local::CodexQuotaSnapshot {
+            observed_at: Utc::now(),
+            session_id: "test".into(),
+            primary: codex_local::RateLimitWindow {
+                used_percent: util,
+                window_duration_minutes: 10080,
+                resets_at: Utc::now(),
+            },
+            secondary: None,
+            plan_type: "go".into(),
+            rate_limit_reached: false,
+        }
+    }
+
+    /// The original bug: the ring colored from the worst window (weekly 94%) but
+    /// the title only ever printed the 5h (20%) - a red icon beside "20%". Now
+    /// the ring, title, and tooltip header all name the same worst window.
+    #[test]
+    fn worst_window_drives_ring_title_and_tooltip_together() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        s.claude_oauth = Some(oauth_5h_7d(20.0, 94.0));
+        let view = TrayView::from_snapshot(&s);
+
+        assert_eq!(bucket_for_view(&view, false), ColorBucket::Red);
+        // Menu-bar shows Claude's worst (94), not the 5h (20).
+        assert_eq!(tray_title(&view), "Claude 94%");
+        let tip = tray_tooltip(&view, false);
+        assert!(tip.contains("worst: Claude 7d 94%"), "{tip}");
+        assert!(tip.contains("5h 20%"), "{tip}");
+        assert!(tip.contains("7d 94%"), "{tip}");
+    }
+
+    #[test]
+    fn title_shows_both_providers_worst() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        s.claude_oauth = Some(oauth_5h_7d(20.0, 40.0));
+        s.codex_quota = Some(codex_with_util(30.0));
+        let view = TrayView::from_snapshot(&s);
+        assert_eq!(tray_title(&view), "Claude 40% · Codex 30%");
+        // Ring = the largest shown number (40 -> Green, <50).
+        assert_eq!(bucket_for_view(&view, false), ColorBucket::Green);
+    }
+
+    #[test]
+    fn title_omits_absent_provider() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        s.codex_quota = Some(codex_with_util(55.0));
+        let view = TrayView::from_snapshot(&s);
+        assert_eq!(tray_title(&view), "Codex 55%");
+    }
+
+    #[test]
+    fn ring_classifies_rounded_worst_at_cutoff() {
+        use chrono::Utc;
+        // 89.6 displays "90%" and must read Red, not Orange.
+        let mut s = Snapshot::empty(Utc::now());
+        s.claude_oauth = Some(oauth_5h_7d(10.0, 89.6));
+        let view = TrayView::from_snapshot(&s);
+        assert_eq!(bucket_for_view(&view, false), ColorBucket::Red);
+        assert_eq!(tray_title(&view), "Claude 90%");
+    }
+
+    #[test]
+    fn cold_start_vs_degraded_tooltip() {
+        use chrono::Utc;
+        let view = TrayView::from_snapshot(&Snapshot::empty(Utc::now()));
+        assert_eq!(tray_tooltip(&view, false), "Balanze - connecting...");
+        assert_eq!(tray_tooltip(&view, true), "Balanze - quota unavailable");
+    }
+
+    #[test]
+    fn weekly_variant_cadences_fold_into_7d() {
+        use chrono::Utc;
+        // A per-model weekly bucket (seven_day_opus) at 80% must surface as the
+        // 7d figure and drive the ring, not vanish behind the named windows.
+        let mut s = Snapshot::empty(Utc::now());
+        let mut oauth = oauth_with_util(15.0); // five_hour at 15%
+        oauth.cadences.push(anthropic_oauth::CadenceBar {
+            key: "seven_day_opus".into(),
+            display_label: "7d Opus".into(),
+            utilization_percent: 80.0,
+            resets_at: Utc::now(),
+        });
+        s.claude_oauth = Some(oauth);
+        let view = TrayView::from_snapshot(&s);
+        assert_eq!(view.claude_7d, Some(80.0));
+        assert_eq!(tray_title(&view), "Claude 80%");
+        assert_eq!(bucket_for_view(&view, false), ColorBucket::Orange);
+    }
+
+    #[test]
+    fn tooltip_fits_windows_128_char_cap() {
+        use chrono::Utc;
+        // The Windows tray tooltip is capped near 128 chars; the fixed layout
+        // must stay well under even with both providers present and degraded.
+        let mut s = Snapshot::empty(Utc::now());
+        s.claude_oauth = Some(oauth_5h_7d(88.0, 94.0));
+        s.codex_quota = Some(codex_with_util(72.0));
+        let view = TrayView::from_snapshot(&s);
+        let tip = tray_tooltip(&view, true);
+        assert!(tip.len() <= 128, "tooltip {} chars: {tip}", tip.len());
     }
 }

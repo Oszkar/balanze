@@ -369,6 +369,7 @@ dependencies = [
  "anthropic_oauth",
  "chrono",
  "claude_statusline",
+ "codex_local",
  "keychain",
  "serde",
  "serde_json",
@@ -383,6 +384,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "watcher",
+ "window",
 ]
 
 [[package]]
