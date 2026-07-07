@@ -60,15 +60,20 @@ pub(crate) fn paint(app: &AppHandle, bucket: ColorBucket, title: &str, tooltip: 
     if let Err(e) = tray.set_icon(Some(img)) {
         tracing::warn!("tray_icon: set_icon failed: {e}");
     }
-    let _ = tray.set_tooltip(Some(if tooltip.is_empty() {
+    let tip = if tooltip.is_empty() {
         "Balanze"
     } else {
         tooltip
-    }));
+    };
+    if let Err(e) = tray.set_tooltip(Some(tip)) {
+        tracing::warn!("tray_icon: set_tooltip failed: {e}");
+    }
     // `title` is the macOS menu-bar text only; Windows/Linux trays have no label.
     #[cfg(target_os = "macos")]
     {
-        let _ = tray.set_title(Some(title));
+        if let Err(e) = tray.set_title(Some(title)) {
+            tracing::warn!("tray_icon: set_title failed: {e}");
+        }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = title;

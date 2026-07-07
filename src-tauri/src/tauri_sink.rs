@@ -60,6 +60,26 @@ fn source_key(source: Source) -> &'static str {
     }
 }
 
+/// Friendly source label for the degraded tray tooltip (mirrors the popover's
+/// DegradedBanner labels).
+fn degraded_source_label(source: Source) -> &'static str {
+    match source {
+        Source::ClaudeOAuth => "Anthropic quota",
+        Source::ClaudeJsonl => "Claude activity",
+        Source::AnthropicApiCost => "Anthropic cost",
+        Source::CodexQuota => "Codex quota",
+        Source::OpenAiCosts => "OpenAI cost",
+        Source::ClaudeStatusline => "Claude statusLine",
+    }
+}
+
+/// Tooltip for the `on_degraded` repaint path, which has no Snapshot to build a
+/// `TrayView` from - name the failing source so the Warn icon is always
+/// explained, including a cold-start failure with no prior paint.
+fn degraded_tooltip(source: Source) -> String {
+    format!("Balanze - {} unavailable", degraded_source_label(source))
+}
+
 /// The statusLine payload feeds the tray only while fresh. Mirrors the
 /// coordinator's ingest guard and the popover's render-time check
 /// (`STATUSLINE_FRESHNESS_MS` in `quota.ts`): a frozen file (another tool owns
@@ -292,12 +312,16 @@ impl Sink for TauriSink {
         if let Err(e) = self.app.emit("degraded_state", payload) {
             tracing::warn!("tauri_sink: emit degraded_state failed: {e}");
         }
-        let (title, tooltip) = self
+        // Keep the last-known numbers in the (macOS) title, but the tooltip names
+        // the failing source rather than cloning the last NORMAL tooltip - so the
+        // red icon is always explained, including a cold-start failure with no
+        // prior paint (which would otherwise show the generic "Balanze").
+        let title = self
             .last_painted
             .as_ref()
-            .map(|(_, t, tip)| (t.clone(), tip.clone()))
+            .map(|(_, t, _)| t.clone())
             .unwrap_or_default();
-        let target = (ColorBucket::Warn, title, tooltip);
+        let target = (ColorBucket::Warn, title, degraded_tooltip(source));
         if self.last_painted.as_ref() != Some(&target) {
             tray_icon::paint(&self.app, target.0, &target.1, &target.2);
             self.last_painted = Some(target);
@@ -654,5 +678,19 @@ mod tests {
         let view = TrayView::from_snapshot(&s);
         let tip = tray_tooltip(&view, true);
         assert!(tip.len() <= 128, "tooltip {} chars: {tip}", tip.len());
+    }
+
+    #[test]
+    fn degraded_tooltip_names_the_failing_source() {
+        // The on_degraded path has no snapshot; it must still explain the red
+        // icon by naming the source, not reuse the last normal tooltip.
+        assert_eq!(
+            degraded_tooltip(Source::ClaudeOAuth),
+            "Balanze - Anthropic quota unavailable"
+        );
+        assert_eq!(
+            degraded_tooltip(Source::OpenAiCosts),
+            "Balanze - OpenAI cost unavailable"
+        );
     }
 }
