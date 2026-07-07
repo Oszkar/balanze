@@ -36,7 +36,7 @@ The statusLine push is the v0.2 live backbone for Anthropic quota when the user 
 balanze/
 ├── Cargo.toml, package.json, svelte.config.js, vite.config.js, tsconfig.json
 ├── docs/PRD.md                 product spec
-├── src/                        Svelte 5 frontend - popover (grid/cards + settings views, IPC store, presentation helpers) + dev-only states gallery (lib/gallery + routes/gallery, stubbed IPC)
+├── src/                        Svelte 5 frontend - popover (grid/cards + settings views, IPC store, presentation helpers) + dev-only states gallery (lib/gallery, mounted by the standalone gallery.html + gallery-main.ts, stubbed IPC)
 ├── src-tauri/                  Tauri 2 app - gauge tray + live popover + settings + single-instance + first-run welcome + filled TauriSink
 ├── crates/
 │   ├── claude_parser/          JSONL wire format: parse, walker, dedup, IncrementalParser, find_claude_projects_dir

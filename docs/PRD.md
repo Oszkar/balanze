@@ -39,8 +39,7 @@ A small team or technically inclined individual who wants a local dashboard and 
 
 ### Product goals
 
-- Provide one app that shows AI usage across multiple providers in a normalized way.
-- Support both subscription-style usage and API billing or credit usage where feasible.
+- Provide one app that shows AI usage across multiple providers in a normalized way - both subscription-style usage and API billing or credit usage, where feasible.
 - Make the app useful from the tray or menu bar with minimal interaction.
 - Provide a consistent UX across operating systems while following each OS's design conventions.
 - Keep all core functionality local-first and transparent.
@@ -59,15 +58,13 @@ A small team or technically inclined individual who wants a local dashboard and 
 
 ## Product principles
 
-- Honest about data quality and source provenance.
-- **Show measured status, not forecasts.** Present what *is* - how much is used and how far through the window you are - and let the user judge what comes next. Applies to money (the measured-only matrix) and to time.
+- **Show measured status, not forecasts.** Present what *is* - how much is used and how far through the window you are - and mark every metric with its source and confidence; let the user judge what comes next. Applies to money (the measured-only matrix) and to time.
 - Fast glanceability before deep dashboards.
 - One shared core with thin platform shells.
-- Narrow support matrix over broad but unreliable compatibility.
 
 ## Scope
 
-### In scope for MVP
+### In scope
 
 - Desktop application using Tauri 2 + Rust.
 - Tray or menu-bar presence with a compact popup.
@@ -79,9 +76,7 @@ A small team or technically inclined individual who wants a local dashboard and 
 - Local secure storage for credentials and preferences. (Durable local history is deferred to the post-1.0 dashboard; the CLI `export` re-derives history from JSONL statelessly.)
 - Runnable distribution: downloadable binaries, no Rust toolchain required (v0.5).
 
-Committed beyond the MVP: alerts (v0.6) and richer settings / themes (v0.7). The full dashboard window with trends is deferred to post-1.0. See Phasing.
-
-### Out of scope for MVP
+### Out of scope
 
 - Android app.
 - Hosted dashboard.
@@ -97,9 +92,7 @@ Committed beyond the MVP: alerts (v0.6) and richer settings / themes (v0.7). The
 | Windows 11 | CLI v0.1; tray UI v0.3 | CLI works from v0.1 (`cargo install`); tray-first desktop experience lands across the v0.3 sub-milestones (popover in v0.3.0). Windows 10 excluded. |
 | macOS 15+ | CLI v0.1; tray UI v0.3 | CLI works from v0.1; menu-bar-first experience with hidden main window across v0.3. |
 | Linux (generic) | CLI v0.1 | `cargo install` works trivially; no separate test matrix. CLI only - tray UI not targeted here. |
-| Ubuntu 24.04 LTS+ GNOME | Vision (uncommitted) | GNOME tray UI with AppIndicator support. Deferred until the Win + Mac tray story is mature; Linux tray fragility makes it the wrong place to start. |
-| Android | Vision (uncommitted) | Companion app only after desktop proves value. Read-only feed of the desktop state via the sync layer. |
-| Hosted web dashboard | Vision (uncommitted) | Separate surface for wallboard or TV use, reusing normalized backend contracts. |
+| Ubuntu 24.04 LTS+ GNOME | Future | GNOME tray UI with AppIndicator support. Deferred until the Win + Mac tray story is mature; Linux tray fragility makes it the wrong place to start. |
 
 ## Key use cases
 
@@ -112,19 +105,11 @@ Committed beyond the MVP: alerts (v0.6) and richer settings / themes (v0.7). The
 
 ## Core user experience
 
-### Main modes
-
-The app should support three presentation modes from the same codebase:
-
-- Tray or menu-bar only.
-- Tray or menu-bar with compact popup.
-- Full dashboard window, optionally hidden until opened.
-
-Users should be able to configure startup behavior, refresh cadence, alert thresholds and preferred compact metrics.
+Balanze has several surfaces: tray popover GUI, live TUI, CLI command and Claude Code statusline (footer). These should provide a unified user experience and matching information - as much as the surface allows.
 
 ### Information hierarchy
 
-The compact view should prioritize:
+The current compact views should prioritize:
 
 1. Provider status.
 2. Current usage or spend.
@@ -132,12 +117,13 @@ The compact view should prioritize:
 4. Reset time or billing-cycle progress.
 5. Alerts.
 
-The full dashboard should add:
+The (future) full dashboard should add:
 
 - Per-provider detail pages.
-- Recent trends.
 - Account source and confidence indicators.
 - Settings, connectors and troubleshooting.
+- Token usage and trends.
+- Deeper cost analysis.
 
 ## Functional requirements
 
@@ -275,24 +261,11 @@ The Tauri surface - the hero artifact - delivered as bounded sub-milestones so t
 
 Make every surface - popover, CLI, statusline - first-class and presentable. The theme is **"each way in reads as intentional, not a scaffold."** Three bounded sub-milestones, built in order.
 
-**v0.4.0 - UI polish (shipped).** A lightweight visual pass, not a design system - the frontend is ~14 small components, so a token/component framework would be YAGNI. Tighten spacing, type scale, and color; grow the existing `theme.css` into a small token set; add real empty / loading / error states. The bar is the Success-criteria line: the UI reads as intentional, not a scaffold, and a screenshot stands on its own. Sequenced first because it feeds the v0.5 release screenshots.
+**v0.4.0 - UI polish.** A lightweight visual pass, not a design system - the frontend is ~14 small components, so a token/component framework would be YAGNI. Tighten spacing, type scale, and color; grow the existing `theme.css` into a small token set; add real empty / loading / error states. The bar is the Success-criteria line: the UI reads as intentional, not a scaffold, and a screenshot stands on its own. Sequenced first because it feeds the v0.5 release screenshots.
 
-**v0.4.1 - CLI maturity (shipped).** Turn `balanze-cli` from feature-complete into a first-class surface (it is also the entire Linux story). Surface note: `status` / `watch` are now explicit subcommands (was bare `--json` / `--sections` / `--watch`); bare `balanze-cli` still defaults to `status`. The CLI stayed glue - no new Tauri command/event (IPC contract unchanged), no change to the twelve architectural boundaries or the actor-model write boundary, and nothing persisted.
+**v0.4.1 - CLI polish** Turn `balanze-cli` from feature-complete into a first-class surface (it is also the entire Linux story). Surface note: `status` / `watch` are now explicit subcommands (was bare `--json` / `--sections` / `--watch`); bare `balanze-cli` still defaults to `status`. The CLI stayed glue - no new Tauri command/event (IPC contract unchanged), no change to the twelve architectural boundaries or the actor-model write boundary, and nothing persisted.
 
-- **Durable history (SQLite) - deferred to the post-1.0 dashboard.** *Not shipped in v0.4.1.* The reopened question resolved against adding it now: Claude history is re-derivable from JSONL (ccusage ships fully stateless), and OpenAI daily buckets *within* a month are free from the Admin Costs API, so the only payoff is cross-month OpenAI history - which the post-1.0 dashboard is the first surface to need. So `export` is stateless and persistence lands with the dashboard.
-- **`export` command - stateless CSV.** `export [-o <file>]` re-derives the full series on every run (no persistence): Claude `(day, model)` rows carrying token counts + a list-price *leverage* dollar column (`jsonl_list_price`, estimate not billed), and OpenAI current-month *billed* rows (`openai_admin_costs`, real) - kept in provenance-separated columns and never summed. `--since` / `--until` / `--provider` / `--format` filters, a JSON time-series variant, and true per-day OpenAI buckets are deferred to issue #114. History-*query* commands fold in when durable storage lands with the dashboard.
-- **`watch` subcommand - live TUI.** Renders a bounded ratatui TUI when stdout is an interactive terminal and `--json` is absent; pipes / redirects / `--json` keep the streaming `StdoutSink` (separator-append) / `JsonlSink` (one JSON doc per line) paths. The CLI analogue of the popover, for users who live in a shell.
-- **`doctor [--offline]`** - per-integration diagnostics over a headless probe set (OK/WARN/FAIL + hint); `setup` reuses the same probes for its readiness summary.
-- **Exit-code taxonomy** - 0 ok / 1 other / 2 usage / 3 auth / 4 network / 5 degraded-under-`--strict`; `main` classifies once and `doctor` shares it. `--quiet` suppresses the status matrix (not `--json`) and trims `doctor` to WARN/FAIL; `--strict` promotes a degraded source to exit 5.
-- **Ergonomics** - clap-derive arg parsing (migrated from hand-rolled); colored `status` output (TTY / NO_COLOR / `--no-color` aware, replicating the tray's 50/90 color buckets); `completions <shell>` + a hidden `man` subcommand; new global flags `-v` / `--verbose`, `--quiet`, `--no-color`, `--strict`, `--version`.
-
-**v0.4.2 - Statusline (shipped).** Productize the Claude Code statusline (already shipped in v0.2 as the watcher's IPC bridge) into a first-class, installable display that **replaces** an existing statusline like cship - the low-friction way into Balanze for people who live in their coding-agent prompt.
-
-- **Cross-provider one-liner** - Claude quota (5h / 7d) alongside OpenAI (Codex quota + real billed $) in a single status line. This is the differentiator: the Claude-only incumbents (ccusage, cship, claude-powerline) can't show cross-provider usage, and Balanze already computes all of it.
-- **Replace, don't wrap.** cship cannot be chained (it only embeds Starship via subprocess and hard-writes itself as the sole `statusLine.command`), and wrapping it is a finicky arrangement. So Balanze's statusline instead reaches a comparable segment set (model, cost, context %, effort, 5h/7d quota, plus the cross-provider line below) so the user can drop cship outright - scoped against the user's actual cship config. This also fixes the daily OAuth-429 pain for free: today Balanze can't run its statusline because cship owns the single slot, so it falls back to OAuth polling that 429s during active use; Balanze's statusline is zero-auth (reads stdin `rate_limits`), so replacing cship with it gives authoritative live quota during active sessions with no 429 (AGENTS.md §3.1).
-- **Configurable display** - segment selection, colors / thresholds (base -> warn -> critical escalation), light/dark: the ~80% of a statusline that is presentation rather than novel data. `setup` detects an existing `statusLine` entry and replaces it with consent, leaving the other tool's config file intact so the user can switch back.
-- **OpenAI fallback cache** - a machine-wide file cache under `<ProjectDirs.cache>/statusline/`: 300s TTL, stale-while-updating so the line never blanks, a 300s negative-cache cooldown that doubles as the §3.1 politeness gate, and an OpenAI-key fingerprint to invalidate on account switch without storing the key. Required because the statusline runs on every conversation turn, while OpenAI billed spend is account-wide and must be fetched at most once per 5 minutes per machine.
-- **Codex: a config preset, not a build.** Codex CLI has no external-command statusline injection point (openai/codex#17827, unshipped) and already shows token / context / 5h / weekly usage natively via its declarative `[tui] status_line` picker - so an in-TUI Codex statusline is both impossible and redundant. The honest deliverable is a recommended `~/.codex/config.toml [tui] status_line` preset plus a docs note; Balanze keeps surfacing Codex usage from outside (it already reads `~/.codex/sessions`).
+**v0.4.2 - Statusline polish.** Productize the Claude Code statusline (already shipped in v0.2 as the watcher's IPC bridge) into a first-class, installable display that **replaces** an existing statusline like cship - the low-friction way into Balanze for people who live in their coding-agent prompt.
 
 ### Phase 5 - v0.5: Distribution & Legibility
 
