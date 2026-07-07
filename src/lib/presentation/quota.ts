@@ -22,9 +22,13 @@ export const QUOTA_BAD_PCT = 90;
 export const STATUSLINE_FRESHNESS_MS = 900_000;
 
 export function quotaTone(pct: number): Tone {
-  if (pct >= QUOTA_BAD_PCT) return 'bad';
-  if (pct >= QUOTA_ORANGE_PCT) return 'orange';
-  if (pct >= QUOTA_WARN_PCT) return 'warn';
+  // Classify the ROUNDED value so the tone matches the toFixed(0) label the
+  // cells render: 74.6 shows "75%" and must read orange, not warn. Mirrors the
+  // Rust surfaces, which classify their rounded display value too.
+  const p = Math.round(pct);
+  if (p >= QUOTA_BAD_PCT) return 'bad';
+  if (p >= QUOTA_ORANGE_PCT) return 'orange';
+  if (p >= QUOTA_WARN_PCT) return 'warn';
   return 'ok';
 }
 

@@ -130,9 +130,11 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             let cross = input.cross?;
             let pct = cross.codex_used_percent?;
             let mark = if cross.codex_stale { " ⚠" } else { "" };
-            let text = format!("◇Codex {pct:.0}%{mark}");
-            // Same shared 50/75/90 severity scale as the usage windows.
-            let style = severity_style(theme, window::Severity::from_util(pct));
+            // Round once for both the label and the color so they agree at a
+            // cutoff (see render_window). Same shared 50/75/90 scale as usage.
+            let shown = pct.round() as i64;
+            let text = format!("◇Codex {shown}%{mark}");
+            let style = severity_style(theme, window::Severity::from_util(shown as f32));
             Some(if input.color {
                 apply_style(style, &text)
             } else {
@@ -195,12 +197,14 @@ fn render_window(
         text.push_str(&format!(" ({})", fmt_countdown(delta)));
     }
     // Color by the shared 50/75/90 severity classifier so the statusline agrees
-    // with the tray, popover, and CLI. The per-segment warn/critical config is
-    // NOT consulted for color here; it stays in `settings` as the hook for
-    // future user-configurable thresholds.
+    // with the tray, popover, and CLI. Classify the ROUNDED display value
+    // (`shown`), not the raw percent, so the number and color never disagree at
+    // a cutoff (89.6 shows "90%" and must read Red, not Orange). The per-segment
+    // warn/critical config is NOT consulted for color here; it stays in
+    // `settings` as the hook for future user-configurable thresholds.
     let style = severity_style(
         input.config.theme.as_str(),
-        window::Severity::from_util(w.used_percent),
+        window::Severity::from_util(shown as f32),
     );
     if input.color {
         apply_style(style, &text)
@@ -737,6 +741,35 @@ mod tests {
         assert!(
             out.contains("\x1b[38;2;255;158;100m"),
             "orange band 75-90: {out:?}"
+        );
+    }
+
+    #[test]
+    fn severity_classifies_rounded_display_value_at_cutoff() {
+        // 89.6% displays "90%" and must read Red, not Orange: classify the
+        // rounded display value so the number and color never disagree.
+        let c = cfg();
+        let mut s = snap();
+        s.rate_limits
+            .as_mut()
+            .unwrap()
+            .windows
+            .iter_mut()
+            .find(|w| w.key == "five_hour")
+            .unwrap()
+            .used_percent = 89.6;
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(out.contains("5h 90%"), "89.6 rounds to 90 in label: {out}");
+        // Red = bold fg:#f7768e = rgb(247,118,142).
+        assert!(
+            out.contains("\x1b[1;38;2;247;118;142m"),
+            "89.6 shows 90% and must read Red, not Orange: {out:?}"
         );
     }
 }

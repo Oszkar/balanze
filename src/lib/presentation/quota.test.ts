@@ -25,6 +25,13 @@ describe('quota', () => {
     expect(quotaTone(90)).toBe('bad');
     expect(quotaTone(95)).toBe('bad');
   });
+  it('classifies the rounded value so tone matches the toFixed(0) label', () => {
+    expect(quotaTone(49.6)).toBe('warn'); // shows "50%"
+    expect(quotaTone(74.6)).toBe('orange'); // shows "75%"
+    expect(quotaTone(89.6)).toBe('bad'); // shows "90%"
+    expect(quotaTone(49.4)).toBe('ok'); // shows "49%"
+    expect(quotaTone(74.4)).toBe('warn'); // shows "74%"
+  });
   it('prefers statusline over oauth', () => {
     const s: Snapshot = { ...base,
       claude_statusline: { schema_version: 2, captured_at: '2026-06-03T12:00:00Z',
