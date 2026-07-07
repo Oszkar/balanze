@@ -17,12 +17,16 @@ Productize the Claude Code statusline into a cross-provider, installable command
 - **Generalized Rate Limits** - Parses arbitrary rate-limit window arrays dynamically, preparing for future Anthropic rate limit windows.
 - **Sonnet 5 Pricing** - Vendored Sonnet 5 price tables to estimated list costs.
 
+### Changed
+- **Unified quota coloring** - one green / yellow / orange / red scale at 50 / 75 / 90 now spans the tray, popover, CLI, and statusline (the statusline previously stayed neutral until 70). Every surface classifies the rounded displayed value, so a shown percentage and its color always agree at a cutoff.
+
 ### Fixed
 - **Safe settings modification** - Prevented settings save paths from clobbering malformed configurations, bailing with a hint instead of defaulting (resolves #144).
 - **Stale statusline guard** - Checked `captured_at` freshness and clock skew on statusline snapshots in the coordinator and UI, falling back to live OAuth if stale (resolves #128).
 - **Pace Freshness** - Kept window pace metrics fresh across poller ticks, refresh requests, and settings transitions.
 - **Windows Vite 8 Deadlock** - Forced binding to `127.0.0.1` in configuration to resolve Node.js IPv6 resolution deadlocks.
 - **UI Synchronization** - Fixed watcher-to-store update delivery and popover store synchronization issues during live refresh events.
+- **Tray title and tooltip name the worst window** - the icon color, the macOS menu-bar title, and the hover tooltip now derive from one view, so a red icon can no longer sit beside a low number. The tooltip explains the color and shows connecting / unavailable states; the cryptic C / O labels are gone.
 
 ## [0.4.1] - CLI maturity - 2026-06-27
 
