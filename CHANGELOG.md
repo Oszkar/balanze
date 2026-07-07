@@ -4,25 +4,25 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 - minor bumps may break; patch bumps are fixes only.
 
-## [0.4.2] - Statusline - 2026-07-07
+## [0.4.2] - Statusline maturity - 2026-07-07
 
 Productize the Claude Code statusline into a cross-provider, installable command that replaces existing statuslines with backup/restore consent. Enforces OpenAI Admin Costs politeness via an on-disk cache.
 
 ### Added
-- **Cross-provider statusline** - Merges Claude Code subscription quota with OpenAI costs (real billed spend) and Codex CLI quota in a single prompt line ([#135](https://github.com/Oszkar/balanze/pull/135), [#137](https://github.com/Oszkar/balanze/pull/137)).
-- **`statusline_render` Crate & Style Engine** - Supports configurable display segments, ANSI color/threshold scaling, and dark/light palettes ([#135](https://github.com/Oszkar/balanze/pull/135)).
-- **Self-compose fallback path** - Headless, no-app fallback that reads Codex files locally and fetches OpenAI costs directly behind a short 3s timeout ([#138](https://github.com/Oszkar/balanze/pull/138)).
-- **OpenAI cost cache** - Enforces the 5-minute OpenAI politeness gate machine-wide via a 300s TTL file cache, keyed securely by FNV-1a key fingerprints ([#138](https://github.com/Oszkar/balanze/pull/138), [#141](https://github.com/Oszkar/balanze/pull/141)).
-- **Replace and Restore with consent** - setup replaces an existing statusline (e.g. cship) in Claude Code's settings.json with user consent, saving a backup to restore it cleanly at any time ([#142](https://github.com/Oszkar/balanze/pull/142)).
-- **Generalized Rate Limits** - Parses arbitrary rate-limit window arrays dynamically, preparing for future Anthropic rate limit windows ([#143](https://github.com/Oszkar/balanze/pull/143)).
-- **Sonnet 5 Pricing** - Vendored Sonnet 5 price tables to estimated list costs ([#139](https://github.com/Oszkar/balanze/pull/139)).
+- **Cross-provider statusline** - Merges Claude Code subscription quota with OpenAI costs (real billed spend) and Codex CLI quota in a single prompt line.
+- **`statusline_render` Crate & Style Engine** - Supports configurable display segments, ANSI color/threshold scaling, and dark/light palettes.
+- **Self-compose fallback path** - Headless, no-app fallback that reads Codex files locally and fetches OpenAI costs directly behind a short 3s timeout.
+- **OpenAI cost cache** - Enforces the 5-minute OpenAI politeness gate machine-wide via a 300s TTL file cache, keyed securely by FNV-1a key fingerprints.
+- **Replace and Restore with consent** - setup replaces an existing statusline in Claude Code's settings.json with user consent, saving a backup to restore it cleanly at any time in case the user is only experimenting.
+- **Generalized Rate Limits** - Parses arbitrary rate-limit window arrays dynamically, preparing for future Anthropic rate limit windows.
+- **Sonnet 5 Pricing** - Vendored Sonnet 5 price tables to estimated list costs.
 
 ### Fixed
-- **Safe settings modification** - Prevented settings save paths from clobbering malformed configurations, bailing with a hint instead of defaulting ([#154](https://github.com/Oszkar/balanze/pull/154), resolving #144).
-- **Stale statusline guard** - Checked `captured_at` freshness and clock skew on statusline snapshots in the coordinator and UI, falling back to live OAuth if stale ([#153](https://github.com/Oszkar/balanze/pull/153), resolving #128).
-- **Pace Freshness** - Kept window pace metrics fresh across poller ticks, refresh requests, and settings transitions ([#150](https://github.com/Oszkar/balanze/pull/150)).
+- **Safe settings modification** - Prevented settings save paths from clobbering malformed configurations, bailing with a hint instead of defaulting (resolves #144).
+- **Stale statusline guard** - Checked `captured_at` freshness and clock skew on statusline snapshots in the coordinator and UI, falling back to live OAuth if stale (resolves #128).
+- **Pace Freshness** - Kept window pace metrics fresh across poller ticks, refresh requests, and settings transitions.
 - **Windows Vite 8 Deadlock** - Forced binding to `127.0.0.1` in configuration to resolve Node.js IPv6 resolution deadlocks.
-- **UI Synchronization** - Fixed watcher-to-store update delivery and popover store synchronization issues during live refresh events ([#148](https://github.com/Oszkar/balanze/pull/148)).
+- **UI Synchronization** - Fixed watcher-to-store update delivery and popover store synchronization issues during live refresh events.
 
 ## [0.4.1] - CLI maturity - 2026-06-27
 
@@ -45,7 +45,7 @@ CLI maturity: `balanze-cli` becomes a first-class, scriptable surface. `status` 
 - **Over-limit pay-as-you-go overage now reads as real billed money.** Past the monthly cap, Anthropic flips the `extra_usage` block to `is_enabled=false` while keeping the real billed amount (and clamps utilization to 100%). The compact matrix, `--sections`, and the `watch` TUI all keyed on `is_enabled` alone and mislabeled it "not configured" / "not available" / "not enabled" - hiding real spend exactly when it was highest. Now detected from `used >= limit` and shown as `$X/$Y over limit (real)`.
 - **statusLine UTF-8 BOM tolerance** - `balanze-cli statusline` strips a leading UTF-8 BOM before parsing, so a BOM-prefixed payload (e.g. piped from PowerShell) no longer reads as a parse error.
 
-## [0.4.0] - UI polish - 2026-06-23
+## [0.4.0] - UI maturity - 2026-06-23
 
 The popover stops reading like a scaffold. New type system and a design-token set, real empty / loading / error states across every cell, a first-run welcome, and parity between the 2 views.
 
