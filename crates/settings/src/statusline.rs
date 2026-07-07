@@ -11,7 +11,15 @@
 //! to the `theme` palette in the `statusline_render` crate (dark or light). This
 //! is what makes `theme` actually switch colors and what lets a partial override
 //! (changing only a width or threshold) keep its coloring instead of going
-//! colorless. An explicit non-empty style overrides the theme palette.
+//! colorless. An explicit non-empty style overrides the theme palette for the
+//! `model`, `context_bar`, `cost`, and `openai_cost` segments.
+//!
+//! Exception - `usage` and `codex`: since the cross-surface color unification
+//! these two are shaded by the shared `window::Severity` classifier (50/75/90),
+//! so their `*_style` overrides are currently INERT. The fields are retained as
+//! the hook for the future user-configurable per-band styling work, which needs
+//! green/orange slots the 3-way base/warn/critical shape lacks. See
+//! `UsageSegment` / `PctSegment`.
 
 use serde::{Deserialize, Serialize};
 
