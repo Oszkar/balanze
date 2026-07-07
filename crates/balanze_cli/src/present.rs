@@ -22,6 +22,12 @@ pub(crate) enum Bucket {
     Neutral,
 }
 
+/// Truecolor RGB for the "orange" heat band, matching the tray icon
+/// (`src-tauri/src/tray_icon.rs`). Shared by the compact matrix (`render.rs`)
+/// and the `watch` TUI (`tui.rs`) so the two renderers cannot drift if the tray
+/// color ever changes. The 16-color ANSI palette has no orange, hence truecolor.
+pub(crate) const TRAY_ORANGE: (u8, u8, u8) = (0xd9, 0x6a, 0x2a);
+
 /// Map a utilization fraction (0.0..=1.0+, may exceed 1.0 on overage) to a
 /// color bucket via the shared `window::Severity` classifier, so the CLI matrix
 /// agrees with the tray, popover, and statusline at 50 / 75 / 90.

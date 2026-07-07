@@ -13,7 +13,7 @@ use crate::format::{
     fmt_int, format_codex_age, format_codex_window, micro_usd_to_display_dollars, pretty_duration,
     short_cadence,
 };
-use crate::present::{Bucket, bucket_for_fraction, bucket_for_pace_ratio};
+use crate::present::{Bucket, TRAY_ORANGE, bucket_for_fraction, bucket_for_pace_ratio};
 
 /// How the `extra_usage` overage block should be presented. Anthropic flips
 /// `is_enabled` to false once usage exceeds the monthly cap, but keeps the real
@@ -583,9 +583,9 @@ fn bucket_style(b: Bucket) -> Style {
     match b {
         Bucket::Ok => Style::new().green(),
         Bucket::Warn => Style::new().yellow(),
-        // No 16-color ANSI orange; use truecolor matching the tray icon
-        // (#d96a2a). AutoStream strips it under --no-color / non-TTY / NO_COLOR.
-        Bucket::Orange => Style::new().truecolor(0xd9, 0x6a, 0x2a),
+        // Shared tray-orange truecolor (no 16-color ANSI orange). AutoStream
+        // strips it under --no-color / non-TTY / NO_COLOR.
+        Bucket::Orange => Style::new().truecolor(TRAY_ORANGE.0, TRAY_ORANGE.1, TRAY_ORANGE.2),
         Bucket::Critical => Style::new().red(),
         Bucket::Neutral => Style::new().dimmed(),
     }

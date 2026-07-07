@@ -265,9 +265,10 @@ fn palette_style(theme: &str, segment: &str, tone: Tone) -> &'static str {
             ("model", true) => "bold fg:#34548a",
             ("agent", false) => "fg:#9ece6a",
             ("agent", true) => "fg:#485e30",
-            ("context_bar", false) | ("codex", false) => "fg:#7dcfff",
-            ("context_bar", true) | ("codex", true) => "fg:#166775",
-            // cost, usage, openai_cost, and any unknown segment -> neutral fg.
+            ("context_bar", false) => "fg:#7dcfff",
+            ("context_bar", true) => "fg:#166775",
+            // cost, openai_cost, and any unknown segment -> neutral fg. (usage
+            // and codex are colored by the severity classifier, not palette_style.)
             (_, false) => "fg:#a9b1d6",
             (_, true) => "fg:#343b58",
         },
@@ -770,6 +771,59 @@ mod tests {
         assert!(
             out.contains("\x1b[1;38;2;247;118;142m"),
             "89.6 shows 90% and must read Red, not Orange: {out:?}"
+        );
+    }
+
+    #[test]
+    fn codex_segment_colored_by_severity_band() {
+        // A populated Codex percentage is shaded by the shared classifier, the
+        // same as the usage windows. Isolate the segment so no usage-window
+        // color bleeds into the assertion.
+        let mut c = cfg();
+        c.lines = vec!["{codex}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_used_percent: Some(80.0),
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(out.contains("Codex 80%"), "codex label: {out}");
+        // 80% -> Orange = fg:#ff9e64 = rgb(255,158,100).
+        assert!(
+            out.contains("\x1b[38;2;255;158;100m"),
+            "codex 80% must read Orange: {out:?}"
+        );
+    }
+
+    #[test]
+    fn codex_severity_classifies_rounded_value_at_cutoff() {
+        // 89.6% shows "Codex 90%" and must read Red, not Orange - same
+        // round-before-classify rule as the usage windows.
+        let mut c = cfg();
+        c.lines = vec!["{codex}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_used_percent: Some(89.6),
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(out.contains("Codex 90%"), "codex rounds to 90: {out}");
+        // Red = bold fg:#f7768e = rgb(247,118,142).
+        assert!(
+            out.contains("\x1b[1;38;2;247;118;142m"),
+            "codex 89.6 shows 90% and must read Red: {out:?}"
         );
     }
 }
