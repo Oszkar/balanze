@@ -1,4 +1,4 @@
-// Hand-built fixtures for the dev-only states gallery (`/gallery`). Each entry is
+// Hand-built fixtures for the dev-only states gallery (`bun run gallery`). Each entry is
 // a real `Snapshot` shaped to drive one popover state through the real components
 // and presentation logic - no IPC, no live data. See the "States gallery" note
 // in README.md.
