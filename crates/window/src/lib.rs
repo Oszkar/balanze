@@ -101,6 +101,52 @@ pub fn pace(
     }
 }
 
+/// Utilization severity band - the one color language shared by every surface
+/// that shades a quota gauge (tray icon, popover, CLI/TUI matrix, statusline).
+/// A single classifier here means the surfaces can never disagree about whether
+/// a given utilization is "fine" or "act now". Cutoffs are the tray's original
+/// 50 / 75 / 90 heat scale; each consumer maps a band to its own paint (tray
+/// RGBA, CLI ANSI, ratatui color, CSS token). The Svelte popover mirrors these
+/// cutoffs in `src/lib/presentation/quota.ts` with a comment pointing back - it
+/// cannot import this crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    /// `< 50%` - comfortable headroom.
+    Green,
+    /// `50% ..< 75%` - worth noticing.
+    Yellow,
+    /// `75% ..< 90%` - getting tight.
+    Orange,
+    /// `>= 90%` - effectively at the cap.
+    Red,
+}
+
+/// Utilization percent at/above which a gauge leaves Green for Yellow.
+pub const SEVERITY_YELLOW_PCT: f32 = 50.0;
+/// Utilization percent at/above which a gauge escalates Yellow -> Orange.
+pub const SEVERITY_ORANGE_PCT: f32 = 75.0;
+/// Utilization percent at/above which a gauge escalates Orange -> Red.
+pub const SEVERITY_RED_PCT: f32 = 90.0;
+
+impl Severity {
+    /// Classify a utilization percentage into a heat band. Boundaries are
+    /// inclusive lower bounds (`>=`): exactly 50.0 is Yellow, 75.0 is Orange,
+    /// 90.0 is Red. Values may exceed 100 (over cap) and map to Red. A NaN
+    /// input fails every `>=` and falls through to Green - callers should not
+    /// pass NaN, but Green is the safe "no alarm" default.
+    pub fn from_util(util_percent: f32) -> Self {
+        if util_percent >= SEVERITY_RED_PCT {
+            Severity::Red
+        } else if util_percent >= SEVERITY_ORANGE_PCT {
+            Severity::Orange
+        } else if util_percent >= SEVERITY_YELLOW_PCT {
+            Severity::Yellow
+        } else {
+            Severity::Green
+        }
+    }
+}
+
 /// Summarize a slice of `UsageEvent`s over a rolling window ending at `now`.
 ///
 /// `window` defines the main aggregation interval (events with
@@ -694,5 +740,26 @@ mod tests {
         let p = pace(25.0, resets_at, SEVEN_DAY_WINDOW, now);
         assert!((p.elapsed_fraction - 0.5).abs() < 1e-9);
         assert!((p.ratio.unwrap() - 0.5).abs() < 1e-9);
+    }
+
+    // --- severity ---
+
+    #[test]
+    fn severity_bands_at_50_75_90_inclusive() {
+        // Inclusive lower bounds; these pin the one scale every surface shares.
+        assert_eq!(Severity::from_util(0.0), Severity::Green);
+        assert_eq!(Severity::from_util(49.9), Severity::Green);
+        assert_eq!(Severity::from_util(50.0), Severity::Yellow);
+        assert_eq!(Severity::from_util(74.9), Severity::Yellow);
+        assert_eq!(Severity::from_util(75.0), Severity::Orange);
+        assert_eq!(Severity::from_util(89.9), Severity::Orange);
+        assert_eq!(Severity::from_util(90.0), Severity::Red);
+        assert_eq!(Severity::from_util(150.0), Severity::Red);
+    }
+
+    #[test]
+    fn severity_negative_and_nan_are_green() {
+        assert_eq!(Severity::from_util(-5.0), Severity::Green);
+        assert_eq!(Severity::from_util(f32::NAN), Severity::Green);
     }
 }

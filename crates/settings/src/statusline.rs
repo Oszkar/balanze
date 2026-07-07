@@ -11,7 +11,15 @@
 //! to the `theme` palette in the `statusline_render` crate (dark or light). This
 //! is what makes `theme` actually switch colors and what lets a partial override
 //! (changing only a width or threshold) keep its coloring instead of going
-//! colorless. An explicit non-empty style overrides the theme palette.
+//! colorless. An explicit non-empty style overrides the theme palette for the
+//! `model`, `context_bar`, `cost`, and `openai_cost` segments.
+//!
+//! Exception - `usage` and `codex`: since the cross-surface color unification
+//! these two are shaded by the shared `window::Severity` classifier (50/75/90),
+//! so their `*_style` overrides are currently INERT. The fields are retained as
+//! the hook for the future user-configurable per-band styling work, which needs
+//! green/orange slots the 3-way base/warn/critical shape lacks. See
+//! `UsageSegment` / `PctSegment`.
 
 use serde::{Deserialize, Serialize};
 
@@ -169,6 +177,11 @@ impl Default for MoneySegment {
     }
 }
 
+/// Usage-window (5h / 7d) segment config. NOTE: since the cross-surface color
+/// unification, the window COLOR is driven by the shared `window::Severity`
+/// classifier (50 / 75 / 90), not by `warn`/`critical` here - those and the
+/// `*_style` fields are retained as the hook for future user-configurable
+/// per-segment thresholds. `show_pace` / `show_reset` are still honored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageSegment {
     /// `warn` must be <= `critical` for the warn band to be reachable.
@@ -210,6 +223,9 @@ impl Default for UsageSegment {
     }
 }
 
+/// Codex quota segment config. Like `UsageSegment`, the COLOR now comes from
+/// the shared `window::Severity` classifier (50 / 75 / 90); `warn`/`critical`
+/// and the `*_style` fields are retained for future configurable thresholds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PctSegment {
     /// `warn` must be <= `critical` for the warn band to be reachable.

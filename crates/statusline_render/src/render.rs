@@ -129,17 +129,17 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
         "codex" => {
             let cross = input.cross?;
             let pct = cross.codex_used_percent?;
-            let c = &segs.codex;
-            let tone = tone_pct(pct, c.warn, c.critical);
             let mark = if cross.codex_stale { " ⚠" } else { "" };
-            Some(paint(
-                &format!("◇Codex {pct:.0}%{mark}"),
-                resolve(&c.style, theme, "codex", Tone::Base),
-                resolve(&c.warn_style, theme, "codex", Tone::Warn),
-                resolve(&c.critical_style, theme, "codex", Tone::Critical),
-                tone,
-                input.color,
-            ))
+            // Round once for both the label and the color so they agree at a
+            // cutoff (see render_window). Same shared 50/75/90 scale as usage.
+            let shown = pct.round() as i64;
+            let text = format!("◇Codex {shown}%{mark}");
+            let style = severity_style(theme, window::Severity::from_util(shown as f32));
+            Some(if input.color {
+                apply_style(style, &text)
+            } else {
+                text
+            })
         }
         "openai_cost" => {
             let cross = input.cross?;
@@ -183,7 +183,6 @@ fn render_window(
     c: &settings::statusline::UsageSegment,
     input: &RenderInput,
 ) -> String {
-    let tone = tone_pct(w.used_percent, c.warn, c.critical);
     let shown = w.used_percent.round() as i64;
     let mut text = format!("{label} {shown}%");
     if c.show_pace {
@@ -197,15 +196,21 @@ fn render_window(
         let delta = w.resets_at - input.now;
         text.push_str(&format!(" ({})", fmt_countdown(delta)));
     }
-    let theme = input.config.theme.as_str();
-    paint(
-        &text,
-        resolve(&c.style, theme, "usage", Tone::Base),
-        resolve(&c.warn_style, theme, "usage", Tone::Warn),
-        resolve(&c.critical_style, theme, "usage", Tone::Critical),
-        tone,
-        input.color,
-    )
+    // Color by the shared 50/75/90 severity classifier so the statusline agrees
+    // with the tray, popover, and CLI. Classify the ROUNDED display value
+    // (`shown`), not the raw percent, so the number and color never disagree at
+    // a cutoff (89.6 shows "90%" and must read Red, not Orange). The per-segment
+    // warn/critical config is NOT consulted for color here; it stays in
+    // `settings` as the hook for future user-configurable thresholds.
+    let style = severity_style(
+        input.config.theme.as_str(),
+        window::Severity::from_util(shown as f32),
+    );
+    if input.color {
+        apply_style(style, &text)
+    } else {
+        text
+    }
 }
 
 /// Apply the tone's configured style to `text`, gated by `color`. A blank style
@@ -260,12 +265,53 @@ fn palette_style(theme: &str, segment: &str, tone: Tone) -> &'static str {
             ("model", true) => "bold fg:#34548a",
             ("agent", false) => "fg:#9ece6a",
             ("agent", true) => "fg:#485e30",
-            ("context_bar", false) | ("codex", false) => "fg:#7dcfff",
-            ("context_bar", true) | ("codex", true) => "fg:#166775",
-            // cost, usage, openai_cost, and any unknown segment -> neutral fg.
+            ("context_bar", false) => "fg:#7dcfff",
+            ("context_bar", true) => "fg:#166775",
+            // cost, openai_cost, and any unknown segment -> neutral fg. (usage
+            // and codex are colored by the severity classifier, not palette_style.)
             (_, false) => "fg:#a9b1d6",
             (_, true) => "fg:#343b58",
         },
+    }
+}
+
+/// Color for a utilization severity band, per theme. The usage windows and the
+/// Codex segment are shaded by the shared `window::Severity` classifier
+/// (50 / 75 / 90), NOT the per-segment config thresholds, so the statusline
+/// agrees with the tray, popover, and CLI. Yellow/Red reuse the existing
+/// warn/critical hues; Green/Orange extend the palette (tokyonight-family),
+/// dark + light.
+fn severity_style(theme: &str, sev: window::Severity) -> &'static str {
+    let light = theme.eq_ignore_ascii_case("light");
+    match sev {
+        window::Severity::Green => {
+            if light {
+                "fg:#485e30"
+            } else {
+                "fg:#9ece6a"
+            }
+        }
+        window::Severity::Yellow => {
+            if light {
+                "fg:#8f5e15"
+            } else {
+                "fg:#e0af68"
+            }
+        }
+        window::Severity::Orange => {
+            if light {
+                "fg:#a1521a"
+            } else {
+                "fg:#ff9e64"
+            }
+        }
+        window::Severity::Red => {
+            if light {
+                "bold fg:#8c4351"
+            } else {
+                "bold fg:#f7768e"
+            }
+        }
     }
 }
 
@@ -621,9 +667,8 @@ mod tests {
     }
 
     #[test]
-    fn color_true_wraps_warn_tone_with_warn_style() {
-        // 5h at 75% -> warn (>=70, <90); default usage warn_style = "fg:#e0af68"
-        // = rgb(224,175,104), no bold.
+    fn color_true_shades_yellow_band_50_to_75() {
+        // 5h at 60% -> Yellow (>=50, <75); yellow = fg:#e0af68 = rgb(224,175,104).
         let c = cfg();
         let mut s = snap();
         s.rate_limits
@@ -633,7 +678,7 @@ mod tests {
             .iter_mut()
             .find(|w| w.key == "five_hour")
             .unwrap()
-            .used_percent = 75.0;
+            .used_percent = 60.0;
         let out = render(&RenderInput {
             snapshot: &s,
             cross: None,
@@ -643,7 +688,142 @@ mod tests {
         });
         assert!(
             out.contains("\x1b[38;2;224;175;104m"),
-            "warn style applied: {out:?}"
+            "yellow band applied: {out:?}"
+        );
+    }
+
+    #[test]
+    fn color_true_greens_below_50() {
+        // 5h at 40% -> Green (<50); green = fg:#9ece6a = rgb(158,206,106). The
+        // statusline greens up when there is headroom (cross-surface parity).
+        let c = cfg();
+        let mut s = snap();
+        s.rate_limits
+            .as_mut()
+            .unwrap()
+            .windows
+            .iter_mut()
+            .find(|w| w.key == "five_hour")
+            .unwrap()
+            .used_percent = 40.0;
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(
+            out.contains("\x1b[38;2;158;206;106m"),
+            "green band below 50: {out:?}"
+        );
+    }
+
+    #[test]
+    fn color_true_oranges_band_75_to_90() {
+        // 5h at 80% -> Orange (>=75, <90); orange = fg:#ff9e64 = rgb(255,158,100).
+        let c = cfg();
+        let mut s = snap();
+        s.rate_limits
+            .as_mut()
+            .unwrap()
+            .windows
+            .iter_mut()
+            .find(|w| w.key == "five_hour")
+            .unwrap()
+            .used_percent = 80.0;
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(
+            out.contains("\x1b[38;2;255;158;100m"),
+            "orange band 75-90: {out:?}"
+        );
+    }
+
+    #[test]
+    fn severity_classifies_rounded_display_value_at_cutoff() {
+        // 89.6% displays "90%" and must read Red, not Orange: classify the
+        // rounded display value so the number and color never disagree.
+        let c = cfg();
+        let mut s = snap();
+        s.rate_limits
+            .as_mut()
+            .unwrap()
+            .windows
+            .iter_mut()
+            .find(|w| w.key == "five_hour")
+            .unwrap()
+            .used_percent = 89.6;
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(out.contains("5h 90%"), "89.6 rounds to 90 in label: {out}");
+        // Red = bold fg:#f7768e = rgb(247,118,142).
+        assert!(
+            out.contains("\x1b[1;38;2;247;118;142m"),
+            "89.6 shows 90% and must read Red, not Orange: {out:?}"
+        );
+    }
+
+    #[test]
+    fn codex_segment_colored_by_severity_band() {
+        // A populated Codex percentage is shaded by the shared classifier, the
+        // same as the usage windows. Isolate the segment so no usage-window
+        // color bleeds into the assertion.
+        let mut c = cfg();
+        c.lines = vec!["{codex}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_used_percent: Some(80.0),
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(out.contains("Codex 80%"), "codex label: {out}");
+        // 80% -> Orange = fg:#ff9e64 = rgb(255,158,100).
+        assert!(
+            out.contains("\x1b[38;2;255;158;100m"),
+            "codex 80% must read Orange: {out:?}"
+        );
+    }
+
+    #[test]
+    fn codex_severity_classifies_rounded_value_at_cutoff() {
+        // 89.6% shows "Codex 90%" and must read Red, not Orange - same
+        // round-before-classify rule as the usage windows.
+        let mut c = cfg();
+        c.lines = vec!["{codex}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_used_percent: Some(89.6),
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(out.contains("Codex 90%"), "codex rounds to 90: {out}");
+        // Red = bold fg:#f7768e = rgb(247,118,142).
+        assert!(
+            out.contains("\x1b[1;38;2;247;118;142m"),
+            "codex 89.6 shows 90% and must read Red: {out:?}"
         );
     }
 }

@@ -35,7 +35,7 @@ use state_coordinator::{Sink, Snapshot, Source, StateCoordinatorHandle, StateMsg
 use tokio::sync::watch;
 
 use crate::format::micro_usd_to_display_dollars;
-use crate::present::{Bucket, bucket_for_fraction};
+use crate::present::{Bucket, TRAY_ORANGE, bucket_for_fraction};
 use crate::render::{OverageState, classify_overage};
 
 // ---------------------------------------------------------------------------
@@ -169,6 +169,8 @@ fn bucket_color(b: Bucket) -> Color {
     match b {
         Bucket::Ok => Color::Green,
         Bucket::Warn => Color::Yellow,
+        // Shared tray-orange truecolor; the 16-color ANSI set has no orange.
+        Bucket::Orange => Color::Rgb(TRAY_ORANGE.0, TRAY_ORANGE.1, TRAY_ORANGE.2),
         Bucket::Critical => Color::Red,
         Bucket::Neutral => Color::DarkGray,
     }

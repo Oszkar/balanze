@@ -15,16 +15,22 @@ const base: Snapshot = {
 };
 
 describe('quota', () => {
-  it('tone folds to warn at 50 and bad at 90 (the tray orange band at 75 folds into warn)', () => {
+  it('tone is 4-stage green/yellow/orange/red at 50/75/90 (matching window::Severity)', () => {
     expect(quotaTone(20)).toBe('ok');
     expect(quotaTone(49)).toBe('ok');
     expect(quotaTone(50)).toBe('warn');
-    expect(quotaTone(60)).toBe('warn');
-    // 75 is the tray's yellow->orange boundary; this 3-tone palette keeps it 'warn'.
-    expect(quotaTone(75)).toBe('warn');
-    expect(quotaTone(89)).toBe('warn');
+    expect(quotaTone(74)).toBe('warn');
+    expect(quotaTone(75)).toBe('orange');
+    expect(quotaTone(89)).toBe('orange');
     expect(quotaTone(90)).toBe('bad');
     expect(quotaTone(95)).toBe('bad');
+  });
+  it('classifies the rounded value so tone matches the toFixed(0) label', () => {
+    expect(quotaTone(49.6)).toBe('warn'); // shows "50%"
+    expect(quotaTone(74.6)).toBe('orange'); // shows "75%"
+    expect(quotaTone(89.6)).toBe('bad'); // shows "90%"
+    expect(quotaTone(49.4)).toBe('ok'); // shows "49%"
+    expect(quotaTone(74.4)).toBe('warn'); // shows "74%"
   });
   it('prefers statusline over oauth', () => {
     const s: Snapshot = { ...base,

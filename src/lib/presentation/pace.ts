@@ -1,4 +1,4 @@
-export type Tone = 'ok' | 'warn' | 'bad' | 'ink';
+export type Tone = 'ok' | 'warn' | 'orange' | 'bad' | 'ink';
 export interface PaceVerdict { ratio: number | null; text: string; tone: Tone; }
 
 export function paceVerdict(usedFraction: number, elapsedFraction: number): PaceVerdict {
