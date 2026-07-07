@@ -45,9 +45,12 @@ pub(crate) fn render_gauge(bucket: ColorBucket, size: u32) -> Vec<u8> {
     buf
 }
 
-/// Paint the tray icon + tooltip. Logs and no-ops on any Tauri error - a
+/// Paint the tray icon, macOS menu-bar title, and hover tooltip. `title` is the
+/// compact `Claude X% · Codex Y%` line (macOS menu bar only); `tooltip` is the
+/// multi-line status panel shown on hover (and the only text on Windows, where
+/// the tray has no persistent label). Logs and no-ops on any Tauri error - a
 /// failed repaint must never crash the coordinator task.
-pub(crate) fn paint(app: &AppHandle, bucket: ColorBucket, title: &str) {
+pub(crate) fn paint(app: &AppHandle, bucket: ColorBucket, title: &str, tooltip: &str) {
     let Some(tray) = app.tray_by_id("main") else {
         tracing::warn!("tray_icon: tray 'main' not found; skipping paint");
         return;
@@ -57,11 +60,23 @@ pub(crate) fn paint(app: &AppHandle, bucket: ColorBucket, title: &str) {
     if let Err(e) = tray.set_icon(Some(img)) {
         tracing::warn!("tray_icon: set_icon failed: {e}");
     }
-    let _ = tray.set_tooltip(Some(if title.is_empty() { "Balanze" } else { title }));
+    let tip = if tooltip.is_empty() {
+        "Balanze"
+    } else {
+        tooltip
+    };
+    if let Err(e) = tray.set_tooltip(Some(tip)) {
+        tracing::warn!("tray_icon: set_tooltip failed: {e}");
+    }
+    // `title` is the macOS menu-bar text only; Windows/Linux trays have no label.
     #[cfg(target_os = "macos")]
     {
-        let _ = tray.set_title(Some(title));
+        if let Err(e) = tray.set_title(Some(title)) {
+            tracing::warn!("tray_icon: set_title failed: {e}");
+        }
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = title;
 }
 
 #[cfg(test)]
