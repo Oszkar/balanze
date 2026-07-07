@@ -39,8 +39,7 @@ A small team or technically inclined individual who wants a local dashboard and 
 
 ### Product goals
 
-- Provide one app that shows AI usage across multiple providers in a normalized way.
-- Support both subscription-style usage and API billing or credit usage where feasible.
+- Provide one app that shows AI usage across multiple providers in a normalized way - both subscription-style usage and API billing or credit usage, where feasible.
 - Make the app useful from the tray or menu bar with minimal interaction.
 - Provide a consistent UX across operating systems while following each OS's design conventions.
 - Keep all core functionality local-first and transparent.
@@ -59,8 +58,7 @@ A small team or technically inclined individual who wants a local dashboard and 
 
 ## Product principles
 
-- Honest about data quality and source provenance.
-- **Show measured status, not forecasts.** Present what *is* - how much is used and how far through the window you are - and let the user judge what comes next. Applies to money (the measured-only matrix) and to time.
+- **Show measured status, not forecasts.** Present what *is* - how much is used and how far through the window you are - and mark every metric with its source and confidence; let the user judge what comes next. Applies to money (the measured-only matrix) and to time.
 - Fast glanceability before deep dashboards.
 - One shared core with thin platform shells.
 - Narrow support matrix over broad but unreliable compatibility.
