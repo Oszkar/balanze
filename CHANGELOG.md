@@ -4,6 +4,30 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 - minor bumps may break; patch bumps are fixes only.
 
+## [0.4.2] - Statusline maturity - 2026-07-07
+
+The Claude Code statusline becomes a cross-provider, installable command - it replaces an existing statusline with backup/restore consent and enforces OpenAI Admin Costs politeness via an on-disk cache.
+
+### Added
+- **Cross-provider statusline** - merges Claude Code subscription quota with OpenAI costs (real billed spend) and Codex CLI quota in a single prompt line.
+- **`statusline_render` crate + style engine** - configurable display segments, ANSI color/threshold scaling, and dark/light palettes.
+- **Self-compose fallback path** - a headless, no-app fallback that reads Codex files locally and fetches OpenAI costs directly behind a short 3s timeout.
+- **OpenAI cost cache** - enforces the 5-minute OpenAI politeness gate machine-wide via a 300s TTL file cache, keyed securely by FNV-1a key fingerprints.
+- **Replace and restore with consent** - setup replaces an existing statusline in Claude Code's `settings.json` with user consent, saving a backup to restore it cleanly at any time.
+- **Generalized rate limits** - parses arbitrary rate-limit window arrays dynamically, preparing for future Anthropic rate-limit windows.
+- **Sonnet 5 pricing** - vendored the Sonnet 5 price table into the list-price leverage estimate.
+
+### Changed
+- **Unified quota coloring** - one green / yellow / orange / red scale at 50 / 75 / 90 now spans the tray, popover, CLI, and statusline (the statusline previously stayed neutral until 70). Every surface classifies the rounded displayed value, so a shown percentage and its color always agree at a cutoff.
+
+### Fixed
+- **Safe settings modification** - stopped settings save paths from clobbering a malformed configuration, bailing with a hint instead of defaulting.
+- **Stale statusline guard** - checked `captured_at` freshness and clock skew on statusline snapshots in the coordinator and UI, falling back to live OAuth if stale.
+- **Pace freshness** - kept window pace metrics fresh across poller ticks, refresh requests, and settings transitions.
+- **Windows Vite 8 deadlock** - forced the dev server to bind `127.0.0.1` instead of `localhost`, fixing a Node.js IPv6 module-runner hang on Windows.
+- **UI synchronization** - fixed watcher-to-store update delivery and popover store synchronization during live refresh events.
+- **Tray title and tooltip name the worst window** - the icon color, the macOS menu-bar title, and the hover tooltip now derive from one view, so a red icon can no longer sit beside a low number. The tooltip explains the color and shows connecting / unavailable states; the cryptic C / O labels are gone.
+
 ## [0.4.1] - CLI maturity - 2026-06-27
 
 CLI maturity: `balanze-cli` becomes a first-class, scriptable surface. `status` is now colored, and `doctor` / `export` / `watch` (TUI) / `completions` land alongside an exit-code taxonomy.
@@ -25,7 +49,7 @@ CLI maturity: `balanze-cli` becomes a first-class, scriptable surface. `status` 
 - **Over-limit pay-as-you-go overage now reads as real billed money.** Past the monthly cap, Anthropic flips the `extra_usage` block to `is_enabled=false` while keeping the real billed amount (and clamps utilization to 100%). The compact matrix, `--sections`, and the `watch` TUI all keyed on `is_enabled` alone and mislabeled it "not configured" / "not available" / "not enabled" - hiding real spend exactly when it was highest. Now detected from `used >= limit` and shown as `$X/$Y over limit (real)`.
 - **statusLine UTF-8 BOM tolerance** - `balanze-cli statusline` strips a leading UTF-8 BOM before parsing, so a BOM-prefixed payload (e.g. piped from PowerShell) no longer reads as a parse error.
 
-## [0.4.0] - UI polish - 2026-06-23
+## [0.4.0] - UI maturity - 2026-06-23
 
 The popover stops reading like a scaffold. New type system and a design-token set, real empty / loading / error states across every cell, a first-run welcome, and parity between the 2 views.
 
@@ -142,6 +166,7 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
+[0.4.2]: https://github.com/Oszkar/balanze/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Oszkar/balanze/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Oszkar/balanze/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Oszkar/balanze/compare/v0.3.0...v0.3.1
