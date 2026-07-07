@@ -1,44 +1,36 @@
 //! Shared presentation helper: maps a utilization fraction or a pace ratio to
-//! a color `Bucket`, using the SAME thresholds as the tray gauge. The tray's
-//! own `ColorBucket` lives in `src-tauri/src/tauri_sink.rs` and is `pub(crate)`
-//! to that binary, so it cannot be imported here (the CLI does not depend on
-//! the `src-tauri` package). The thresholds (50 / 90 percent, inclusive `>=`)
-//! are replicated below and manually kept in lockstep with
-//! `src-tauri/src/tauri_sink.rs` (QUOTA_WARN_PCT = 50, QUOTA_BAD_PCT = 90).
-//! The test below pins only the CLI's own constants; it does NOT enforce
-//! cross-crate parity automatically - if the tray thresholds change, update
-//! the constants here too.
+//! a color `Bucket`. Utilization coloring delegates to the shared
+//! `window::Severity` classifier (crates/window/src/lib.rs) - the one
+//! green/yellow/orange/red heat scale at 50 / 75 / 90 that the tray, popover,
+//! and statusline also use - so the surfaces cannot drift apart. The tray's own
+//! six-way `ColorBucket` (src-tauri/src/tauri_sink.rs) maps the same `Severity`
+//! bands to its icon RGBA.
 //!
-//! Consumed by the colored one-shot `status` renderer (and, later, the `watch`
-//! TUI) so the matrix coloring logic is not forked.
+//! Consumed by the colored one-shot `status` renderer and the `watch` TUI so
+//! the matrix coloring logic is not forked.
 
-/// Color bucket for a presented value. Collapsed from the tray's six-way
-/// `ColorBucket` to the three signal states the CLI text surface needs, plus
-/// `Neutral` for "no signal yet" (cold start / missing pace ratio).
+/// Color bucket for a presented value. The four utilization heat bands mirror
+/// `window::Severity` (Ok=Green, Warn=Yellow, Orange, Critical=Red), plus
+/// `Neutral` for "no signal yet" (cold start / missing pace ratio). Pace-ratio
+/// coloring reuses Ok/Warn/Critical only - a different axis, no Orange band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Bucket {
     Ok,
     Warn,
+    Orange,
     Critical,
     Neutral,
 }
 
-/// Tray-parity utilization thresholds, as FRACTIONS (the tray uses percent).
-/// 0.50 -> Warn boundary (tray QUOTA_WARN_PCT = 50.0), 0.90 -> Critical
-/// boundary (tray QUOTA_BAD_PCT = 90.0). Boundaries are inclusive (`>=`),
-/// matching `ColorBucket::from_util` in src-tauri/src/tauri_sink.rs.
-const WARN_FRACTION: f64 = 0.50;
-const CRITICAL_FRACTION: f64 = 0.90;
-
 /// Map a utilization fraction (0.0..=1.0+, may exceed 1.0 on overage) to a
-/// color bucket using the same thresholds as the tray gauge.
+/// color bucket via the shared `window::Severity` classifier, so the CLI matrix
+/// agrees with the tray, popover, and statusline at 50 / 75 / 90.
 pub(crate) fn bucket_for_fraction(used: f64) -> Bucket {
-    if used >= CRITICAL_FRACTION {
-        Bucket::Critical
-    } else if used >= WARN_FRACTION {
-        Bucket::Warn
-    } else {
-        Bucket::Ok
+    match window::Severity::from_util((used * 100.0) as f32) {
+        window::Severity::Green => Bucket::Ok,
+        window::Severity::Yellow => Bucket::Warn,
+        window::Severity::Orange => Bucket::Orange,
+        window::Severity::Red => Bucket::Critical,
     }
 }
 
@@ -59,20 +51,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bucket_for_fraction_matches_tray_thresholds() {
-        // Pins the CLI's own constants (WARN_FRACTION = 0.50, CRITICAL_FRACTION
-        // = 0.90, inclusive `>=`) against hardcoded expected values.
-        // These are manually kept in sync with src-tauri/src/tauri_sink.rs
-        // (QUOTA_WARN_PCT = 50.0, QUOTA_BAD_PCT = 90.0). This test does NOT
-        // cross-crate-import the tray constants; if the tray thresholds change,
-        // update WARN_FRACTION / CRITICAL_FRACTION above AND this test.
-        // The tray's intermediate 75% Orange band (QUOTA_ORANGE_PCT) is
-        // intentionally folded into `Warn` here - the CLI uses a 3-way bucket,
-        // so 50 / 90 are the only parity points, not an oversight.
+    fn bucket_for_fraction_matches_severity_bands() {
+        // The CLI matrix inherits the shared `window::Severity` scale
+        // (Green/Yellow/Orange/Red at 50 / 75 / 90, inclusive `>=`); a change to
+        // those cutoffs flows here automatically, no manual cross-crate sync.
         assert_eq!(bucket_for_fraction(0.0), Bucket::Ok);
         assert_eq!(bucket_for_fraction(0.499), Bucket::Ok);
         assert_eq!(bucket_for_fraction(0.50), Bucket::Warn);
-        assert_eq!(bucket_for_fraction(0.899), Bucket::Warn);
+        assert_eq!(bucket_for_fraction(0.749), Bucket::Warn);
+        assert_eq!(bucket_for_fraction(0.75), Bucket::Orange);
+        assert_eq!(bucket_for_fraction(0.899), Bucket::Orange);
         assert_eq!(bucket_for_fraction(0.90), Bucket::Critical);
         assert_eq!(bucket_for_fraction(1.25), Bucket::Critical);
     }

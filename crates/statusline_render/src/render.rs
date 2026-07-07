@@ -129,17 +129,15 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
         "codex" => {
             let cross = input.cross?;
             let pct = cross.codex_used_percent?;
-            let c = &segs.codex;
-            let tone = tone_pct(pct, c.warn, c.critical);
             let mark = if cross.codex_stale { " ⚠" } else { "" };
-            Some(paint(
-                &format!("◇Codex {pct:.0}%{mark}"),
-                resolve(&c.style, theme, "codex", Tone::Base),
-                resolve(&c.warn_style, theme, "codex", Tone::Warn),
-                resolve(&c.critical_style, theme, "codex", Tone::Critical),
-                tone,
-                input.color,
-            ))
+            let text = format!("◇Codex {pct:.0}%{mark}");
+            // Same shared 50/75/90 severity scale as the usage windows.
+            let style = severity_style(theme, window::Severity::from_util(pct));
+            Some(if input.color {
+                apply_style(style, &text)
+            } else {
+                text
+            })
         }
         "openai_cost" => {
             let cross = input.cross?;
@@ -183,7 +181,6 @@ fn render_window(
     c: &settings::statusline::UsageSegment,
     input: &RenderInput,
 ) -> String {
-    let tone = tone_pct(w.used_percent, c.warn, c.critical);
     let shown = w.used_percent.round() as i64;
     let mut text = format!("{label} {shown}%");
     if c.show_pace {
@@ -197,15 +194,19 @@ fn render_window(
         let delta = w.resets_at - input.now;
         text.push_str(&format!(" ({})", fmt_countdown(delta)));
     }
-    let theme = input.config.theme.as_str();
-    paint(
-        &text,
-        resolve(&c.style, theme, "usage", Tone::Base),
-        resolve(&c.warn_style, theme, "usage", Tone::Warn),
-        resolve(&c.critical_style, theme, "usage", Tone::Critical),
-        tone,
-        input.color,
-    )
+    // Color by the shared 50/75/90 severity classifier so the statusline agrees
+    // with the tray, popover, and CLI. The per-segment warn/critical config is
+    // NOT consulted for color here; it stays in `settings` as the hook for
+    // future user-configurable thresholds.
+    let style = severity_style(
+        input.config.theme.as_str(),
+        window::Severity::from_util(w.used_percent),
+    );
+    if input.color {
+        apply_style(style, &text)
+    } else {
+        text
+    }
 }
 
 /// Apply the tone's configured style to `text`, gated by `color`. A blank style
@@ -266,6 +267,46 @@ fn palette_style(theme: &str, segment: &str, tone: Tone) -> &'static str {
             (_, false) => "fg:#a9b1d6",
             (_, true) => "fg:#343b58",
         },
+    }
+}
+
+/// Color for a utilization severity band, per theme. The usage windows and the
+/// Codex segment are shaded by the shared `window::Severity` classifier
+/// (50 / 75 / 90), NOT the per-segment config thresholds, so the statusline
+/// agrees with the tray, popover, and CLI. Yellow/Red reuse the existing
+/// warn/critical hues; Green/Orange extend the palette (tokyonight-family),
+/// dark + light.
+fn severity_style(theme: &str, sev: window::Severity) -> &'static str {
+    let light = theme.eq_ignore_ascii_case("light");
+    match sev {
+        window::Severity::Green => {
+            if light {
+                "fg:#485e30"
+            } else {
+                "fg:#9ece6a"
+            }
+        }
+        window::Severity::Yellow => {
+            if light {
+                "fg:#8f5e15"
+            } else {
+                "fg:#e0af68"
+            }
+        }
+        window::Severity::Orange => {
+            if light {
+                "fg:#a1521a"
+            } else {
+                "fg:#ff9e64"
+            }
+        }
+        window::Severity::Red => {
+            if light {
+                "bold fg:#8c4351"
+            } else {
+                "bold fg:#f7768e"
+            }
+        }
     }
 }
 
@@ -621,9 +662,8 @@ mod tests {
     }
 
     #[test]
-    fn color_true_wraps_warn_tone_with_warn_style() {
-        // 5h at 75% -> warn (>=70, <90); default usage warn_style = "fg:#e0af68"
-        // = rgb(224,175,104), no bold.
+    fn color_true_shades_yellow_band_50_to_75() {
+        // 5h at 60% -> Yellow (>=50, <75); yellow = fg:#e0af68 = rgb(224,175,104).
         let c = cfg();
         let mut s = snap();
         s.rate_limits
@@ -633,7 +673,7 @@ mod tests {
             .iter_mut()
             .find(|w| w.key == "five_hour")
             .unwrap()
-            .used_percent = 75.0;
+            .used_percent = 60.0;
         let out = render(&RenderInput {
             snapshot: &s,
             cross: None,
@@ -643,7 +683,60 @@ mod tests {
         });
         assert!(
             out.contains("\x1b[38;2;224;175;104m"),
-            "warn style applied: {out:?}"
+            "yellow band applied: {out:?}"
+        );
+    }
+
+    #[test]
+    fn color_true_greens_below_50() {
+        // 5h at 40% -> Green (<50); green = fg:#9ece6a = rgb(158,206,106). The
+        // statusline greens up when there is headroom (cross-surface parity).
+        let c = cfg();
+        let mut s = snap();
+        s.rate_limits
+            .as_mut()
+            .unwrap()
+            .windows
+            .iter_mut()
+            .find(|w| w.key == "five_hour")
+            .unwrap()
+            .used_percent = 40.0;
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(
+            out.contains("\x1b[38;2;158;206;106m"),
+            "green band below 50: {out:?}"
+        );
+    }
+
+    #[test]
+    fn color_true_oranges_band_75_to_90() {
+        // 5h at 80% -> Orange (>=75, <90); orange = fg:#ff9e64 = rgb(255,158,100).
+        let c = cfg();
+        let mut s = snap();
+        s.rate_limits
+            .as_mut()
+            .unwrap()
+            .windows
+            .iter_mut()
+            .find(|w| w.key == "five_hour")
+            .unwrap()
+            .used_percent = 80.0;
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: None,
+            config: &c,
+            now: now(),
+            color: true,
+        });
+        assert!(
+            out.contains("\x1b[38;2;255;158;100m"),
+            "orange band 75-90: {out:?}"
         );
     }
 }

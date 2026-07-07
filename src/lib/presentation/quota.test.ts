@@ -15,14 +15,13 @@ const base: Snapshot = {
 };
 
 describe('quota', () => {
-  it('tone folds to warn at 50 and bad at 90 (the tray orange band at 75 folds into warn)', () => {
+  it('tone is 4-stage green/yellow/orange/red at 50/75/90 (matching window::Severity)', () => {
     expect(quotaTone(20)).toBe('ok');
     expect(quotaTone(49)).toBe('ok');
     expect(quotaTone(50)).toBe('warn');
-    expect(quotaTone(60)).toBe('warn');
-    // 75 is the tray's yellow->orange boundary; this 3-tone palette keeps it 'warn'.
-    expect(quotaTone(75)).toBe('warn');
-    expect(quotaTone(89)).toBe('warn');
+    expect(quotaTone(74)).toBe('warn');
+    expect(quotaTone(75)).toBe('orange');
+    expect(quotaTone(89)).toBe('orange');
     expect(quotaTone(90)).toBe('bad');
     expect(quotaTone(95)).toBe('bad');
   });

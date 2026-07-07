@@ -169,6 +169,11 @@ impl Default for MoneySegment {
     }
 }
 
+/// Usage-window (5h / 7d) segment config. NOTE: since the cross-surface color
+/// unification, the window COLOR is driven by the shared `window::Severity`
+/// classifier (50 / 75 / 90), not by `warn`/`critical` here - those and the
+/// `*_style` fields are retained as the hook for future user-configurable
+/// per-segment thresholds. `show_pace` / `show_reset` are still honored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageSegment {
     /// `warn` must be <= `critical` for the warn band to be reachable.
@@ -210,6 +215,9 @@ impl Default for UsageSegment {
     }
 }
 
+/// Codex quota segment config. Like `UsageSegment`, the COLOR now comes from
+/// the shared `window::Severity` classifier (50 / 75 / 90); `warn`/`critical`
+/// and the `*_style` fields are retained for future configurable thresholds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PctSegment {
     /// `warn` must be <= `critical` for the warn band to be reachable.

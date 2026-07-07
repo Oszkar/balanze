@@ -1,12 +1,13 @@
 import type { Snapshot } from '../types/snapshot';
 import type { Tone } from './pace';
 
-// Canonical quota-tone thresholds (percent utilization), mirroring the WARN and
-// BAD boundaries in src-tauri/src/tauri_sink.rs (ColorBucket::from_util). The
-// tray uses a 4-color palette with an extra ORANGE band at 75%; this popover
-// uses a coarser 3-tone palette and folds 75-90% into 'warn'. Keep the shared
-// boundary values (50, 90) in lockstep across the two files.
+// Canonical quota-tone thresholds (percent utilization). These mirror the
+// shared `window::Severity` classifier (crates/window/src/lib.rs) - the one
+// green/yellow/orange/red heat scale at 50 / 75 / 90 used by the tray, CLI, and
+// statusline. This popover cannot import the Rust crate, so it re-declares the
+// cutoffs here; keep them in lockstep with SEVERITY_YELLOW/ORANGE/RED_PCT.
 export const QUOTA_WARN_PCT = 50;
+export const QUOTA_ORANGE_PCT = 75;
 export const QUOTA_BAD_PCT = 90;
 
 // Staleness ceiling for the statusLine payload, in milliseconds. Kept in
@@ -22,8 +23,7 @@ export const STATUSLINE_FRESHNESS_MS = 900_000;
 
 export function quotaTone(pct: number): Tone {
   if (pct >= QUOTA_BAD_PCT) return 'bad';
-  // 50-90 is one 'warn' tone here; the tray splits it into yellow (50-75) and
-  // orange (75-90), which this 3-tone palette intentionally folds together.
+  if (pct >= QUOTA_ORANGE_PCT) return 'orange';
   if (pct >= QUOTA_WARN_PCT) return 'warn';
   return 'ok';
 }

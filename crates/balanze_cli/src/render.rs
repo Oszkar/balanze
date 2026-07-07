@@ -583,6 +583,9 @@ fn bucket_style(b: Bucket) -> Style {
     match b {
         Bucket::Ok => Style::new().green(),
         Bucket::Warn => Style::new().yellow(),
+        // No 16-color ANSI orange; use truecolor matching the tray icon
+        // (#d96a2a). AutoStream strips it under --no-color / non-TTY / NO_COLOR.
+        Bucket::Orange => Style::new().truecolor(0xd9, 0x6a, 0x2a),
         Bucket::Critical => Style::new().red(),
         Bucket::Neutral => Style::new().dimmed(),
     }

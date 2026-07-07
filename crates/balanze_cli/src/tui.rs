@@ -169,6 +169,9 @@ fn bucket_color(b: Bucket) -> Color {
     match b {
         Bucket::Ok => Color::Green,
         Bucket::Warn => Color::Yellow,
+        // Truecolor orange matching the tray icon (#d96a2a); the 16-color ANSI
+        // set has no orange.
+        Bucket::Orange => Color::Rgb(0xd9, 0x6a, 0x2a),
         Bucket::Critical => Color::Red,
         Bucket::Neutral => Color::DarkGray,
     }

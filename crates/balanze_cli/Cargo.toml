@@ -30,6 +30,10 @@ snapshot_composer = { path = "../snapshot_composer" }
 state_coordinator = { path = "../state_coordinator" }
 statusline_render = { path = "../statusline_render" }
 watcher = { path = "../watcher" }
+# Shared `Severity` utilization classifier consumed by present.rs so the CLI
+# matrix colors agree with the tray / popover / statusline. Already in the tree
+# transitively via state_coordinator; also used directly by integration tests.
+window = { path = "../window" }
 
 # Setup-wizard masked input. Tiny, widely-used crate (cross-platform tty
 # detection + termios/console manipulation). Used only by `balanze-cli setup`.
@@ -79,10 +83,6 @@ clap_mangen = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"  # used by statusline snapshot write tests
-# integration_4quadrant.rs calls window::summarize_window directly (composition-
-# contract test, not the CLI binary). The binary accesses window fields only
-# through state_coordinator::Snapshot public fields - no direct window:: call.
-window = { path = "../window" }
 # integration_statusline_self_compose.rs: subprocess invocation via assert_cmd
 # and a wiremock Admin Costs API server to gate-prove the 300s cache.
 assert_cmd = "2"
