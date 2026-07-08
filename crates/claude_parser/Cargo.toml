@@ -22,6 +22,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
+# Parser emits WARN on skipped schema-drift lines (AGENTS.md §3.2 documents the
+# `balanze::claude_parser` target and its WARN default / trace gating).
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
