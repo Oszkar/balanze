@@ -88,7 +88,9 @@ pub fn parse_line(line: &str, line_no: usize) -> Result<Option<UsageEvent>, Pars
 /// Parse every line of a JSONL document into events.
 ///
 /// Errors propagate with the line number that broke parsing; callers may
-/// choose to log and skip the file, or to fail fast.
+/// choose to log and skip the file, or to fail fast. For an append-tailing
+/// reader that must keep making forward progress, prefer [`parse_str_lossy`],
+/// which skips a bad line instead of discarding the whole batch.
 pub fn parse_str(input: &str) -> Result<Vec<UsageEvent>, ParseError> {
     let mut events = Vec::new();
     for (idx, line) in input.lines().enumerate() {
@@ -97,6 +99,42 @@ pub fn parse_str(input: &str) -> Result<Vec<UsageEvent>, ParseError> {
         }
     }
     Ok(events)
+}
+
+/// Events plus the 1-indexed line numbers that failed to parse, from
+/// [`parse_str_lossy`].
+#[derive(Debug, Default)]
+pub struct LossyParse {
+    /// Successfully parsed usage events, in document order.
+    pub events: Vec<UsageEvent>,
+    /// 1-indexed numbers of lines that failed to parse and were skipped.
+    /// Empty on a clean document. Benign non-event lines (blank / non-assistant
+    /// / no usage) are NOT counted here - they carry no event by design.
+    pub skipped_lines: Vec<usize>,
+}
+
+/// Parse every line, **skipping** (not aborting on) lines that fail to parse.
+///
+/// Unlike [`parse_str`], a single malformed or schema-drifted line does not
+/// discard the whole document: the offending line is skipped, its 1-indexed
+/// number recorded in [`LossyParse::skipped_lines`], and parsing continues.
+///
+/// This is what the incremental reader uses so one bad complete line can't park
+/// its byte cursor in front of the batch forever (which would re-fail every
+/// tick and stall all future appends for that file). The caller surfaces
+/// `skipped_lines` (e.g. a WARN) rather than silently under-counting.
+pub fn parse_str_lossy(input: &str) -> LossyParse {
+    let mut out = LossyParse::default();
+    for (idx, line) in input.lines().enumerate() {
+        match parse_line(line, idx + 1) {
+            Ok(Some(event)) => out.events.push(event),
+            Ok(None) => {}
+            // `parse_line` only ever yields `SchemaDrift` here (it does no I/O);
+            // record the line number and keep going regardless of variant.
+            Err(_) => out.skipped_lines.push(idx + 1),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -148,6 +186,31 @@ mod tests {
         assert_eq!(ev.cache_creation_input_tokens, 0);
         assert_eq!(ev.cache_read_input_tokens, 0);
         assert_eq!(ev.total_tokens(), 23);
+    }
+
+    #[test]
+    fn parse_str_lossy_skips_bad_lines_and_keeps_good_events() {
+        // A valid usage line, an invalid-JSON line, and a schema-drift line
+        // (assistant + usage but no top-level timestamp - the exact case that
+        // used to stall the incremental cursor).
+        let good = r#"{"type":"assistant","timestamp":"2026-05-06T14:28:06.800Z","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":2}}}"#;
+        let bad_json = "{not json";
+        let drift = r#"{"type":"assistant","message":{"model":"m","usage":{"input_tokens":9,"output_tokens":9}}}"#;
+        let doc = format!("{good}\n{bad_json}\n{good}\n{drift}\n");
+
+        let out = parse_str_lossy(&doc);
+        assert_eq!(out.events.len(), 2, "both good lines survive the bad ones");
+        assert_eq!(out.skipped_lines, vec![2, 4], "bad-JSON (2) and drift (4)");
+        // `parse_str` (strict) aborts on the first bad line, by contrast.
+        assert!(parse_str(&doc).is_err());
+    }
+
+    #[test]
+    fn parse_str_lossy_clean_document_has_no_skips() {
+        let good = r#"{"type":"assistant","timestamp":"2026-05-06T14:28:06.800Z","message":{"model":"m","usage":{"input_tokens":1,"output_tokens":2}}}"#;
+        let out = parse_str_lossy(&format!("{good}\n{good}\n"));
+        assert_eq!(out.events.len(), 2);
+        assert!(out.skipped_lines.is_empty());
     }
 
     #[test]

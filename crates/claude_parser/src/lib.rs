@@ -17,7 +17,7 @@ mod walker;
 
 pub use dedup::dedup_events;
 pub use incremental::{FileCursor, IncrementalParser};
-pub use parser::{parse_line, parse_str};
+pub use parser::{LossyParse, parse_line, parse_str, parse_str_lossy};
 pub use types::{AccountType, DataSource, ParseError, Provider, UsageEvent};
 pub use walker::{
     candidate_claude_projects_dirs, find_all_claude_projects_dirs, find_claude_projects_dir,

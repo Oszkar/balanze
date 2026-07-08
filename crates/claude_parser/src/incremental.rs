@@ -18,7 +18,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::parser::parse_str;
+use crate::parser::parse_str_lossy;
 use crate::types::{ParseError, UsageEvent};
 
 /// Snapshot of a single file's state at the last `read_incremental` call.
@@ -84,7 +84,23 @@ impl IncrementalParser {
             let events = if prefix_len == 0 {
                 Vec::new()
             } else {
-                parse_str(&buf[..prefix_len])?
+                let parsed = parse_str_lossy(&buf[..prefix_len]);
+                if !parsed.skipped_lines.is_empty() {
+                    // Skip-and-advance: a schema-drift or malformed *complete*
+                    // line must not park the cursor in front of the batch. The
+                    // strict `parse_str` would `?`-abort here and, since the
+                    // cursor is only advanced below, leave `byte_pos` pinned so
+                    // every later read re-hit the same line and stalled all
+                    // future appends for this file. We keep the good events and
+                    // let the cursor advance past the whole complete prefix.
+                    tracing::warn!(
+                        "claude_parser: skipped {} unparseable line(s) in {} (batch at byte {}); continuing without them",
+                        parsed.skipped_lines.len(),
+                        path.display(),
+                        start_offset,
+                    );
+                }
+                parsed.events
             };
             (events, prefix_len)
         };
@@ -332,6 +348,42 @@ mod tests {
         assert_eq!(second.len(), 2);
         assert_eq!(second[0].message_id.as_deref(), Some("msg_b"));
         assert_eq!(second[1].message_id.as_deref(), Some("msg_c"));
+    }
+
+    #[test]
+    fn bad_complete_line_is_skipped_and_cursor_advances() {
+        // Regression: a single malformed *complete* line used to `?`-abort the
+        // whole read, leaving the cursor parked in front of it so every later
+        // read re-hit the same line and stalled all future appends for the file.
+        // Now the bad line is skipped, the good events ingest, and the cursor
+        // advances past the whole complete prefix.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut content = String::new();
+        write_assistant_line(&mut content, "msg_a", "req_1", 100);
+        // A schema-drift line: assistant + usage but no top-level timestamp.
+        content.push_str(
+            r#"{"type":"assistant","message":{"model":"m","usage":{"input_tokens":9,"output_tokens":9}}}"#,
+        );
+        content.push('\n');
+        write_assistant_line(&mut content, "msg_b", "req_2", 200);
+        std::fs::write(&path, &content).unwrap();
+
+        let mut p = IncrementalParser::new();
+        let first = p.read_incremental(&path).unwrap();
+        assert_eq!(first.len(), 2, "both good lines survive the bad one");
+        assert_eq!(
+            p.cursor_for(&path).unwrap().byte_pos,
+            content.len() as u64,
+            "cursor advanced past the whole prefix, not parked on the bad line"
+        );
+
+        // Forward progress: a later append is still picked up (no stall).
+        write_assistant_line(&mut content, "msg_c", "req_3", 300);
+        std::fs::write(&path, &content).unwrap();
+        let second = p.read_incremental(&path).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].message_id.as_deref(), Some("msg_c"));
     }
 
     #[test]
