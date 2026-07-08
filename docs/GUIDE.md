@@ -27,10 +27,10 @@ The popover is one normalized snapshot of your AI usage. Everything in the grid 
 |               | Quota %                              | API $ (real billed)                                 |
 |---------------|--------------------------------------|-----------------------------------------------------|
 | **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
-| **OpenAI**    | Codex CLI rate-limit %               | real billed spend (Admin Costs API)                 |
+| **OpenAI**    | Codex CLI rate-limit % (5h / weekly) | real billed spend (Admin Costs API)                 |
 
 - **Anthropic quota %** - live 5-hour / 7-day utilization from the same `/api/oauth/usage` endpoint Claude Code uses, with a reset clock on each bar.
-- **OpenAI quota %** - the Codex CLI rate-limit %, read from your local Codex rollout files.
+- **OpenAI quota %** - the Codex CLI rate-limit % for both rolling windows (5-hour + weekly, classified by duration), read from your local Codex rollout files.
 - **OpenAI API $** - this-month billed spend from the Admin Costs API.
 - **Anthropic API $** - real or nothing. If you enabled pay-as-you-go "Extra usage" on claude.ai, this cell shows that real overage; otherwise it reads **not available** (Anthropic exposes no per-user API spend). It is never backfilled with an estimate.
 
@@ -77,7 +77,7 @@ Until a key is present, the OpenAI column shows a connect prompt rather than a b
 
 ## The Claude Code statusline
 
-`balanze-cli statusline` is a zero-auth status line for your Claude Code prompt: live 5h/7d subscription quota, session cost, and - uniquely - cross-provider signal (Codex quota and real OpenAI spend) in one line.
+`balanze-cli statusline` is a zero-auth status line for your Claude Code prompt: live 5h/7d subscription quota, session cost, and - uniquely - cross-provider signal (both Codex rate-limit windows, 5-hour and weekly, and real OpenAI spend) in one line.
 
 - **Wire it** during `balanze-cli setup`, or from the popover's settings panel.
 - **Replace, don't wrap.** If another tool already owns the `statusLine.command`, Balanze offers to replace it *with your consent*, backing the previous command up first. Nothing in the other tool's own config is touched.
