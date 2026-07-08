@@ -106,19 +106,28 @@ pub fn get(name: &str) -> Result<String, KeychainError> {
 /// `BALANZE_OPENAI_KEY` env override (trimmed; empty = unset), which takes
 /// precedence over the stored keychain entry (AGENTS.md §3.4).
 ///
-/// `Ok(None)` means "not configured" - the env var is unset/empty AND there's
-/// no keychain entry. `Err` is a real keychain failure (locked, denied), not
-/// mere absence. Single source of truth for the CLI snapshot fetch, the
-/// statusline self-compose fingerprint, and the watcher poll task.
+/// `Ok(None)` means "not configured". `Err` is a real keychain failure (locked,
+/// denied), not mere absence. Single source of truth for the CLI snapshot fetch,
+/// the statusline self-compose fingerprint, and the watcher poll task.
+///
+/// The env var, **when present, is authoritative even if blank**: a blank or
+/// whitespace `BALANZE_OPENAI_KEY` explicitly means "not configured" and does
+/// NOT fall through to the keychain. Callers set it blank to force OpenAI off /
+/// no network (see `balanze_cli` statusline self-compose); reading the keychain
+/// there could fetch or prompt on a machine with a saved key. The keychain is
+/// consulted only when the env var is entirely absent.
 pub fn resolve_openai_key() -> Result<Option<String>, KeychainError> {
     resolve_openai_key_with(std::env::var("BALANZE_OPENAI_KEY").ok())
 }
 
-/// Inner logic of [`resolve_openai_key`] with the env value injected, so the
-/// keychain fall-through is separable from the (pure, store-free) env rules.
-fn resolve_openai_key_with(env_override: Option<String>) -> Result<Option<String>, KeychainError> {
-    if let Some(key) = env_key_override(env_override) {
-        return Ok(Some(key));
+/// Inner logic of [`resolve_openai_key`] with the env value injected (as
+/// `std::env::var(...).ok()`, so `None` = absent, `Some(_)` = present). Keeps
+/// the present/absent branch and the trim rule unit-testable without a store.
+fn resolve_openai_key_with(env_var: Option<String>) -> Result<Option<String>, KeychainError> {
+    // Present (blank or not) is authoritative; a blank value is `None` here and
+    // must not fall through to the keychain below.
+    if let Some(raw) = env_var {
+        return Ok(non_blank(&raw));
     }
     match get(keys::OPENAI_API_KEY) {
         Ok(k) => Ok(Some(k)),
@@ -127,12 +136,10 @@ fn resolve_openai_key_with(env_override: Option<String>) -> Result<Option<String
     }
 }
 
-/// Apply the `BALANZE_OPENAI_KEY` override rules to a raw env value: trim it,
-/// and treat empty/whitespace as unset. Pure - no keychain access - so the
-/// precedence policy is unit-testable without a store.
-fn env_key_override(env_override: Option<String>) -> Option<String> {
-    let trimmed = env_override?.trim().to_string();
-    (!trimmed.is_empty()).then_some(trimmed)
+/// Trim a raw value; `None` if it is empty or all whitespace. Pure.
+fn non_blank(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// Delete the entry under the given name. Returns `Ok(())` if it didn't
@@ -211,24 +218,27 @@ mod tests {
     }
 
     #[test]
-    fn env_override_wins_and_is_trimmed() {
+    fn present_nonblank_env_wins_and_is_trimmed() {
         assert_eq!(
-            env_key_override(Some("  sk-admin-xyz  ".to_string())),
+            resolve_openai_key_with(Some("  sk-admin-xyz  ".to_string())).unwrap(),
             Some("sk-admin-xyz".to_string())
         );
     }
 
     #[test]
-    fn empty_or_whitespace_env_override_is_treated_as_unset() {
-        // Must NOT leak as `Some("")` - that means "not set", so `resolve` falls
-        // through to the keychain instead of short-circuiting on a blank key.
+    fn present_but_blank_env_is_not_configured_without_touching_keychain() {
+        // Regression guard (PR #165 review): a present-but-blank BALANZE_OPENAI_KEY
+        // must resolve to Ok(None) directly and must NOT fall through to the
+        // keychain - callers set it blank to force "OpenAI off / no network", and
+        // a machine with a saved key (or a prompting keychain) would otherwise
+        // fetch or prompt. Testable without a store precisely because the
+        // env-present branch never calls `get`.
         for blank in ["", "   ", "\t\n"] {
             assert_eq!(
-                env_key_override(Some(blank.to_string())),
+                resolve_openai_key_with(Some(blank.to_string())).unwrap(),
                 None,
-                "blank: {blank:?}"
+                "blank env {blank:?} must be Ok(None)"
             );
         }
-        assert_eq!(env_key_override(None), None);
     }
 }
