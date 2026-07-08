@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired } from '$lib/presentation/quota';
+  import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired, codexWindowsByKind } from '$lib/presentation/quota';
   import { microUsdToDollars } from '$lib/presentation/format';
   import { PROV } from '$lib/presentation/provenance';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
@@ -107,14 +107,24 @@
   });
   // Codex quota bar for the data state (empty when only OpenAI spend is present,
   // where the card shows just the header + billed spend).
-  const codexWindows = $derived.by<CardWindow[]>(() =>
-    codex
-      ? [{ label: `Codex · ${codex.plan_type}`, used: codex.primary.used_percent,
-          elapsed: codexElapsedFraction(codex.primary, snapshot.fetched_at) * 100, tone: quotaTone(codex.primary.used_percent),
-          resetsAt: codex.primary.resets_at, stale: codexWindowExpired(codex.primary, snapshot.fetched_at) || !!degraded['codex_quota'],
-          title: PROV.codexQuota.title }]
-      : [],
-  );
+  const codexWindows = $derived.by<CardWindow[]>(() => {
+    if (!codex) return [];
+    const { five, weekly } = codexWindowsByKind(codex);
+    const out: CardWindow[] = [];
+    for (const [win, name] of [[five, '5h'], [weekly, 'weekly']] as const) {
+      if (!win) continue;
+      out.push({
+        label: `Codex ${name} · ${codex.plan_type}`,
+        used: win.used_percent,
+        elapsed: codexElapsedFraction(win, snapshot.fetched_at) * 100,
+        tone: quotaTone(win.used_percent),
+        resetsAt: win.resets_at,
+        stale: codexWindowExpired(win, snapshot.fetched_at) || !!degraded['codex_quota'],
+        title: PROV.codexQuota.title,
+      });
+    }
+    return out;
+  });
 </script>
 
 <div class="cards">
