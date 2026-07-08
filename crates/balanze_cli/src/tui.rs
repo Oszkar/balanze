@@ -342,7 +342,13 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
 
     match &s.codex_quota {
         Some(q) => {
-            frame.render_widget(quota_gauge("Codex", q.primary.used_percent as f32), rows[0]);
+            frame.render_widget(
+                quota_gauge(
+                    "Codex",
+                    q.worst_window().map_or(0.0, |w| w.used_percent) as f32,
+                ),
+                rows[0],
+            );
         }
         None => {
             let msg = if s.codex_quota_error.is_some() {
@@ -716,6 +722,8 @@ mod tests {
             secondary: None,
             plan_type: "go".to_string(),
             rate_limit_reached: false,
+            tokens: None,
+            credits: None,
         });
         snap.openai = Some(OpenAiCosts {
             total_micro_usd: 4_237_000,

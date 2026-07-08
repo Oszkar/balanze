@@ -1,4 +1,4 @@
-import type { Snapshot } from '../types/snapshot';
+import type { Snapshot, CodexQuotaSnapshot, RateLimitWindow } from '../types/snapshot';
 import type { Tone } from './pace';
 
 // Canonical quota-tone thresholds (percent utilization). These mirror the
@@ -99,4 +99,35 @@ export function codexElapsedFraction(
   if (totalMs <= 0) return 0;
   const elapsed = 1 - remainMs / totalMs;
   return Math.min(1, Math.max(0, elapsed));
+}
+
+export interface CodexQuota {
+  headline: { pct: number; resetsAt: string; window: RateLimitWindow; label: '5h' | 'weekly' | 'codex' };
+  secondaryPct: number | null;
+  plan: string;
+  tone: Tone;
+}
+
+// Codex reports windows of 300 min (5h) and 10080 min (weekly); which JSON slot
+// holds which varies by plan, so select by duration, never by position.
+export function codexWindowsByKind(q: CodexQuotaSnapshot): { five: RateLimitWindow | null; weekly: RateLimitWindow | null } {
+  const windows = [q.primary, ...(q.secondary ? [q.secondary] : [])];
+  return {
+    five: windows.find((w) => w.window_duration_minutes === 300) ?? null,
+    weekly: windows.find((w) => w.window_duration_minutes === 10080) ?? null,
+  };
+}
+
+export function codexQuota(s: Snapshot): CodexQuota | null {
+  const q = s.codex_quota;
+  if (!q) return null;
+  const { five, weekly } = codexWindowsByKind(q);
+  const headlineWin = five ?? weekly ?? q.primary;
+  const label = headlineWin === five ? '5h' : headlineWin === weekly ? 'weekly' : 'codex';
+  return {
+    headline: { pct: headlineWin.used_percent, resetsAt: headlineWin.resets_at, window: headlineWin, label },
+    secondaryPct: five && weekly ? weekly.used_percent : null,
+    plan: q.plan_type,
+    tone: quotaTone(headlineWin.used_percent),
+  };
 }

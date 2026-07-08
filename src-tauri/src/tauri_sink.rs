@@ -105,8 +105,9 @@ fn statusline_fresh(s: &Snapshot) -> bool {
 }
 
 /// The tray's canonical windows, per provider: Claude 5h, Claude weekly (7d =
-/// the worst of every non-5h cadence), and Codex primary. The ring color, the
-/// menu-bar title, and the tooltip ALL derive from this one view, so a red ring
+/// the worst of every non-5h cadence), Codex 5h, and Codex weekly (the worst of
+/// every non-5h Codex window). The ring color, the menu-bar title, and the
+/// tooltip ALL derive from this one view, so a red ring
 /// always corresponds to a number the user can see. (The old bug: the ring came
 /// from the worst window across everything, but the title only ever printed the
 /// 5h - a red icon could sit next to "C 20%".) Folds OAuth cadences and fresh
@@ -115,7 +116,8 @@ fn statusline_fresh(s: &Snapshot) -> bool {
 struct TrayView {
     claude_5h: Option<f32>,
     claude_7d: Option<f32>,
-    codex: Option<f32>,
+    codex_5h: Option<f32>,
+    codex_weekly: Option<f32>,
 }
 
 fn fold_max(slot: &mut Option<f32>, v: f32) {
@@ -151,23 +153,42 @@ impl TrayView {
                 }
             }
         }
-        v.codex = s
-            .codex_quota
-            .as_ref()
-            .map(|q| q.primary.used_percent as f32);
+        if let Some(q) = &s.codex_quota {
+            for w in q.windows() {
+                if w.window_duration_minutes == 300 {
+                    fold_max(&mut v.codex_5h, w.used_percent as f32);
+                } else {
+                    // Weekly (10080) or any other duration folds into the weekly
+                    // slot so no window can hide from the ring/title.
+                    fold_max(&mut v.codex_weekly, w.used_percent as f32);
+                }
+            }
+        }
         v
     }
 
     /// Any live quota signal at all - distinguishes real data (paint a heat
     /// color) from a cold-start snapshot (paint Neutral).
     fn has_data(&self) -> bool {
-        self.claude_5h.is_some() || self.claude_7d.is_some() || self.codex.is_some()
+        self.claude_5h.is_some()
+            || self.claude_7d.is_some()
+            || self.codex_5h.is_some()
+            || self.codex_weekly.is_some()
     }
 
     /// Claude's worst window (max of 5h and 7d) - the single Claude figure shown
     /// in the menu-bar title.
     fn claude_worst(&self) -> Option<f32> {
         match (self.claude_5h, self.claude_7d) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// Codex's worst window (max of 5h and weekly) - the single Codex figure
+    /// shown in the menu-bar title.
+    fn codex_worst(&self) -> Option<f32> {
+        match (self.codex_5h, self.codex_weekly) {
             (Some(a), Some(b)) => Some(a.max(b)),
             (a, b) => a.or(b),
         }
@@ -181,7 +202,8 @@ impl TrayView {
         [
             ("Claude 5h", self.claude_5h),
             ("Claude 7d", self.claude_7d),
-            ("Codex", self.codex),
+            ("Codex 5h", self.codex_5h),
+            ("Codex wk", self.codex_weekly),
         ]
         .into_iter()
         .filter_map(|(label, pct)| pct.map(|p| (label, p)))
@@ -217,7 +239,9 @@ fn tray_title(view: &TrayView) -> String {
     let c = view
         .claude_worst()
         .map(|p| format!("Claude {}%", p.round() as i64));
-    let o = view.codex.map(|p| format!("Codex {}%", p.round() as i64));
+    let o = view
+        .codex_worst()
+        .map(|p| format!("Codex {}%", p.round() as i64));
     [c, o].into_iter().flatten().collect::<Vec<_>>().join(" · ")
 }
 
@@ -247,8 +271,15 @@ fn tray_tooltip(view: &TrayView, degraded: bool) -> String {
     if !claude.is_empty() {
         lines.push(format!("Claude  {}", claude.join("  ")));
     }
-    if let Some(p) = view.codex {
-        lines.push(format!("Codex   {}%", p.round() as i64));
+    let mut codex = Vec::new();
+    if let Some(p) = view.codex_5h {
+        codex.push(format!("5h {}%", p.round() as i64));
+    }
+    if let Some(p) = view.codex_weekly {
+        codex.push(format!("wk {}%", p.round() as i64));
+    }
+    if !codex.is_empty() {
+        lines.push(format!("Codex   {}", codex.join("  ")));
     }
     if degraded {
         lines.push("(some data may be stale)".to_string());
@@ -585,7 +616,46 @@ mod tests {
             secondary: None,
             plan_type: "go".into(),
             rate_limit_reached: false,
+            tokens: None,
+            credits: None,
         }
+    }
+
+    fn codex_5h_weekly(five: f64, weekly: f64) -> codex_local::CodexQuotaSnapshot {
+        use chrono::Utc;
+        codex_local::CodexQuotaSnapshot {
+            observed_at: Utc::now(),
+            session_id: "test".into(),
+            primary: codex_local::RateLimitWindow {
+                used_percent: five,
+                window_duration_minutes: 300,
+                resets_at: Utc::now(),
+            },
+            secondary: Some(codex_local::RateLimitWindow {
+                used_percent: weekly,
+                window_duration_minutes: 10080,
+                resets_at: Utc::now(),
+            }),
+            plan_type: "pro".into(),
+            rate_limit_reached: false,
+            tokens: None,
+            credits: None,
+        }
+    }
+
+    #[test]
+    fn codex_splits_into_5h_and_weekly() {
+        use chrono::Utc;
+        let mut s = Snapshot::empty(Utc::now());
+        s.codex_quota = Some(codex_5h_weekly(12.0, 80.0));
+        let view = TrayView::from_snapshot(&s);
+        assert_eq!(view.codex_5h, Some(12.0));
+        assert_eq!(view.codex_weekly, Some(80.0));
+        assert_eq!(tray_title(&view), "Codex 80%");
+        let tip = tray_tooltip(&view, false);
+        assert!(tip.contains("worst: Codex wk 80%"), "{tip}");
+        assert!(tip.contains("5h 12%"), "{tip}");
+        assert!(tip.contains("wk 80%"), "{tip}");
     }
 
     /// The original bug: the ring colored from the worst window (weekly 94%) but
@@ -674,7 +744,7 @@ mod tests {
         // must stay well under even with both providers present and degraded.
         let mut s = Snapshot::empty(Utc::now());
         s.claude_oauth = Some(oauth_5h_7d(88.0, 94.0));
-        s.codex_quota = Some(codex_with_util(72.0));
+        s.codex_quota = Some(codex_5h_weekly(88.0, 94.0));
         let view = TrayView::from_snapshot(&s);
         let tip = tray_tooltip(&view, true);
         assert!(tip.len() <= 128, "tooltip {} chars: {tip}", tip.len());

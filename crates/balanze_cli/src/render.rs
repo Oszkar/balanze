@@ -324,27 +324,19 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             q.plan_type,
             q.observed_at.format("%Y-%m-%d %H:%M:%S UTC"),
         )?;
-        let resets_in = q
-            .primary
-            .resets_at
-            .signed_duration_since(snapshot.fetched_at);
-        writeln!(
-            w,
-            "  Primary window:    {:.2}% of {} minutes  (resets in {})",
-            q.primary.used_percent,
-            q.primary.window_duration_minutes,
-            pretty_duration(resets_in),
-        )?;
-        if let Some(secondary) = &q.secondary {
-            let s_resets = secondary
-                .resets_at
-                .signed_duration_since(snapshot.fetched_at);
+        for win in q.windows() {
+            let label = match win.window_duration_minutes {
+                300 => "5h",
+                10080 => "weekly",
+                _ => "window",
+            };
+            let resets_in = win.resets_at.signed_duration_since(snapshot.fetched_at);
             writeln!(
                 w,
-                "  Secondary window:  {:.2}% of {} minutes  (resets in {})",
-                secondary.used_percent,
-                secondary.window_duration_minutes,
-                pretty_duration(s_resets),
+                "  {label:<8} window: {:.2}% of {} minutes  (resets in {})",
+                win.used_percent,
+                win.window_duration_minutes,
+                pretty_duration(resets_in),
             )?;
         }
         if q.rate_limit_reached {
@@ -865,6 +857,8 @@ mod tests {
             secondary: None,
             plan_type: "go".to_string(),
             rate_limit_reached: false,
+            tokens: None,
+            credits: None,
         });
 
         snap.openai = Some(OpenAiCosts {
@@ -1497,6 +1491,8 @@ mod tests {
                 secondary: None,
                 plan_type: "go".to_string(),
                 rate_limit_reached: false,
+                tokens: None,
+                credits: None,
             });
             snap
         };

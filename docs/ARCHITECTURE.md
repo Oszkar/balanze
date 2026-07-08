@@ -46,7 +46,7 @@ balanze/
 │   ├── anthropic_oauth/        only HTTP client for /api/oauth/usage; reader/writer of ~/.claude/.credentials.json (+ read-only macOS login-Keychain credential)
 │   ├── window/                 pure rolling-window math (5h + 30m burn + per-model) and pace (used vs elapsed)
 │   ├── openai_client/          only HTTP client for /v1/organization/costs
-│   ├── codex_local/            only reader of ~/.codex/; latest rate_limits.primary
+│   ├── codex_local/            only reader of ~/.codex/; both rate-limit windows (5h + weekly) classified by duration; token/context read internally (deferred)
 │   ├── snapshot_composer/      one-shot source-orchestration policy for `balanze-cli status`; shares JSONL window/cost math with the live coordinator via `state_coordinator::summarize_jsonl`
 │   ├── state_coordinator/      actor: owns Snapshot; bounded-mpsc StateMsg loop; Sink-notified; owns the snapshot.json IPC file (snapshot_file + SnapshotFileSink)
 │   ├── watcher/                only importer of notify; spawns jsonl/statusline/openai_poll/safety/oauth_poll tasks

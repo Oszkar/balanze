@@ -57,7 +57,7 @@ pub mod walker;
 
 pub use errors::ParseError;
 pub use parser::read_latest_quota_snapshot;
-pub use types::{CodexQuotaSnapshot, RateLimitWindow};
+pub use types::{CodexCredits, CodexQuotaSnapshot, CodexTokenUsage, RateLimitWindow, WindowKind};
 pub use walker::{
     CODEX_CONFIG_DIR_ENV, collect_sessions_newest_first, find_codex_sessions_dir,
     find_latest_session,

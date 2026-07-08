@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired } from '$lib/presentation/quota';
+  import { anthropicQuota, codexElapsedFraction, codexWindowExpired, codexQuota } from '$lib/presentation/quota';
   import { microUsdToDollars } from '$lib/presentation/format';
   import { PROV } from '$lib/presentation/provenance';
   import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
@@ -18,6 +18,7 @@
   const aq = $derived(anthropicQuota(snapshot));
   const fivePace = $derived(snapshot.pace.find((p) => p.key === 'five_hour') ?? null);
   const codex = $derived(snapshot.codex_quota);
+  const cq = $derived(codexQuota(snapshot));
   const eu = $derived(snapshot.claude_oauth?.extra_usage ?? null);
   const openai = $derived(snapshot.openai);
   const anthStale = $derived(!!degraded['claude_statusline'] && aq?.source === 'oauth');
@@ -87,11 +88,12 @@
         <BilledCell hatch placeholder="unavailable" note={OPENAI_COL_COPY.error.note}
           title={OPENAI_COL_COPY.error.title(colState.message)} />
       </div>
-    {:else if codex}
-      <QuotaCell pct={codex.primary.used_percent} used={codex.primary.used_percent}
-        elapsed={codexElapsedFraction(codex.primary, snapshot.fetched_at) * 100} tone={quotaTone(codex.primary.used_percent)}
-        resetsAt={codex.primary.resets_at} secondary={`codex ${codex.plan_type}`}
-        stale={!!degraded['codex_quota'] || codexWindowExpired(codex.primary, snapshot.fetched_at)} staleLabel="stale" title={PROV.codexQuota.title} />
+    {:else if cq}
+      <QuotaCell pct={cq.headline.pct} used={cq.headline.pct}
+        elapsed={codexElapsedFraction(cq.headline.window, snapshot.fetched_at) * 100} tone={cq.tone}
+        resetsAt={cq.headline.resetsAt}
+        secondary={cq.secondaryPct !== null ? `weekly ${cq.secondaryPct.toFixed(0)}% · ${cq.plan}` : cq.plan}
+        stale={!!degraded['codex_quota'] || codexWindowExpired(cq.headline.window, snapshot.fetched_at)} staleLabel="stale" title={PROV.codexQuota.title} />
     {:else}
       <BilledCell note="not connected" title="OpenAI Codex not configured" />
     {/if}

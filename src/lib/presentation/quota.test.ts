@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { quotaTone, anthropicQuota, codexElapsedFraction, codexWindowExpired } from './quota';
+import { quotaTone, anthropicQuota, codexElapsedFraction, codexWindowExpired, codexQuota } from './quota';
 import type { Snapshot } from '../types/snapshot';
 
 const base: Snapshot = {
@@ -101,5 +101,34 @@ describe('quota', () => {
     expect(codexWindowExpired({ resets_at: '2026-06-03T13:00:00Z' }, fetchedAt)).toBe(false);
     // Unparseable timestamp must not be reported as expired (no false stale).
     expect(codexWindowExpired({ resets_at: 'not-a-date' }, fetchedAt)).toBe(false);
+  });
+
+  const codexSnap = (primary: { used_percent: number; window_duration_minutes: number; resets_at: string }, secondary: typeof primary | null, plan = 'pro'): Snapshot => ({
+    ...base,
+    codex_quota: { observed_at: '2026-07-08T10:00:00Z', session_id: 's', primary, secondary, plan_type: plan, rate_limit_reached: false },
+  });
+
+  it('codexQuota: 5h headline + weekly secondary on two-window plans', () => {
+    const s = codexSnap(
+      { used_percent: 1, window_duration_minutes: 300, resets_at: '2026-07-08T06:03:41Z' },
+      { used_percent: 2, window_duration_minutes: 10080, resets_at: '2026-07-14T04:25:36Z' },
+    );
+    const q = codexQuota(s)!;
+    expect(q.headline.label).toBe('5h');
+    expect(q.headline.pct).toBe(1);
+    expect(q.secondaryPct).toBe(2);
+    expect(q.plan).toBe('pro');
+  });
+
+  it('codexQuota: single weekly window becomes the headline (go plan)', () => {
+    const s = codexSnap({ used_percent: 3, window_duration_minutes: 10080, resets_at: '2026-07-14T04:25:36Z' }, null, 'go');
+    const q = codexQuota(s)!;
+    expect(q.headline.label).toBe('weekly');
+    expect(q.headline.pct).toBe(3);
+    expect(q.secondaryPct).toBeNull();
+  });
+
+  it('codexQuota: null snapshot -> null', () => {
+    expect(codexQuota(base)).toBeNull();
   });
 });
