@@ -36,7 +36,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
 
 use crate::errors::ParseError;
-use crate::types::{CodexQuotaSnapshot, RateLimitWindow};
+use crate::types::{CodexCredits, CodexQuotaSnapshot, CodexTokenUsage, RateLimitWindow};
 
 /// Read one Codex session file and return the latest rate-limit
 /// snapshot. See the module-level "Error policy" doc for the four
@@ -62,6 +62,9 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
     // surfacing as a typed error.
     let mut token_count_attempts: usize = 0;
     let mut last_drift_line: usize = 0;
+    // Previous (observed_at, cumulative session tokens) for burn between the
+    // last two token_count events. Only advances on events that carry tokens.
+    let mut prev_token_sample: Option<(DateTime<Utc>, u64)> = None;
 
     for (idx, line_result) in reader.lines().enumerate() {
         let line_no = idx + 1; // 1-indexed for human-readable errors
@@ -155,6 +158,21 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
             }
         };
 
+        let mut tokens = parse_token_usage(payload.pointer("/info"));
+        if let Some(t) = tokens.as_mut() {
+            t.recent_burn_tokens_per_min = match prev_token_sample {
+                Some((prev_ts, prev_total))
+                    if observed_at > prev_ts && t.session_total_tokens >= prev_total =>
+                {
+                    let mins = (observed_at - prev_ts).num_seconds() as f64 / 60.0;
+                    (mins > 0.0).then(|| (t.session_total_tokens - prev_total) as f64 / mins)
+                }
+                _ => None,
+            };
+            prev_token_sample = Some((observed_at, t.session_total_tokens));
+        }
+        let credits = parse_credits(rate_limits.get("credits"));
+
         latest = Some(CodexQuotaSnapshot {
             observed_at,
             session_id: session_id.clone(),
@@ -162,6 +180,8 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
             secondary,
             plan_type,
             rate_limit_reached,
+            tokens,
+            credits,
         });
         // Don't break - keep scanning so the LAST valid token_count wins.
     }
@@ -193,6 +213,59 @@ fn parse_window(value: Option<&Value>) -> Option<RateLimitWindow> {
         used_percent,
         window_duration_minutes,
         resets_at,
+    })
+}
+
+/// Parse the `info` block into internal token/context accounting. Returns
+/// `None` when no token counts are present (nothing useful to record).
+fn parse_token_usage(info: Option<&Value>) -> Option<CodexTokenUsage> {
+    let info = info?;
+    // Bail when `info` is absent or not an object (nothing to record). Keeping
+    // `info` as a `&Value` lets us use both `get` and `pointer` below.
+    info.as_object()?;
+    let context_window = info
+        .get("model_context_window")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let last_input_tokens = info
+        .pointer("/last_token_usage/input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let last_total_tokens = info
+        .pointer("/last_token_usage/total_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let session_total_tokens = info
+        .pointer("/total_token_usage/total_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    if context_window == 0 && session_total_tokens == 0 && last_total_tokens == 0 {
+        return None;
+    }
+    Some(CodexTokenUsage {
+        context_window,
+        last_input_tokens,
+        last_total_tokens,
+        session_total_tokens,
+        recent_burn_tokens_per_min: None,
+    })
+}
+
+/// Parse the `credits` object. `null` -> `None`. `balance` is a JSON string
+/// (e.g. "0") parsed to `i64` when numeric.
+fn parse_credits(credits: Option<&Value>) -> Option<CodexCredits> {
+    let obj = credits?.as_object()?;
+    let has_credits = obj
+        .get("has_credits")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let balance = obj
+        .get("balance")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i64>().ok());
+    Some(CodexCredits {
+        has_credits,
+        balance,
     })
 }
 
@@ -351,5 +424,43 @@ mod tests {
             ParseError::FileMissing(p) => assert_eq!(p, nonexistent),
             other => panic!("expected FileMissing, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_tokens_and_recent_burn_across_two_events() {
+        // Two token_count events 2 minutes apart: session tokens 1000 -> 4000.
+        const E1: &str = r#"{"timestamp":"2026-07-08T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":1000},"last_token_usage":{"input_tokens":900,"total_tokens":1000},"model_context_window":258400},"rate_limits":{"primary":{"used_percent":1.0,"window_minutes":300,"resets_at":1783490621},"secondary":{"used_percent":2.0,"window_minutes":10080,"resets_at":1784003136},"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+        const E2: &str = r#"{"timestamp":"2026-07-08T10:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":4000},"last_token_usage":{"input_tokens":1200,"total_tokens":1500},"model_context_window":258400},"rate_limits":{"primary":{"used_percent":1.0,"window_minutes":300,"resets_at":1783490621},"secondary":{"used_percent":2.0,"window_minutes":10080,"resets_at":1784003136},"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, "{SESSION_META}\n{E1}\n{E2}\n").unwrap();
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        let t = snap.tokens.expect("tokens parsed");
+        assert_eq!(t.context_window, 258400);
+        assert_eq!(t.session_total_tokens, 4000);
+        assert_eq!(t.last_input_tokens, 1200);
+        // (4000 - 1000) tokens over 2.0 minutes = 1500 tok/min.
+        assert_eq!(t.recent_burn_tokens_per_min, Some(1500.0));
+    }
+
+    #[test]
+    fn single_event_has_no_burn() {
+        const E1: &str = r#"{"timestamp":"2026-07-08T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":1000},"model_context_window":258400},"rate_limits":{"primary":{"used_percent":1.0,"window_minutes":300,"resets_at":1783490621},"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, "{SESSION_META}\n{E1}\n").unwrap();
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        assert_eq!(snap.tokens.unwrap().recent_burn_tokens_per_min, None);
+    }
+
+    #[test]
+    fn credits_string_balance_parsed() {
+        const E1: &str = r#"{"timestamp":"2026-07-08T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"primary":{"used_percent":1.0,"window_minutes":300,"resets_at":1783490621},"credits":{"has_credits":false,"unlimited":false,"balance":"0"},"plan_type":"plus","rate_limit_reached_type":null}}}"#;
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, "{SESSION_META}\n{E1}\n").unwrap();
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        let c = snap.credits.expect("credits parsed");
+        assert_eq!(c.balance, Some(0));
+        assert!(!c.has_credits);
+        // info was empty -> no token usage recorded.
+        assert!(snap.tokens.is_none());
     }
 }

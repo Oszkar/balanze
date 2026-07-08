@@ -585,6 +585,8 @@ mod tests {
             secondary: None,
             plan_type: "go".into(),
             rate_limit_reached: false,
+            tokens: None,
+            credits: None,
         }
     }
 

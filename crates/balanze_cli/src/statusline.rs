@@ -331,6 +331,8 @@ mod statusline_tests {
             secondary: None,
             plan_type: "go".into(),
             rate_limit_reached: false,
+            tokens: None,
+            credits: None,
         });
         s.openai = Some(openai_client::OpenAiCosts {
             start_time: now,
@@ -370,6 +372,8 @@ mod statusline_tests {
             secondary: None,
             plan_type: "go".into(),
             rate_limit_reached: false,
+            tokens: None,
+            credits: None,
         });
         s.openai = Some(openai_client::OpenAiCosts {
             start_time: now,

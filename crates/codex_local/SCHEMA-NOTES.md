@@ -206,3 +206,11 @@ These changes need to land back in the design doc and the test plan:
 - v0.1 success criteria: target shifts from "codex_local has ≥30 tests" to "codex_local has ≥8 tests + 1 smoke example, all passing against real ~/.codex/sessions/ data".
 
 Apply these via the same /plan-eng-review flow if you want them re-reviewed; or apply directly if confident.
+
+---
+
+## 2026-07-08 update: two windows, internal token/context, backend-only fields
+
+- **Windows vary by plan.** "go" reports ONE window (weekly, `window_minutes: 10080`) in `primary`, `secondary: null`. "plus"/"pro" report TWO: `primary` = 5-hour (300), `secondary` = weekly (10080). Confirmed across 447 files spanning CLI 0.130.0 -> 0.143.0. Classify by `window_minutes` (`RateLimitWindow::kind()`), never by slot. The old "primary is 7-day" comment was only ever true on "go".
+- **Token/context: internal only.** `info.total_token_usage`, `info.last_token_usage`, `info.model_context_window` are parsed into `CodexTokenUsage` (`#[serde(skip)]`), tested, but NOT surfaced in any UI yet. LIMITATION: Codex's cap is percentage-windows, not tokens, so token burn does NOT predict quota exhaustion (unlike Claude). The eventual actionable metric is context-window fill. Exposure and presentation deferred.
+- **Backend-only fields.** `individual_limit` (per-model GPT-5.3-Codex-Spark caps) is `null` in 0 of 447 files, including sessions that invoked Spark; it is backend/web-only. `credits.balance` is only ever `"0"`/null for observed plans. Neither the Spark caps nor a real credits balance is obtainable from local files; that would require the ChatGPT backend API + Codex OAuth (out of scope).

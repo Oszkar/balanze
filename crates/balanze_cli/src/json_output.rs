@@ -488,6 +488,8 @@ mod tests {
             secondary: None,
             plan_type: "go".to_string(),
             rate_limit_reached: false,
+            tokens: None,
+            credits: None,
         }
     }
 

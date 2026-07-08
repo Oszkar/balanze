@@ -716,6 +716,8 @@ mod tests {
             secondary: None,
             plan_type: "go".to_string(),
             rate_limit_reached: false,
+            tokens: None,
+            credits: None,
         });
         snap.openai = Some(OpenAiCosts {
             total_micro_usd: 4_237_000,
