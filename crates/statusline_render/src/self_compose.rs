@@ -25,8 +25,9 @@ pub trait CrossSources {
     /// configured (no cell, no cooldown); `Err(msg)` = the fetch attempt failed
     /// (triggers the negative cooldown and keeps any prior value).
     async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String>;
-    /// Local Codex quota percent (0..100), or `None` if Codex is absent/unparsed.
-    fn codex_used_percent(&self) -> Option<f32>;
+    /// Local Codex window utilizations (0..100): `(five_hour, weekly)`. Each
+    /// `None` if that window is absent/unparsed or not present on the plan.
+    fn codex_windows(&self) -> (Option<f32>, Option<f32>);
 }
 
 pub async fn self_compose<S: CrossSources>(
@@ -36,7 +37,7 @@ pub async fn self_compose<S: CrossSources>(
     now: DateTime<Utc>,
 ) -> CrossProvider {
     // Codex: local, cheap, never cached -> current whenever present.
-    let codex_used_percent = sources.codex_used_percent();
+    let (codex_five_hour, codex_weekly) = sources.codex_windows();
 
     // OpenAI: cache-gated.
     let entry = cache::read(cache_dir, fingerprint);
@@ -64,7 +65,8 @@ pub async fn self_compose<S: CrossSources>(
     };
 
     CrossProvider {
-        codex_used_percent,
+        codex_five_hour,
+        codex_weekly,
         openai_cost_micro_usd,
         codex_stale: false,
         openai_stale,
@@ -93,8 +95,8 @@ mod tests {
             self.calls.set(self.calls.get() + 1);
             self.openai.clone()
         }
-        fn codex_used_percent(&self) -> Option<f32> {
-            self.codex
+        fn codex_windows(&self) -> (Option<f32>, Option<f32>) {
+            (self.codex, None)
         }
     }
 
@@ -108,7 +110,7 @@ mod tests {
         };
         let cp = self_compose(&f, dir.path(), "fp", t0()).await;
         assert_eq!(cp.openai_cost_micro_usd, Some(4_200_000));
-        assert_eq!(cp.codex_used_percent, Some(6.0));
+        assert_eq!(cp.codex_five_hour, Some(6.0));
         assert!(!cp.openai_stale && !cp.codex_stale);
         assert_eq!(f.calls.get(), 1);
         assert!(cache::read(dir.path(), "fp").is_some(), "value cached");
@@ -184,7 +186,7 @@ mod tests {
         let cp = self_compose(&f, dir.path(), "fp", t0()).await;
         assert_eq!(cp.openai_cost_micro_usd, None);
         assert!(!cp.openai_stale);
-        assert_eq!(cp.codex_used_percent, Some(3.0));
+        assert_eq!(cp.codex_five_hour, Some(3.0));
         // One fetch attempt is made (empty cache, no cooldown), but a missing
         // key caches nothing, so no cooldown starts.
         assert_eq!(f.calls.get(), 1);

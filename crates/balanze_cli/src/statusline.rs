@@ -115,9 +115,10 @@ fn pick_cross(
 ) -> Option<statusline_render::CrossProvider> {
     let merged = match (composed, stale_snapshot) {
         (Some(c), Some(s)) => statusline_render::CrossProvider {
-            codex_used_percent: c.codex_used_percent.or(s.codex_used_percent),
+            codex_five_hour: c.codex_five_hour.or(s.codex_five_hour),
+            codex_weekly: c.codex_weekly.or(s.codex_weekly),
             openai_cost_micro_usd: c.openai_cost_micro_usd.or(s.openai_cost_micro_usd),
-            codex_stale: if c.codex_used_percent.is_some() {
+            codex_stale: if c.codex_five_hour.is_some() || c.codex_weekly.is_some() {
                 c.codex_stale
             } else {
                 s.codex_stale
@@ -132,8 +133,10 @@ fn pick_cross(
         (None, Some(s)) => s,
         (None, None) => return None,
     };
-    (merged.codex_used_percent.is_some() || merged.openai_cost_micro_usd.is_some())
-        .then_some(merged)
+    (merged.codex_five_hour.is_some()
+        || merged.codex_weekly.is_some()
+        || merged.openai_cost_micro_usd.is_some())
+    .then_some(merged)
 }
 
 /// Run the self-compose path: resolve cache dir + key fingerprint, build a
@@ -195,10 +198,15 @@ fn cross_from_payload(
     // polls fail), so also mark a cell stale when its source last errored.
     let envelope_stale = age > SNAPSHOT_FRESHNESS_SECS;
     statusline_render::CrossProvider {
-        codex_used_percent: snap
+        codex_five_hour: snap
             .codex_quota
             .as_ref()
-            .and_then(|q| q.worst_window())
+            .and_then(|q| q.five_hour())
+            .map(|w| w.used_percent as f32),
+        codex_weekly: snap
+            .codex_quota
+            .as_ref()
+            .and_then(|q| q.weekly())
             .map(|w| w.used_percent as f32),
         openai_cost_micro_usd: snap.openai.as_ref().map(|c| c.total_micro_usd),
         codex_stale: envelope_stale || snap.codex_quota_error.is_some(),
@@ -345,7 +353,9 @@ mod statusline_tests {
         });
         let fresh = state_coordinator::SnapshotFilePayload::new(s.clone(), now);
         let c = super::cross_from_payload(&fresh, now);
-        assert_eq!(c.codex_used_percent, Some(6.0));
+        // The single window is weekly (10_080 min), so it lands in codex_weekly.
+        assert_eq!(c.codex_weekly, Some(6.0));
+        assert_eq!(c.codex_five_hour, None);
         assert_eq!(c.openai_cost_micro_usd, Some(4_200_000));
         assert!(!c.codex_stale, "fresh payload: codex not stale");
         assert!(!c.openai_stale, "fresh payload: openai not stale");
@@ -357,7 +367,7 @@ mod statusline_tests {
     }
 
     #[test]
-    fn cross_uses_worst_codex_window() {
+    fn cross_surfaces_both_codex_windows() {
         use chrono::TimeZone as _;
         let now = chrono::Utc.with_ymd_and_hms(2026, 7, 8, 12, 0, 0).unwrap();
         let mut s = state_coordinator::Snapshot::empty(now);
@@ -381,8 +391,9 @@ mod statusline_tests {
         });
         let payload = state_coordinator::SnapshotFilePayload::new(s, now);
         let c = super::cross_from_payload(&payload, now);
-        // worst window is the weekly at 6%, not the 5h at 1%.
-        assert_eq!(c.codex_used_percent, Some(6.0));
+        // Both windows surface independently: 5h at 1% and weekly at 6%.
+        assert_eq!(c.codex_five_hour, Some(1.0));
+        assert_eq!(c.codex_weekly, Some(6.0));
     }
 
     #[test]
@@ -419,7 +430,8 @@ mod statusline_tests {
         // Envelope is fresh (now), yet the errored cells must render stale.
         let payload = state_coordinator::SnapshotFilePayload::new(s, now);
         let c = super::cross_from_payload(&payload, now);
-        assert_eq!(c.codex_used_percent, Some(6.0));
+        // The single window is weekly (10_080 min).
+        assert_eq!(c.codex_weekly, Some(6.0));
         assert_eq!(c.openai_cost_micro_usd, Some(4_200_000));
         assert!(
             c.codex_stale,
@@ -440,7 +452,8 @@ mod statusline_tests {
             now,
         );
         let c = super::cross_from_payload(&payload, now);
-        assert!(c.codex_used_percent.is_none());
+        assert!(c.codex_five_hour.is_none());
+        assert!(c.codex_weekly.is_none());
         assert!(c.openai_cost_micro_usd.is_none());
     }
 
@@ -448,7 +461,8 @@ mod statusline_tests {
     fn cross_renders_codex_and_openai_segments() {
         let snap = claude_statusline::parse(r#"{"model":{"display_name":"Opus"}}"#).unwrap();
         let cross = statusline_render::CrossProvider {
-            codex_used_percent: Some(6.0),
+            codex_five_hour: Some(6.0),
+            codex_weekly: None,
             openai_cost_micro_usd: Some(4_200_000),
             codex_stale: false,
             openai_stale: false,
@@ -459,7 +473,7 @@ mod statusline_tests {
             false,
             Some(&cross),
         );
-        assert!(out.contains("Codex 6%"), "{out}");
+        assert!(out.contains("◇5h 6%"), "{out}");
         assert!(out.contains("OpenAI $4.20"), "{out}");
     }
 
@@ -529,7 +543,8 @@ mod statusline_tests {
 
     fn cp(codex: Option<f32>, openai: Option<i64>) -> statusline_render::CrossProvider {
         statusline_render::CrossProvider {
-            codex_used_percent: codex,
+            codex_five_hour: codex,
+            codex_weekly: None,
             openai_cost_micro_usd: openai,
             codex_stale: false,
             openai_stale: false,
@@ -538,7 +553,8 @@ mod statusline_tests {
 
     fn cp_stale(codex: Option<f32>, openai: Option<i64>) -> statusline_render::CrossProvider {
         statusline_render::CrossProvider {
-            codex_used_percent: codex,
+            codex_five_hour: codex,
+            codex_weekly: None,
             openai_cost_micro_usd: openai,
             codex_stale: true,
             openai_stale: true,
@@ -552,7 +568,7 @@ mod statusline_tests {
         // marker) rather than dropping it.
         let got =
             super::pick_cross(Some(cp(Some(5.0), None)), Some(cp_stale(None, Some(99)))).unwrap();
-        assert_eq!(got.codex_used_percent, Some(5.0));
+        assert_eq!(got.codex_five_hour, Some(5.0));
         assert!(!got.codex_stale, "composed Codex is current");
         assert_eq!(got.openai_cost_micro_usd, Some(99));
         assert!(got.openai_stale, "snapshot OpenAI is stale");
@@ -577,7 +593,7 @@ mod statusline_tests {
     #[test]
     fn pick_cross_falls_back_when_composed_absent() {
         let got = super::pick_cross(None, Some(cp_stale(Some(1.0), None))).unwrap();
-        assert_eq!(got.codex_used_percent, Some(1.0));
+        assert_eq!(got.codex_five_hour, Some(1.0));
         assert!(got.codex_stale);
     }
 
