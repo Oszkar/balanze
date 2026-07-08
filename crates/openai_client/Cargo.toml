@@ -1,6 +1,6 @@
 [package]
 name = "openai_client"
-description = "OpenAI Admin API client. Fetches /v1/organization/costs (Admin Costs API) with a sk-admin-… bearer; sums spend across daily buckets and groups by line item. Requires an admin API key; project/service-account keys hit 403."
+description = "OpenAI Admin API client. Fetches /v1/organization/costs (Admin Costs API) with a sk-admin-... bearer; sums spend across daily buckets and groups by line item. Requires an admin API key; project/service-account keys hit 403."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,4 +20,3 @@ tracing = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 wiremock = { workspace = true }
-anyhow = { workspace = true }

@@ -372,7 +372,6 @@ dependencies = [
  "codex_local",
  "keychain",
  "serde",
- "serde_json",
  "settings",
  "state_coordinator",
  "tauri",
@@ -3409,7 +3408,6 @@ dependencies = [
 name = "openai_client"
 version = "0.4.2"
 dependencies = [
- "anyhow",
  "backoff",
  "chrono",
  "reqwest 0.12.28",
