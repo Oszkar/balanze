@@ -4,10 +4,12 @@ Reads the user's local OpenAI Codex CLI session files
 (`~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-*.jsonl`) and extracts the
 latest rate-limit quota snapshot.
 
-Fills the "Codex %" cell of Balanze's 4-quadrant matrix
-(`primary.used_percent` from the latest `token_count` event). The
-schema details that drove the design live in `SCHEMA-NOTES.md` (this
-directory) - re-read those if Codex CLI changes its JSONL format.
+Fills the "Codex %" cell of Balanze's 4-quadrant matrix. Codex reports
+two rolling windows (5-hour + weekly); the crate classifies them by
+duration and exposes `five_hour()` / `weekly()` / `worst_window()`. The
+tray reads the worst window; the popover, cards, and statusline show
+both. The schema details that drove the design live in `SCHEMA-NOTES.md`
+(this directory) - re-read those if Codex CLI changes its JSONL format.
 
 ## Public API
 
@@ -15,12 +17,15 @@ directory) - re-read those if Codex CLI changes its JSONL format.
 use codex_local::{read_codex_quota, ParseError};
 
 match read_codex_quota() {
-    Ok(Some(snap)) => println!(
-        "Codex: {:.1}% of {}d window, resets at {}",
-        snap.primary.used_percent,
-        snap.primary.window_duration_minutes / 1440,
-        snap.primary.resets_at,
-    ),
+    Ok(Some(snap)) => {
+        // Both windows via snap.windows() / five_hour() / weekly();
+        // worst_window() is the "how close to a limit" figure the tray uses.
+        let w = snap.worst_window().expect("primary is always present");
+        println!(
+            "Codex: {:.1}% used ({:?} window), resets at {}",
+            w.used_percent, w.kind(), w.resets_at,
+        );
+    }
     Ok(None) => {
         // Codex installed, scanned cleanly, just no quota data yet -
         // session probably crashed before any `token_count` event fired.
@@ -68,9 +73,10 @@ match read_codex_quota() {
   is a hot loop, revisit; for v0.1 the simpler scan wins.
 - **No per-token cost computation.** Codex side is quota %, not $. The
   4-quadrant matrix's "OpenAI API $" cell is filled by `openai_client`
-  (Admin Costs API). If a "Codex API spend (estimated)" cell ever
-  becomes a v0.2+ goal, the per-turn `last_token_usage` fields are
-  available in the JSONL - that's a different crate's problem.
+  (Admin Costs API). The per-turn token/context (`CodexTokenUsage`) and
+  credits (`CodexCredits`) are already parsed into internal `#[serde(skip)]`
+  fields on the snapshot (tested, deliberately not surfaced in any UI yet);
+  this crate still computes no dollar cost - only the Admin Costs API does.
 
 ## `CODEX_CONFIG_DIR`
 
@@ -84,7 +90,7 @@ CODEX_CONFIG_DIR=/path/to/codex-data balanze
 
 ## Tests
 
-12 unit tests across `walker.rs` (5) and `parser.rs` (7). Fixtures
+31 unit tests across `walker.rs` (11), `parser.rs` (16), `types.rs` (2), and `lib.rs` (2). Fixtures
 embed anonymized real-data lines captured during the schema spike;
 the original raw data lives at
 `~/.gstack/projects/balanze/spike-codex-schema-20260514.md`.

@@ -92,7 +92,7 @@ The `token_count` event_msg is the only line with billing-relevant data.
 ### Key fields for v0.1's "Codex quota %" cell
 
 - `payload.rate_limits.primary.used_percent` - **the value the user sees** (e.g. 3.0 means 3%).
-- `payload.rate_limits.primary.window_minutes` - 10080 = 7 days. This is Codex CLI's only rolling window.
+- `payload.rate_limits.primary.window_minutes` - 10080 = 7 days. **(SUPERSEDED - see the 2026-07-08 update below: there are two windows (5h + weekly) and which slot holds which varies by plan; classify by duration, never by slot.)**
 - `payload.rate_limits.primary.resets_at` - unix timestamp; convert to `DateTime<Utc>` for "resets in 4d 7h" display.
 - `payload.rate_limits.plan_type` - "go" (ChatGPT Go), probably "pro" (ChatGPT Pro), etc. Display only.
 - `payload.rate_limits.secondary` - null in this sample. May contain a sub-window (5h?) for higher-tier plans. Treat as `Option<RateLimitWindow>`.
@@ -189,7 +189,7 @@ Post-spike plan:
 
 2. **Codex CLI version compatibility**: this schema was captured from `cli_version: "0.130.0"`. If Codex CLI bumps schema in a breaking way, our parser breaks. Treat schema drift as `DegradedState` per AGENTS.md §3.3.
 
-3. **What about ChatGPT Pro / Pro+ plans?** Sample is from `plan_type: "go"`. Pro likely populates `secondary` with a 5h window. Capture as `Option<RateLimitWindow>` and display both windows in the CLI/UI if present.
+3. **What about ChatGPT Pro / Pro+ plans?** Sample is from `plan_type: "go"`. **(RESOLVED - see the 2026-07-08 update below: plus/pro populate `primary` = 5h and `secondary` = weekly, not the reverse; both windows are classified by duration and surfaced across the UI.)**
 
 4. **Token counts as a v0.2 enhancement**: the `last_token_usage` data per turn could feed a future "Codex API spend (estimated)" cell if we ever vendor OpenAI/Codex pricing. Out of scope for v0.1.
 

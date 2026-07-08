@@ -332,10 +332,13 @@ impl statusline_render::CrossSources for LiveCrossSources {
         Ok(Some(costs.total_micro_usd))
     }
 
-    fn codex_used_percent(&self) -> Option<f32> {
+    fn codex_windows(&self) -> (Option<f32>, Option<f32>) {
         match codex_local::read_codex_quota() {
-            Ok(Some(q)) => q.worst_window().map(|w| w.used_percent as f32),
-            _ => None,
+            Ok(Some(q)) => (
+                q.five_hour().map(|w| w.used_percent as f32),
+                q.weekly().map(|w| w.used_percent as f32),
+            ),
+            _ => (None, None),
         }
     }
 }

@@ -6,7 +6,10 @@ use crate::style::apply_style;
 /// or self-compose in later PRs; `None` in PR1 (placeholders render empty).
 #[derive(Debug, Clone, Default)]
 pub struct CrossProvider {
-    pub codex_used_percent: Option<f32>,
+    /// Local Codex 5-hour window utilization (0..100). `None` if absent.
+    pub codex_five_hour: Option<f32>,
+    /// Local Codex weekly window utilization (0..100). `None` if absent.
+    pub codex_weekly: Option<f32>,
     pub openai_cost_micro_usd: Option<i64>,
     /// True when the Codex figure is stale (e.g. an old snapshot). The
     /// self-compose path reads Codex locally each turn, so it is false there.
@@ -128,18 +131,18 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
         "usage" => render_usage(input),
         "codex" => {
             let cross = input.cross?;
-            let pct = cross.codex_used_percent?;
+            let mut windows = Vec::new();
+            if let Some(pct) = cross.codex_five_hour {
+                windows.push(render_codex_window("◇5h", pct, input));
+            }
+            if let Some(pct) = cross.codex_weekly {
+                windows.push(render_codex_window("◇wk", pct, input));
+            }
+            if windows.is_empty() {
+                return None;
+            }
             let mark = if cross.codex_stale { " ⚠" } else { "" };
-            // Round once for both the label and the color so they agree at a
-            // cutoff (see render_window). Same shared 50/75/90 scale as usage.
-            let shown = pct.round() as i64;
-            let text = format!("◇Codex {shown}%{mark}");
-            let style = severity_style(theme, window::Severity::from_util(shown as f32));
-            Some(if input.color {
-                apply_style(style, &text)
-            } else {
-                text
-            })
+            Some(format!("{}{mark}", windows.join(" ")))
         }
         "openai_cost" => {
             let cross = input.cross?;
@@ -202,6 +205,23 @@ fn render_window(
     // a cutoff (89.6 shows "90%" and must read Red, not Orange). The per-segment
     // warn/critical config is NOT consulted for color here; it stays in
     // `settings` as the hook for future user-configurable thresholds.
+    let style = severity_style(
+        input.config.theme.as_str(),
+        window::Severity::from_util(shown as f32),
+    );
+    if input.color {
+        apply_style(style, &text)
+    } else {
+        text
+    }
+}
+
+/// One Codex window, severity-toned by the shared 50/75/90 classifier (same
+/// scale as the usage windows and the tray/popover/CLI). Classify the ROUNDED
+/// display value so the number and color never disagree at a cutoff.
+fn render_codex_window(label: &str, pct: f32, input: &RenderInput) -> String {
+    let shown = pct.round() as i64;
+    let text = format!("{label} {shown}%");
     let style = severity_style(
         input.config.theme.as_str(),
         window::Severity::from_util(shown as f32),
@@ -783,7 +803,7 @@ mod tests {
         c.lines = vec!["{codex}".to_string()];
         let s = snap();
         let cross = CrossProvider {
-            codex_used_percent: Some(80.0),
+            codex_five_hour: Some(80.0),
             ..Default::default()
         };
         let out = render(&RenderInput {
@@ -793,7 +813,7 @@ mod tests {
             now: now(),
             color: true,
         });
-        assert!(out.contains("Codex 80%"), "codex label: {out}");
+        assert!(out.contains("◇5h 80%"), "codex label: {out}");
         // 80% -> Orange = fg:#ff9e64 = rgb(255,158,100).
         assert!(
             out.contains("\x1b[38;2;255;158;100m"),
@@ -803,13 +823,13 @@ mod tests {
 
     #[test]
     fn codex_severity_classifies_rounded_value_at_cutoff() {
-        // 89.6% shows "Codex 90%" and must read Red, not Orange - same
+        // 89.6% shows "◇5h 90%" and must read Red, not Orange - same
         // round-before-classify rule as the usage windows.
         let mut c = cfg();
         c.lines = vec!["{codex}".to_string()];
         let s = snap();
         let cross = CrossProvider {
-            codex_used_percent: Some(89.6),
+            codex_five_hour: Some(89.6),
             ..Default::default()
         };
         let out = render(&RenderInput {
@@ -819,11 +839,33 @@ mod tests {
             now: now(),
             color: true,
         });
-        assert!(out.contains("Codex 90%"), "codex rounds to 90: {out}");
+        assert!(out.contains("◇5h 90%"), "codex rounds to 90: {out}");
         // Red = bold fg:#f7768e = rgb(247,118,142).
         assert!(
             out.contains("\x1b[1;38;2;247;118;142m"),
             "codex 89.6 shows 90% and must read Red: {out:?}"
         );
+    }
+
+    #[test]
+    fn codex_renders_both_windows() {
+        // Both windows present -> both are rendered, each with its diamond label.
+        let mut c = cfg();
+        c.lines = vec!["{codex}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_five_hour: Some(2.0),
+            codex_weekly: Some(3.0),
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: false,
+        });
+        assert!(out.contains("◇5h 2%"), "5h window: {out}");
+        assert!(out.contains("◇wk 3%"), "weekly window: {out}");
     }
 }
