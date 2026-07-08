@@ -106,8 +106,8 @@ fn statusline_fresh(s: &Snapshot) -> bool {
 
 /// The tray's canonical windows, per provider: Claude 5h, Claude weekly (7d =
 /// the worst of every non-5h cadence), Codex 5h, and Codex weekly (the worst of
-/// every non-5h Codex window). The ring color, the
-/// menu-bar title, and the tooltip ALL derive from this one view, so a red ring
+/// every non-5h Codex window). The ring color, the menu-bar title, and the
+/// tooltip ALL derive from this one view, so a red ring
 /// always corresponds to a number the user can see. (The old bug: the ring came
 /// from the worst window across everything, but the title only ever printed the
 /// 5h - a red icon could sit next to "C 20%".) Folds OAuth cadences and fresh
@@ -744,7 +744,7 @@ mod tests {
         // must stay well under even with both providers present and degraded.
         let mut s = Snapshot::empty(Utc::now());
         s.claude_oauth = Some(oauth_5h_7d(88.0, 94.0));
-        s.codex_quota = Some(codex_with_util(72.0));
+        s.codex_quota = Some(codex_5h_weekly(88.0, 94.0));
         let view = TrayView::from_snapshot(&s);
         let tip = tray_tooltip(&view, true);
         assert!(tip.len() <= 128, "tooltip {} chars: {tip}", tip.len());
