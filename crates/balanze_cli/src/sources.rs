@@ -382,7 +382,7 @@ impl statusline_render::CrossSources for LiveCrossSources {
 
     fn codex_used_percent(&self) -> Option<f32> {
         match codex_local::read_codex_quota() {
-            Ok(Some(q)) => Some(q.primary.used_percent as f32),
+            Ok(Some(q)) => q.worst_window().map(|w| w.used_percent as f32),
             _ => None,
         }
     }
