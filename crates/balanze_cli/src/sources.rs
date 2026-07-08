@@ -3,14 +3,14 @@
 //! per-source helpers are the I/O adapters (AGENTS.md §4 #8 - glue, not logic).
 
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use std::env;
 use std::fs;
 
 use anthropic_oauth::{
     CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, ClaudeOAuthSnapshot, CredentialsClaudeAiOauth,
-    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage, load_from_source,
-    locate_credentials, refresh_access_token, write_back,
+    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, REFRESH_MARGIN, WriteBack, fetch_usage,
+    load_from_source, locate_credentials, refresh_access_token, token_needs_refresh, write_back,
 };
 use claude_parser::{
     UsageEvent, dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir,
@@ -161,16 +161,6 @@ fn live_fetch_codex_quota() -> Result<Option<codex_local::CodexQuotaSnapshot>> {
         Err(codex_local::ParseError::FileMissing(_)) => Ok(None),
         Err(e) => Err(e.into()),
     }
-}
-
-/// Refresh proactively if the access token is expired or expires within this.
-const REFRESH_MARGIN: Duration = Duration::seconds(300);
-
-/// Pure: true if `expires_at_ms` is in the past or within `margin` of now.
-fn token_needs_refresh(expires_at_ms: i64, now: DateTime<Utc>, margin: Duration) -> bool {
-    // Fix 5: saturating_sub so a pathological/hostile expires_at_ms near
-    // i64::MIN cannot cause an arithmetic underflow panic in debug builds.
-    now.timestamp_millis() >= expires_at_ms.saturating_sub(margin.num_milliseconds())
 }
 
 /// Refresh the bearer and best-effort persist it. A skipped/failed write is
@@ -395,29 +385,5 @@ impl statusline_render::CrossSources for LiveCrossSources {
             Ok(Some(q)) => Some(q.primary.used_percent as f32),
             _ => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use chrono::TimeZone;
-
-    #[test]
-    fn token_needs_refresh_logic() {
-        let now = chrono::Utc.with_ymd_and_hms(2026, 5, 15, 12, 0, 0).unwrap();
-        let margin = chrono::Duration::seconds(300);
-        let now_ms = now.timestamp_millis();
-        assert!(super::token_needs_refresh(now_ms - 1, now, margin));
-        assert!(super::token_needs_refresh(now_ms + 200_000, now, margin));
-        assert!(!super::token_needs_refresh(now_ms + 3_600_000, now, margin));
-        // Boundary: token expiring exactly `margin` from now → refresh now.
-        assert!(super::token_needs_refresh(
-            now_ms + margin.num_milliseconds(),
-            now,
-            margin
-        ));
-        // Fix 5: pathological/hostile expires_at near i64::MIN must not panic
-        // and must return true (absurdly-past expiry → needs refresh).
-        assert!(super::token_needs_refresh(i64::MIN, now, margin));
     }
 }

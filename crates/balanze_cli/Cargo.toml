@@ -24,6 +24,7 @@ claude_parser = { path = "../claude_parser" }
 claude_statusline = { path = "../claude_statusline" }
 codex_local = { path = "../codex_local" }
 keychain = { path = "../keychain" }
+logging = { path = "../logging" }
 openai_client = { path = "../openai_client" }
 settings = { path = "../settings" }
 snapshot_composer = { path = "../snapshot_composer" }
@@ -70,8 +71,6 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-tracing-appender = { workspace = true }
 directories = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name = "logging"
+description = "Shared tracing-subscriber setup for the Balanze binaries: a BALANZE_LOG env filter plus a daily-rotating file sink under the data dir. Lives in its own crate so the subscriber deps don't leak into the pure library crates that only need settings for config."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+settings = { path = "../settings" }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

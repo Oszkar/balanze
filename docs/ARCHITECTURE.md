@@ -53,6 +53,7 @@ balanze/
 │   ├── backoff/                pure exponential-backoff policy + generic async retry combinator
 │   ├── keychain/               only importer of `keyring-core`
 │   ├── settings/               owns settings.json (atomic, schema-versioned, non-secrets only)
+│   ├── logging/                shared `tracing` subscriber setup (BALANZE_LOG env filter + daily-rotating file sink); owns tracing-subscriber/tracing-appender so they stay out of the pure library crates; used only by the two binaries via `init_tracing(prefix)`
 │   └── balanze_cli/            CLI glue; composes the crates into a Snapshot. clap-derive command tree (cli); subcommands: status (colored 4-quadrant via present + anstream/owo-colors), watch (ratatui/crossterm TUI in tui, else streaming sinks), doctor/setup (headless probes), export (stateless CSV; no persistence), completions + hidden man (clap_complete/clap_mangen, also rendered to OUT_DIR by build.rs); exit owns the 0/1/2/3/4/5 exit-code taxonomy. New deps: clap, clap_complete, clap_mangen, anstream, owo-colors, ratatui, crossterm, futures-util, csv
 └── .github/workflows/          ci.yml + release.yml
 ```

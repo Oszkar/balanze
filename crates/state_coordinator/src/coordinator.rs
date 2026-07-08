@@ -101,6 +101,28 @@ pub fn spawn<S: Sink>(sink: S) -> (StateCoordinatorHandle, JoinHandle<()>) {
     spawn_with_capacity(sink, DEFAULT_CHANNEL_CAPACITY)
 }
 
+/// Spawn the coordinator, transparently teeing snapshots to the on-disk
+/// `snapshot.json` when a data-dir path is resolvable.
+///
+/// When [`snapshot_file_path`](crate::snapshot_file::snapshot_file_path) yields
+/// a path, `sink` is wrapped in a [`SnapshotFileSink`](crate::SnapshotFileSink)
+/// so the statusline self-compose path (and any other reader) sees fresh
+/// cross-provider snapshots. When it can't be resolved - rare; only if the OS
+/// data dir is unavailable - we warn once and fall back to the bare `sink` (the
+/// statusline degrades to Claude-only). Both `balanze-cli watch` and the Tauri
+/// host use this instead of hand-rolling the match.
+pub fn spawn_with_optional_file<S: Sink>(sink: S) -> (StateCoordinatorHandle, JoinHandle<()>) {
+    match crate::snapshot_file::snapshot_file_path() {
+        Some(path) => spawn(crate::sink_file::SnapshotFileSink::new(sink, path)),
+        None => {
+            tracing::warn!(
+                "could not resolve snapshot.json path; cross-provider statusline will fall back to Claude-only"
+            );
+            spawn(sink)
+        }
+    }
+}
+
 /// Same as `spawn` but with a custom channel capacity (used by the saturation
 /// test).
 pub fn spawn_with_capacity<S: Sink>(

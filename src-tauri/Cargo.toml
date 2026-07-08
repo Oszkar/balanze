@@ -22,8 +22,6 @@ tauri-plugin-notification = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-tracing-appender = { workspace = true }
 
 # The live data spine. The coordinator owns the in-memory Snapshot and routes
 # side effects through `TauriSink`; the watcher feeds it; settings configure
@@ -31,6 +29,10 @@ tracing-appender = { workspace = true }
 state_coordinator = { path = "../crates/state_coordinator" }
 watcher = { path = "../crates/watcher" }
 settings = { path = "../crates/settings" }
+# Shared tracing-subscriber setup (BALANZE_LOG env filter + rotating file sink);
+# owns the tracing-subscriber/tracing-appender deps so they stay out of the
+# pure library crates. Both binaries call `logging::init_tracing(prefix)`.
+logging = { path = "../crates/logging" }
 # Registers the OS-native credential store as keyring-core's default once at
 # host startup, before the watcher it boots reads the OpenAI key.
 keychain = { path = "../crates/keychain" }

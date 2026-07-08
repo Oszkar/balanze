@@ -14,7 +14,7 @@
 //! branches.
 
 use anyhow::Result;
-use state_coordinator::{Sink, spawn as spawn_coord};
+use state_coordinator::Sink;
 use tokio::sync::mpsc;
 use watcher::Watcher;
 
@@ -53,15 +53,9 @@ pub(crate) fn run_watch_mode(json: bool, verbose: bool) -> Result<()> {
 /// (sink mid-render, no further output, no exit) while the user sees a
 /// frozen TUI and assumes the watcher is just idle.
 async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
-    let settings = settings::load().unwrap_or_else(|e| {
-        tracing::warn!("settings load failed ({e}); using defaults");
-        settings::Settings::default()
-    });
+    let settings = settings::load_or_default();
 
-    let (handle, coord_join) = match state_coordinator::snapshot_file_path() {
-        Some(path) => spawn_coord(state_coordinator::SnapshotFileSink::new(sink, path)),
-        None => spawn_coord(sink),
-    };
+    let (handle, coord_join) = state_coordinator::spawn_with_optional_file(sink);
     let watcher_handles = Watcher::spawn(handle.clone(), &settings);
 
     // Per-task watchdog: each watcher handle gets a wrapper that signals
@@ -146,16 +140,10 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
 /// the normal screen, not a garbled alt screen. The runtime drop aborts
 /// surviving tasks.
 async fn run_tui_mode() -> Result<()> {
-    let settings = settings::load().unwrap_or_else(|e| {
-        tracing::warn!("settings load failed ({e}); using defaults");
-        settings::Settings::default()
-    });
+    let settings = settings::load_or_default();
 
     let (sink, rx) = ChannelSink::new();
-    let (handle, mut coord_join) = match state_coordinator::snapshot_file_path() {
-        Some(path) => spawn_coord(state_coordinator::SnapshotFileSink::new(sink, path)),
-        None => spawn_coord(sink),
-    };
+    let (handle, mut coord_join) = state_coordinator::spawn_with_optional_file(sink);
     let watcher_handles = Watcher::spawn(handle.clone(), &settings);
 
     // Per-task watchdog mirroring `run_with_sink`: surface an unexpected watcher

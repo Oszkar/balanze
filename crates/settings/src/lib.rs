@@ -167,6 +167,19 @@ pub fn load() -> Result<Settings, SettingsError> {
     load_from(&path)
 }
 
+/// Load settings, falling back to `Settings::default()` on ANY error (missing,
+/// malformed, or unreadable) with a `warn`. For read-only consumers - the Tauri
+/// watcher supervisor and `balanze-cli watch` - where proceeding on defaults is
+/// correct. **Save-path callers must use [`load_for_update`] instead**: silently
+/// defaulting a corrupt file here and then [`save`]-ing would overwrite the
+/// user's real settings (including the `statusline.replaced_command` backup).
+pub fn load_or_default() -> Settings {
+    load().unwrap_or_else(|e| {
+        warn!("settings load failed ({e}); using defaults");
+        Settings::default()
+    })
+}
+
 /// Load settings from an explicit path. Used by tests and by any future
 /// override path (e.g. `--config` CLI flag).
 pub fn load_from(path: &Path) -> Result<Settings, SettingsError> {
