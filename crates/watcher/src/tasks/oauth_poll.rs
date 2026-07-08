@@ -10,17 +10,18 @@
 //! 4. On `AuthExpired`, refreshes once and retries (same pattern as the CLI).
 //! 5. Emits `Update(ClaudeOAuth, ...)` to the state coordinator.
 //!
-//! Mirrors `balanze_cli::live_fetch_oauth` and
-//! `balanze_cli::refresh_and_persist`. Keep drift visible here until a shared
-//! extraction can preserve the CLI's fail-fast policy, the watcher's standard
-//! backoff policy, and the Anthropic credential write-back boundary.
+//! The write-back itself is the shared `anthropic_oauth::refresh_and_persist`
+//! (policy-parameterized). The pre-flight + 401-retry *orchestration* still
+//! mirrors `balanze_cli::live_fetch_oauth` and stays inline here, because it
+//! differs in two ways that resist a clean shared extraction: the watcher's
+//! `standard()` backoff (vs the CLI's `fail_fast()`) and the read-only-Keychain
+//! credential cache kept across ticks below.
 
 use std::path::{Path, PathBuf};
 
 use anthropic_oauth::{
-    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, CredentialsClaudeAiOauth,
-    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, REFRESH_MARGIN, WriteBack, fetch_usage,
-    load_from_source, locate_credentials, refresh_access_token, token_needs_refresh, write_back,
+    CredentialsClaudeAiOauth, DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, REFRESH_MARGIN,
+    fetch_usage, load_from_source, locate_credentials, refresh_and_persist, token_needs_refresh,
 };
 use chrono::{Duration, Utc};
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
@@ -190,19 +191,19 @@ async fn poll_once(
             }
         };
 
+    let policy = backoff::BackoffPolicy::standard();
+
     // Pre-flight refresh only for a source we own (a file). The macOS Keychain
     // entry is Claude Code's - read-only (AGENTS.md §3.4): use the token while
     // valid; if it has already expired, surface an actionable error.
     if let Some(path) = &writable_path {
         if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
             tracing::info!("watcher/oauth_poll: token expired/near-expiry - refreshing pre-flight");
-            oauth = refresh_and_persist(client, path, oauth).await?;
+            oauth = refresh_and_persist(client, path, oauth, &policy).await?;
         }
     } else if token_needs_refresh(oauth.expires_at, Utc::now(), Duration::zero()) {
         return Err(OAuthError::CredentialExpiredReadOnly.into());
     }
-
-    let policy = backoff::BackoffPolicy::standard();
 
     let result = fetch_usage(
         client,
@@ -235,7 +236,7 @@ async fn poll_once(
                 return Err(OAuthError::CredentialExpiredReadOnly.into());
             };
             tracing::warn!("watcher/oauth_poll: 401 despite pre-flight - one refresh+retry");
-            let oauth = refresh_and_persist(client, &path, oauth).await?;
+            let oauth = refresh_and_persist(client, &path, oauth, &policy).await?;
             let s = fetch_usage(
                 client,
                 ANTHROPIC_API_BASE,
@@ -253,47 +254,4 @@ async fn poll_once(
         }
         Err(e) => Err(e.into()),
     }
-}
-
-/// Refresh the bearer token and atomically persist it back to disk.
-/// A write-back failure is non-fatal as long as we hold a usable in-memory token.
-/// MIRRORS balanze_cli::refresh_and_persist.
-async fn refresh_and_persist(
-    client: &reqwest::Client,
-    path: &std::path::Path,
-    oauth: CredentialsClaudeAiOauth,
-) -> anyhow::Result<CredentialsClaudeAiOauth> {
-    let rt = oauth
-        .refresh_token
-        .as_deref()
-        .ok_or(OAuthError::RefreshTokenMissing)?;
-    // Watcher uses BackoffPolicy::standard() (30s start, 10min cap) -
-    // unlike the one-shot CLI which uses fail_fast().
-    let refreshed = refresh_access_token(
-        client,
-        CLAUDE_CODE_TOKEN_URL,
-        CLAUDE_CODE_CLIENT_ID,
-        rt,
-        Utc::now().timestamp_millis(),
-        &backoff::BackoffPolicy::standard(),
-    )
-    .await?;
-    match write_back(path, &refreshed) {
-        Ok(WriteBack::Written) => {
-            tracing::info!("watcher/oauth_poll: refreshed bearer, wrote back")
-        }
-        Ok(WriteBack::SkippedDiskNewer) => {
-            tracing::info!(
-                "watcher/oauth_poll: refreshed bearer; on-disk copy already newer, kept disk"
-            )
-        }
-        Err(e) => {
-            tracing::warn!("watcher/oauth_poll: refresh ok but write-back failed (non-fatal): {e}")
-        }
-    }
-    let mut next = oauth;
-    next.access_token = refreshed.access_token;
-    next.refresh_token = Some(refreshed.refresh_token);
-    next.expires_at = refreshed.expires_at_ms;
-    Ok(next)
 }

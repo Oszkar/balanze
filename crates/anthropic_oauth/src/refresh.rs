@@ -5,11 +5,14 @@
 //! grant; `credentials::write_back` persists the result atomically. The
 //! refreshed `access_token` / `refresh_token` are secrets - never logged.
 
+use std::path::Path;
+
 use chrono::{DateTime, Duration, Utc};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 
-use crate::types::{OAuthError, RefreshedTokens};
+use crate::credentials::{WriteBack, write_back};
+use crate::types::{CredentialsClaudeAiOauth, OAuthError, RefreshedTokens};
 
 /// Claude Code's public, non-secret OAuth client id (the same identifier the
 /// Claude Code CLI uses for its PKCE flow - not a credential). VERIFY via the
@@ -127,6 +130,46 @@ pub async fn refresh_access_token(
         })
     })
     .await
+}
+
+/// Refresh the bearer token and best-effort persist it back to the credential
+/// file Balanze owns (AGENTS.md §3.4 - the only OAuth write path). A skipped or
+/// failed write is non-fatal as long as we still hold a usable in-memory token.
+///
+/// `policy` is the caller's backoff: `BackoffPolicy::fail_fast()` from the
+/// one-shot CLI, `BackoffPolicy::standard()` from the watcher. The refreshed
+/// `access_token` / `refresh_token` are secrets and are never logged.
+pub async fn refresh_and_persist(
+    client: &Client,
+    path: &Path,
+    oauth: CredentialsClaudeAiOauth,
+    policy: &backoff::BackoffPolicy,
+) -> Result<CredentialsClaudeAiOauth, OAuthError> {
+    let rt = oauth
+        .refresh_token
+        .as_deref()
+        .ok_or(OAuthError::RefreshTokenMissing)?;
+    let refreshed = refresh_access_token(
+        client,
+        CLAUDE_CODE_TOKEN_URL,
+        CLAUDE_CODE_CLIENT_ID,
+        rt,
+        Utc::now().timestamp_millis(),
+        policy,
+    )
+    .await?;
+    match write_back(path, &refreshed) {
+        Ok(WriteBack::Written) => tracing::info!("oauth: refreshed bearer, wrote back"),
+        Ok(WriteBack::SkippedDiskNewer) => {
+            tracing::info!("oauth: refreshed bearer; on-disk copy already newer, kept disk")
+        }
+        Err(e) => tracing::warn!("oauth: refresh ok but write-back failed (non-fatal): {e}"),
+    }
+    let mut next = oauth;
+    next.access_token = refreshed.access_token;
+    next.refresh_token = Some(refreshed.refresh_token);
+    next.expires_at = refreshed.expires_at_ms;
+    Ok(next)
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ pub use validate::{KeyProbe, validate_openai_key};
 
 use settings::Settings;
 use state_coordinator::StateCoordinatorHandle;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 pub struct Watcher;
@@ -92,6 +93,41 @@ impl Watcher {
 /// True if a non-empty `BALANZE_OPENAI_KEY` env override is set.
 fn openai_env_key_present() -> bool {
     std::env::var("BALANZE_OPENAI_KEY").is_ok_and(|v| !v.trim().is_empty())
+}
+
+/// Spawn one watchdog task per `(label, handle)` returned by [`Watcher::spawn`]:
+/// signal the *unexpected* completion (an `Err` return or a panic) of a watcher
+/// task through the returned channel, so a supervisor's `tokio::select!` learns
+/// of a failure without pulling in `JoinSet` / `select_all` (neither is a
+/// workspace dep). A clean `Ok(())` exit (a provider that is simply not
+/// configured - e.g. `openai_poll` with no key) and a deliberate cancellation
+/// (a reload-abort) are NOT signalled: treating either as fatal would break
+/// `watch` for the common single-provider user, or fire spuriously on shutdown.
+///
+/// Consumes the handles. A caller that also needs to abort the tasks later (the
+/// Tauri host's live-reload path) should collect their `abort_handle()`s first.
+pub fn watch_for_task_death(
+    handles: Vec<(&'static str, JoinHandle<Result<(), WatcherError>>)>,
+) -> mpsc::UnboundedReceiver<&'static str> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    for (label, h) in handles {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            match h.await {
+                Ok(Ok(())) => tracing::debug!("watcher/{label}: exited Ok(())"),
+                Ok(Err(e)) => {
+                    tracing::error!("watcher/{label}: returned error: {e}");
+                    let _ = tx.send(label);
+                }
+                Err(je) if je.is_cancelled() => {}
+                Err(je) => {
+                    tracing::error!("watcher/{label}: panicked/aborted: {je}");
+                    let _ = tx.send(label);
+                }
+            }
+        });
+    }
+    rx
 }
 
 /// Map a watcher task label (as returned by [`Watcher::spawn`]) to the

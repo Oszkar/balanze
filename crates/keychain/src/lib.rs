@@ -102,6 +102,46 @@ pub fn get(name: &str) -> Result<String, KeychainError> {
     }
 }
 
+/// Resolve the user's OpenAI admin key, honoring the documented
+/// `BALANZE_OPENAI_KEY` env override (trimmed; empty = unset), which takes
+/// precedence over the stored keychain entry (AGENTS.md §3.4).
+///
+/// `Ok(None)` means "not configured". `Err` is a real keychain failure (locked,
+/// denied), not mere absence. Single source of truth for the CLI snapshot fetch,
+/// the statusline self-compose fingerprint, and the watcher poll task.
+///
+/// The env var, **when present, is authoritative even if blank**: a blank or
+/// whitespace `BALANZE_OPENAI_KEY` explicitly means "not configured" and does
+/// NOT fall through to the keychain. Callers set it blank to force OpenAI off /
+/// no network (see `balanze_cli` statusline self-compose); reading the keychain
+/// there could fetch or prompt on a machine with a saved key. The keychain is
+/// consulted only when the env var is entirely absent.
+pub fn resolve_openai_key() -> Result<Option<String>, KeychainError> {
+    resolve_openai_key_with(std::env::var("BALANZE_OPENAI_KEY").ok())
+}
+
+/// Inner logic of [`resolve_openai_key`] with the env value injected (as
+/// `std::env::var(...).ok()`, so `None` = absent, `Some(_)` = present). Keeps
+/// the present/absent branch and the trim rule unit-testable without a store.
+fn resolve_openai_key_with(env_var: Option<String>) -> Result<Option<String>, KeychainError> {
+    // Present (blank or not) is authoritative; a blank value is `None` here and
+    // must not fall through to the keychain below.
+    if let Some(raw) = env_var {
+        return Ok(non_blank(&raw));
+    }
+    match get(keys::OPENAI_API_KEY) {
+        Ok(k) => Ok(Some(k)),
+        Err(KeychainError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Trim a raw value; `None` if it is empty or all whitespace. Pure.
+fn non_blank(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 /// Delete the entry under the given name. Returns `Ok(())` if it didn't
 /// exist (delete is idempotent).
 pub fn delete(name: &str) -> Result<(), KeychainError> {
@@ -175,5 +215,30 @@ mod tests {
     #[test]
     fn keys_module_exposes_well_known_constants() {
         assert_eq!(keys::OPENAI_API_KEY, "openai_api_key");
+    }
+
+    #[test]
+    fn present_nonblank_env_wins_and_is_trimmed() {
+        assert_eq!(
+            resolve_openai_key_with(Some("  sk-admin-xyz  ".to_string())).unwrap(),
+            Some("sk-admin-xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn present_but_blank_env_is_not_configured_without_touching_keychain() {
+        // Regression guard (PR #165 review): a present-but-blank BALANZE_OPENAI_KEY
+        // must resolve to Ok(None) directly and must NOT fall through to the
+        // keychain - callers set it blank to force "OpenAI off / no network", and
+        // a machine with a saved key (or a prompting keychain) would otherwise
+        // fetch or prompt. Testable without a store precisely because the
+        // env-present branch never calls `get`.
+        for blank in ["", "   ", "\t\n"] {
+            assert_eq!(
+                resolve_openai_key_with(Some(blank.to_string())).unwrap(),
+                None,
+                "blank env {blank:?} must be Ok(None)"
+            );
+        }
     }
 }
