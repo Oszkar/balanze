@@ -35,13 +35,13 @@ Balanze surfaces one normalized snapshot two ways - the `balanze-cli` CLI and a 
 |               | Quota %                              | API $ (real billed)                                 |
 |---------------|--------------------------------------|-----------------------------------------------------|
 | **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
-| **OpenAI**    | Codex CLI rate-limit %               | real billed spend (Admin Costs API)                 |
+| **OpenAI**    | Codex CLI rate-limit % (5h / weekly) | real billed spend (Admin Costs API)                 |
 
 The Claude list-price figure is deliberately **not** a matrix cell - it lives outside the grid as a separate *Subscription leverage* insight (below), so a counterfactual estimate can never be mistaken for billed spend.
 
 - **Anthropic quota** - the same `/api/oauth/usage` endpoint Claude Code uses: live 5-hour / 7-day / per-model bars with `resets_at` clocks. No scraping.
 - **Anthropic API $ - real or nothing.** Anthropic exposes no per-user API spend, so this cell shows the real `extra_usage` pay-as-you-go overage *if* you enabled it on claude.ai (the same billed cents claude.ai's overage meter shows), and otherwise reads as **not available** - never backfilled with a substitute number.
-- **OpenAI Codex quota** - the server-computed `rate_limits.primary` %, read from the local Codex CLI rollout files (`~/.codex/sessions/`).
+- **OpenAI Codex quota** - the server-computed rate-limit % for both rolling windows, the 5-hour and the weekly (classified by duration, mirroring Claude's 5h / 7-day bars), read from the local Codex CLI rollout files (`~/.codex/sessions/`).
 - **OpenAI API $** - this-month spend plus a per-line-item breakdown from `/v1/organization/costs`, using an `sk-admin-...` key. Real billing data.
 - **Subscription leverage (a separate estimate)** - `claude_cost` multiplies your local Claude Code JSONL by a vendored LiteLLM price table to show what that usage *would* cost at API list prices. For Pro/Max users that is leverage from the subscription, **never billed** - so it sits outside the matrix as its own insight.
 
@@ -77,7 +77,7 @@ For a full walkthrough - first run, reading the popover, connecting OpenAI, wiri
 balanze-cli                     4-quadrant compact status (the default; colored on
                                 a TTY, honors NO_COLOR / --no-color)
 balanze-cli status --sections   per-source detail (cadence bars, model breakdown,
-                                Codex window, OpenAI line items)
+                                Codex 5h + weekly windows, OpenAI line items)
 balanze-cli status --json       machine-readable Snapshot JSON
 balanze-cli watch               live TUI on a TTY; streams one JSON doc per line
                                 when piped or given --json
