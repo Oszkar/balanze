@@ -102,6 +102,39 @@ pub fn get(name: &str) -> Result<String, KeychainError> {
     }
 }
 
+/// Resolve the user's OpenAI admin key, honoring the documented
+/// `BALANZE_OPENAI_KEY` env override (trimmed; empty = unset), which takes
+/// precedence over the stored keychain entry (AGENTS.md §3.4).
+///
+/// `Ok(None)` means "not configured" - the env var is unset/empty AND there's
+/// no keychain entry. `Err` is a real keychain failure (locked, denied), not
+/// mere absence. Single source of truth for the CLI snapshot fetch, the
+/// statusline self-compose fingerprint, and the watcher poll task.
+pub fn resolve_openai_key() -> Result<Option<String>, KeychainError> {
+    resolve_openai_key_with(std::env::var("BALANZE_OPENAI_KEY").ok())
+}
+
+/// Inner logic of [`resolve_openai_key`] with the env value injected, so the
+/// keychain fall-through is separable from the (pure, store-free) env rules.
+fn resolve_openai_key_with(env_override: Option<String>) -> Result<Option<String>, KeychainError> {
+    if let Some(key) = env_key_override(env_override) {
+        return Ok(Some(key));
+    }
+    match get(keys::OPENAI_API_KEY) {
+        Ok(k) => Ok(Some(k)),
+        Err(KeychainError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Apply the `BALANZE_OPENAI_KEY` override rules to a raw env value: trim it,
+/// and treat empty/whitespace as unset. Pure - no keychain access - so the
+/// precedence policy is unit-testable without a store.
+fn env_key_override(env_override: Option<String>) -> Option<String> {
+    let trimmed = env_override?.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
 /// Delete the entry under the given name. Returns `Ok(())` if it didn't
 /// exist (delete is idempotent).
 pub fn delete(name: &str) -> Result<(), KeychainError> {
@@ -175,5 +208,27 @@ mod tests {
     #[test]
     fn keys_module_exposes_well_known_constants() {
         assert_eq!(keys::OPENAI_API_KEY, "openai_api_key");
+    }
+
+    #[test]
+    fn env_override_wins_and_is_trimmed() {
+        assert_eq!(
+            env_key_override(Some("  sk-admin-xyz  ".to_string())),
+            Some("sk-admin-xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_or_whitespace_env_override_is_treated_as_unset() {
+        // Must NOT leak as `Some("")` - that means "not set", so `resolve` falls
+        // through to the keychain instead of short-circuiting on a blank key.
+        for blank in ["", "   ", "\t\n"] {
+            assert_eq!(
+                env_key_override(Some(blank.to_string())),
+                None,
+                "blank: {blank:?}"
+            );
+        }
+        assert_eq!(env_key_override(None), None);
     }
 }

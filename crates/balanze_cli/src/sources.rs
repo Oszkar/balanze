@@ -4,13 +4,11 @@
 
 use anyhow::{Result, anyhow};
 use chrono::{Duration, Utc};
-use std::env;
 use std::fs;
 
 use anthropic_oauth::{
-    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, ClaudeOAuthSnapshot, CredentialsClaudeAiOauth,
-    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, REFRESH_MARGIN, WriteBack, fetch_usage,
-    load_from_source, locate_credentials, refresh_access_token, token_needs_refresh, write_back,
+    ClaudeOAuthSnapshot, DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, REFRESH_MARGIN,
+    fetch_usage, load_from_source, locate_credentials, refresh_and_persist, token_needs_refresh,
 };
 use claude_parser::{
     UsageEvent, dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir,
@@ -163,41 +161,6 @@ fn live_fetch_codex_quota() -> Result<Option<codex_local::CodexQuotaSnapshot>> {
     }
 }
 
-/// Refresh the bearer and best-effort persist it. A skipped/failed write is
-/// non-fatal as long as we hold a usable token in memory.
-async fn refresh_and_persist(
-    client: &reqwest::Client,
-    path: &std::path::Path,
-    oauth: CredentialsClaudeAiOauth,
-) -> Result<CredentialsClaudeAiOauth> {
-    let rt = oauth
-        .refresh_token
-        .as_deref()
-        .ok_or(OAuthError::RefreshTokenMissing)?;
-    // One-shot CLI must not block on provider backoff; the watcher will pass standard().
-    let refreshed = refresh_access_token(
-        client,
-        CLAUDE_CODE_TOKEN_URL,
-        CLAUDE_CODE_CLIENT_ID,
-        rt,
-        Utc::now().timestamp_millis(),
-        &backoff::BackoffPolicy::fail_fast(),
-    )
-    .await?;
-    match write_back(path, &refreshed) {
-        Ok(WriteBack::Written) => info!("oauth: refreshed bearer, wrote back"),
-        Ok(WriteBack::SkippedDiskNewer) => {
-            info!("oauth: refreshed bearer; on-disk copy already newer, kept disk")
-        }
-        Err(e) => warn!("oauth: refresh ok but write-back failed (non-fatal): {e}"),
-    }
-    let mut next = oauth;
-    next.access_token = refreshed.access_token;
-    next.refresh_token = Some(refreshed.refresh_token);
-    next.expires_at = refreshed.expires_at_ms;
-    Ok(next)
-}
-
 async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
     // locate+load is sync I/O (a file read, or a `security` subprocess on
     // macOS that can block on a Keychain access prompt), so run it on a
@@ -217,20 +180,20 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
+    // One-shot CLI must not block on provider backoff; the watcher passes standard().
+    let policy = backoff::BackoffPolicy::fail_fast();
+
     // Refresh only a source we own (a file). The macOS Keychain entry is Claude
     // Code's - read-only (AGENTS.md §3.4): use the token while valid; if it has
     // already expired, surface an actionable error rather than refresh it.
     if let Some(path) = source.writable_path() {
         if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
             info!("oauth: token expired/near-expiry - refreshing pre-flight");
-            oauth = refresh_and_persist(&client, path, oauth).await?;
+            oauth = refresh_and_persist(&client, path, oauth, &policy).await?;
         }
     } else if token_needs_refresh(oauth.expires_at, Utc::now(), Duration::zero()) {
         return Err(OAuthError::CredentialExpiredReadOnly.into());
     }
-
-    // One-shot CLI must not block on provider backoff; the watcher will pass standard().
-    let policy = backoff::BackoffPolicy::fail_fast();
 
     match fetch_usage(
         &client,
@@ -255,7 +218,7 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
                 return Err(OAuthError::CredentialExpiredReadOnly.into());
             };
             warn!("oauth: 401 despite pre-flight - one refresh+retry");
-            let oauth = refresh_and_persist(&client, path, oauth).await?;
+            let oauth = refresh_and_persist(&client, path, oauth, &policy).await?;
             let s = fetch_usage(
                 &client,
                 ANTHROPIC_API_BASE,
@@ -275,24 +238,13 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
     }
 }
 
-/// Resolve the OpenAI admin key: `BALANZE_OPENAI_KEY` (trimmed; empty -> None)
-/// takes precedence, else the OS keychain entry. `Ok(None)` = not configured;
-/// `Err` = a real keychain failure (not just "absent"). Single source of truth
-/// for both the snapshot fetch and the statusline self-compose fingerprint.
+/// Resolve the OpenAI admin key via [`keychain::resolve_openai_key`] (env
+/// override, else keychain). `Ok(None)` = not configured; `Err` = a real
+/// keychain failure. Thin `anyhow` adapter over the shared resolver, kept as
+/// the crate-local name used by the snapshot fetch and the statusline
+/// self-compose fingerprint.
 pub(crate) fn resolve_openai_key() -> Result<Option<String>> {
-    if let Ok(env_key) = env::var("BALANZE_OPENAI_KEY") {
-        let trimmed = env_key.trim();
-        return Ok(if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        });
-    }
-    match keychain::get(keychain::keys::OPENAI_API_KEY) {
-        Ok(k) => Ok(Some(k)),
-        Err(keychain::KeychainError::NotFound(_)) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    Ok(keychain::resolve_openai_key()?)
 }
 
 /// Production OpenAI base, overridable via `BALANZE_OPENAI_API_BASE` (a test

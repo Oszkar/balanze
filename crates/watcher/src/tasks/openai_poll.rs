@@ -4,14 +4,14 @@
 //! Each tick: resolve the OpenAI admin key → fetch month-to-date costs →
 //! emit `Update(OpenAiCosts, ...)`.
 //!
-//! Key resolution order (same as the CLI):
-//!   1. `BALANZE_OPENAI_KEY` env var (workaround for Windows keychain bug).
-//!   2. OS keychain entry `openai_api_key`.
-//!   3. Neither configured → log at `info!` and exit `Ok(())` immediately.
+//! Key resolution is the shared `keychain::resolve_openai_key` (the
+//! `BALANZE_OPENAI_KEY` env override, else the `openai_api_key` keychain entry);
+//! if neither is configured the task logs at `info!` and exits `Ok(())`.
 //!
-//! MIRRORS balanze_cli::live_fetch_openai - see
-//! TODO: extract a shared live-fetch helper so CLI and watcher share
-//! one implementation.
+//! The fetch + error-mapping still mirrors `balanze_cli::live_fetch_openai`; a
+//! full shared fetch helper is deliberately left un-merged because the two
+//! paths diverge on backoff (`standard()` here vs the CLI's `fail_fast()`) and
+//! on caching (the CLI's 300s self-compose disk cache).
 
 use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, costs_this_month};
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
@@ -40,7 +40,7 @@ pub(crate) fn spawn(
     tokio::spawn(async move {
         // Resolve the key once at task startup. The key rarely changes during
         // a watcher session; if the user adds/rotates it they restart the app.
-        let key = match resolve_key().await {
+        let key = match resolve_key() {
             Some(k) => k,
             None => {
                 tracing::info!(
@@ -121,25 +121,13 @@ pub(crate) fn spawn(
     })
 }
 
-/// Resolve the OpenAI admin key from env var or keychain.
-/// Returns `None` if not configured (no error - just not set up).
-/// Errors from the keychain other than `NotFound` are logged but treated as
-/// "not configured" to avoid a boot failure blocking the rest of the watcher.
-async fn resolve_key() -> Option<String> {
-    if let Ok(env_key) = std::env::var("BALANZE_OPENAI_KEY") {
-        let trimmed = env_key.trim().to_string();
-        if !trimmed.is_empty() {
-            return Some(trimmed);
-        }
-        // Empty env var = "not configured".
-        return None;
-    }
-    match keychain::get(keychain::keys::OPENAI_API_KEY) {
-        Ok(k) => Some(k),
-        Err(keychain::KeychainError::NotFound(_)) => None,
-        Err(e) => {
-            tracing::warn!("watcher/openai_poll: keychain error (treating as not configured): {e}");
-            None
-        }
-    }
+/// Resolve the OpenAI admin key via the shared [`keychain::resolve_openai_key`]
+/// (env override, else keychain). A real keychain failure is logged and treated
+/// as "not configured" so a transient keychain error doesn't block the rest of
+/// the watcher from booting.
+fn resolve_key() -> Option<String> {
+    keychain::resolve_openai_key().unwrap_or_else(|e| {
+        tracing::warn!("watcher/openai_poll: keychain error (treating as not configured): {e}");
+        None
+    })
 }

@@ -23,7 +23,7 @@ pub use credentials::{
 };
 pub use refresh::{
     CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, REFRESH_MARGIN, refresh_access_token,
-    token_needs_refresh,
+    refresh_and_persist, token_needs_refresh,
 };
 pub use types::{
     CadenceBar, ClaudeOAuthSnapshot, Credentials, CredentialsClaudeAiOauth, ExtraUsage, OAuthError,

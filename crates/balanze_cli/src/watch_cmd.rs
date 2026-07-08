@@ -15,7 +15,6 @@
 
 use anyhow::Result;
 use state_coordinator::Sink;
-use tokio::sync::mpsc;
 use watcher::Watcher;
 
 use crate::sinks::{JsonlSink, StdoutSink};
@@ -58,43 +57,14 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
     let (handle, coord_join) = state_coordinator::spawn_with_optional_file(sink);
     let watcher_handles = Watcher::spawn(handle.clone(), &settings);
 
-    // Per-task watchdog: each watcher handle gets a wrapper that signals
-    // *unexpected* completion (Err return OR panic) through a single mpsc,
-    // so the top-level `select!` learns about any task failure without
-    // needing `futures::select_all` or `JoinSet` (neither is a workspace
-    // dep today). Clean `Ok(Ok(()))` exits - e.g. `openai_poll` when no
-    // key is configured, `jsonl` when no Claude projects dir exists,
-    // `oauth_poll` when credentials are absent at startup - are NOT
-    // signalled. Each of those tasks is designed to exit clean when its
-    // upstream isn't present; treating that as fatal would break
-    // `--watch` for any user missing one of the providers (which is the
-    // common case for the modal user).
-    //
-    // The labels come from `Watcher::spawn`'s return tuple rather than a
-    // hard-coded array here, so they can't drift out of sync with the
-    // spawn order if the watcher crate's task list changes.
-    let (exit_tx, mut exit_rx) = mpsc::unbounded_channel::<&'static str>();
-    for (label, h) in watcher_handles {
-        let tx = exit_tx.clone();
-        tokio::spawn(async move {
-            match h.await {
-                Ok(Ok(())) => {
-                    // Clean exit (e.g. no OpenAI key configured). Logged
-                    // at debug; do NOT signal the supervisor.
-                    tracing::debug!("watcher/{label}: exited Ok(())");
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("watcher/{label}: returned error: {e}");
-                    let _ = tx.send(label);
-                }
-                Err(join_err) => {
-                    tracing::error!("watcher/{label}: panicked or aborted: {join_err}");
-                    let _ = tx.send(label);
-                }
-            }
-        });
-    }
-    drop(exit_tx); // only the wrapper tasks hold senders now
+    // Per-task watchdog: `watch_for_task_death` signals *unexpected* completion
+    // (an Err return or a panic) of any watcher task through this channel, so the
+    // `select!` below learns of a failure without a `JoinSet`/`select_all` dep.
+    // Clean `Ok(())` exits - a provider simply not configured (no OpenAI key, no
+    // Claude dir, absent credentials) - are NOT signalled; treating them as fatal
+    // would break `--watch` for any single-provider user. The labels come from
+    // `Watcher::spawn`, so they can't drift out of sync with the spawn order.
+    let mut exit_rx = watcher::watch_for_task_death(watcher_handles);
 
     tokio::select! {
         res = tokio::signal::ctrl_c() => {
@@ -146,30 +116,11 @@ async fn run_tui_mode() -> Result<()> {
     let (handle, mut coord_join) = state_coordinator::spawn_with_optional_file(sink);
     let watcher_handles = Watcher::spawn(handle.clone(), &settings);
 
-    // Per-task watchdog mirroring `run_with_sink`: surface an unexpected watcher
-    // Err-return or panic so a dead provider task is not silently invisible
-    // behind the TUI (AGENTS.md §3.2 - long-running tasks must be supervised).
-    // Clean Ok(()) exits (a provider that is simply not configured) are NOT
-    // signalled - treating those as fatal would break `watch` for the common
-    // single-provider user.
-    let (exit_tx, mut exit_rx) = mpsc::unbounded_channel::<&'static str>();
-    for (label, h) in watcher_handles {
-        let tx = exit_tx.clone();
-        tokio::spawn(async move {
-            match h.await {
-                Ok(Ok(())) => tracing::debug!("watcher/{label}: exited Ok(())"),
-                Ok(Err(e)) => {
-                    tracing::error!("watcher/{label}: returned error: {e}");
-                    let _ = tx.send(label);
-                }
-                Err(join_err) => {
-                    tracing::error!("watcher/{label}: panicked or aborted: {join_err}");
-                    let _ = tx.send(label);
-                }
-            }
-        });
-    }
-    drop(exit_tx); // only the wrapper tasks hold senders now
+    // Per-task watchdog mirroring `run_with_sink` (AGENTS.md §3.2): surface an
+    // unexpected watcher Err-return or panic so a dead provider task is not
+    // silently invisible behind the TUI. Clean `Ok(())` exits (a provider simply
+    // not configured) are NOT signalled.
+    let mut exit_rx = watcher::watch_for_task_death(watcher_handles);
 
     // Race the TUI against ctrl-c, the coordinator dying, and a watcher dying.
     // `&mut coord_join` lets the TUI arm win without consuming the join handle.

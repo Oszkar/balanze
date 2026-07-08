@@ -432,32 +432,14 @@ async fn supervise_watcher(
         let tasks = watcher::Watcher::spawn(handle.clone(), &settings);
         tracing::info!("watcher: spawned {} task(s)", tasks.len());
 
-        // Per-task watchdog: signal an *unexpected* completion (Err return or
-        // panic) of any task through one channel, so the select! below learns of
-        // a failure. Clean Ok(()) exits and our own reload aborts (cancellation)
-        // are NOT signalled. Mirrors balanze_cli::watch_cmd. `death_tx` stays in
-        // scope for the iteration, so `death_rx.recv()` only resolves on a real
-        // death, never spuriously on all-senders-dropped.
-        let (death_tx, mut death_rx) = tokio::sync::mpsc::unbounded_channel::<&'static str>();
-        let mut aborts = Vec::with_capacity(tasks.len());
-        for (label, h) in tasks {
-            aborts.push(h.abort_handle());
-            let death_tx = death_tx.clone();
-            tokio::spawn(async move {
-                match h.await {
-                    Ok(Ok(())) => tracing::debug!("watcher/{label}: exited Ok(())"),
-                    Ok(Err(e)) => {
-                        tracing::error!("watcher/{label}: returned error: {e}");
-                        let _ = death_tx.send(label);
-                    }
-                    Err(je) if je.is_cancelled() => {}
-                    Err(je) => {
-                        tracing::error!("watcher/{label}: panicked/aborted: {je}");
-                        let _ = death_tx.send(label);
-                    }
-                }
-            });
-        }
+        // Per-task watchdog: `watch_for_task_death` signals an *unexpected*
+        // completion (Err return or panic) of any task through this channel, so
+        // the select! below learns of a failure. Clean Ok(()) exits and our own
+        // reload aborts (cancellation) are NOT signalled. Collect the abort
+        // handles first so we can tear the current set down before the next
+        // action (the reload abort then shows up as an ignored cancellation).
+        let aborts: Vec<_> = tasks.iter().map(|(_, h)| h.abort_handle()).collect();
+        let mut death_rx = watcher::watch_for_task_death(tasks);
 
         let wake = tokio::select! {
             r = reload_rx.recv() => r.map_or(Wake::Shutdown, |()| Wake::Reload),
