@@ -198,7 +198,8 @@ fn cross_from_payload(
         codex_used_percent: snap
             .codex_quota
             .as_ref()
-            .map(|q| q.primary.used_percent as f32),
+            .and_then(|q| q.worst_window())
+            .map(|w| w.used_percent as f32),
         openai_cost_micro_usd: snap.openai.as_ref().map(|c| c.total_micro_usd),
         codex_stale: envelope_stale || snap.codex_quota_error.is_some(),
         openai_stale: envelope_stale || snap.openai_error.is_some(),
@@ -353,6 +354,35 @@ mod statusline_tests {
         let stale = super::cross_from_payload(&stale_payload, now);
         assert!(stale.codex_stale, "old payload: codex stale");
         assert!(stale.openai_stale, "old payload: openai stale");
+    }
+
+    #[test]
+    fn cross_uses_worst_codex_window() {
+        use chrono::TimeZone as _;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 7, 8, 12, 0, 0).unwrap();
+        let mut s = state_coordinator::Snapshot::empty(now);
+        s.codex_quota = Some(codex_local::types::CodexQuotaSnapshot {
+            observed_at: now,
+            session_id: "s".into(),
+            primary: codex_local::types::RateLimitWindow {
+                used_percent: 1.0,
+                window_duration_minutes: 300,
+                resets_at: now,
+            },
+            secondary: Some(codex_local::types::RateLimitWindow {
+                used_percent: 6.0,
+                window_duration_minutes: 10_080,
+                resets_at: now,
+            }),
+            plan_type: "pro".into(),
+            rate_limit_reached: false,
+            tokens: None,
+            credits: None,
+        });
+        let payload = state_coordinator::SnapshotFilePayload::new(s, now);
+        let c = super::cross_from_payload(&payload, now);
+        // worst window is the weekly at 6%, not the 5h at 1%.
+        assert_eq!(c.codex_used_percent, Some(6.0));
     }
 
     #[test]
