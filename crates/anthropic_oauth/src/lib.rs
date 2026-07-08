@@ -21,7 +21,10 @@ pub use client::fetch_usage;
 pub use credentials::{
     CredentialSource, WriteBack, load, load_from, load_from_source, locate_credentials, write_back,
 };
-pub use refresh::{CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, refresh_access_token};
+pub use refresh::{
+    CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, REFRESH_MARGIN, refresh_access_token,
+    token_needs_refresh,
+};
 pub use types::{
     CadenceBar, ClaudeOAuthSnapshot, Credentials, CredentialsClaudeAiOauth, ExtraUsage, OAuthError,
     RefreshedTokens,

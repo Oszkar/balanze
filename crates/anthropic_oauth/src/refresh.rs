@@ -5,6 +5,7 @@
 //! grant; `credentials::write_back` persists the result atomically. The
 //! refreshed `access_token` / `refresh_token` are secrets - never logged.
 
+use chrono::{DateTime, Duration, Utc};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 
@@ -17,6 +18,19 @@ pub const CLAUDE_CODE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
 /// Claude Code's OAuth token endpoint. VERIFY via the ignored smoke (above).
 pub const CLAUDE_CODE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
+
+/// Refresh proactively if the access token is expired or expires within this
+/// window. AGENTS.md §3.1/§3.4: both the one-shot CLI and the watcher pre-flight
+/// refresh a writable credential this far ahead of expiry.
+pub const REFRESH_MARGIN: Duration = Duration::seconds(300);
+
+/// Pure: `true` if `expires_at_ms` is in the past or within `margin` of `now`.
+///
+/// `saturating_sub` guards against underflow on a pathological/hostile
+/// `expires_at_ms` near `i64::MIN`, which would otherwise panic in debug builds.
+pub fn token_needs_refresh(expires_at_ms: i64, now: DateTime<Utc>, margin: Duration) -> bool {
+    now.timestamp_millis() >= expires_at_ms.saturating_sub(margin.num_milliseconds())
+}
 
 #[derive(Debug, Deserialize)]
 struct RawRefreshResponse {
@@ -113,4 +127,29 @@ pub async fn refresh_access_token(
         })
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_needs_refresh;
+    use chrono::{Duration, TimeZone, Utc};
+
+    #[test]
+    fn token_needs_refresh_logic() {
+        let now = Utc.with_ymd_and_hms(2026, 5, 15, 12, 0, 0).unwrap();
+        let margin = Duration::seconds(300);
+        let now_ms = now.timestamp_millis();
+        assert!(token_needs_refresh(now_ms - 1, now, margin));
+        assert!(token_needs_refresh(now_ms + 200_000, now, margin));
+        assert!(!token_needs_refresh(now_ms + 3_600_000, now, margin));
+        // Boundary: token expiring exactly `margin` from now → refresh now.
+        assert!(token_needs_refresh(
+            now_ms + margin.num_milliseconds(),
+            now,
+            margin
+        ));
+        // A pathological/hostile expires_at near i64::MIN must not panic and
+        // must return true (absurdly-past expiry → needs refresh).
+        assert!(token_needs_refresh(i64::MIN, now, margin));
+    }
 }

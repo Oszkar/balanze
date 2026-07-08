@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 
 use anthropic_oauth::{
     CLAUDE_CODE_CLIENT_ID, CLAUDE_CODE_TOKEN_URL, CredentialsClaudeAiOauth,
-    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, WriteBack, fetch_usage, load_from_source,
-    locate_credentials, refresh_access_token, write_back,
+    DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, REFRESH_MARGIN, WriteBack, fetch_usage,
+    load_from_source, locate_credentials, refresh_access_token, token_needs_refresh, write_back,
 };
 use chrono::{Duration, Utc};
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
@@ -28,10 +28,6 @@ use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
 use crate::tasks::get_or_build_client;
-
-/// Pre-flight refresh margin: refresh the bearer if it expires within this window.
-/// Mirrors `REFRESH_MARGIN` in `balanze_cli`.
-const REFRESH_MARGIN: Duration = Duration::seconds(300);
 
 /// Spawn the OAuth poll task and return its `JoinHandle`.
 ///
@@ -257,12 +253,6 @@ async fn poll_once(
         }
         Err(e) => Err(e.into()),
     }
-}
-
-/// True if `expires_at_ms` is in the past or within `margin` of now.
-/// Saturating sub prevents underflow on pathological/hostile timestamps.
-fn token_needs_refresh(expires_at_ms: i64, now: chrono::DateTime<Utc>, margin: Duration) -> bool {
-    now.timestamp_millis() >= expires_at_ms.saturating_sub(margin.num_milliseconds())
 }
 
 /// Refresh the bearer token and atomically persist it back to disk.
