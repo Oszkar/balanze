@@ -89,35 +89,51 @@ fn main() -> ExitCode {
 /// Installs the `tracing` subscriber: `BALANZE_LOG` (AGENTS.md §3.2/§3.4)
 /// drives verbosity, defaulting to `info` when unset. Emits to stderr and,
 /// when a data directory is resolvable, to a daily-rotating file under
-/// `<data_dir>/logs/` (kept 3 days) so a GUI launch - which has nowhere for
-/// stderr to go - still leaves diagnostics behind. The returned guard must be
-/// held for the process lifetime; dropping it early stops the non-blocking
-/// file writer from flushing.
+/// `<data_dir>/logs/` (kept 3 days) - useful when this binary is launched
+/// with no attached console (e.g. double-clicked on Windows), where stderr
+/// has nowhere to go. The returned guard must be held for the process
+/// lifetime; dropping it early stops the non-blocking file writer from
+/// flushing.
 fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let env_filter = tracing_subscriber::EnvFilter::try_from_env("BALANZE_LOG")
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    // Distinguish "unset" (quietly default to info) from "set but invalid"
+    // (a typo like `BALANZE_LOG=deubg` should not look identical to unset).
+    let env_filter = match std::env::var("BALANZE_LOG") {
+        Ok(directives) => tracing_subscriber::EnvFilter::try_new(&directives).unwrap_or_else(|e| {
+            eprintln!("warning: invalid BALANZE_LOG={directives:?} ({e}); using \"info\"");
+            tracing_subscriber::EnvFilter::new("info")
+        }),
+        Err(_) => tracing_subscriber::EnvFilter::new("info"),
+    };
     let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
 
     let (file_layer, guard) = match settings::log_dir() {
-        Some(dir) => match tracing_appender::rolling::Builder::new()
-            .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix("balanze-cli")
-            .filename_suffix("log")
-            .max_log_files(3)
-            .build(&dir)
-        {
-            Ok(appender) => {
-                let (writer, guard) = tracing_appender::non_blocking(appender);
-                let layer = tracing_subscriber::fmt::layer()
-                    .with_ansi(false)
-                    .with_writer(writer);
-                (Some(layer), Some(guard))
+        Some(dir) => {
+            // `Builder::build` prunes the directory for retention *before*
+            // creating it, so on a brand-new install (no `logs/` yet) it
+            // prints an alarming-looking "Error reading the log directory" to
+            // stderr. Pre-create it (best-effort - a real failure surfaces
+            // through the `build` error below) so first run is quiet too.
+            let _ = std::fs::create_dir_all(&dir);
+            match tracing_appender::rolling::Builder::new()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .filename_prefix("balanze-cli")
+                .filename_suffix("log")
+                .max_log_files(3)
+                .build(&dir)
+            {
+                Ok(appender) => {
+                    let (writer, guard) = tracing_appender::non_blocking(appender);
+                    let layer = tracing_subscriber::fmt::layer()
+                        .with_ansi(false)
+                        .with_writer(writer);
+                    (Some(layer), Some(guard))
+                }
+                Err(e) => {
+                    eprintln!("warning: could not open log file in {}: {e}", dir.display());
+                    (None, None)
+                }
             }
-            Err(e) => {
-                eprintln!("warning: could not open log file in {}: {e}", dir.display());
-                (None, None)
-            }
-        },
+        }
         None => (None, None),
     };
 
