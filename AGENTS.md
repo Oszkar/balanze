@@ -80,7 +80,7 @@ There is no internal rate-limit gate - the only thing being rate-limited is *us*
 | `debug` | Per-event detail - individual JSONL line parsed, state-coordinator message handled, window pace recomputed |
 | `trace` | Raw frame dumps; almost never enabled |
 
-Default level: `INFO` for app modules, `WARN` for the parser (DEBUG-per-file JSONL parsing is gated behind `BALANZE_LOG=debug,balanze::claude_parser=trace`). Logs rotate via `tracing-appender` (5 MB max, keep last 3). Don't log secrets at any level. Periodic logs cap at one line per N minutes; never one-per-event at info level.
+Default level: `INFO` for app modules, `WARN` for the parser (DEBUG-per-file JSONL parsing is gated behind `BALANZE_LOG=debug,balanze::claude_parser=trace`). Both binaries emit to stderr and, when a data directory is resolvable, to a daily-rotating file under `<data_dir>/logs/` via `tracing-appender` (`Rotation::DAILY`, `max_log_files(3)` - a 3-day retention window, not a byte cap; `tracing-appender`'s rolling writer only rotates by time). Don't log secrets at any level. Periodic logs cap at one line per N minutes; never one-per-event at info level.
 
 ### 3.3 Legal context
 

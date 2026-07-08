@@ -24,6 +24,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 
 # The live data spine. The coordinator owns the in-memory Snapshot and routes
 # side effects through `TauriSink`; the watcher feeds it; settings configure

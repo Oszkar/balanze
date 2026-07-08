@@ -142,6 +142,19 @@ pub fn statusline_snapshot_path() -> Option<PathBuf> {
     project_dirs().map(|d| d.data_dir().join("statusline.snapshot.json"))
 }
 
+/// Log file directory for this user (`<data_dir>/logs`). Lazy: doesn't create
+/// the directory - the `tracing-appender` rolling writer creates it on first
+/// write.
+///
+/// `BALANZE_DATA_DIR_OVERRIDE` is intended for tests that need an isolated
+/// log directory (same override [`statusline_snapshot_path`] honors).
+pub fn log_dir() -> Option<PathBuf> {
+    if let Ok(env_path) = std::env::var("BALANZE_DATA_DIR_OVERRIDE") {
+        return Some(PathBuf::from(env_path).join("logs"));
+    }
+    project_dirs().map(|d| d.data_dir().join("logs"))
+}
+
 fn project_dirs() -> Option<directories::ProjectDirs> {
     directories::ProjectDirs::from("me", "oszkar", "Balanze")
 }
@@ -353,6 +366,19 @@ mod tests {
         unsafe { std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE") };
 
         assert_eq!(path, Some(dir.path().join("statusline.snapshot.json")));
+    }
+
+    #[test]
+    fn log_dir_honors_env_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: this env-mutating test is serialized via ENV_MUTEX; the
+        // override is test-only and removed before assertions run.
+        unsafe { std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", dir.path()) };
+        let path = log_dir();
+        unsafe { std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE") };
+
+        assert_eq!(path, Some(dir.path().join("logs")));
     }
 
     #[test]
