@@ -40,7 +40,7 @@ pub enum OpenAiError {
 
     /// HTTP 403 - key lacks the admin scope (project/service-account keys hit this).
     #[error(
-        "HTTP 403 from organization/costs. This endpoint requires an admin API key (`sk-admin-…`); project keys and service-account keys cannot read organization billing. Generate an admin key at https://platform.openai.com/settings/organization/admin-keys and try again. Server said: {body}"
+        "HTTP 403 from organization/costs. This endpoint requires an admin API key (`sk-admin-...`); project keys and service-account keys cannot read organization billing. Generate an admin key at https://platform.openai.com/settings/organization/admin-keys and try again. Server said: {body}"
     )]
     InsufficientScope { body: String },
 

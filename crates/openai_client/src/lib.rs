@@ -2,10 +2,10 @@
 //!
 //! Calls `GET https://api.openai.com/v1/organization/costs` - the
 //! documented Admin API endpoint for monthly spend. Requires an Admin API
-//! key (`sk-admin-…`), which only org owners can create at
+//! key (`sk-admin-...`), which only org owners can create at
 //! <https://platform.openai.com/settings/organization/admin-keys>.
 //!
-//! Project keys (`sk-proj-…`) and service account keys do NOT have access
+//! Project keys (`sk-proj-...`) and service account keys do NOT have access
 //! to this surface. The legacy `/v1/dashboard/billing/credit_grants`
 //! endpoint we used in an earlier draft is being phased out and only
 //! worked with legacy user keys, which OpenAI no longer issues.

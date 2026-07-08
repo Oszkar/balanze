@@ -5,8 +5,8 @@
 //! code. Keeping the mapping pure (no I/O, no process exit) makes every case
 //! unit-testable.
 //!
-//! Codes (documented in `--help`, AGENTS.md §9 / the v0.4.1 CLI-maturity
-//! design; the user-facing README table lands with the docs-lockstep change):
+//! Codes (also documented in `--help`, AGENTS.md §9, and the README exit-code
+//! table):
 //!
 //! | Code | Meaning |
 //! |------|---------|

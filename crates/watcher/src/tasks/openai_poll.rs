@@ -97,14 +97,14 @@ pub(crate) fn spawn(
                 Err(openai_client::OpenAiError::AuthInvalid { .. }) => SourceUpdate {
                     source: Source::OpenAiCosts,
                     result: Err("OpenAI admin key rejected (HTTP 401). \
-                         Run `balanze-cli set-openai-key` with a fresh `sk-admin-…` key."
+                         Run `balanze-cli set-openai-key` with a fresh `sk-admin-...` key."
                         .to_string()),
                 },
                 Err(openai_client::OpenAiError::InsufficientScope { .. }) => SourceUpdate {
                     source: Source::OpenAiCosts,
                     result: Err(
                         "OpenAI returned 403. organization/costs requires an admin API key \
-                         (`sk-admin-…`), not a project or service-account key."
+                         (`sk-admin-...`), not a project or service-account key."
                             .to_string(),
                     ),
                 },
