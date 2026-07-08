@@ -463,4 +463,37 @@ mod tests {
         // info was empty -> no token usage recorded.
         assert!(snap.tokens.is_none());
     }
+
+    #[test]
+    fn burn_is_none_when_counter_decreases() {
+        // Session tokens go DOWN (4000 -> 1000), e.g. a context-compaction
+        // reset. The `session_total_tokens >= prev_total` guard rejects the
+        // negative delta (and prevents u64 underflow), so no burn is reported.
+        const E1: &str = r#"{"timestamp":"2026-07-08T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":4000},"model_context_window":258400},"rate_limits":{"primary":{"used_percent":1.0,"window_minutes":300,"resets_at":1783490621},"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+        const E2: &str = r#"{"timestamp":"2026-07-08T10:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":1000},"model_context_window":258400},"rate_limits":{"primary":{"used_percent":1.0,"window_minutes":300,"resets_at":1783490621},"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, "{SESSION_META}\n{E1}\n{E2}\n").unwrap();
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        assert_eq!(snap.tokens.unwrap().recent_burn_tokens_per_min, None);
+    }
+
+    #[test]
+    fn credits_null_is_none() {
+        const E1: &str = r#"{"timestamp":"2026-07-08T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"primary":{"used_percent":1.0,"window_minutes":300,"resets_at":1783490621},"credits":null,"plan_type":"plus","rate_limit_reached_type":null}}}"#;
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, "{SESSION_META}\n{E1}\n").unwrap();
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        assert!(snap.credits.is_none());
+    }
+
+    #[test]
+    fn credits_non_numeric_balance_is_none() {
+        const E1: &str = r#"{"timestamp":"2026-07-08T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"primary":{"used_percent":1.0,"window_minutes":300,"resets_at":1783490621},"credits":{"has_credits":true,"balance":"abc"},"plan_type":"plus","rate_limit_reached_type":null}}}"#;
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, "{SESSION_META}\n{E1}\n").unwrap();
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        let c = snap.credits.expect("credits parsed");
+        assert_eq!(c.balance, None);
+        assert!(c.has_credits);
+    }
 }
