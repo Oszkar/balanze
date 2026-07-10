@@ -52,29 +52,28 @@ pub fn atomic_write(path: &Path, bytes: &[u8], perms: Permissions) -> io::Result
 
     let write_result = (|| -> io::Result<()> {
         let mut f = create_tmp(&tmp, perms)?;
+        // Preserve the existing target's mode across the replace - but ONLY for
+        // `Default`, and BEFORE `sync_all` so the mode change is durable, not
+        // just the bytes (a crash after rename must not leave the file at the
+        // tmp's umask-default mode). For `OwnerOnly` the tmp is already 0o600
+        // from `O_CREAT` and MUST stay restrictive even when the existing file
+        // is looser (e.g. a 0o644 credential file), so its mode is never copied.
+        // A copy failure is non-fatal (we keep the safe default rather than fail).
+        #[cfg(unix)]
+        if perms == Permissions::Default
+            && let Ok(meta) = fs::metadata(path)
+        {
+            let _ = f.set_permissions(meta.permissions());
+        }
         f.write_all(bytes)?;
         // fsync before rename: a crash/power-loss between write and rename
-        // cannot lose the bytes.
+        // cannot lose the bytes or the copied mode.
         f.sync_all()?;
         Ok(())
     })();
     if let Err(e) = write_result {
         let _ = fs::remove_file(&tmp);
         return Err(e);
-    }
-
-    // Preserve the existing target's mode across the replace - but ONLY for
-    // `Default`. For `OwnerOnly` the tmp is already 0o600 and MUST stay
-    // restrictive even when the existing file is looser (e.g. a 0o644 credential
-    // file), so its mode is never copied. A copy failure is non-fatal (we keep
-    // the safe default rather than fail).
-    #[cfg(unix)]
-    {
-        if perms == Permissions::Default
-            && let Ok(meta) = fs::metadata(path)
-        {
-            let _ = fs::set_permissions(&tmp, meta.permissions());
-        }
     }
 
     if let Err(e) = fs::rename(&tmp, path) {
@@ -113,7 +112,11 @@ fn create_tmp(tmp: &Path, _perms: Permissions) -> io::Result<fs::File> {
 /// `.` so the tmp is a real sibling and the parent-dir fsync opens a real
 /// directory rather than the empty path (which would fail and silently drop the
 /// dir-fsync from the durable sequence).
-fn resolve_parent(path: &Path) -> &Path {
+///
+/// Public so callers that must `create_dir_all` the parent before writing (this
+/// crate does not create directories) target exactly the directory the write
+/// will use, instead of passing a raw `path.parent()` that can be `Some("")`.
+pub fn resolve_parent(path: &Path) -> &Path {
     match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),

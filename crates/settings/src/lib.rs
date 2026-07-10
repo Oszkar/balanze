@@ -250,12 +250,14 @@ pub fn save(settings: &Settings) -> Result<(), SettingsError> {
 
 pub fn save_to(settings: &Settings, path: &Path) -> Result<(), SettingsError> {
     debug!(path = %path.display(), "settings: save");
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| SettingsError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
+    // Normalize the parent (a bare relative target's `parent()` is `Some("")`)
+    // to exactly the directory `atomic_write` will write into, so a relative
+    // target doesn't fail here at `create_dir_all("")` before the helper runs.
+    let parent = atomic_file::resolve_parent(path);
+    fs::create_dir_all(parent).map_err(|e| SettingsError::Io {
+        path: parent.to_path_buf(),
+        source: e,
+    })?;
 
     let bytes = serde_json::to_vec_pretty(settings).map_err(|e| SettingsError::Malformed {
         path: path.to_path_buf(),
