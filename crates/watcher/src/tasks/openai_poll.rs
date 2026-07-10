@@ -8,17 +8,16 @@
 //! `BALANZE_OPENAI_KEY` env override, else the `openai_api_key` keychain entry);
 //! if neither is configured the task logs at `info!` and exits `Ok(())`.
 //!
-//! The fetch + error-mapping still mirrors `balanze_cli::live_fetch_openai`; a
-//! full shared fetch helper is deliberately left un-merged because the two
-//! paths diverge on backoff (`standard()` here vs the CLI's `fail_fast()`) and
-//! on caching (the CLI's 300s self-compose disk cache).
+//! The fetch shares `openai_client::costs_this_month_with` (client assembly +
+//! this-month costs) with the CLI and self-compose paths, injecting this task's
+//! own 30s timeout and `standard()` backoff; the 401/403 admin-key hint is the
+//! shared `OpenAiError::admin_key_hint`, kept in lockstep with the CLI.
 
-use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, costs_this_month};
+use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, costs_this_month_with};
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
-use crate::tasks::get_or_build_client;
 
 /// Spawn the OpenAI cost poll task and return its `JoinHandle`.
 ///
@@ -51,33 +50,18 @@ pub(crate) fn spawn(
         };
 
         // First tick fires immediately. `Delay` (not default `Burst`) so a
-        // slow `costs_this_month` under `BackoffPolicy::standard()` backoff
+        // slow `costs_this_month_with` under `BackoffPolicy::standard()` backoff
         // can't queue up multiple missed ticks and fire a burst on recovery.
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut client: Option<reqwest::Client> = None;
 
         loop {
             ticker.tick().await;
 
-            let client = match get_or_build_client(&mut client) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!("watcher/openai_poll: reqwest client build failed: {e}");
-                    let _ = coord
-                        .send(StateMsg::Update(SourceUpdate {
-                            source: Source::OpenAiCosts,
-                            result: Err(format!("reqwest client build failed: {e}")),
-                        }))
-                        .await;
-                    continue;
-                }
-            };
-
-            let update = match costs_this_month(
-                client,
+            let update = match costs_this_month_with(
                 OPENAI_API_BASE,
                 &key,
+                std::time::Duration::from_secs(30),
                 &backoff::BackoffPolicy::standard(),
             )
             .await
@@ -94,25 +78,20 @@ pub(crate) fn spawn(
                         result: Ok(SourcePartial::OpenAiCosts(costs)),
                     }
                 }
-                Err(openai_client::OpenAiError::AuthInvalid { .. }) => SourceUpdate {
-                    source: Source::OpenAiCosts,
-                    result: Err("OpenAI admin key rejected (HTTP 401). \
-                         Run `balanze-cli set-openai-key` with a fresh `sk-admin-...` key."
-                        .to_string()),
-                },
-                Err(openai_client::OpenAiError::InsufficientScope { .. }) => SourceUpdate {
-                    source: Source::OpenAiCosts,
-                    result: Err(
-                        "OpenAI returned 403. organization/costs requires an admin API key \
-                         (`sk-admin-...`), not a project or service-account key."
-                            .to_string(),
-                    ),
-                },
                 Err(e) => {
-                    tracing::warn!("watcher/openai_poll: fetch error: {e}");
+                    // Shared 401/403 admin-key hint (in lockstep with the CLI);
+                    // a client-build failure or any other error surfaces via
+                    // Display with a WARN.
+                    let result = match e.admin_key_hint() {
+                        Some(hint) => Err(hint.to_string()),
+                        None => {
+                            tracing::warn!("watcher/openai_poll: fetch error: {e}");
+                            Err(format!("{e}"))
+                        }
+                    };
                     SourceUpdate {
                         source: Source::OpenAiCosts,
-                        result: Err(format!("{e}")),
+                        result,
                     }
                 }
             };

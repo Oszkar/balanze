@@ -14,9 +14,7 @@ use claude_parser::{
     UsageEvent, dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir,
     find_jsonl_files, parse_str,
 };
-use openai_client::{
-    DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiCosts, OpenAiError, costs_this_month,
-};
+use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiCosts, costs_this_month_with};
 use state_coordinator::Snapshot;
 use tracing::{info, warn};
 
@@ -268,15 +266,11 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
         Some(k) => k,
         None => return Ok(None),
     };
-    let client = reqwest::Client::builder()
-        .user_agent("balanze-cli/0.1.0")
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
     // One-shot CLI must not block on provider backoff; watcher passes standard().
-    match costs_this_month(
-        &client,
+    match costs_this_month_with(
         OPENAI_API_BASE,
         &key,
+        std::time::Duration::from_secs(30),
         &backoff::BackoffPolicy::fail_fast(),
     )
     .await
@@ -290,13 +284,13 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
             );
             Ok(Some(costs))
         }
-        Err(OpenAiError::AuthInvalid { .. }) => Err(anyhow!(
-            "OpenAI admin key rejected (HTTP 401). Run `balanze-cli set-openai-key` with a fresh `sk-admin-...` key."
-        )),
-        Err(OpenAiError::InsufficientScope { .. }) => Err(anyhow!(
-            "OpenAI returned 403. organization/costs requires an admin API key (`sk-admin-...`), not a project or service-account key. Generate one at https://platform.openai.com/settings/organization/admin-keys."
-        )),
-        Err(e) => Err(e.into()),
+        // Shared admin-key hint, kept in lockstep with the watcher poller
+        // (`openai_client::OpenAiError::admin_key_hint`); other errors surface
+        // via their `Display`.
+        Err(e) => match e.admin_key_hint() {
+            Some(hint) => Err(anyhow!("{hint}")),
+            None => Err(e.into()),
+        },
     }
 }
 
@@ -317,14 +311,10 @@ impl statusline_render::CrossSources for LiveCrossSources {
             Err(e) => return Err(e.to_string()),
         };
         // Short timeout: the statusline runs every turn; never hang the prompt.
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .map_err(|e| e.to_string())?;
-        let costs = openai_client::costs_this_month(
-            &client,
+        let costs = costs_this_month_with(
             &openai_api_base(),
             &key,
+            std::time::Duration::from_secs(3),
             &backoff::BackoffPolicy::fail_fast(),
         )
         .await
