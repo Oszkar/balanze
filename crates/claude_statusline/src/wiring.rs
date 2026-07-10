@@ -14,10 +14,7 @@
 //! all other keys, and creates the file+parent dir if absent (AGENTS.md §3.4
 //! pattern - no secret so no 0o600 requirement; plain ACL inheritance is fine).
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::errors::StatuslineError;
 
@@ -294,54 +291,14 @@ fn atomic_write_json(path: &Path, root: &serde_json::Value) -> Result<(), Status
         source: e,
     })?;
 
-    // Unique tmp name: pid + nanosecond timestamp + monotonic counter.
-    // Avoids collisions on concurrent calls or PID reuse (mirrors credentials.rs).
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    let tmp = dir.join(format!(
-        "settings.json.balanze-{}-{}-{}.tmp",
-        std::process::id(),
-        nanos,
-        seq,
-    ));
-
-    let write_result = (|| -> std::io::Result<()> {
-        let mut f = std::fs::File::create_new(&tmp)?;
-        f.write_all(&serialized)?;
-        // fsync before rename: crash between write and rename cannot lose data.
-        f.sync_all()?;
-        Ok(())
-    })();
-
-    if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(StatuslineError::SettingsIo {
-            path: tmp,
-            source: e,
-        });
-    }
-
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        StatuslineError::SettingsIo {
+    // Claude Code's settings.json is not a secret, but preserving its existing
+    // mode across the replace (via `Permissions::Default`) is the right default.
+    atomic_file::atomic_write(path, &serialized, atomic_file::Permissions::Default).map_err(
+        |source| StatuslineError::SettingsIo {
             path: path.to_path_buf(),
-            source: e,
-        }
-    })?;
-
-    // Unix: fsync the parent directory so the rename itself is durable.
-    // Best-effort - dir-fsync failure must not fail the write since data is
-    // already renamed into place.
-    #[cfg(unix)]
-    {
-        let _ = std::fs::File::open(dir).and_then(|f| f.sync_all());
-    }
-
-    Ok(())
+            source,
+        },
+    )
 }
 
 #[cfg(test)]

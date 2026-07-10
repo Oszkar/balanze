@@ -14,7 +14,6 @@
 //! requires bumping the version and adding a migration step in `load_from`.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -242,8 +241,8 @@ pub fn load_for_update_from(path: &Path) -> Result<Settings, SettingsError> {
 pub const UPDATE_LOAD_HINT: &str =
     "refusing to overwrite settings.json with defaults; fix or remove it and retry";
 
-/// Save settings atomically: write to `<path>.tmp`, fsync, rename over `<path>`.
-/// Creates parent directories as needed.
+/// Save settings atomically via the shared `atomic_file` helper (fsync'd temp +
+/// rename, plus a parent-dir fsync on unix). Creates parent directories as needed.
 pub fn save(settings: &Settings) -> Result<(), SettingsError> {
     let path = default_path()?;
     save_to(settings, &path)
@@ -263,32 +262,12 @@ pub fn save_to(settings: &Settings, path: &Path) -> Result<(), SettingsError> {
         reason: format!("serialization failed: {e}"),
     })?;
 
-    let tmp = tmp_path(path);
-    {
-        let mut f = fs::File::create(&tmp).map_err(|e| SettingsError::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
-        f.write_all(&bytes).map_err(|e| SettingsError::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
-        f.sync_all().map_err(|e| SettingsError::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
-    }
-    fs::rename(&tmp, path).map_err(|e| SettingsError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    Ok(())
-}
-
-fn tmp_path(target: &Path) -> PathBuf {
-    let mut s = target.as_os_str().to_owned();
-    s.push(".tmp");
-    PathBuf::from(s)
+    atomic_file::atomic_write(path, &bytes, atomic_file::Permissions::Default).map_err(|source| {
+        SettingsError::Io {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -349,10 +328,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         save_to(&Settings::default(), &path).expect("save");
-        // After a successful save, the tmp file should NOT exist.
-        let tmp = tmp_path(&path);
-        assert!(!tmp.exists(), "leftover {tmp:?} after successful save");
         assert!(path.exists());
+        // A successful save leaves no temp files behind (atomic_file cleans up
+        // its unique `*.tmp` on both the success and failure paths).
+        let leftover_tmp = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"));
+        assert!(!leftover_tmp, "leftover .tmp file after successful save");
     }
 
     #[test]

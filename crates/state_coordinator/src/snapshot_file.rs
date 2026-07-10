@@ -12,10 +12,7 @@
 //! mirrors `claude_statusline::file_io`. The coordinator actor never calls these
 //! (boundary #7: no I/O in the actor); the host's sink does.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -149,53 +146,12 @@ pub fn atomic_write_snapshot_file(
         source: e,
     })?;
 
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    let tmp = parent.join(format!(
-        "snapshot.{}-{}-{}.json.tmp",
-        std::process::id(),
-        nanos,
-        seq,
-    ));
-
-    let write_result = (|| -> std::io::Result<()> {
-        let mut f = std::fs::File::create_new(&tmp)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
-        Ok(())
-    })();
-    if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(SnapshotFileError::Io {
-            path: tmp,
-            source: e,
-        });
-    }
-
-    #[cfg(unix)]
-    {
-        if let Ok(meta) = std::fs::metadata(path) {
-            let _ = std::fs::set_permissions(&tmp, meta.permissions());
-        }
-    }
-
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
+    atomic_file::atomic_write(path, &bytes, atomic_file::Permissions::Default).map_err(|source| {
         SnapshotFileError::Io {
             path: path.to_path_buf(),
-            source: e,
+            source,
         }
-    })?;
-
-    #[cfg(unix)]
-    {
-        let _ = std::fs::File::open(parent).and_then(|f| f.sync_all());
-    }
-    Ok(())
+    })
 }
 
 #[cfg(test)]
