@@ -237,7 +237,7 @@ Engineering bar (what "finished-feeling" means here):
 
 The MVP lands across five release phases - Data -> Liveness -> UI -> Surfaces -> Distribution - followed by two committed enhancement phases (Alerts, then Settings & configurability) and a post-1.0 deferred tier (Dashboard, then the uncommitted Vision ideas). Each phase has **one dominant theme** so "done" is hard to fudge and risk is sequenced correctly (read-only data primitives first, asymmetric/UI work later). Shipped phases are summarized to a line here; the blow-by-blow lives in the [CHANGELOG](../CHANGELOG.md), and this section stays forward-looking.
 
-**Current status: shipped through v0.4.2 (Statusline).** The data layer, the live spine, the Tauri popover + settings, the UI polish pass, the first-class CLI surface, and the productized cross-provider statusline are done, and the product is useful day to day. The remaining work (v0.5) distributes it to other people; v0.6 adds alerts; v0.7 deepens settings and theming.
+**Current status: shipped through v0.4.3 (Codex maturity).** The data layer, the live spine, the Tauri popover + settings, the UI polish pass, the first-class CLI surface, the productized cross-provider statusline, and first-class Codex treatment (both rolling windows, everywhere) are done, and the product is useful day to day. The remaining work (v0.5) distributes it to other people; v0.6 adds alerts; v0.7 deepens settings and theming.
 
 ### Phase 1 - v0.1: Data (shipped)
 
@@ -259,13 +259,17 @@ The Tauri surface - the hero artifact - delivered as bounded sub-milestones so t
 
 ### Phase 4 - v0.4: Surfaces
 
-Make every surface - popover, CLI, statusline - first-class and presentable. The theme is **"each way in reads as intentional, not a scaffold."** Three bounded sub-milestones, built in order.
+Make every surface - popover, CLI, statusline - first-class and presentable. The theme is **"each way in reads as intentional, not a scaffold."** Four bounded sub-milestones, built in order.
 
 **v0.4.0 - UI polish.** A lightweight visual pass, not a design system - the frontend is ~14 small components, so a token/component framework would be YAGNI. Tighten spacing, type scale, and color; grow the existing `theme.css` into a small token set; add real empty / loading / error states. The bar is the Success-criteria line: the UI reads as intentional, not a scaffold, and a screenshot stands on its own. Sequenced first because it feeds the v0.5 release screenshots.
 
 **v0.4.1 - CLI polish** Turn `balanze-cli` from feature-complete into a first-class surface (it is also the entire Linux story). Surface note: `status` / `watch` are now explicit subcommands (was bare `--json` / `--sections` / `--watch`); bare `balanze-cli` still defaults to `status`. The CLI stayed glue - no new Tauri command/event (IPC contract unchanged), no change to the twelve architectural boundaries or the actor-model write boundary, and nothing persisted.
 
 **v0.4.2 - Statusline polish.** Productize the Claude Code statusline (already shipped in v0.2 as the watcher's IPC bridge) into a first-class, installable display that **replaces** an existing statusline like cship - the low-friction way into Balanze for people who live in their coding-agent prompt.
+
+**v0.4.3 - Codex maturity.** Codex stops being a second-class quota source. `codex_local` classifies each of Codex's two rolling windows (5-hour and weekly) by duration instead of trusting a plan-dependent JSON slot, and both windows surface everywhere - tray, popover, cards, CLI, and statusline - on the same shared 50/75/90 color scale as Claude. Alongside it: a parser-reliability fix (a single bad JSONL line no longer stalls the incremental cursor for the rest of the file), honest `BALANZE_LOG` file logging, and a quieter macOS Keychain path (no more re-prompting every poll tick).
+
+**Phase 4 is done at v0.4.3.** Every surface reads as intentional, and Codex is now a peer citizen across all of them rather than an afterthought.
 
 ### Phase 5 - v0.5: Distribution & Legibility
 

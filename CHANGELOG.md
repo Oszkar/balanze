@@ -4,9 +4,9 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 - minor bumps may break; patch bumps are fixes only.
 
-## [Unreleased]
+## [0.4.3] - Codex maturity - 2026-07-10
 
-Targeted as v0.4.3 (theme "Codex maturity"). Codex gets first-class treatment: both rolling windows (5-hour and weekly) now surface across the tray, popover, cards, CLI, and statusline, alongside a parser-reliability fix, honest file logging, and a quieter macOS Keychain path.
+Codex gets first-class treatment: both rolling windows (5-hour and weekly) now surface across the tray, popover, cards, CLI, and statusline, alongside a parser-reliability fix, honest file logging, and a quieter macOS Keychain path.
 
 ### Added
 - **Codex 5h + weekly windows everywhere** - Codex reports two rolling rate-limit windows (a 5-hour and a weekly), and which JSON slot holds which varies by plan, so `codex_local` now classifies each window by duration instead of trusting the slot. The tray splits Codex into 5h + weekly (the ring color and menu-bar title name the worst of the two), the popover and cards show both, and the CLI compact `status` (one cell, the worst of the two), `status --sections`, and the `watch` TUI label each window by kind.
