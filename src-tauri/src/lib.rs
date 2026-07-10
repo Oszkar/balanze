@@ -498,7 +498,7 @@ async fn supervise_watcher(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Held for the process lifetime (see `logging::init_tracing` doc comment).
-    let _log_guard = logging::init_tracing("balanze-gui");
+    let _log_guard = logging::init_tracing("balanze-gui", true);
 
     // keyring-core has no default credential store until one is registered;
     // do it once here before the watcher (booted in `setup`) reads the key.

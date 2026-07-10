@@ -2,8 +2,10 @@
 //!
 //! Both entry points (`balanze-cli` and the Tauri host) install the same
 //! subscriber: a `BALANZE_LOG` env filter (defaulting to `info`) writing to
-//! stderr, plus - when a data directory is resolvable - a daily-rotating file
-//! sink under `<data_dir>/logs/` (kept 3 days). See AGENTS.md §3.2/§3.4.
+//! stderr (unless the caller opts out - the interactive `watch` TUI does, so
+//! logs don't bleed over its alternate screen), plus - when a data directory is
+//! resolvable - a daily-rotating file sink under `<data_dir>/logs/` (kept 3
+//! days). See AGENTS.md §3.2/§3.4.
 //!
 //! This lives in its own crate rather than `settings` so the subscriber deps
 //! (`tracing-subscriber`, `tracing-appender`) don't leak into the pure library
@@ -24,11 +26,16 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// (the former "balanze") would let each binary's rotation sweep up and delete
 /// the other's logs.
 ///
+/// `to_stderr` attaches the stderr log layer. Pass `false` for a mode that owns
+/// the terminal's alternate screen (the interactive `balanze-cli watch` TUI),
+/// where stderr logs would paint over the UI; the rotating file sink still
+/// captures everything, so nothing is lost. All other invocations pass `true`.
+///
 /// Returns the file writer's [`WorkerGuard`], which the caller MUST hold for
 /// the process lifetime; dropping it early stops the non-blocking file writer
 /// from flushing. Returns `None` when no data directory is resolvable (the
-/// subscriber is still installed, stderr-only).
-pub fn init_tracing(filename_prefix: &str) -> Option<WorkerGuard> {
+/// subscriber is still installed, stderr-only when `to_stderr`).
+pub fn init_tracing(filename_prefix: &str, to_stderr: bool) -> Option<WorkerGuard> {
     // Distinguish "unset" (quietly default to info) from "set but invalid"
     // (a typo like `BALANZE_LOG=deubg` should not look identical to unset).
     let env_filter = match std::env::var("BALANZE_LOG") {
@@ -38,7 +45,10 @@ pub fn init_tracing(filename_prefix: &str) -> Option<WorkerGuard> {
         }),
         Err(_) => tracing_subscriber::EnvFilter::new("info"),
     };
-    let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+    // `Option<Layer>` is itself a `Layer` (None is a no-op), so `to_stderr =
+    // false` cleanly drops the stderr sink without changing the registry shape.
+    let stderr_layer =
+        to_stderr.then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stderr));
 
     let (file_layer, guard) = match build_file_writer(filename_prefix) {
         Some((writer, guard)) => {

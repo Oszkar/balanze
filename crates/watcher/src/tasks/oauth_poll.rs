@@ -132,7 +132,9 @@ pub(crate) fn spawn(
             let result = poll_once(client, &mut keychain_cache).await;
             let update = match result {
                 Ok(snapshot) => {
-                    tracing::info!(
+                    // Per-tick success detail: debug, not info (fires every
+                    // poll; §3.2). The refresh lifecycle events stay at info.
+                    tracing::debug!(
                         "watcher/oauth_poll: fetched {} cadence bars",
                         snapshot.cadences.len()
                     );
