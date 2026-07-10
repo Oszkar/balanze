@@ -17,10 +17,7 @@
 //! messages include the file path only - never file contents (defense in
 //! depth).
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::payload::{SCHEMA_VERSION, StatuslineFilePayload};
 
@@ -166,68 +163,12 @@ pub fn atomic_write_snapshot(
         source: e,
     })?;
 
-    // Unique tmp name: pid + nanosecond timestamp + monotonic counter.
-    // Avoids collisions on concurrent calls or PID reuse (mirrors wiring.rs).
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    let tmp = parent.join(format!(
-        "statusline.snapshot.{}-{}-{}.json.tmp",
-        std::process::id(),
-        nanos,
-        seq,
-    ));
-
-    // Write to tmp, fsync, then atomically rename over the final path.
-    let write_result = (|| -> std::io::Result<()> {
-        let mut f = std::fs::File::create_new(&tmp)?;
-        f.write_all(&bytes)?;
-        // fsync before rename: crash between write and rename cannot lose data.
-        f.sync_all()?;
-        Ok(())
-    })();
-
-    if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(FileIoError::Io {
-            path: tmp,
-            source: e,
-        });
-    }
-
-    // Unix: copy the original file's permissions onto the tmp BEFORE rename,
-    // so the final file inherits the caller's chosen mode (e.g. 0o600).
-    // On Windows this block is compiled out; the ACL of the parent directory
-    // governs new files naturally.
-    #[cfg(unix)]
-    {
-        if let Ok(meta) = std::fs::metadata(path) {
-            let _ = std::fs::set_permissions(&tmp, meta.permissions());
-        }
-    }
-
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
+    atomic_file::atomic_write(path, &bytes, atomic_file::Permissions::Default).map_err(|source| {
         FileIoError::Io {
             path: path.to_path_buf(),
-            source: e,
+            source,
         }
-    })?;
-
-    // Unix: fsync the parent directory so the rename itself is durable.
-    // Best-effort - dir-fsync failure must not fail the write since data is
-    // already renamed into place.  Windows does not support opening a
-    // directory as a File for sync; the file fsync + rename is the portable
-    // guarantee.
-    #[cfg(unix)]
-    {
-        let _ = std::fs::File::open(parent).and_then(|f| f.sync_all());
-    }
-
-    Ok(())
+    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ publish.workspace = true
 description = "Parses the Claude Code statusLine stdin payload and owns the statusLine stanza in Claude Code's settings.json. The only code that knows that wire format."
 
 [dependencies]
+atomic_file = { path = "../atomic_file" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

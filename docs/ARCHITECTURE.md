@@ -51,6 +51,7 @@ balanze/
 │   ├── state_coordinator/      actor: owns Snapshot; bounded-mpsc StateMsg loop; Sink-notified; owns the snapshot.json IPC file (snapshot_file + SnapshotFileSink)
 │   ├── watcher/                only importer of notify; spawns jsonl/statusline/openai_poll/safety/oauth_poll tasks
 │   ├── backoff/                pure exponential-backoff policy + generic async retry combinator
+│   ├── atomic_file/            perms-preserving durable atomic file replace (create_new tmp + fsync + perms-copy + rename + parent-dir fsync); one home for the byte-level sequence AGENTS.md §3.4 relies on, used by the snapshot / statusline / settings / OAuth-credential writers
 │   ├── keychain/               only importer of `keyring-core`
 │   ├── settings/               owns settings.json (atomic, schema-versioned, non-secrets only)
 │   ├── logging/                shared `tracing` subscriber setup (BALANZE_LOG env filter + daily-rotating file sink); owns tracing-subscriber/tracing-appender so they stay out of the pure library crates; used only by the two binaries via `init_tracing(prefix)`

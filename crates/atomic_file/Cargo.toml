@@ -1,0 +1,14 @@
+[package]
+name = "atomic_file"
+description = "Perms-preserving, durable atomic file replace (create_new tmp + write + fsync + perms-copy + rename + parent-dir fsync). One home for the byte-level sequence AGENTS.md 3.4 relies on, shared by the snapshot, statusline, settings, and OAuth-credential writers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"

@@ -117,6 +117,7 @@ name = "anthropic_oauth"
 version = "0.4.2"
 dependencies = [
  "anyhow",
+ "atomic_file",
  "backoff",
  "chrono",
  "reqwest 0.12.28",
@@ -348,6 +349,13 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+
+[[package]]
+name = "atomic_file"
+version = "0.4.2"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "autocfg"
@@ -855,6 +863,7 @@ name = "claude_statusline"
 version = "0.4.2"
 dependencies = [
  "anyhow",
+ "atomic_file",
  "chrono",
  "serde",
  "serde_json",
@@ -4760,6 +4769,7 @@ dependencies = [
 name = "settings"
 version = "0.4.2"
 dependencies = [
+ "atomic_file",
  "directories",
  "serde",
  "serde_json",
@@ -4935,6 +4945,7 @@ name = "state_coordinator"
 version = "0.4.2"
 dependencies = [
  "anthropic_oauth",
+ "atomic_file",
  "chrono",
  "claude_cost",
  "claude_parser",
