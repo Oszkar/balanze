@@ -23,14 +23,21 @@ export default defineConfig({
   expect: { timeout: 30_000 },
   reporter: 'list',
   use: {
-    baseURL: 'http://localhost:1430',
-    navigationTimeout: 120_000,
+    // 127.0.0.1, not localhost: on Windows `localhost` resolves to ::1 first and
+    // the Vite gallery server binds 127.0.0.1 only (see vite.gallery.config.ts),
+    // so a `localhost` navigation stalls. Keep this in lockstep with the bind.
+    baseURL: 'http://127.0.0.1:1430',
+    // The first navigation transforms the whole popover component tree cold,
+    // which on Windows can exceed 2 minutes; 120s timed out here even with a
+    // warm optimizeDeps cache. Give the cold first frame room (the second theme
+    // reuses the warmed transform cache and is fast).
+    navigationTimeout: 300_000,
     actionTimeout: 30_000,
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     command: 'bun run gallery:serve',
-    url: 'http://localhost:1430/gallery.html',
+    url: 'http://127.0.0.1:1430/gallery.html',
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
   },
