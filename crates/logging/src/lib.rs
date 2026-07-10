@@ -2,8 +2,10 @@
 //!
 //! Both entry points (`balanze-cli` and the Tauri host) install the same
 //! subscriber: a `BALANZE_LOG` env filter (defaulting to `info`) writing to
-//! stderr, plus - when a data directory is resolvable - a daily-rotating file
-//! sink under `<data_dir>/logs/` (kept 3 days). See AGENTS.md §3.2/§3.4.
+//! stderr (unless the caller opts out - the interactive `watch` TUI does, so
+//! logs don't bleed over its alternate screen), plus - when a data directory is
+//! resolvable - a daily-rotating file sink under `<data_dir>/logs/` (kept 3
+//! days). See AGENTS.md §3.2/§3.4.
 //!
 //! This lives in its own crate rather than `settings` so the subscriber deps
 //! (`tracing-subscriber`, `tracing-appender`) don't leak into the pure library
@@ -24,11 +26,19 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// (the former "balanze") would let each binary's rotation sweep up and delete
 /// the other's logs.
 ///
+/// `to_stderr` attaches the stderr log layer. Pass `false` for a mode that owns
+/// the terminal's alternate screen (the interactive `balanze-cli watch` TUI),
+/// where stderr logs would paint over the UI; the rotating file sink then
+/// captures the logs instead. All other invocations pass `true`. `to_stderr =
+/// false` is honored only when a file sink is actually available - if no data
+/// directory is resolvable, stderr is kept as a fallback so logs are never
+/// silently dropped (a little TUI noise beats losing the trail).
+///
 /// Returns the file writer's [`WorkerGuard`], which the caller MUST hold for
 /// the process lifetime; dropping it early stops the non-blocking file writer
 /// from flushing. Returns `None` when no data directory is resolvable (the
-/// subscriber is still installed, stderr-only).
-pub fn init_tracing(filename_prefix: &str) -> Option<WorkerGuard> {
+/// subscriber is still installed and, in that case, always logs to stderr).
+pub fn init_tracing(filename_prefix: &str, to_stderr: bool) -> Option<WorkerGuard> {
     // Distinguish "unset" (quietly default to info) from "set but invalid"
     // (a typo like `BALANZE_LOG=deubg` should not look identical to unset).
     let env_filter = match std::env::var("BALANZE_LOG") {
@@ -38,8 +48,6 @@ pub fn init_tracing(filename_prefix: &str) -> Option<WorkerGuard> {
         }),
         Err(_) => tracing_subscriber::EnvFilter::new("info"),
     };
-    let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
-
     let (file_layer, guard) = match build_file_writer(filename_prefix) {
         Some((writer, guard)) => {
             let layer = tracing_subscriber::fmt::layer()
@@ -50,6 +58,13 @@ pub fn init_tracing(filename_prefix: &str) -> Option<WorkerGuard> {
         None => (None, None),
     };
 
+    // Attach stderr when the caller asked for it, OR as a fallback when there is
+    // no file sink - never leave the subscriber with zero output layers, which
+    // would silently drop every log. `Option<Layer>` is itself a `Layer` (None
+    // is a no-op), so this drops the sink cleanly without changing the shape.
+    let stderr_layer = want_stderr(to_stderr, file_layer.is_some())
+        .then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stderr));
+
     tracing_subscriber::registry()
         .with(env_filter)
         .with(stderr_layer)
@@ -57,6 +72,14 @@ pub fn init_tracing(filename_prefix: &str) -> Option<WorkerGuard> {
         .init();
 
     guard
+}
+
+/// Whether to attach the stderr layer: when the caller asked for it, OR as a
+/// fallback when there is no file sink (so the subscriber never ends up with
+/// zero output layers, which would silently drop every log). Pure, so the
+/// fallback invariant is testable without installing a process-global subscriber.
+fn want_stderr(to_stderr: bool, has_file: bool) -> bool {
+    to_stderr || !has_file
 }
 
 /// Resolve the data-dir log directory and open the rolling writer there, or
@@ -96,7 +119,18 @@ fn build_rolling_writer(dir: &Path, filename_prefix: &str) -> Option<(NonBlockin
 
 #[cfg(test)]
 mod tests {
-    use super::build_rolling_writer;
+    use super::{build_rolling_writer, want_stderr};
+
+    #[test]
+    fn want_stderr_falls_back_when_no_file_sink() {
+        // Caller asked for stderr -> always on, regardless of the file sink.
+        assert!(want_stderr(true, true));
+        assert!(want_stderr(true, false));
+        // Caller opted out (watch TUI) -> off ONLY when a file sink exists.
+        assert!(!want_stderr(false, true));
+        // Opted out but no file sink -> fall back to stderr, never drop all logs.
+        assert!(want_stderr(false, false));
+    }
 
     #[test]
     fn build_rolling_writer_precreates_dir_and_opens() {

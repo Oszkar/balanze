@@ -67,7 +67,11 @@ pub(crate) fn spawn(
             .await
             {
                 Ok(costs) => {
-                    tracing::info!(
+                    // Per-tick success detail: debug, not info. INFO stays for
+                    // lifecycle moments (no-key startup exit, errors) per §3.2 -
+                    // this fires every poll and would otherwise scroll the
+                    // `watch` TUI / stderr with unchanged `total=0` lines.
+                    tracing::debug!(
                         "watcher/openai_poll: fetched costs total_micro_usd={} buckets={} truncated={}",
                         costs.total_micro_usd,
                         costs.by_line_item.len(),

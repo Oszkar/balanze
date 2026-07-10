@@ -53,21 +53,25 @@ mod tui;
 mod watch_cmd;
 
 fn main() -> ExitCode {
+    // clap handles --help / --version / unknown-command by itself; parse()
+    // prints and exits 2 for those (ExitClass::Usage = 2 documents that
+    // contract, but clap owns the exit - we never override it). Everything past
+    // here is a real dispatch that classifies into an ExitClass exactly once.
+    // Parsed first so logging can suppress stderr for the interactive TUI.
+    let cli = Cli::parse();
+
     // Held for the process lifetime so the non-blocking file writer keeps
     // flushing right up to the `ExitCode` return below (no `process::exit`
-    // anywhere in this fn, so destructors - including this guard's - run).
-    let _log_guard = logging::init_tracing("balanze-cli");
+    // anywhere in this fn, so destructors - including this guard's - run). The
+    // interactive `watch` TUI owns the terminal's alternate screen, so its
+    // stderr logs would paint over the UI; suppress the stderr layer for that
+    // one mode (the rotating file sink still captures everything).
+    let _log_guard = logging::init_tracing("balanze-cli", !is_interactive_watch_tui(&cli));
 
     // keyring-core has no default credential store until one is registered;
     // do it once here before any keychain get/set (in this process or the
     // watcher it spawns).
     keychain::init_default_store();
-
-    // clap handles --help / --version / unknown-command by itself; parse()
-    // prints and exits 2 for those (ExitClass::Usage = 2 documents that
-    // contract, but clap owns the exit - we never override it). Everything past
-    // here is a real dispatch that classifies into an ExitClass exactly once.
-    let cli = Cli::parse();
 
     let class = match run(&cli) {
         Ok(class) => class,
@@ -82,6 +86,22 @@ fn main() -> ExitCode {
     // `ExitCode::from(u8)` carries them exactly while still running destructors
     // (no `std::process::exit`).
     ExitCode::from(class.code() as u8)
+}
+
+/// True when this invocation will enter the ratatui `watch` TUI, which takes
+/// over the terminal's alternate screen: `watch` without `--json` on an
+/// interactive stdout. Mirrors the TUI gate in `watch_cmd::run_watch_mode` so
+/// logging and the TUI agree on when the screen is taken over.
+fn is_interactive_watch_tui(cli: &Cli) -> bool {
+    use std::io::IsTerminal;
+    watch_without_json(cli) && std::io::stdout().is_terminal()
+}
+
+/// The command half of the TUI gate: `watch` without `--json`. Split from the
+/// terminal check so it is unit-testable without a real TTY. Kept in lockstep
+/// with `watch_cmd::run_watch_mode`'s `!json && stdout().is_terminal()`.
+fn watch_without_json(cli: &Cli) -> bool {
+    matches!(&cli.command, Some(Commands::Watch(args)) if !args.json)
 }
 
 /// Dispatch a parsed `Cli` to its handler and return the `ExitClass` for the
@@ -216,7 +236,24 @@ fn cmd_settings() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderMode, render_mode};
+    use super::{RenderMode, render_mode, watch_without_json};
+    use crate::cli::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn watch_without_json_gates_tui_log_suppression() {
+        // The stderr-log suppression keys on this: `watch` without --json is the
+        // interactive TUI mode. --json (JSONL stream) and every other command
+        // keep stderr logging. Mirrors watch_cmd's TUI gate.
+        let watch = Cli::parse_from(["balanze-cli", "watch"]);
+        assert!(watch_without_json(&watch));
+        let watch_json = Cli::parse_from(["balanze-cli", "watch", "--json"]);
+        assert!(!watch_without_json(&watch_json));
+        let status = Cli::parse_from(["balanze-cli", "status"]);
+        assert!(!watch_without_json(&status));
+        let bare = Cli::parse_from(["balanze-cli"]); // defaults to status
+        assert!(!watch_without_json(&bare));
+    }
 
     #[test]
     fn render_mode_json_beats_quiet_and_sections() {
