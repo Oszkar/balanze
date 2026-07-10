@@ -374,14 +374,15 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
 /// nothing below jumps as plans/CLI versions gain or lose a window.
 ///
 /// Never silently drop a live cap. `five_hour()` / `weekly()` only match the
-/// known 300 / 10080-minute durations; the worst window is dropped by those two
-/// branches exactly when it classifies as `WindowKind::Other` (a Codex taxonomy
-/// change - a new or renamed duration). In that case surface it in whichever row
-/// is still free, labeled by its actual duration, so `watch` cannot hide a
-/// high-utilization window that the non-TUI renderers still show (`render.rs`
-/// iterates every `q.windows()` and labels unknown durations `window`). This
-/// also covers the all-`Other` case (both known windows absent -> the worst goes
-/// in the first, free row), so a live-data Codex block is never rendered blank.
+/// known 300 / 10080-minute durations, so any window with an unrecognized
+/// duration (`WindowKind::Other`, a Codex taxonomy change) has no home in the two
+/// labeled branches. Fill every row left free by an absent known window with
+/// those unshown windows, worst-first and labeled by their actual duration, so
+/// `watch` cannot hide a window the non-TUI renderers still show (`render.rs`
+/// iterates every `q.windows()` and labels unknown durations `window`). Codex
+/// reports at most two windows (primary + optional secondary) into these two
+/// rows, so nothing is ever dropped - regardless of whether the `Other` window
+/// is the highest-utilization one or sits behind a known window.
 fn draw_codex_windows(frame: &mut Frame, five_row: Rect, weekly_row: Rect, q: &CodexQuotaSnapshot) {
     let five = q.five_hour();
     let weekly = q.weekly();
@@ -391,18 +392,32 @@ fn draw_codex_windows(frame: &mut Frame, five_row: Rect, weekly_row: Rect, q: &C
     if let Some(w) = weekly {
         frame.render_widget(quota_gauge("Codex wk", w.used_percent as f32), weekly_row);
     }
-    if let Some(w) = q.worst_window() {
-        if w.kind() == WindowKind::Other {
-            let label = format!("Codex {}", format_codex_window(w.window_duration_minutes));
-            // Prefer the 5h row, else the weekly row; both are full only in the
-            // (unobserved) case of three windows, where the two known caps are
-            // already shown.
-            if five.is_none() {
-                frame.render_widget(quota_gauge(&label, w.used_percent as f32), five_row);
-            } else if weekly.is_none() {
-                frame.render_widget(quota_gauge(&label, w.used_percent as f32), weekly_row);
-            }
-        }
+
+    // Rows the known-window branches did not claim, in fixed order (5h first) so
+    // the layout stays stable.
+    let mut free_rows = Vec::new();
+    if five.is_none() {
+        free_rows.push(five_row);
+    }
+    if weekly.is_none() {
+        free_rows.push(weekly_row);
+    }
+    if free_rows.is_empty() {
+        return;
+    }
+
+    // Windows the branches above did NOT render are exactly the `Other`-kind
+    // ones (`five`/`weekly` already cover FiveHour/Weekly). Worst-first so the
+    // free rows fill by descending utilization.
+    let mut others: Vec<&codex_local::RateLimitWindow> = q
+        .windows()
+        .filter(|w| w.kind() == WindowKind::Other)
+        .collect();
+    others.sort_by(|a, b| b.used_percent.total_cmp(&a.used_percent));
+
+    for (row, w) in free_rows.into_iter().zip(others) {
+        let label = format!("Codex {}", format_codex_window(w.window_duration_minutes));
+        frame.render_widget(quota_gauge(&label, w.used_percent as f32), row);
     }
 }
 
@@ -894,6 +909,44 @@ mod tests {
         assert!(
             text.contains("Codex 3d"),
             "unclassified window labeled by its duration in:\n{text}"
+        );
+    }
+
+    #[test]
+    fn tui_render_keeps_lower_unclassified_window_behind_a_known_window() {
+        // The dangerous case: a known window (5h 80%) outranks an unclassified
+        // Other window (3d 30%), so worst_window() is the KNOWN one. The Other
+        // window must still fill the free weekly row rather than be dropped - a
+        // free row must never sit blank next to a real live window.
+        let mut snap = populated_snapshot();
+        snap.codex_quota = Some(CodexQuotaSnapshot {
+            observed_at: ts("2026-05-15T10:55:00Z"),
+            session_id: "sess-1".to_string(),
+            primary: RateLimitWindow {
+                used_percent: 80.0,
+                window_duration_minutes: 300, // 5h (classified, higher)
+                resets_at: ts("2026-05-15T15:00:00Z"),
+            },
+            secondary: Some(RateLimitWindow {
+                used_percent: 30.0,
+                window_duration_minutes: 4320, // 3d - unclassified (lower)
+                resets_at: ts("2026-05-18T10:55:00Z"),
+            }),
+            plan_type: "pro".to_string(),
+            rate_limit_reached: false,
+            tokens: None,
+            credits: None,
+        });
+        let terminal = render_to_terminal(&snap);
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Codex 5h"), "5h window shown in:\n{text}");
+        assert!(
+            text.contains("Codex 3d"),
+            "the lower unclassified window must still fill the free row in:\n{text}"
+        );
+        assert!(
+            text.contains("30.0"),
+            "the lower unclassified window's utilization must not be dropped in:\n{text}"
         );
     }
 
