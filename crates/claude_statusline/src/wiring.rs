@@ -285,7 +285,10 @@ fn atomic_write_json(path: &Path, root: &serde_json::Value) -> Result<(), Status
             reason: format!("re-serialize: {e}"),
         })?;
 
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    // Normalize the parent (a bare relative target's `parent()` is `Some("")`)
+    // to exactly the directory `atomic_write` will use, so a relative target
+    // doesn't fail at `create_dir_all("")` before the helper runs.
+    let dir = atomic_file::resolve_parent(path);
     std::fs::create_dir_all(dir).map_err(|e| StatuslineError::SettingsIo {
         path: dir.to_path_buf(),
         source: e,
