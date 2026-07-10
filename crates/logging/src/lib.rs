@@ -28,13 +28,16 @@ use tracing_subscriber::util::SubscriberInitExt;
 ///
 /// `to_stderr` attaches the stderr log layer. Pass `false` for a mode that owns
 /// the terminal's alternate screen (the interactive `balanze-cli watch` TUI),
-/// where stderr logs would paint over the UI; the rotating file sink still
-/// captures everything, so nothing is lost. All other invocations pass `true`.
+/// where stderr logs would paint over the UI; the rotating file sink then
+/// captures the logs instead. All other invocations pass `true`. `to_stderr =
+/// false` is honored only when a file sink is actually available - if no data
+/// directory is resolvable, stderr is kept as a fallback so logs are never
+/// silently dropped (a little TUI noise beats losing the trail).
 ///
 /// Returns the file writer's [`WorkerGuard`], which the caller MUST hold for
 /// the process lifetime; dropping it early stops the non-blocking file writer
 /// from flushing. Returns `None` when no data directory is resolvable (the
-/// subscriber is still installed, stderr-only when `to_stderr`).
+/// subscriber is still installed and, in that case, always logs to stderr).
 pub fn init_tracing(filename_prefix: &str, to_stderr: bool) -> Option<WorkerGuard> {
     // Distinguish "unset" (quietly default to info) from "set but invalid"
     // (a typo like `BALANZE_LOG=deubg` should not look identical to unset).
@@ -45,11 +48,6 @@ pub fn init_tracing(filename_prefix: &str, to_stderr: bool) -> Option<WorkerGuar
         }),
         Err(_) => tracing_subscriber::EnvFilter::new("info"),
     };
-    // `Option<Layer>` is itself a `Layer` (None is a no-op), so `to_stderr =
-    // false` cleanly drops the stderr sink without changing the registry shape.
-    let stderr_layer =
-        to_stderr.then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stderr));
-
     let (file_layer, guard) = match build_file_writer(filename_prefix) {
         Some((writer, guard)) => {
             let layer = tracing_subscriber::fmt::layer()
@@ -60,6 +58,13 @@ pub fn init_tracing(filename_prefix: &str, to_stderr: bool) -> Option<WorkerGuar
         None => (None, None),
     };
 
+    // Attach stderr when the caller asked for it, OR as a fallback when there is
+    // no file sink - never leave the subscriber with zero output layers, which
+    // would silently drop every log. `Option<Layer>` is itself a `Layer` (None
+    // is a no-op), so this drops the sink cleanly without changing the shape.
+    let stderr_layer = want_stderr(to_stderr, file_layer.is_some())
+        .then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stderr));
+
     tracing_subscriber::registry()
         .with(env_filter)
         .with(stderr_layer)
@@ -67,6 +72,14 @@ pub fn init_tracing(filename_prefix: &str, to_stderr: bool) -> Option<WorkerGuar
         .init();
 
     guard
+}
+
+/// Whether to attach the stderr layer: when the caller asked for it, OR as a
+/// fallback when there is no file sink (so the subscriber never ends up with
+/// zero output layers, which would silently drop every log). Pure, so the
+/// fallback invariant is testable without installing a process-global subscriber.
+fn want_stderr(to_stderr: bool, has_file: bool) -> bool {
+    to_stderr || !has_file
 }
 
 /// Resolve the data-dir log directory and open the rolling writer there, or
@@ -106,7 +119,18 @@ fn build_rolling_writer(dir: &Path, filename_prefix: &str) -> Option<(NonBlockin
 
 #[cfg(test)]
 mod tests {
-    use super::build_rolling_writer;
+    use super::{build_rolling_writer, want_stderr};
+
+    #[test]
+    fn want_stderr_falls_back_when_no_file_sink() {
+        // Caller asked for stderr -> always on, regardless of the file sink.
+        assert!(want_stderr(true, true));
+        assert!(want_stderr(true, false));
+        // Caller opted out (watch TUI) -> off ONLY when a file sink exists.
+        assert!(!want_stderr(false, true));
+        // Opted out but no file sink -> fall back to stderr, never drop all logs.
+        assert!(want_stderr(false, false));
+    }
 
     #[test]
     fn build_rolling_writer_precreates_dir_and_opens() {
