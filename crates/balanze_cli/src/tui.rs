@@ -18,6 +18,7 @@ use std::io::{self, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
+use codex_local::CodexQuotaSnapshot;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -239,7 +240,7 @@ pub fn draw_ui(frame: &mut Frame, s: &Snapshot) {
         .constraints([
             Constraint::Length(1),        // title + clock
             Constraint::Length(5),        // Anthropic block (border + 2 gauges + $)
-            Constraint::Length(4),        // OpenAI block (border + gauge + $)
+            Constraint::Length(5),        // OpenAI block (border + 2 Codex gauges + $)
             Constraint::Length(1),        // pace line
             Constraint::Length(1),        // leverage line
             Constraint::Length(banner_h), // degraded banner (0 when clean)
@@ -335,21 +336,14 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // codex gauge
+            Constraint::Length(1), // Codex 5h gauge
+            Constraint::Length(1), // Codex weekly gauge
             Constraint::Length(1), // admin $
         ])
         .split(inner);
 
     match &s.codex_quota {
-        Some(q) => {
-            frame.render_widget(
-                quota_gauge(
-                    "Codex",
-                    q.worst_window().map_or(0.0, |w| w.used_percent) as f32,
-                ),
-                rows[0],
-            );
-        }
+        Some(q) => draw_codex_windows(frame, rows[0], rows[1], q),
         None => {
             let msg = if s.codex_quota_error.is_some() {
                 "codex read error"
@@ -368,7 +362,33 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
         None if s.openai_error.is_some() => "admin costs: fetch failed".to_string(),
         None => "admin costs: not configured".to_string(),
     };
-    frame.render_widget(Paragraph::new(admin_line), rows[1]);
+    frame.render_widget(Paragraph::new(admin_line), rows[2]);
+}
+
+/// Render Codex's two rolling windows as separate labeled gauges, mirroring the
+/// Anthropic block above (5h + 7d) and the statusline / tray / popover, which
+/// all surface both windows. Classify by DURATION via `five_hour()` / `weekly()`
+/// (the primary/secondary slot-to-duration mapping varies by plan - see
+/// `codex_local`), never by slot. A single-window plan (e.g. "go", weekly only)
+/// leaves the missing gauge's row blank so the block height stays fixed at 5 and
+/// nothing below jumps as plans/CLI versions gain or lose a window. If a plan
+/// reports only an unclassifiable "Other" window, fall back to the worst window
+/// on the first row so a live-data Codex block is never rendered all-blank.
+fn draw_codex_windows(frame: &mut Frame, five_row: Rect, weekly_row: Rect, q: &CodexQuotaSnapshot) {
+    let five = q.five_hour();
+    let weekly = q.weekly();
+    if five.is_none() && weekly.is_none() {
+        if let Some(w) = q.worst_window() {
+            frame.render_widget(quota_gauge("Codex", w.used_percent as f32), five_row);
+        }
+        return;
+    }
+    if let Some(w) = five {
+        frame.render_widget(quota_gauge("Codex 5h", w.used_percent as f32), five_row);
+    }
+    if let Some(w) = weekly {
+        frame.render_widget(quota_gauge("Codex wk", w.used_percent as f32), weekly_row);
+    }
 }
 
 fn draw_pace(frame: &mut Frame, area: Rect, s: &Snapshot) {
@@ -757,6 +777,65 @@ mod tests {
         assert!(
             text.contains("refresh"),
             "missing refresh keybind in:\n{text}"
+        );
+    }
+
+    #[test]
+    fn tui_render_shows_both_codex_windows_when_present() {
+        // plus/pro layout: primary=5h (low), secondary=weekly (high). The TUI
+        // must render BOTH windows as separate labeled gauges - mirroring the
+        // Anthropic block above and the statusline/tray/popover - not collapse
+        // to a single worst-window figure with an unlabeled "Codex". Assert on
+        // the "Codex "-prefixed labels so the Anthropic block's own "5h" cannot
+        // satisfy the check.
+        let mut snap = populated_snapshot();
+        snap.codex_quota = Some(CodexQuotaSnapshot {
+            observed_at: ts("2026-05-15T10:55:00Z"),
+            session_id: "sess-1".to_string(),
+            primary: RateLimitWindow {
+                used_percent: 12.0,
+                window_duration_minutes: 300, // 5h
+                resets_at: ts("2026-05-15T15:00:00Z"),
+            },
+            secondary: Some(RateLimitWindow {
+                used_percent: 76.0,
+                window_duration_minutes: 10080, // weekly
+                resets_at: ts("2026-05-22T10:55:00Z"),
+            }),
+            plan_type: "pro".to_string(),
+            rate_limit_reached: false,
+            tokens: None,
+            credits: None,
+        });
+        let terminal = render_to_terminal(&snap);
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Codex 5h"),
+            "missing labeled Codex 5h gauge in:\n{text}"
+        );
+        assert!(
+            text.contains("Codex wk"),
+            "missing labeled Codex weekly gauge in:\n{text}"
+        );
+        assert!(text.contains("12.0"), "missing 5h percent in:\n{text}");
+        assert!(text.contains("76.0"), "missing weekly percent in:\n{text}");
+    }
+
+    #[test]
+    fn tui_render_single_window_plan_labels_the_window_and_blanks_the_other() {
+        // "go" plan exposes a single weekly window in `primary`. The TUI must
+        // label it "Codex wk" (not a bare unlabeled "Codex" that hides which
+        // window it is) and leave the 5h row blank rather than reordering.
+        let snap = populated_snapshot(); // codex_quota is weekly-only (10080).
+        let terminal = render_to_terminal(&snap);
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Codex wk"),
+            "weekly-only plan must label the window 'Codex wk' in:\n{text}"
+        );
+        assert!(
+            !text.contains("Codex 5h"),
+            "weekly-only plan must not invent a 5h gauge in:\n{text}"
         );
     }
 
