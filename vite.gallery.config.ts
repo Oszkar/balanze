@@ -20,7 +20,12 @@ export default defineConfig({
   // the first request and Vite force-reloads mid-navigation, which aborts
   // Playwright's page.goto with net::ERR_ABORTED.
   optimizeDeps: { entries: ['gallery.html'] },
-  server: { port: 1430, strictPort: true },
+  // Bind 127.0.0.1 explicitly (not the default `localhost`), mirroring
+  // vite.config.js. On Windows, `localhost` resolves to ::1 first and Vite 8's
+  // module runner hangs on the IPv6 socket, so the server prints "ready" but
+  // never serves - which silently broke `bun run gallery:snap` (the Playwright
+  // visual harness) on Windows until this pin.
+  server: { host: '127.0.0.1', port: 1430, strictPort: true },
   build: {
     outDir: 'build-gallery',
     rollupOptions: {

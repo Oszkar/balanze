@@ -162,6 +162,24 @@ function overageBilled(): Snapshot {
   return s;
 }
 
+/** Overage OVER the monthly cap: Anthropic flips is_enabled to false but keeps
+ * the real billed used/limit (used >= limit) and clamps utilization to 100.0.
+ * The billed cell must show the real spend "over limit", not the "none"
+ * placeholder (issue #125). Mirrors the CLI's over_limit_snapshot fixture. */
+function overageOverLimit(): Snapshot {
+  const s = clone(baseSnapshot());
+  if (s.claude_oauth) {
+    s.claude_oauth.extra_usage = {
+      is_enabled: false,
+      monthly_limit_micro_usd: 45_000_000, // $45.00 cap
+      used_credits_micro_usd: 45_580_000, // $45.58 billed (over cap)
+      utilization_percent: 100.0, // Anthropic clamps this at 100.0
+      currency: 'USD',
+    };
+  }
+  return s;
+}
+
 /** Statusline-sourced Anthropic quota with 3 windows (5h, 7d, and an
  * unrecognized 3rd window) - the states gallery previously had zero
  * coverage of the statusline branch at all, even for the 2-window case. */
@@ -243,10 +261,12 @@ export const GALLERY_STATES: GalleryState[] = [
     degraded: { claude_statusline: 'statusline payload is stale' },
   },
   { label: 'Grid - overage billed', view: 'grid', openaiEnabled: true, snapshot: overageBilled() },
+  { label: 'Grid - overage over limit', view: 'grid', openaiEnabled: true, snapshot: overageOverLimit() },
 
   { label: 'Cards - two providers', view: 'cards', openaiEnabled: true, snapshot: baseSnapshot() },
   { label: 'Cards - Anthropic only', view: 'cards', openaiEnabled: false, snapshot: singleProvider() },
   { label: 'Cards - Codex stale window', view: 'cards', openaiEnabled: true, snapshot: codexStale() },
+  { label: 'Cards - overage over limit', view: 'cards', openaiEnabled: true, snapshot: overageOverLimit() },
   { label: 'Cards - OpenAI connect CTA', view: 'cards', openaiEnabled: true, snapshot: openaiConnect() },
   { label: 'Cards - OpenAI error', view: 'cards', openaiEnabled: true, snapshot: openaiError() },
   { label: 'Cards - cold start (quota loading)', view: 'cards', openaiEnabled: true, snapshot: coldStart() },
