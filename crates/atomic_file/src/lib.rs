@@ -47,12 +47,7 @@ pub enum Permissions {
 /// Returns the underlying [`io::Error`] on failure (callers map it to their own
 /// error type); the tmp file is cleaned up first.
 pub fn atomic_write(path: &Path, bytes: &[u8], perms: Permissions) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "atomic_write: path has no parent directory",
-        )
-    })?;
+    let parent = resolve_parent(path);
     let tmp = parent.join(tmp_name(path));
 
     let write_result = (|| -> io::Result<()> {
@@ -68,12 +63,16 @@ pub fn atomic_write(path: &Path, bytes: &[u8], perms: Permissions) -> io::Result
         return Err(e);
     }
 
-    // Preserve the existing target's permissions on unix. The tmp already
-    // carries a safe mode (umask default, or 0o600 for OwnerOnly), so a copy
-    // failure is non-fatal - we keep the restrictive default rather than fail.
+    // Preserve the existing target's mode across the replace - but ONLY for
+    // `Default`. For `OwnerOnly` the tmp is already 0o600 and MUST stay
+    // restrictive even when the existing file is looser (e.g. a 0o644 credential
+    // file), so its mode is never copied. A copy failure is non-fatal (we keep
+    // the safe default rather than fail).
     #[cfg(unix)]
     {
-        if let Ok(meta) = fs::metadata(path) {
+        if perms == Permissions::Default
+            && let Ok(meta) = fs::metadata(path)
+        {
             let _ = fs::set_permissions(&tmp, meta.permissions());
         }
     }
@@ -107,6 +106,18 @@ fn create_tmp(tmp: &Path, perms: Permissions) -> io::Result<fs::File> {
 #[cfg(not(unix))]
 fn create_tmp(tmp: &Path, _perms: Permissions) -> io::Result<fs::File> {
     fs::File::create_new(tmp)
+}
+
+/// The directory the tmp lands in and the parent to fsync. A bare relative
+/// filename has `parent() == Some("")`; normalize that (and a `None` root) to
+/// `.` so the tmp is a real sibling and the parent-dir fsync opens a real
+/// directory rather than the empty path (which would fail and silently drop the
+/// dir-fsync from the durable sequence).
+fn resolve_parent(path: &Path) -> &Path {
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    }
 }
 
 /// A unique tmp filename in the target's directory:
@@ -167,6 +178,31 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = dir.path().join("nope").join("f.json");
         assert!(atomic_write(&p, b"x", Permissions::Default).is_err());
+    }
+
+    #[test]
+    fn resolve_parent_normalizes_bare_and_empty_to_dot() {
+        // A bare relative filename's parent is Some(""), which must normalize to
+        // "." so the parent-dir fsync targets a real directory.
+        assert_eq!(resolve_parent(Path::new("bare.json")), Path::new("."));
+        assert_eq!(resolve_parent(Path::new("dir/f.json")), Path::new("dir"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_only_stays_restrictive_over_a_permissive_existing_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("secret");
+        // An existing world-readable file must NOT loosen an OwnerOnly write.
+        fs::write(&p, b"old").unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+        atomic_write(&p, b"tok", Permissions::OwnerOnly).unwrap();
+        let mode = fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "OwnerOnly must stay 0o600 over a 0o644 file, got {mode:o}"
+        );
     }
 
     #[test]
