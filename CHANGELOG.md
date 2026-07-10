@@ -180,7 +180,8 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.4.3...HEAD
+[0.4.2]: https://github.com/Oszkar/balanze/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Oszkar/balanze/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Oszkar/balanze/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Oszkar/balanze/compare/v0.3.1...v0.4.0
