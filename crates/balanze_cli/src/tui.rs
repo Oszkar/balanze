@@ -18,7 +18,7 @@ use std::io::{self, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
-use codex_local::CodexQuotaSnapshot;
+use codex_local::{CodexQuotaSnapshot, WindowKind};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -35,7 +35,7 @@ use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 use state_coordinator::{Sink, Snapshot, Source, StateCoordinatorHandle, StateMsg};
 use tokio::sync::watch;
 
-use crate::format::micro_usd_to_display_dollars;
+use crate::format::{format_codex_window, micro_usd_to_display_dollars};
 use crate::present::{Bucket, TRAY_ORANGE, bucket_for_fraction};
 use crate::render::{OverageState, classify_overage};
 
@@ -371,23 +371,38 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
 /// (the primary/secondary slot-to-duration mapping varies by plan - see
 /// `codex_local`), never by slot. A single-window plan (e.g. "go", weekly only)
 /// leaves the missing gauge's row blank so the block height stays fixed at 5 and
-/// nothing below jumps as plans/CLI versions gain or lose a window. If a plan
-/// reports only an unclassifiable "Other" window, fall back to the worst window
-/// on the first row so a live-data Codex block is never rendered all-blank.
+/// nothing below jumps as plans/CLI versions gain or lose a window.
+///
+/// Never silently drop a live cap. `five_hour()` / `weekly()` only match the
+/// known 300 / 10080-minute durations; the worst window is dropped by those two
+/// branches exactly when it classifies as `WindowKind::Other` (a Codex taxonomy
+/// change - a new or renamed duration). In that case surface it in whichever row
+/// is still free, labeled by its actual duration, so `watch` cannot hide a
+/// high-utilization window that the non-TUI renderers still show (`render.rs`
+/// iterates every `q.windows()` and labels unknown durations `window`). This
+/// also covers the all-`Other` case (both known windows absent -> the worst goes
+/// in the first, free row), so a live-data Codex block is never rendered blank.
 fn draw_codex_windows(frame: &mut Frame, five_row: Rect, weekly_row: Rect, q: &CodexQuotaSnapshot) {
     let five = q.five_hour();
     let weekly = q.weekly();
-    if five.is_none() && weekly.is_none() {
-        if let Some(w) = q.worst_window() {
-            frame.render_widget(quota_gauge("Codex", w.used_percent as f32), five_row);
-        }
-        return;
-    }
     if let Some(w) = five {
         frame.render_widget(quota_gauge("Codex 5h", w.used_percent as f32), five_row);
     }
     if let Some(w) = weekly {
         frame.render_widget(quota_gauge("Codex wk", w.used_percent as f32), weekly_row);
+    }
+    if let Some(w) = q.worst_window() {
+        if w.kind() == WindowKind::Other {
+            let label = format!("Codex {}", format_codex_window(w.window_duration_minutes));
+            // Prefer the 5h row, else the weekly row; both are full only in the
+            // (unobserved) case of three windows, where the two known caps are
+            // already shown.
+            if five.is_none() {
+                frame.render_widget(quota_gauge(&label, w.used_percent as f32), five_row);
+            } else if weekly.is_none() {
+                frame.render_widget(quota_gauge(&label, w.used_percent as f32), weekly_row);
+            }
+        }
     }
 }
 
@@ -836,6 +851,49 @@ mod tests {
         assert!(
             !text.contains("Codex 5h"),
             "weekly-only plan must not invent a 5h gauge in:\n{text}"
+        );
+    }
+
+    #[test]
+    fn tui_render_surfaces_unclassified_worst_codex_window() {
+        // Forward-defense: if Codex adds or renames a window duration, its worst
+        // window classifies as WindowKind::Other. five_hour()/weekly() won't match
+        // it, but the TUI must still surface a live cap (the non-TUI renderers do)
+        // rather than blank the row. Here primary=5h (low, classified) and
+        // secondary=an unknown 3-day duration (high) - the high one must not be
+        // dropped, and it's labeled by its actual duration.
+        let mut snap = populated_snapshot();
+        snap.codex_quota = Some(CodexQuotaSnapshot {
+            observed_at: ts("2026-05-15T10:55:00Z"),
+            session_id: "sess-1".to_string(),
+            primary: RateLimitWindow {
+                used_percent: 8.0,
+                window_duration_minutes: 300, // 5h (classified)
+                resets_at: ts("2026-05-15T15:00:00Z"),
+            },
+            secondary: Some(RateLimitWindow {
+                used_percent: 91.0,
+                window_duration_minutes: 4320, // 3d - unclassified (not 300/10080)
+                resets_at: ts("2026-05-18T10:55:00Z"),
+            }),
+            plan_type: "pro".to_string(),
+            rate_limit_reached: false,
+            tokens: None,
+            credits: None,
+        });
+        let terminal = render_to_terminal(&snap);
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Codex 5h"),
+            "5h window still shown in:\n{text}"
+        );
+        assert!(
+            text.contains("91.0"),
+            "unclassified worst window must not be dropped in:\n{text}"
+        );
+        assert!(
+            text.contains("Codex 3d"),
+            "unclassified window labeled by its duration in:\n{text}"
         );
     }
 
