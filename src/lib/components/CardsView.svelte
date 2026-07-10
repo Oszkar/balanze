@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired, codexWindowsByKind } from '$lib/presentation/quota';
+  import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired, codexWindowsByKind, overageCell } from '$lib/presentation/quota';
   import { microUsdToDollars } from '$lib/presentation/format';
   import { PROV } from '$lib/presentation/provenance';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
@@ -84,6 +84,7 @@
   });
 
   const eu = $derived(snapshot.claude_oauth?.extra_usage ?? null);
+  const anthBilled = $derived(overageCell(eu));
   const codex = $derived(snapshot.codex_quota);
   const openai = $derived(snapshot.openai);
   const openaiErr = $derived(snapshot.openai_error ?? null);
@@ -130,9 +131,7 @@
 <div class="cards">
   <ProviderCard name="Anthropic · Claude" plan={anthPlan}
     windows={anthWindows} quotaState={anthQuotaState}
-    billed={eu?.is_enabled
-      ? { amount: `${microUsdToDollars(eu.used_credits_micro_usd)}/${microUsdToDollars(eu.monthly_limit_micro_usd)}`, note: 'overage · this cycle', badge: 'real', title: PROV.anthropicBilledOverage.title }
-      : { amount: null, placeholder: 'none', note: 'overage · this cycle', title: PROV.anthropicBilledNa.title }} />
+    billed={anthBilled} />
   {#if showOpenAI}
     <ProviderCard name="OpenAI" plan="API + Codex"
       windows={codexWindows} quotaState={openaiQuotaState}

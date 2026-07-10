@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { quotaTone, anthropicQuota, codexElapsedFraction, codexWindowExpired, codexQuota } from './quota';
-import type { Snapshot } from '../types/snapshot';
+import { quotaTone, anthropicQuota, codexElapsedFraction, codexWindowExpired, codexQuota, classifyOverage, overageCell } from './quota';
+import type { Snapshot, ExtraUsage } from '../types/snapshot';
 
 const base: Snapshot = {
   schema_version: 2,
@@ -130,5 +130,55 @@ describe('quota', () => {
 
   it('codexQuota: null snapshot -> null', () => {
     expect(codexQuota(base)).toBeNull();
+  });
+});
+
+describe('extra-usage overage', () => {
+  const eu = (over: Partial<ExtraUsage>): ExtraUsage => ({
+    is_enabled: true,
+    monthly_limit_micro_usd: 100_000_000,
+    used_credits_micro_usd: 23_500_000,
+    utilization_percent: 23.5,
+    currency: 'USD',
+    ...over,
+  });
+
+  it('classifyOverage: null / enabled / over-limit / disabled-with-no-spend', () => {
+    expect(classifyOverage(null)).toBe('not-configured');
+    expect(classifyOverage(eu({ is_enabled: true }))).toBe('active');
+    // The bug: disabled past the cap, but used >= limit is REAL billed money.
+    expect(
+      classifyOverage(eu({ is_enabled: false, monthly_limit_micro_usd: 45_000_000, used_credits_micro_usd: 45_580_000 })),
+    ).toBe('over-limit');
+    // Disabled with no accrued spend (limit 0 / used 0) is genuinely not configured.
+    expect(classifyOverage(eu({ is_enabled: false, monthly_limit_micro_usd: 0, used_credits_micro_usd: 0 }))).toBe('not-configured');
+  });
+
+  it('classifyOverage: breach is detected from used >= limit, NOT the clamped utilization', () => {
+    // utilization clamped to 100 must not decide the state; used >= limit does.
+    const over = eu({ is_enabled: false, monthly_limit_micro_usd: 45_000_000, used_credits_micro_usd: 45_580_000, utilization_percent: 100 });
+    expect(classifyOverage(over)).toBe('over-limit');
+    // used < limit while disabled is not an over-limit breach.
+    const under = eu({ is_enabled: false, monthly_limit_micro_usd: 45_000_000, used_credits_micro_usd: 44_000_000, utilization_percent: 100 });
+    expect(classifyOverage(under)).toBe('not-configured');
+  });
+
+  it('overageCell: over-limit shows the REAL billed amount, not the "none" placeholder', () => {
+    const cell = overageCell(eu({ is_enabled: false, monthly_limit_micro_usd: 45_000_000, used_credits_micro_usd: 45_580_000 }));
+    expect(cell.amount).toBe('$45.58/$45.00');
+    expect(cell.badge).toBe('real');
+    expect(cell.note).toContain('over limit');
+    expect(cell.placeholder).toBeUndefined();
+  });
+
+  it('overageCell: active shows spend; not-configured shows the none placeholder', () => {
+    const active = overageCell(eu({ is_enabled: true, monthly_limit_micro_usd: 100_000_000, used_credits_micro_usd: 23_500_000 }));
+    expect(active.amount).toBe('$23.50/$100.00');
+    expect(active.badge).toBe('real');
+
+    const none = overageCell(null);
+    expect(none.amount).toBeNull();
+    expect(none.placeholder).toBe('none');
+    expect(none.badge).toBeUndefined();
   });
 });

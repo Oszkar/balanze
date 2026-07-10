@@ -1,5 +1,7 @@
-import type { Snapshot, CodexQuotaSnapshot, RateLimitWindow } from '../types/snapshot';
+import type { Snapshot, CodexQuotaSnapshot, RateLimitWindow, ExtraUsage } from '../types/snapshot';
 import type { Tone } from './pace';
+import { microUsdToDollars } from './format';
+import { PROV } from './provenance';
 
 // Canonical quota-tone thresholds (percent utilization). These mirror the
 // shared `window::Severity` classifier (crates/window/src/lib.rs) - the one
@@ -130,4 +132,47 @@ export function codexQuota(s: Snapshot): CodexQuota | null {
     plan: q.plan_type,
     tone: quotaTone(headlineWin.used_percent),
   };
+}
+
+// Three-state classification of the claude.ai pay-as-you-go extra-usage
+// overage, mirroring the CLI's `classify_overage`
+// (crates/balanze_cli/src/render.rs) so the popover and CLI cannot diverge.
+// GOTCHA: once usage exceeds the monthly cap Anthropic flips `is_enabled` to
+// false but KEEPS the real billed used/limit and clamps `utilization_percent`
+// to 100.0, so a naive `is_enabled` gate hides real billed money at its peak.
+// Detect the breach from `used_credits >= monthly_limit`, NEVER from
+// `utilization_percent`.
+export type OverageState = 'active' | 'over-limit' | 'not-configured';
+
+export function classifyOverage(eu: ExtraUsage | null): OverageState {
+  if (!eu) return 'not-configured';
+  if (eu.is_enabled) return 'active';
+  if (eu.monthly_limit_micro_usd > 0 && eu.used_credits_micro_usd >= eu.monthly_limit_micro_usd) {
+    return 'over-limit';
+  }
+  return 'not-configured';
+}
+
+// The billed-cell descriptor for the Anthropic extra-usage overage, shared by
+// GridView and CardsView so the two surfaces (and the CLI) stay in lockstep -
+// the divergence between them was the bug this fixes. `active` and `over-limit`
+// both surface the real billed `$used/$limit` with the `real` badge; only the
+// note differs (over-limit signals the cap is reached). `not-configured` keeps
+// the neutral "none" placeholder.
+export interface OverageCell {
+  amount: string | null;
+  placeholder?: 'none';
+  note: string;
+  badge?: 'real' | 'na';
+  title: string;
+}
+
+export function overageCell(eu: ExtraUsage | null): OverageCell {
+  const state = classifyOverage(eu);
+  if (eu && (state === 'active' || state === 'over-limit')) {
+    const amount = `${microUsdToDollars(eu.used_credits_micro_usd)}/${microUsdToDollars(eu.monthly_limit_micro_usd)}`;
+    const note = state === 'over-limit' ? 'over limit · this cycle' : 'overage · this cycle';
+    return { amount, note, badge: PROV.anthropicBilledOverage.badge, title: PROV.anthropicBilledOverage.title };
+  }
+  return { amount: null, placeholder: 'none', note: 'overage · this cycle', title: PROV.anthropicBilledNa.title };
 }
