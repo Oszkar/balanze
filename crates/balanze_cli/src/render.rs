@@ -6,6 +6,7 @@ use std::io::{self, Write};
 
 use anstream::ColorChoice;
 use anthropic_oauth::ExtraUsage;
+use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
 use owo_colors::{OwoColorize, Style};
 use state_coordinator::Snapshot;
 
@@ -516,17 +517,31 @@ fn compact_pace_line(s: &Snapshot) -> Option<String> {
     Some(format!("Pace: {}", parts.join(";  ")))
 }
 
+/// The rolling window the compact "Codex %" cell represents: the worst
+/// (highest-utilization) of the 5h + weekly windows, the same window the tray,
+/// statusline, and `--sections` key on. Codex reports both windows and which
+/// JSON slot holds which VARIES by plan, so the cell classifies by utilization,
+/// never by the `primary` slot (reading `primary` undercounted whenever the
+/// weekly window was the worse one on a plus/pro plan). `worst_window` is always
+/// `Some` (primary is always present); the `unwrap_or` is a total-function
+/// fallback, not an expected path. See `codex_local::WindowKind`.
+fn codex_display_window(q: &CodexQuotaSnapshot) -> &RateLimitWindow {
+    q.worst_window().unwrap_or(&q.primary)
+}
+
 fn compact_codex_quota(s: &Snapshot) -> String {
     match (&s.codex_quota, &s.codex_quota_error) {
         (Some(q), _) => {
-            let window = format_codex_window(q.primary.window_duration_minutes);
-            // Honesty: a rollout whose primary window has already reset is
-            // stale - the used% it carries describes an elapsed window. Degrade
-            // the ✓ to a ⚠ + "stale" marker rather than show a confident figure
-            // behind a green check. Compared against the snapshot's `fetched_at`
-            // (not wall-clock now) so it's deterministic/testable; the popover's
-            // `codexWindowExpired` in src/lib/presentation/quota.ts uses the same
-            // basis - keep the two in lockstep.
+            let win = codex_display_window(q);
+            let window = format_codex_window(win.window_duration_minutes);
+            // Honesty: a rollout whose displayed (worst) window has already
+            // reset is stale - the used% it carries describes an elapsed window.
+            // Degrade the ✓ to a ⚠ + "stale" marker rather than show a confident
+            // figure behind a green check. Compared against the snapshot's
+            // `fetched_at` (not wall-clock now) so it's deterministic/testable;
+            // the popover's `codexWindowExpired` in src/lib/presentation/quota.ts
+            // uses the same fetched_at-anchored formula per window - keep the two
+            // in lockstep.
             let expired = codex_window_expired(s);
             // Append snapshot age when meaningfully stale (≥1 min). The
             // walker returns the newest-mtime rollout file regardless of
@@ -544,7 +559,7 @@ fn compact_codex_quota(s: &Snapshot) -> String {
             // genuine 0.4% must not collapse to "0%".
             format!(
                 "{marker} {:.1}% {window} (codex {}{stale_tag}{age_tag})",
-                q.primary.used_percent, q.plan_type
+                win.used_percent, q.plan_type
             )
         }
         (None, Some(_)) => "✗ codex_local error".to_string(),
@@ -608,22 +623,23 @@ fn anthropic_quota_fraction(s: &Snapshot) -> Option<f64> {
     Some(worst / 100.0)
 }
 
-/// Codex primary-window utilization as a fraction. `None` when no codex
-/// quota signal -> Neutral.
+/// Codex worst-window utilization as a fraction. `None` when no codex
+/// quota signal -> Neutral. Keyed on the same window the cell displays
+/// (`codex_display_window`) so the heat color matches the shown number.
 fn codex_quota_fraction(s: &Snapshot) -> Option<f64> {
     let q = s.codex_quota.as_ref()?;
-    Some(q.primary.used_percent / 100.0)
+    Some(codex_display_window(q).used_percent / 100.0)
 }
 
-/// True when a Codex quota snapshot is present AND its primary window has
-/// already reset (fetched_at > primary.resets_at). This is the same staleness
-/// check `compact_codex_quota` uses for the `⚠` / "stale" marker; calling it
-/// here keeps the bucket decision in lockstep with the displayed glyph instead
-/// of relying on glyph-sniffing at the call site.
+/// True when a Codex quota snapshot is present AND the displayed (worst) window
+/// has already reset (fetched_at > that window's resets_at). This is the same
+/// staleness check `compact_codex_quota` shows as the `⚠` / "stale" marker;
+/// calling it here keeps the bucket decision in lockstep with the displayed
+/// glyph instead of relying on glyph-sniffing at the call site.
 fn codex_window_expired(s: &Snapshot) -> bool {
     s.codex_quota
         .as_ref()
-        .is_some_and(|q| s.fetched_at > q.primary.resets_at)
+        .is_some_and(|q| s.fetched_at > codex_display_window(q).resets_at)
 }
 
 /// Colorized sibling of [`write_compact`]. Identical text content and column
@@ -647,8 +663,9 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     let openai_cost = compact_openai_cost(snapshot);
 
     // A failed-fetch cell (starts with ✗) is always Critical; a stale Codex
-    // window (fetched_at > primary.resets_at, shown with ⚠) is Warn; otherwise
-    // color by the row's quota fraction, Neutral when there's no signal.
+    // window (fetched_at > the displayed worst window's resets_at, shown with ⚠)
+    // is Warn; otherwise color by the row's quota fraction, Neutral when there's
+    // no signal.
     let anth_bucket = if anth_quota.starts_with('✗') {
         Bucket::Critical
     } else {
@@ -1072,6 +1089,54 @@ mod tests {
         assert!(
             cell.contains("stale"),
             "an expired window must be labeled stale:\n{cell}"
+        );
+    }
+
+    #[test]
+    fn compact_codex_quota_shows_worst_window_not_primary_slot() {
+        // plus/pro layout: the `primary` slot is the 5h window (low), and the
+        // weekly window sits in `secondary` (high). The single compact cell must
+        // show the WORST window (weekly 82%), matching the tray, statusline, and
+        // --sections. Reading the `primary` slot - which slot is which varies by
+        // plan - would undercount this cell to 4%.
+        let now = fixture_fetched_at();
+        let mut snap = fully_populated_snapshot();
+        if let Some(q) = snap.codex_quota.as_mut() {
+            q.plan_type = "pro".to_string();
+            q.primary = RateLimitWindow {
+                used_percent: 4.0,
+                window_duration_minutes: 300, // 5h
+                resets_at: now + Duration::hours(3),
+            };
+            q.secondary = Some(RateLimitWindow {
+                used_percent: 82.0,
+                window_duration_minutes: 10_080, // weekly
+                resets_at: now + Duration::days(5),
+            });
+        }
+        let cell = compact_codex_quota(&snap);
+        assert!(
+            cell.contains("82.0%"),
+            "compact cell must show the worst (weekly) window's %:\n{cell}"
+        );
+        assert!(
+            !cell.contains("4.0%"),
+            "compact cell must NOT show the lower primary-slot (5h) %:\n{cell}"
+        );
+        assert!(
+            cell.contains("7d") && !cell.contains("5h"),
+            "the worst window is weekly, so the label must read '7d', not '5h':\n{cell}"
+        );
+        // The heat fraction must key on the SAME worst window as the number, or
+        // a red ring could sit next to a green figure (the #169 class of bug).
+        let frac = codex_quota_fraction(&snap).expect("codex fraction present");
+        assert!(
+            (0.80..0.83).contains(&frac),
+            "heat fraction must track the displayed worst window (0.82), got {frac}"
+        );
+        assert!(
+            !codex_window_expired(&snap),
+            "the worst (weekly) window is still live, so the cell is not stale"
         );
     }
 
