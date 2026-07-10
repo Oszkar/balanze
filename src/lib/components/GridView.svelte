@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, codexElapsedFraction, codexWindowExpired, codexQuota } from '$lib/presentation/quota';
+  import { anthropicQuota, codexElapsedFraction, codexWindowExpired, codexQuota, overageCell } from '$lib/presentation/quota';
   import { microUsdToDollars } from '$lib/presentation/format';
   import { PROV } from '$lib/presentation/provenance';
   import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
@@ -20,6 +20,7 @@
   const codex = $derived(snapshot.codex_quota);
   const cq = $derived(codexQuota(snapshot));
   const eu = $derived(snapshot.claude_oauth?.extra_usage ?? null);
+  const overage = $derived(overageCell(eu));
   const openai = $derived(snapshot.openai);
   const anthStale = $derived(!!degraded['claude_statusline'] && aq?.source === 'oauth');
   // When no quota is available, distinguish a real failure (an error slot is
@@ -99,12 +100,8 @@
     {/if}
   {/if}
 
-  {#if eu?.is_enabled}
-    <BilledCell amount={`${microUsdToDollars(eu.used_credits_micro_usd)}/${microUsdToDollars(eu.monthly_limit_micro_usd)}`}
-      note="overage · this cycle" badge={PROV.anthropicBilledOverage.badge} title={PROV.anthropicBilledOverage.title} />
-  {:else}
-    <BilledCell hatch placeholder="none" note="overage · this cycle" title={PROV.anthropicBilledNa.title} />
-  {/if}
+  <BilledCell amount={overage.amount} placeholder={overage.placeholder ?? 'none'} hatch={overage.amount === null}
+    note={overage.note} badge={overage.badge ?? null} title={overage.title} />
   {#if showOpenAI && colState.kind !== 'connect' && colState.kind !== 'error'}
     {#if openai}
       <BilledCell amount={microUsdToDollars(openai.total_micro_usd)}
