@@ -4,6 +4,23 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 - minor bumps may break; patch bumps are fixes only.
 
+## [Unreleased]
+
+Targeted as v0.4.3 (theme "Codex maturity"). Codex gets first-class treatment: both rolling windows (5-hour and weekly) now surface across the tray, popover, cards, CLI, and statusline, alongside a parser-reliability fix, honest file logging, and a quieter macOS Keychain path.
+
+### Added
+- **Codex 5h + weekly windows everywhere** - Codex reports two rolling rate-limit windows (a 5-hour and a weekly), and which JSON slot holds which varies by plan, so `codex_local` now classifies each window by duration instead of trusting the slot. The tray splits Codex into 5h + weekly (the ring color and menu-bar title name the worst of the two), the popover and cards show both, and the CLI `status --sections` / `watch` TUI label each window by kind.
+- **Both Codex windows in the statusline** - `balanze-cli statusline` renders a 5h and a weekly segment, severity-toned on the shared 50 / 75 / 90 scale and mirroring the Claude usage segment, on both the snapshot-read and self-compose paths.
+- **File logging + `BALANZE_LOG`** - both binaries now honor `BALANZE_LOG` (same syntax as `RUST_LOG`; an invalid value warns and falls back to `info` instead of silently reverting) and write a daily-rotating log kept 3 days under the data directory's `logs/`, so a windowless launch (a double-click on Windows) still leaves a trail.
+- **User guide** - a first-run-to-statusline walkthrough (`docs/GUIDE.md`), plus a tightened README and PRD.
+
+### Changed
+- **Internal** - `codex_local` also parses Codex's per-session token/context and credits into internal `#[serde(skip)]` fields (tested, deliberately not surfaced in any UI yet and kept off every IPC wire; Codex's cap is percentage-windows, not tokens, so token burn does not predict quota exhaustion). Shared the OAuth-refresh, keychain-key-resolution, and task-watchdog helpers; extracted a `logging` crate so `tracing-subscriber` / `tracing-appender` stay out of the pure library crates; dropped unused deps and normalized placeholder strings. No user-facing behavior change.
+
+### Fixed
+- **Parser no longer stalls on a bad JSONL line** - a single malformed or schema-drifted complete line used to abort the whole incremental read and park the byte cursor in front of it, so every later read re-hit the same line and stalled all future appends for that file. The reader now skips the bad line (a WARN with the skipped count), keeps the good events, and advances the cursor past the batch.
+- **macOS Keychain no longer re-prompts every poll** - the watcher was re-reading Claude Code's read-only login-Keychain OAuth credential on every 5-minute tick, shelling out to `/usr/bin/security` and re-triggering the macOS access prompt each time. A still-valid credential is now reused across ticks; only an actual expiry (never a transient network error) forces a fresh Keychain read.
+
 ## [0.4.2] - Statusline maturity - 2026-07-07
 
 The Claude Code statusline becomes a cross-provider, installable command - it replaces an existing statusline with backup/restore consent and enforces OpenAI Admin Costs politeness via an on-disk cache.
@@ -166,6 +183,7 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.4.2...HEAD
 [0.4.2]: https://github.com/Oszkar/balanze/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Oszkar/balanze/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Oszkar/balanze/compare/v0.3.1...v0.4.0
