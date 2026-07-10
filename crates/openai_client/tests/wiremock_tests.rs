@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
-use openai_client::{OpenAiError, costs_this_month, fetch_costs};
+use openai_client::{OpenAiError, costs_this_month, costs_this_month_with, fetch_costs};
 use reqwest::Client;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -73,6 +73,62 @@ async fn happy_path_parses_response_and_sends_expected_query() {
     assert!(!costs.truncated);
     // gpt-5 has the higher amount, comes first.
     assert_eq!(costs.by_line_item[0].line_item, "gpt-5");
+}
+
+#[tokio::test]
+async fn costs_this_month_with_builds_its_own_client_and_fetches() {
+    // The shared helper assembles the reqwest client from the injected timeout
+    // (no caller-supplied Client) and queries this-month costs. Only assert the
+    // method/path/auth + parsed total; the start_time/end_time are "this month"
+    // (dynamic), so they're not pinned here.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .and(header("Authorization", "Bearer sk-admin-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body_typical()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let costs = costs_this_month_with(
+        &server.uri(),
+        "sk-admin-test",
+        Duration::from_secs(30),
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect("should succeed");
+    assert_eq!(costs.total_micro_usd, 1_730_000);
+    assert_eq!(costs.by_line_item.len(), 2);
+}
+
+#[tokio::test]
+async fn costs_this_month_with_maps_401_to_the_shared_admin_key_hint() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error":"nope"}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let err = costs_this_month_with(
+        &server.uri(),
+        "sk-admin-bad",
+        Duration::from_secs(30),
+        &backoff::BackoffPolicy::fail_fast(),
+    )
+    .await
+    .expect_err("should fail with 401");
+    assert!(
+        matches!(err, OpenAiError::AuthInvalid { .. }),
+        "got {err:?}"
+    );
+    assert!(
+        err.admin_key_hint()
+            .is_some_and(|h| h.contains("set-openai-key")),
+        "401 should carry the shared admin-key hint"
+    );
 }
 
 #[tokio::test]

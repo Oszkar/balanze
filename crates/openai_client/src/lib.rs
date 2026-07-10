@@ -18,7 +18,7 @@
 mod client;
 mod types;
 
-pub use client::{costs_this_month, fetch_costs};
+pub use client::{costs_this_month, costs_this_month_with, fetch_costs};
 pub use types::{LineItemCost, OpenAiCosts, OpenAiError};
 
 /// Default base URL for the OpenAI API. Tests override this to point at wiremock.

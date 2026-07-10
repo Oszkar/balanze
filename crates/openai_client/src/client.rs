@@ -84,6 +84,12 @@ fn deserialize_amount_value<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::E
     }
 }
 
+/// User agent for every Balanze OpenAI request. Centralized here so the CLI,
+/// watcher, and statusline self-compose paths send one current UA instead of
+/// the stale per-crate strings (`balanze-cli/0.1.0`, `balanze-watcher/0.1.0`)
+/// they used to hardcode when each built its own client.
+const USER_AGENT: &str = concat!("balanze/", env!("CARGO_PKG_VERSION"));
+
 /// Convenience wrapper: query spend from the first of the current calendar
 /// month (00:00 UTC) through now, daily buckets, grouped by line item.
 ///
@@ -98,6 +104,26 @@ pub async fn costs_this_month(
     let now = Utc::now();
     let month_start = first_of_month(now);
     fetch_costs(client, base_url, admin_key, month_start, Some(now), policy).await
+}
+
+/// [`costs_this_month`] plus the HTTP client assembly, so callers inject only a
+/// per-request `timeout` and a [`backoff::BackoffPolicy`] instead of each
+/// rebuilding a `reqwest::Client`. Centralizes the client config (user agent,
+/// timeout) the CLI one-shot fetch (30s / fail_fast), the statusline
+/// self-compose path (3s / fail_fast), and the watcher poller (30s / standard)
+/// otherwise duplicated. A client-build failure surfaces as
+/// [`OpenAiError::Network`].
+pub async fn costs_this_month_with(
+    base_url: &str,
+    admin_key: &str,
+    timeout: std::time::Duration,
+    policy: &backoff::BackoffPolicy,
+) -> Result<OpenAiCosts, OpenAiError> {
+    let client = Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(timeout)
+        .build()?;
+    costs_this_month(&client, base_url, admin_key, policy).await
 }
 
 /// Fetch costs over a [start_time, end_time) window with daily buckets and

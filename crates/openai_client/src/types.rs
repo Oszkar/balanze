@@ -58,3 +58,60 @@ pub enum OpenAiError {
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
 }
+
+impl OpenAiError {
+    /// A user-facing remediation hint for the two admin-key auth failures
+    /// (401 invalid/revoked key, 403 wrong scope). Shared by the CLI `status`
+    /// path and the watcher poller so their guidance cannot drift. Returns
+    /// `None` for every other variant, which callers format with the `Display`
+    /// impl instead.
+    pub fn admin_key_hint(&self) -> Option<&'static str> {
+        match self {
+            OpenAiError::AuthInvalid { .. } => Some(
+                "OpenAI admin key rejected (HTTP 401). Run `balanze-cli set-openai-key` with a fresh `sk-admin-...` key.",
+            ),
+            OpenAiError::InsufficientScope { .. } => Some(
+                "OpenAI returned 403. organization/costs requires an admin API key (`sk-admin-...`), not a project or service-account key. Generate one at https://platform.openai.com/settings/organization/admin-keys.",
+            ),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admin_key_hint_covers_the_two_auth_failures_only() {
+        let h401 = OpenAiError::AuthInvalid { body: "x".into() }
+            .admin_key_hint()
+            .expect("401 has a hint");
+        assert!(h401.contains("HTTP 401") && h401.contains("set-openai-key"));
+
+        let h403 = OpenAiError::InsufficientScope { body: "x".into() }
+            .admin_key_hint()
+            .expect("403 has a hint");
+        assert!(h403.contains("403") && h403.contains("admin-keys"));
+
+        // Non-auth variants carry no hint; callers use Display for those.
+        assert!(
+            OpenAiError::ResponseShape("x".into())
+                .admin_key_hint()
+                .is_none()
+        );
+        assert!(
+            OpenAiError::RateLimited { retry_after: None }
+                .admin_key_hint()
+                .is_none()
+        );
+        assert!(
+            OpenAiError::UnexpectedStatus {
+                status: 500,
+                body: "x".into()
+            }
+            .admin_key_hint()
+            .is_none()
+        );
+    }
+}
