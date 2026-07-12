@@ -3,10 +3,9 @@
 //! Read/refresh: `get_snapshot` + `refresh_now` reach the coordinator via the
 //! managed `StateCoordinatorHandle` (async - they await the coordinator).
 //!
-//! Settings/keys: `get_settings` / `set_settings` / `set_api_key` are sync
-//! commands. Tauri runs non-async commands on a dedicated thread (not the
-//! async runtime), so their blocking keychain + `settings.json` I/O does not
-//! stall a tokio worker (AGENTS.md §2.1). Secret hygiene (§3.4): the API key
+//! Settings, keychain, and statusline commands are async commands whose
+//! synchronous work runs through `spawn_blocking`, so filesystem, subprocess,
+//! and keychain latency never stalls a tokio worker. Secret hygiene (§3.4): the API key
 //! is never logged or echoed, and `get_settings` returns only the non-secret
 //! `Settings` shape - the key itself never crosses back to the frontend.
 //!
@@ -30,6 +29,16 @@ use claude_statusline::{
 use settings::Settings;
 use state_coordinator::{Snapshot, StateCoordinatorHandle, StateMsg};
 use tauri::State;
+
+async fn run_blocking<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("blocking worker failed: {error}"))?
+}
 
 #[tauri::command]
 pub async fn get_snapshot(handle: State<'_, StateCoordinatorHandle>) -> Result<Snapshot, String> {
@@ -103,8 +112,8 @@ pub fn resize_popover(window: tauri::WebviewWindow, height: u32) -> Result<(), S
 /// Return the non-secret settings (`settings.json` shape). Never includes any
 /// API key - secrets live in the OS keychain, not here (AGENTS.md §3.4).
 #[tauri::command]
-pub fn get_settings() -> Result<Settings, String> {
-    settings::load().map_err(|e| e.to_string())
+pub async fn get_settings() -> Result<Settings, String> {
+    run_blocking(|| settings::load().map_err(|e| e.to_string())).await
 }
 
 /// Persist the non-secret settings atomically and live-apply them: provider
@@ -112,9 +121,8 @@ pub fn get_settings() -> Result<Settings, String> {
 /// [`apply_settings_live`]). The watcher's pollers clamp the cadence to the
 /// §3.1 floor regardless of what lands here, so a too-small value is safe.
 #[tauri::command]
-pub fn set_settings(
+pub async fn set_settings(
     mut settings: Settings,
-    coord: State<'_, StateCoordinatorHandle>,
     reload: State<'_, WatcherReload>,
 ) -> Result<(), String> {
     // `seen_welcome` and `statusline` are backend-owned, not user settings the
@@ -128,13 +136,16 @@ pub fn set_settings(
     // settings.json, bail instead of proceeding: the inbound copy carries a
     // stale/default `statusline`, so saving it would wipe the replaced_command
     // backup - the same clobber the read-only save paths guard against.
-    let current =
-        settings::load_for_update().map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
-    settings.seen_welcome = current.seen_welcome;
-    settings.statusline = current.statusline;
-    settings::save(&settings).map_err(|e| e.to_string())?;
-    apply_settings_live(&coord, &reload, settings);
-    Ok(())
+    let settings = run_blocking(move || {
+        let current = settings::load_for_update()
+            .map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
+        settings.seen_welcome = current.seen_welcome;
+        settings.statusline = current.statusline;
+        settings::save(&settings).map_err(|e| e.to_string())?;
+        Ok(settings)
+    })
+    .await?;
+    apply_settings_live(&reload, settings).await
 }
 
 /// Store a user-supplied API key in the OS keychain and mark its provider
@@ -144,21 +155,23 @@ pub fn set_settings(
 /// Secret hygiene (§3.4): the key is validated, trimmed, written to the
 /// keychain, and immediately dropped. It is never logged, echoed, or returned.
 #[tauri::command]
-pub fn set_api_key(
+pub async fn set_api_key(
     provider: String,
     key: String,
-    coord: State<'_, StateCoordinatorHandle>,
     reload: State<'_, WatcherReload>,
 ) -> Result<(), String> {
-    let key = prepare_api_key(&provider, &key)?;
-    keychain::set(keychain::keys::OPENAI_API_KEY, key).map_err(|e| e.to_string())?;
+    let key = prepare_api_key(&provider, &key)?.to_string();
     // Saving a key implies the user wants this provider polled. Flip the
     // enable flag so the watcher picks it up, then live-apply.
-    let mut s = settings::load().map_err(|e| e.to_string())?;
-    s.providers.openai_enabled = true;
-    settings::save(&s).map_err(|e| e.to_string())?;
-    apply_settings_live(&coord, &reload, s);
-    Ok(())
+    let s = run_blocking(move || {
+        keychain::set(keychain::keys::OPENAI_API_KEY, &key).map_err(|e| e.to_string())?;
+        let mut s = settings::load().map_err(|e| e.to_string())?;
+        s.providers.openai_enabled = true;
+        settings::save(&s).map_err(|e| e.to_string())?;
+        Ok(s)
+    })
+    .await?;
+    apply_settings_live(&reload, s).await
 }
 
 /// Outcome of probing a user-supplied API key against the provider WITHOUT
@@ -206,48 +219,58 @@ pub async fn validate_api_key(provider: String, key: String) -> Result<ApiKeyVal
 /// the key value. (Does not consider the `BALANZE_OPENAI_KEY` env override - the
 /// UI affordance manages the keychain-stored key.)
 #[tauri::command]
-pub fn has_api_key(provider: String) -> Result<bool, String> {
+pub async fn has_api_key(provider: String) -> Result<bool, String> {
     if provider != "openai" {
         return Err(format!("unsupported provider: {provider}"));
     }
-    keychain::exists(keychain::keys::OPENAI_API_KEY).map_err(|e| e.to_string())
+    run_blocking(|| keychain::exists(keychain::keys::OPENAI_API_KEY).map_err(|e| e.to_string()))
+        .await
 }
 
 /// Remove a user-supplied API key from the keychain and disable its provider,
 /// then live-apply (the cell clears). Idempotent - succeeds if no key existed.
 #[tauri::command]
-pub fn clear_api_key(
+pub async fn clear_api_key(
     provider: String,
-    coord: State<'_, StateCoordinatorHandle>,
     reload: State<'_, WatcherReload>,
 ) -> Result<(), String> {
     if provider != "openai" {
         return Err(format!("unsupported provider: {provider}"));
     }
-    keychain::delete(keychain::keys::OPENAI_API_KEY).map_err(|e| e.to_string())?;
-    let mut s = settings::load().map_err(|e| e.to_string())?;
-    s.providers.openai_enabled = false;
-    settings::save(&s).map_err(|e| e.to_string())?;
-    apply_settings_live(&coord, &reload, s);
-    Ok(())
+    let s = run_blocking(|| {
+        keychain::delete(keychain::keys::OPENAI_API_KEY).map_err(|e| e.to_string())?;
+        let mut s = settings::load().map_err(|e| e.to_string())?;
+        s.providers.openai_enabled = false;
+        settings::save(&s).map_err(|e| e.to_string())?;
+        Ok(s)
+    })
+    .await?;
+    apply_settings_live(&reload, s).await
 }
 
 /// Sender that asks the host's watcher supervisor to re-spawn its tasks with
 /// the latest settings. Managed in Tauri state by `boot_backend`.
-pub struct WatcherReload(pub tokio::sync::mpsc::Sender<()>);
+pub struct SettingsTransition {
+    pub settings: Settings,
+    pub applied: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
 
-/// Live-apply a settings change without an app restart, in two parts:
-/// 1. Tell the coordinator (owner of the `Snapshot`) to reset the cells of any
-///    now-disabled provider via `StateMsg::SettingsChanged`.
-/// 2. Signal the watcher supervisor to re-spawn its tasks, so enabled providers
-///    start polling and disabled ones stop.
-///
-/// Both sends are non-blocking and best-effort: a full or closed channel just
-/// means the change applies on the next natural cycle / restart, never an error
-/// to the user (the settings are already persisted by the time we get here).
-fn apply_settings_live(coord: &StateCoordinatorHandle, reload: &WatcherReload, settings: Settings) {
-    let _ = coord.try_send(StateMsg::SettingsChanged(Box::new(settings)));
-    let _ = reload.0.try_send(());
+pub struct WatcherReload(pub tokio::sync::mpsc::Sender<SettingsTransition>);
+
+/// Await one supervised settings transition. The supervisor joins the old
+/// pollers, advances the coordinator generation, starts the replacement task
+/// set, and only then completes the reply. A closed supervisor is an explicit
+/// command error, never a silently dropped live update.
+async fn apply_settings_live(reload: &WatcherReload, settings: Settings) -> Result<(), String> {
+    let (applied, completed) = tokio::sync::oneshot::channel();
+    reload
+        .0
+        .send(SettingsTransition { settings, applied })
+        .await
+        .map_err(|_| "watcher settings supervisor has shut down".to_string())?;
+    completed
+        .await
+        .map_err(|_| "watcher settings supervisor dropped the transition".to_string())?
 }
 
 /// Validate + normalize an inbound API key before it touches the keychain.
@@ -280,29 +303,32 @@ pub struct StatuslineWire {
 
 /// Report whether Claude Code's `statusLine` is wired to Balanze.
 #[tauri::command]
-pub fn get_statusline_status() -> Result<StatuslineWire, String> {
-    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-    let status = read_wire_status(&path).map_err(|e| e.to_string())?;
-    let replaced_command = settings::load()
-        .ok()
-        .and_then(|s| s.statusline.replaced_command);
-    Ok(match status {
-        WireStatus::WiredToBalanze => StatuslineWire {
-            status: "wired",
-            command: None,
-            replaced_command,
-        },
-        WireStatus::Unwired => StatuslineWire {
-            status: "unwired",
-            command: None,
-            replaced_command,
-        },
-        WireStatus::OccupiedBy(cmd) => StatuslineWire {
-            status: "occupied",
-            command: Some(cmd),
-            replaced_command,
-        },
+pub async fn get_statusline_status() -> Result<StatuslineWire, String> {
+    run_blocking(|| {
+        let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+        let status = read_wire_status(&path).map_err(|e| e.to_string())?;
+        let replaced_command = settings::load()
+            .ok()
+            .and_then(|s| s.statusline.replaced_command);
+        Ok(match status {
+            WireStatus::WiredToBalanze => StatuslineWire {
+                status: "wired",
+                command: None,
+                replaced_command,
+            },
+            WireStatus::Unwired => StatuslineWire {
+                status: "unwired",
+                command: None,
+                replaced_command,
+            },
+            WireStatus::OccupiedBy(cmd) => StatuslineWire {
+                status: "occupied",
+                command: Some(cmd),
+                replaced_command,
+            },
+        })
     })
+    .await
 }
 
 /// Replace a foreign `statusLine.command` with Balanze's, backing the foreign
@@ -311,27 +337,30 @@ pub fn get_statusline_status() -> Result<StatuslineWire, String> {
 /// Provider-agnostic: keys only off `OccupiedBy(cmd)` - never reads or touches
 /// the foreign tool's own config files.
 #[tauri::command]
-pub fn replace_statusline() -> Result<(), String> {
-    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-    let mut s =
-        settings::load_for_update().map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
-    let prior = s.statusline.replaced_command.clone();
-    if let WireStatus::OccupiedBy(cmd) = read_wire_status(&path).map_err(|e| e.to_string())? {
-        // Don't back up the "statusLine present but no usable command" sentinel;
-        // it is not restorable.
-        if cmd != claude_statusline::NON_STRING_STATUSLINE_COMMAND {
-            s.statusline.replaced_command = Some(cmd);
-            settings::save(&s).map_err(|e| e.to_string())?;
+pub async fn replace_statusline() -> Result<(), String> {
+    run_blocking(|| {
+        let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+        let mut s = settings::load_for_update()
+            .map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
+        let prior = s.statusline.replaced_command.clone();
+        if let WireStatus::OccupiedBy(cmd) = read_wire_status(&path).map_err(|e| e.to_string())? {
+            // Don't back up the "statusLine present but no usable command" sentinel;
+            // it is not restorable.
+            if cmd != claude_statusline::NON_STRING_STATUSLINE_COMMAND {
+                s.statusline.replaced_command = Some(cmd);
+                settings::save(&s).map_err(|e| e.to_string())?;
+            }
         }
-    }
-    if let Err(e) = wire_statusline(&path, STATUSLINE_INVOCATION) {
-        // Roll back to the PRIOR backup (not None) so a failed replace never wipes
-        // an existing one, and the UI shows no phantom Restore for this attempt.
-        s.statusline.replaced_command = prior;
-        let _ = settings::save(&s);
-        return Err(e.to_string());
-    }
-    Ok(())
+        if let Err(e) = wire_statusline(&path, STATUSLINE_INVOCATION) {
+            // Roll back to the PRIOR backup (not None) so a failed replace never wipes
+            // an existing one, and the UI shows no phantom Restore for this attempt.
+            s.statusline.replaced_command = prior;
+            let _ = settings::save(&s);
+            return Err(e.to_string());
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Restore the foreign `statusLine.command` that Balanze displaced via
@@ -340,43 +369,49 @@ pub fn replace_statusline() -> Result<(), String> {
 /// occupies the stanza (one Balanze did not displace), it is left untouched and
 /// the backup is KEPT, surfaced as an error to the caller.
 #[tauri::command]
-pub fn restore_statusline() -> Result<(), String> {
-    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-    let mut s =
-        settings::load_for_update().map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
-    let previous = s.statusline.replaced_command.take();
-    // Fully-qualified to disambiguate from this Tauri command of the same name.
-    let wrote = claude_statusline::restore_statusline(&path, previous.as_deref())
-        .map_err(|e| e.to_string())?;
-    if wrote {
-        // Backup consumed - persist the cleared value.
-        settings::save(&s).map_err(|e| e.to_string())
-    } else if previous.is_some() {
-        // A foreign command owns the stanza; keep the backup (do not save the
-        // cleared value) and tell the caller.
-        Err("Claude Code's statusLine is set to another command; not overwriting it. Your backup is kept.".to_string())
-    } else {
-        Ok(())
-    }
+pub async fn restore_statusline() -> Result<(), String> {
+    run_blocking(|| {
+        let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+        let mut s = settings::load_for_update()
+            .map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
+        let previous = s.statusline.replaced_command.take();
+        // Fully-qualified to disambiguate from this Tauri command of the same name.
+        let wrote = claude_statusline::restore_statusline(&path, previous.as_deref())
+            .map_err(|e| e.to_string())?;
+        if wrote {
+            // Backup consumed - persist the cleared value.
+            settings::save(&s).map_err(|e| e.to_string())
+        } else if previous.is_some() {
+            // A foreign command owns the stanza; keep the backup (do not save the
+            // cleared value) and tell the caller.
+            Err("Claude Code's statusLine is set to another command; not overwriting it. Your backup is kept.".to_string())
+        } else {
+            Ok(())
+        }
+    })
+    .await
 }
 
 /// Wire (`wired = true`) or unwire (`wired = false`) Balanze's `statusLine` in
 /// Claude Code's `settings.json`. No-clobber: refuses to overwrite a stanza set
 /// to another command, and only removes the stanza when it is ours.
 #[tauri::command]
-pub fn set_statusline_wired(wired: bool) -> Result<(), String> {
-    let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-    let status = read_wire_status(&path).map_err(|e| e.to_string())?;
-    match plan_statusline_action(wired, &status) {
-        StatuslineAction::Wire => {
-            wire_statusline(&path, STATUSLINE_INVOCATION).map_err(|e| e.to_string())
+pub async fn set_statusline_wired(wired: bool) -> Result<(), String> {
+    run_blocking(move || {
+        let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
+        let status = read_wire_status(&path).map_err(|e| e.to_string())?;
+        match plan_statusline_action(wired, &status) {
+            StatuslineAction::Wire => {
+                wire_statusline(&path, STATUSLINE_INVOCATION).map_err(|e| e.to_string())
+            }
+            StatuslineAction::Unwire => unwire_statusline(&path).map_err(|e| e.to_string()),
+            StatuslineAction::NoOp => Ok(()),
+            StatuslineAction::RefuseOccupied(cmd) => Err(format!(
+                "Claude Code's statusLine is set to another command ({cmd}); not overwriting it"
+            )),
         }
-        StatuslineAction::Unwire => unwire_statusline(&path).map_err(|e| e.to_string()),
-        StatuslineAction::NoOp => Ok(()),
-        StatuslineAction::RefuseOccupied(cmd) => Err(format!(
-            "Claude Code's statusLine is set to another command ({cmd}); not overwriting it"
-        )),
-    }
+    })
+    .await
 }
 
 #[derive(Debug, PartialEq)]
@@ -442,6 +477,15 @@ mod tests {
             prepare_api_key("openai", "  sk-admin-xyz  ").unwrap(),
             "sk-admin-xyz"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blocking_operations_run_on_blocking_worker() {
+        let runtime_thread = std::thread::current().id();
+        let worker_thread = super::run_blocking(|| Ok(std::thread::current().id()))
+            .await
+            .unwrap();
+        assert_ne!(runtime_thread, worker_thread);
     }
 
     #[test]

@@ -14,7 +14,9 @@
 //! shared `OpenAiError::admin_key_hint`, kept in lockstep with the CLI.
 
 use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, costs_this_month_with};
-use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
+use state_coordinator::{
+    Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg, WatcherGeneration,
+};
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
@@ -33,6 +35,7 @@ use crate::errors::WatcherError;
 pub(crate) fn spawn(
     coord: StateCoordinatorHandle,
     interval_secs: u32,
+    generation: WatcherGeneration,
 ) -> JoinHandle<Result<(), WatcherError>> {
     let interval = std::time::Duration::from_secs(interval_secs.max(300) as u64);
 
@@ -78,6 +81,7 @@ pub(crate) fn spawn(
                         costs.truncated
                     );
                     SourceUpdate {
+                        generation,
                         source: Source::OpenAiCosts,
                         result: Ok(SourcePartial::OpenAiCosts(costs)),
                     }
@@ -94,6 +98,7 @@ pub(crate) fn spawn(
                         }
                     };
                     SourceUpdate {
+                        generation,
                         source: Source::OpenAiCosts,
                         result,
                     }

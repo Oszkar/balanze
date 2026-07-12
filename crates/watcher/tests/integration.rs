@@ -112,7 +112,7 @@ async fn jsonl_initial_scan_then_incremental_append_propagate() {
     // Keep alive for the test duration: dropping the `Vec<JoinHandle>` would
     // not cancel the spawned tasks (tokio task lifetime is independent of
     // JoinHandle), but holding it makes the intent explicit.
-    let _tasks: Vec<_> = Watcher::spawn(handle.clone(), &settings);
+    let _tasks: Vec<_> = Watcher::spawn(handle.clone(), &settings, 0);
 
     // Phase 1 - the launch scan reads the existing file in full (the one full
     // read the byte cursor allows), so the first event propagates.

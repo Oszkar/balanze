@@ -344,7 +344,7 @@ fn boot_backend(app: &App, rt: &tokio::runtime::Handle) {
     // supervisor re-spawns the watcher with fresh settings so provider toggles
     // take effect without an app restart (the coordinator clears disabled
     // cells; this starts/stops the actual polling).
-    let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<()>(8);
+    let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<commands::SettingsTransition>(8);
     app.manage(commands::WatcherReload(reload_tx));
 
     // The watcher supervisor is itself a long-running task (AGENTS.md §3.2). If it
@@ -416,51 +416,68 @@ const FAILURE_RESET_WINDOW: std::time::Duration = std::time::Duration::from_secs
 /// shutdown.
 async fn supervise_watcher(
     handle: state_coordinator::StateCoordinatorHandle,
-    mut reload_rx: tokio::sync::mpsc::Receiver<()>,
+    mut reload_rx: tokio::sync::mpsc::Receiver<commands::SettingsTransition>,
 ) {
     enum Wake {
-        Reload,
+        Reload(Box<commands::SettingsTransition>),
         Death(&'static str),
         Shutdown,
     }
 
     let mut consecutive_failures: u32 = 0;
     let mut last_failure: Option<std::time::Instant> = None;
+    let mut generation: state_coordinator::WatcherGeneration = 1;
+    let mut current_settings = settings::load_or_default();
+    let mut watched = match activate_watcher_generation(&handle, &current_settings, generation)
+        .await
+    {
+        Ok(watched) => watched,
+        Err(error) => {
+            tracing::error!("watcher supervisor failed to activate initial generation: {error}");
+            return;
+        }
+    };
 
     loop {
-        let settings = settings::load_or_default();
-        let tasks = watcher::Watcher::spawn(handle.clone(), &settings);
-        tracing::info!("watcher: spawned {} task(s)", tasks.len());
-
-        // Per-task watchdog: `watch_for_task_death` signals an *unexpected*
-        // completion (Err return or panic) of any task through this channel, so
-        // the select! below learns of a failure. Clean Ok(()) exits and our own
-        // reload aborts (cancellation) are NOT signalled. Collect the abort
-        // handles first so we can tear the current set down before the next
-        // action (the reload abort then shows up as an ignored cancellation).
-        let aborts: Vec<_> = tasks.iter().map(|(_, h)| h.abort_handle()).collect();
-        let mut death_rx = watcher::watch_for_task_death(tasks);
-
         let wake = tokio::select! {
-            r = reload_rx.recv() => r.map_or(Wake::Shutdown, |()| Wake::Reload),
-            Some(label) = death_rx.recv() => Wake::Death(label),
+            r = reload_rx.recv() => r.map_or(Wake::Shutdown, |transition| Wake::Reload(Box::new(transition))),
+            label = watched.recv_death() => label.map_or(Wake::Shutdown, Wake::Death),
         };
-
-        // Tear down the current set before the next action. The reload abort
-        // shows up as a cancellation in each watchdog, which is ignored above.
-        for a in aborts {
-            a.abort();
-        }
 
         match wake {
             Wake::Shutdown => {
-                tracing::info!("watcher supervisor: reload channel closed; stopping");
+                watched.shutdown().await;
+                tracing::info!("watcher supervisor: settings channel closed; stopping");
                 return;
             }
-            Wake::Reload => {
-                while reload_rx.try_recv().is_ok() {} // coalesce a burst
-                consecutive_failures = 0; // user-initiated; not a failure streak
-                tracing::info!("watcher: settings changed; re-spawning tasks");
+            Wake::Reload(transition) => {
+                generation = match generation.checked_add(1) {
+                    Some(next) => next,
+                    None => {
+                        let _ = transition
+                            .applied
+                            .send(Err("watcher generation counter exhausted".to_string()));
+                        watched.shutdown().await;
+                        return;
+                    }
+                };
+                let settings = transition.settings;
+                match replace_watcher_generation(watched, &handle, &settings, generation).await {
+                    Ok(next) => {
+                        watched = next;
+                        current_settings = settings;
+                        consecutive_failures = 0;
+                        tracing::info!(
+                            "watcher: settings transition to generation {generation} completed"
+                        );
+                        let _ = transition.applied.send(Ok(()));
+                    }
+                    Err(error) => {
+                        let _ = transition.applied.send(Err(error.clone()));
+                        tracing::error!("watcher settings transition failed: {error}");
+                        return;
+                    }
+                }
             }
             Wake::Death(label) => {
                 // Surface the affected cell as degraded so the UI shows a warning
@@ -470,6 +487,7 @@ async fn supervise_watcher(
                     let _ = handle
                         .send(state_coordinator::StateMsg::Update(
                             state_coordinator::SourceUpdate {
+                                generation,
                                 source,
                                 result: Err(format!(
                                     "watcher task '{label}' stopped unexpectedly; retrying"
@@ -478,6 +496,7 @@ async fn supervise_watcher(
                         ))
                         .await;
                 }
+                watched.shutdown().await;
                 // Fresh streak if it ran healthy for a while; else escalate.
                 if last_failure.is_some_and(|t| t.elapsed() > FAILURE_RESET_WINDOW) {
                     consecutive_failures = 0;
@@ -490,9 +509,61 @@ async fn supervise_watcher(
                     delay.as_secs()
                 );
                 tokio::time::sleep(delay).await;
+                generation = match generation.checked_add(1) {
+                    Some(next) => next,
+                    None => {
+                        tracing::error!("watcher generation counter exhausted");
+                        return;
+                    }
+                };
+                watched = match activate_watcher_generation(&handle, &current_settings, generation)
+                    .await
+                {
+                    Ok(next) => next,
+                    Err(error) => {
+                        tracing::error!("watcher restart failed: {error}");
+                        return;
+                    }
+                };
             }
         }
     }
+}
+
+async fn replace_watcher_generation(
+    current: watcher::WatchedTasks,
+    handle: &state_coordinator::StateCoordinatorHandle,
+    settings: &settings::Settings,
+    generation: state_coordinator::WatcherGeneration,
+) -> Result<watcher::WatchedTasks, String> {
+    current.shutdown().await;
+    activate_watcher_generation(handle, settings, generation).await
+}
+
+async fn activate_watcher_generation(
+    handle: &state_coordinator::StateCoordinatorHandle,
+    settings: &settings::Settings,
+    generation: state_coordinator::WatcherGeneration,
+) -> Result<watcher::WatchedTasks, String> {
+    let (applied, confirmed) = tokio::sync::oneshot::channel();
+    handle
+        .send(state_coordinator::StateMsg::SettingsChanged {
+            settings: Box::new(settings.clone()),
+            generation,
+            applied,
+        })
+        .await
+        .map_err(|_| "state coordinator has shut down".to_string())?;
+    confirmed
+        .await
+        .map_err(|_| "state coordinator dropped settings acknowledgment".to_string())?;
+
+    let tasks = watcher::Watcher::spawn(handle.clone(), settings, generation);
+    tracing::info!(
+        "watcher: spawned {} task(s) for generation {generation}",
+        tasks.len()
+    );
+    Ok(watcher::watch_for_task_death(tasks))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -568,7 +639,49 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{reanchored_position, respawn_backoff};
+    use super::{reanchored_position, replace_watcher_generation, respawn_backoff};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct StopFlag(Arc<AtomicBool>);
+
+    impl Drop for StopFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn settings_transition_joins_old_generation_before_completion() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let flag = StopFlag(Arc::clone(&stopped));
+        let old_task = tokio::spawn(async move {
+            let _flag = flag;
+            std::future::pending::<Result<(), watcher::WatcherError>>().await
+        });
+        let old = watcher::watch_for_task_death(vec![("test", old_task)]);
+        let (handle, coordinator) = state_coordinator::spawn(state_coordinator::NullSink);
+        let settings = settings::Settings {
+            providers: settings::ProviderSettings {
+                anthropic_enabled: false,
+                openai_enabled: false,
+                codex_enabled: false,
+            },
+            ..settings::Settings::default()
+        };
+
+        let next = replace_watcher_generation(old, &handle, &settings, 1)
+            .await
+            .unwrap();
+        assert!(
+            stopped.load(Ordering::SeqCst),
+            "transition completion must follow old-generation join"
+        );
+
+        next.shutdown().await;
+        drop(handle);
+        coordinator.await.unwrap();
+    }
 
     #[test]
     fn respawn_backoff_is_exponential_capped_at_60s() {

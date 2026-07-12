@@ -13,8 +13,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::jsonl::summarize_jsonl;
-use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg};
+use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg, WatcherGeneration};
 use crate::sink::Sink;
+use crate::sink_file::{SnapshotPublisher, SnapshotWriter, spawn_snapshot_writer};
 use crate::snapshot::{
     STATUSLINE_FRESHNESS_SECS, Snapshot, clear_source, pace_for_oauth, record_error,
     record_oauth_unavailable,
@@ -26,6 +27,7 @@ use crate::snapshot::{
 /// (a clone of the mpsc `Sender`) is shared.
 struct CoordinatorState {
     snapshot: Snapshot,
+    active_generation: WatcherGeneration,
     last_settings: Option<Settings>,
     /// Most recent deduped JSONL event slice (from the `ClaudeJsonl` source).
     /// Cached so an OAuth update - which carries the authoritative 5h reset -
@@ -98,22 +100,22 @@ pub enum QueryError {
 ///   long-running tasks should be supervised with this in a `tokio::select!`.
 ///   Tests can drop the handle to shut down the coordinator and await `join`.
 pub fn spawn<S: Sink>(sink: S) -> (StateCoordinatorHandle, JoinHandle<()>) {
-    spawn_with_capacity(sink, DEFAULT_CHANNEL_CAPACITY)
+    spawn_internal(sink, DEFAULT_CHANNEL_CAPACITY, None)
 }
 
 /// Spawn the coordinator, transparently teeing snapshots to the on-disk
 /// `snapshot.json` when a data-dir path is resolvable.
 ///
 /// When [`snapshot_file_path`](crate::snapshot_file::snapshot_file_path) yields
-/// a path, `sink` is wrapped in a [`SnapshotFileSink`](crate::SnapshotFileSink)
-/// so the statusline self-compose path (and any other reader) sees fresh
-/// cross-provider snapshots. When it can't be resolved - rare; only if the OS
-/// data dir is unavailable - we warn once and fall back to the bare `sink` (the
-/// statusline degrades to Claude-only). Both `balanze-cli watch` and the Tauri
-/// host use this instead of hand-rolling the match.
+/// a path, a dedicated coalescing writer publishes snapshots without blocking
+/// the actor. When it cannot be resolved, we warn once and use only the
+/// supplied sink.
 pub fn spawn_with_optional_file<S: Sink>(sink: S) -> (StateCoordinatorHandle, JoinHandle<()>) {
     match crate::snapshot_file::snapshot_file_path() {
-        Some(path) => spawn(crate::sink_file::SnapshotFileSink::new(sink, path)),
+        Some(path) => {
+            let writer = spawn_snapshot_writer(path);
+            spawn_internal(sink, DEFAULT_CHANNEL_CAPACITY, Some(writer))
+        }
         None => {
             tracing::warn!(
                 "could not resolve snapshot.json path; cross-provider statusline will fall back to Claude-only"
@@ -125,16 +127,60 @@ pub fn spawn_with_optional_file<S: Sink>(sink: S) -> (StateCoordinatorHandle, Jo
 
 /// Same as `spawn` but with a custom channel capacity (used by the saturation
 /// test).
-pub fn spawn_with_capacity<S: Sink>(
+#[cfg(test)]
+fn spawn_with_capacity<S: Sink>(
     sink: S,
     capacity: usize,
 ) -> (StateCoordinatorHandle, JoinHandle<()>) {
+    spawn_internal(sink, capacity, None)
+}
+
+struct PublishingSink<S> {
+    inner: S,
+    publisher: Option<SnapshotPublisher>,
+}
+
+impl<S: Sink> Sink for PublishingSink<S> {
+    fn on_snapshot(&mut self, snapshot: &Snapshot) {
+        if let Some(publisher) = &mut self.publisher {
+            publisher.publish(snapshot);
+        }
+        self.inner.on_snapshot(snapshot);
+    }
+
+    fn on_degraded(&mut self, source: Source, error: &str) {
+        self.inner.on_degraded(source, error);
+    }
+}
+
+fn spawn_internal<S: Sink>(
+    sink: S,
+    capacity: usize,
+    file_writer: Option<(SnapshotPublisher, SnapshotWriter)>,
+) -> (StateCoordinatorHandle, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<StateMsg>(capacity);
-    let join = tokio::spawn(run_loop(rx, sink));
+    let (publisher, writer) = file_writer.unzip();
+    let sink = PublishingSink {
+        inner: sink,
+        publisher,
+    };
+    let join = tokio::spawn(run_loop(rx, sink, writer));
     (StateCoordinatorHandle { tx }, join)
 }
 
-async fn run_loop<S: Sink>(mut rx: mpsc::Receiver<StateMsg>, mut sink: S) {
+#[cfg(test)]
+fn spawn_with_test_writer<S: Sink>(
+    sink: S,
+    writer: (SnapshotPublisher, SnapshotWriter),
+) -> (StateCoordinatorHandle, JoinHandle<()>) {
+    spawn_internal(sink, DEFAULT_CHANNEL_CAPACITY, Some(writer))
+}
+
+async fn run_loop<S: Sink>(
+    mut rx: mpsc::Receiver<StateMsg>,
+    mut sink: S,
+    writer: Option<SnapshotWriter>,
+) {
     // Load the bundled LiteLLM price table once for the coordinator's lifetime.
     // The table is embedded and never changes; a load failure (corrupt embed -
     // shouldn't happen on a release build) degrades only the cost cell, not the
@@ -151,6 +197,7 @@ async fn run_loop<S: Sink>(mut rx: mpsc::Receiver<StateMsg>, mut sink: S) {
     };
     let mut state = CoordinatorState {
         snapshot: Snapshot::empty(Utc::now()),
+        active_generation: 0,
         last_settings: None,
         jsonl_events: None,
         files_scanned: 0,
@@ -159,12 +206,32 @@ async fn run_loop<S: Sink>(mut rx: mpsc::Receiver<StateMsg>, mut sink: S) {
     while let Some(msg) = rx.recv().await {
         handle_msg(&mut state, &mut sink, msg);
     }
+    // Drop the final publisher before joining the writer. Closing the watch
+    // channel tells it to flush or report the last pending snapshot.
+    drop(sink);
+    if let Some(writer) = writer {
+        writer.shutdown().await;
+    }
     tracing::debug!("state_coordinator: channel closed, shutting down");
 }
 
 fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg) {
     match msg {
-        StateMsg::Update(SourceUpdate { source, result }) => match result {
+        StateMsg::Update(SourceUpdate {
+            generation,
+            source,
+            result: _,
+        }) if generation != state.active_generation => {
+            tracing::debug!(
+                "state_coordinator: ignoring stale {source:?} update from generation {generation}; active generation is {}",
+                state.active_generation
+            );
+        }
+        StateMsg::Update(SourceUpdate {
+            generation: _,
+            source,
+            result,
+        }) => match result {
             Ok(partial) => {
                 // Defensive: `partial.source()` and `source` should agree.
                 // If they don't, trust the variant of `partial` (it carries
@@ -189,6 +256,10 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             }
             Err(err) => {
                 record_error(&mut state.snapshot, source, &err);
+                // Error slots are part of the durable Snapshot contract. Emit
+                // the changed snapshot before the degraded notification so the
+                // nonblocking snapshot writer publishes the transition too.
+                sink.on_snapshot(&state.snapshot);
                 sink.on_degraded(source, &err);
             }
         },
@@ -202,7 +273,11 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             recompute_pace(state);
             sink.on_snapshot(&state.snapshot);
         }
-        StateMsg::SettingsChanged(s) => {
+        StateMsg::SettingsChanged {
+            settings: s,
+            generation,
+            applied,
+        } => {
             // Live-apply the provider toggles. The watcher is re-spawned by the
             // host (it decides which pollers run); here we own the Snapshot, so
             // we reset the cell of any now-disabled provider and repaint. A
@@ -222,10 +297,29 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 clear_source(&mut state.snapshot, Source::CodexQuota);
             }
             state.last_settings = Some(*s);
+            state.active_generation = generation;
             recompute_pace(state);
             sink.on_snapshot(&state.snapshot);
+            // The supervisor waits for this before it spawns the new pollers.
+            // A dropped receiver means the caller went away after the state was
+            // still applied, so there is nothing to roll back.
+            let _ = applied.send(());
         }
-        StateMsg::SourceUnavailable { source, reason } => match source {
+        StateMsg::SourceUnavailable {
+            generation,
+            source,
+            reason: _,
+        } if generation != state.active_generation => {
+            tracing::debug!(
+                "state_coordinator: ignoring stale {source:?} unavailable update from generation {generation}; active generation is {}",
+                state.active_generation
+            );
+        }
+        StateMsg::SourceUnavailable {
+            generation: _,
+            source,
+            reason,
+        } => match source {
             Source::ClaudeOAuth => {
                 // Neutral "not configured" state, NOT an error: set the marker,
                 // drop any stale data/error + pace, and repaint via on_snapshot
@@ -412,7 +506,8 @@ mod tests {
         fixture_now, oauth_snapshot, oauth_snapshot_with_reset, openai_costs, sample_events,
     };
     use chrono::Duration;
-    use std::sync::{Arc, Mutex};
+    use std::path::Path;
+    use std::sync::{Arc, Condvar, Mutex};
 
     /// Test sink: records every event so the test can assert on them.
     #[derive(Debug, Default, Clone)]
@@ -451,6 +546,23 @@ mod tests {
         }
     }
 
+    async fn apply_settings(
+        handle: &StateCoordinatorHandle,
+        settings: Settings,
+        generation: WatcherGeneration,
+    ) {
+        let (applied, confirmed) = oneshot::channel();
+        handle
+            .send(StateMsg::SettingsChanged {
+                settings: Box::new(settings),
+                generation,
+                applied,
+            })
+            .await
+            .unwrap();
+        confirmed.await.unwrap();
+    }
+
     #[tokio::test]
     async fn update_msg_merges_data_and_notifies_sink() {
         let sink = RecordingSink::default();
@@ -458,6 +570,7 @@ mod tests {
 
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeOAuth,
                 result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
             }))
@@ -479,6 +592,7 @@ mod tests {
 
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::OpenAiCosts,
                 result: Err("network unreachable".to_string()),
             }))
@@ -488,7 +602,11 @@ mod tests {
         let snap = handle.query().await.unwrap();
         assert_eq!(snap.openai_error.as_deref(), Some("network unreachable"));
         assert!(snap.openai.is_none(), "no data on error");
-        assert_eq!(sink.snapshot_count(), 0);
+        assert_eq!(
+            sink.snapshot_count(),
+            1,
+            "error-slot transitions must publish the changed snapshot"
+        );
         assert_eq!(sink.error_count(), 1);
         let (src, msg) = sink.last_error().unwrap();
         assert_eq!(src, Source::OpenAiCosts);
@@ -519,6 +637,7 @@ mod tests {
             captured_at,
         );
         SourceUpdate {
+            generation: 0,
             source: Source::ClaudeStatusline,
             result: Ok(SourcePartial::ClaudeStatusline(payload)),
         }
@@ -607,6 +726,7 @@ mod tests {
         // derives the window + cost cells).
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeJsonl,
                 result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
                     events: Arc::new(sample_events()),
@@ -626,6 +746,7 @@ mod tests {
         let (handle, _join) = spawn(NullSink);
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeJsonl,
                 result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
                     events: Arc::new(sample_events()),
@@ -660,6 +781,7 @@ mod tests {
         // 1) JSONL events arrive first - no OAuth yet ⇒ now-relative window.
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeJsonl,
                 result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
                     events: Arc::new(sample_events()),
@@ -673,6 +795,7 @@ mod tests {
         let reset = Utc::now() + Duration::minutes(90);
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeOAuth,
                 result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot_with_reset(reset))),
             }))
@@ -699,6 +822,7 @@ mod tests {
         // Seed two independent errors.
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::OpenAiCosts,
                 result: Err("openai 500".to_string()),
             }))
@@ -706,6 +830,7 @@ mod tests {
             .unwrap();
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeJsonl,
                 result: Err("jsonl perm denied".to_string()),
             }))
@@ -715,6 +840,7 @@ mod tests {
         // A successful JSONL update clears its own error and leaves OpenAI's.
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeJsonl,
                 result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
                     events: Arc::new(sample_events()),
@@ -744,6 +870,7 @@ mod tests {
 
         handle
             .send(StateMsg::SourceUnavailable {
+                generation: 0,
                 source: Source::ClaudeOAuth,
                 reason: "Claude Code not detected".to_string(),
             })
@@ -771,6 +898,7 @@ mod tests {
         let (handle, _join) = spawn(NullSink);
         handle
             .send(StateMsg::SourceUnavailable {
+                generation: 0,
                 source: Source::ClaudeOAuth,
                 reason: "Claude Code not detected".to_string(),
             })
@@ -779,6 +907,7 @@ mod tests {
         // Claude Code present after all: a successful poll clears the marker.
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeOAuth,
                 result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
             }))
@@ -802,6 +931,7 @@ mod tests {
         // it arrived as its own `Err` update that reached `on_degraded`).
         let mut state = CoordinatorState {
             snapshot: Snapshot::empty(Utc::now()),
+            active_generation: 0,
             last_settings: None,
             jsonl_events: Some(Arc::new(sample_events())),
             files_scanned: 1,
@@ -840,10 +970,7 @@ mod tests {
     async fn settings_changed_msg_does_not_panic() {
         let (handle, _join) = spawn(NullSink);
         let s = Settings::default();
-        handle
-            .send(StateMsg::SettingsChanged(Box::new(s)))
-            .await
-            .unwrap();
+        apply_settings(&handle, s, 1).await;
         // Followed by a Query to confirm the actor is still alive and processing:
         let _ = handle.query().await.unwrap();
     }
@@ -854,6 +981,7 @@ mod tests {
         // Seed OAuth (also populates `pace`) and OpenAI costs.
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeOAuth,
                 result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
             }))
@@ -861,6 +989,7 @@ mod tests {
             .unwrap();
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::OpenAiCosts,
                 result: Ok(SourcePartial::OpenAiCosts(openai_costs())),
             }))
@@ -882,10 +1011,7 @@ mod tests {
             },
             ..Settings::default()
         };
-        handle
-            .send(StateMsg::SettingsChanged(Box::new(s)))
-            .await
-            .unwrap();
+        apply_settings(&handle, s, 1).await;
 
         let after = handle.query().await.unwrap();
         assert!(
@@ -900,6 +1026,164 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn only_active_watcher_generation_is_accepted() {
+        let (handle, _join) = spawn(NullSink);
+        apply_settings(&handle, Settings::default(), 1).await;
+
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+            }))
+            .await
+            .unwrap();
+        assert!(handle.query().await.unwrap().claude_oauth.is_none());
+
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                generation: 1,
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+            }))
+            .await
+            .unwrap();
+        assert!(handle.query().await.unwrap().claude_oauth.is_some());
+    }
+
+    #[tokio::test]
+    async fn disabling_provider_rejects_late_update_from_old_generation() {
+        let (handle, _join) = spawn(NullSink);
+        apply_settings(&handle, Settings::default(), 1).await;
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                generation: 1,
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+            }))
+            .await
+            .unwrap();
+        assert!(handle.query().await.unwrap().claude_oauth.is_some());
+
+        let disabled = Settings {
+            providers: settings::ProviderSettings {
+                anthropic_enabled: false,
+                ..Settings::default().providers
+            },
+            ..Settings::default()
+        };
+        apply_settings(&handle, disabled, 2).await;
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                generation: 1,
+                source: Source::ClaudeOAuth,
+                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+            }))
+            .await
+            .unwrap();
+
+        assert!(handle.query().await.unwrap().claude_oauth.is_none());
+    }
+
+    #[tokio::test]
+    async fn source_error_transition_is_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.json");
+        let writer = crate::sink_file::spawn_snapshot_writer(path.clone());
+        let (handle, join) = spawn_with_test_writer(NullSink, writer);
+
+        handle
+            .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
+                source: Source::OpenAiCosts,
+                result: Err("provider unavailable".to_string()),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            handle.query().await.unwrap().openai_error.as_deref(),
+            Some("provider unavailable")
+        );
+        drop(handle);
+        join.await.unwrap();
+
+        let persisted = crate::snapshot_file::read_snapshot_file(&path).unwrap();
+        assert_eq!(
+            persisted.snapshot.openai_error.as_deref(),
+            Some("provider unavailable")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blocked_snapshot_write_does_not_block_actor_and_coalesces_latest() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let entered = Arc::new((Mutex::new(false), Condvar::new()));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let write = {
+            let gate = Arc::clone(&gate);
+            let entered = Arc::clone(&entered);
+            let writes = Arc::clone(&writes);
+            Arc::new(move |_path: &Path, payload: &crate::SnapshotFilePayload| {
+                {
+                    let (lock, ready) = &*entered;
+                    *lock.lock().unwrap() = true;
+                    ready.notify_all();
+                }
+                let (lock, ready) = &*gate;
+                let mut open = lock.lock().unwrap();
+                while !*open {
+                    open = ready.wait(open).unwrap();
+                }
+                writes.lock().unwrap().push(
+                    payload
+                        .snapshot
+                        .openai
+                        .as_ref()
+                        .map_or(-1, |costs| costs.total_micro_usd),
+                );
+                Ok(())
+            }) as crate::sink_file::WriteFn
+        };
+        let writer = crate::sink_file::spawn_snapshot_writer_with("unused".into(), write);
+        let (handle, join) = spawn_with_test_writer(NullSink, writer);
+
+        for total in [1, 2, 3] {
+            let mut costs = openai_costs();
+            costs.total_micro_usd = total;
+            handle
+                .send(StateMsg::Update(SourceUpdate {
+                    generation: 0,
+                    source: Source::OpenAiCosts,
+                    result: Ok(SourcePartial::OpenAiCosts(costs)),
+                }))
+                .await
+                .unwrap();
+            if total == 1 {
+                let (lock, ready) = &*entered;
+                let mut is_entered = lock.lock().unwrap();
+                while !*is_entered {
+                    is_entered = ready.wait(is_entered).unwrap();
+                }
+            }
+        }
+
+        let queried = tokio::time::timeout(std::time::Duration::from_secs(1), handle.query())
+            .await
+            .expect("query must not wait for disk")
+            .unwrap();
+        assert_eq!(queried.openai.unwrap().total_micro_usd, 3);
+
+        {
+            let (lock, ready) = &*gate;
+            *lock.lock().unwrap() = true;
+            ready.notify_all();
+        }
+        drop(handle);
+        join.await.unwrap();
+        assert_eq!(writes.lock().unwrap().as_slice(), &[1, 3]);
+    }
+
+    #[tokio::test]
     async fn settings_change_recomputes_pace() {
         let sink = RecordingSink::default();
         let (handle, _join) = spawn(sink.clone());
@@ -907,6 +1191,7 @@ mod tests {
         let future_reset = chrono::Utc::now() + chrono::Duration::hours(5);
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeOAuth,
                 result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot_with_reset(
                     future_reset,
@@ -936,10 +1221,7 @@ mod tests {
             },
             ..Settings::default()
         };
-        handle
-            .send(StateMsg::SettingsChanged(Box::new(s)))
-            .await
-            .unwrap();
+        apply_settings(&handle, s, 1).await;
 
         let _ = handle.query().await.unwrap();
 
@@ -973,6 +1255,7 @@ mod tests {
             openai.total_micro_usd = i as i64;
             handle
                 .send(StateMsg::Update(SourceUpdate {
+                    generation: 0,
                     source: Source::OpenAiCosts,
                     result: Ok(SourcePartial::OpenAiCosts(openai)),
                 }))
@@ -996,6 +1279,7 @@ mod tests {
 
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeOAuth,
                 result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
             }))
@@ -1017,6 +1301,7 @@ mod tests {
 
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeOAuth,
                 result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
             }))
@@ -1051,6 +1336,7 @@ mod tests {
         let reset = now + Duration::hours(3);
         let mut state = CoordinatorState {
             snapshot: Snapshot::empty(now),
+            active_generation: 0,
             last_settings: None,
             jsonl_events: None,
             files_scanned: 0,
@@ -1087,6 +1373,7 @@ mod tests {
     fn jsonl_update_recomputes_existing_oauth_pace_before_notifying_sink() {
         let mut state = CoordinatorState {
             snapshot: Snapshot::empty(Utc::now()),
+            active_generation: 0,
             last_settings: None,
             jsonl_events: None,
             files_scanned: 0,
@@ -1106,6 +1393,7 @@ mod tests {
             &mut state,
             &mut sink,
             StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeJsonl,
                 result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
                     events: Arc::new(sample_events()),
@@ -1131,6 +1419,7 @@ mod tests {
     fn refresh_recomputes_existing_oauth_pace_before_notifying_sink() {
         let mut state = CoordinatorState {
             snapshot: Snapshot::empty(Utc::now()),
+            active_generation: 0,
             last_settings: None,
             jsonl_events: None,
             files_scanned: 0,
@@ -1169,6 +1458,7 @@ mod tests {
 
         handle
             .send(StateMsg::Update(SourceUpdate {
+                generation: 0,
                 source: Source::ClaudeJsonl,
                 result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
                     events: Arc::new(sample_events()),

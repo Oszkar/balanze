@@ -1,9 +1,9 @@
 //! `--watch` mode orchestration.
 //!
 //! Builds a multi-thread tokio runtime, spawns the coordinator + watcher,
-//! then blocks until Ctrl-C. The runtime drop aborts all spawned tasks, so
-//! the watcher and coordinator shut down cleanly without explicit cancellation
-//! tokens.
+//! then blocks until Ctrl-C. Exit explicitly joins watcher tasks, drops the
+//! final coordinator handle, and awaits coordinator shutdown so the coalescing
+//! snapshot writer can flush or report its final pending state.
 //!
 //! # Type-inference note
 //!
@@ -54,8 +54,9 @@ pub(crate) fn run_watch_mode(json: bool, verbose: bool) -> Result<()> {
 async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
     let settings = settings::load_or_default();
 
-    let (handle, coord_join) = state_coordinator::spawn_with_optional_file(sink);
-    let watcher_handles = Watcher::spawn(handle.clone(), &settings);
+    let (handle, mut coord_join) = state_coordinator::spawn_with_optional_file(sink);
+    activate_initial_generation(&handle, &settings).await?;
+    let watcher_handles = Watcher::spawn(handle.clone(), &settings, 1);
 
     // Per-task watchdog: `watch_for_task_death` signals *unexpected* completion
     // (an Err return or a panic) of any watcher task through this channel, so the
@@ -64,8 +65,10 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
     // Claude dir, absent credentials) - are NOT signalled; treating them as fatal
     // would break `--watch` for any single-provider user. The labels come from
     // `Watcher::spawn`, so they can't drift out of sync with the spawn order.
-    let mut exit_rx = watcher::watch_for_task_death(watcher_handles);
+    let mut watched = watcher::watch_for_task_death(watcher_handles);
 
+    let mut coordinator_exited = false;
+    let mut command_error = None;
     tokio::select! {
         res = tokio::signal::ctrl_c() => {
             // `ctrl_c()` returns io::Result<()> - installing the OS signal
@@ -76,20 +79,19 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
                 Ok(()) => eprintln!("\nshutting down..."),
                 Err(e) => {
                     tracing::error!("ctrl_c handler install failed: {e}");
-                    return Err(anyhow::anyhow!(
-                        "failed to install SIGINT handler: {e}"
-                    ));
+                    command_error = Some(anyhow::anyhow!("failed to install SIGINT handler: {e}"));
                 }
             }
         }
-        res = coord_join => {
+        res = &mut coord_join => {
+            coordinator_exited = true;
             tracing::error!("coordinator task exited unexpectedly: {res:?}");
             eprintln!(
                 "\nfatal: state_coordinator task exited unexpectedly. \
                  See `BALANZE_LOG=debug` output for detail. Restart `--watch` to recover."
             );
         }
-        Some(label) = exit_rx.recv() => {
+        Some(label) = watched.recv_death() => {
             tracing::error!("watcher task '{label}' exited unexpectedly");
             eprintln!(
                 "\nfatal: watcher task '{label}' exited unexpectedly. \
@@ -98,8 +100,14 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
             );
         }
     }
-    // Runtime drop on return aborts any tasks still running cleanly.
-    Ok(())
+    watched.shutdown().await;
+    drop(handle);
+    if !coordinator_exited {
+        coord_join
+            .await
+            .map_err(|error| anyhow::anyhow!("coordinator shutdown failed: {error}"))?;
+    }
+    command_error.map_or(Ok(()), Err)
 }
 
 /// TUI variant of the watch supervisor. Spawns the coordinator with a
@@ -107,45 +115,53 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
 /// then runs the ratatui loop. `run_tui` owns the `TerminalGuard`; whichever
 /// `select!` arm wins, dropping the loser futures on return drops that guard and
 /// restores the terminal, so any fatal hint we print AFTER the block lands on
-/// the normal screen, not a garbled alt screen. The runtime drop aborts
-/// surviving tasks.
+/// the normal screen, not a garbled alt screen. Both exit paths then join the
+/// live state tasks before returning.
 async fn run_tui_mode() -> Result<()> {
     let settings = settings::load_or_default();
 
     let (sink, rx) = ChannelSink::new();
     let (handle, mut coord_join) = state_coordinator::spawn_with_optional_file(sink);
-    let watcher_handles = Watcher::spawn(handle.clone(), &settings);
+    activate_initial_generation(&handle, &settings).await?;
+    let watcher_handles = Watcher::spawn(handle.clone(), &settings, 1);
 
     // Per-task watchdog mirroring `run_with_sink` (AGENTS.md §3.2): surface an
     // unexpected watcher Err-return or panic so a dead provider task is not
     // silently invisible behind the TUI. Clean `Ok(())` exits (a provider simply
     // not configured) are NOT signalled.
-    let mut exit_rx = watcher::watch_for_task_death(watcher_handles);
+    let mut watched = watcher::watch_for_task_death(watcher_handles);
 
     // Race the TUI against ctrl-c, the coordinator dying, and a watcher dying.
     // `&mut coord_join` lets the TUI arm win without consuming the join handle.
     let mut fatal: Option<String> = None;
+    let mut command_error = None;
+    let mut coordinator_exited = false;
     tokio::select! {
         res = run_tui(rx, handle.clone()) => {
             // A coordinator-gone exit (the run_tui arm winning the race) is
             // surfaced as fatal too, so a coordinator death is never mistaken
             // for a clean user quit.
-            if let TuiExit::CoordinatorGone = res? {
-                tracing::error!("snapshot channel closed: state coordinator gone");
-                fatal = Some(
-                    "state_coordinator task exited unexpectedly. \
-                     See `BALANZE_LOG=debug` output for detail. Restart `watch` to recover."
-                        .to_string(),
-                );
+            match res {
+                Ok(TuiExit::CoordinatorGone) => {
+                    tracing::error!("snapshot channel closed: state coordinator gone");
+                    fatal = Some(
+                        "state_coordinator task exited unexpectedly. \
+                         See `BALANZE_LOG=debug` output for detail. Restart `watch` to recover."
+                            .to_string(),
+                    );
+                }
+                Ok(TuiExit::UserQuit) => {}
+                Err(error) => command_error = Some(error),
             }
         }
         res = tokio::signal::ctrl_c() => {
             if let Err(e) = res {
                 tracing::error!("ctrl_c handler install failed: {e}");
-                return Err(anyhow::anyhow!("failed to install SIGINT handler: {e}"));
+                command_error = Some(anyhow::anyhow!("failed to install SIGINT handler: {e}"));
             }
         }
         res = &mut coord_join => {
+            coordinator_exited = true;
             tracing::error!("coordinator task exited unexpectedly: {res:?}");
             fatal = Some(
                 "state_coordinator task exited unexpectedly. \
@@ -153,7 +169,7 @@ async fn run_tui_mode() -> Result<()> {
                     .to_string(),
             );
         }
-        Some(label) = exit_rx.recv() => {
+        Some(label) = watched.recv_death() => {
             tracing::error!("watcher task '{label}' exited unexpectedly");
             fatal = Some(format!(
                 "watcher task '{label}' exited unexpectedly. The data source it covers \
@@ -162,11 +178,36 @@ async fn run_tui_mode() -> Result<()> {
             ));
         }
     }
+    watched.shutdown().await;
+    drop(handle);
+    if !coordinator_exited {
+        coord_join
+            .await
+            .map_err(|error| anyhow::anyhow!("coordinator shutdown failed: {error}"))?;
+    }
     // The select dropped run_tui's TerminalGuard on the way out, restoring the
     // terminal. Print any fatal hint NOW, on the normal screen (not the alt
     // screen, which the restore just tore down).
     if let Some(msg) = fatal {
         eprintln!("\nfatal: {msg}");
     }
-    Ok(())
+    command_error.map_or(Ok(()), Err)
+}
+
+async fn activate_initial_generation(
+    handle: &state_coordinator::StateCoordinatorHandle,
+    settings: &settings::Settings,
+) -> Result<()> {
+    let (applied, confirmed) = tokio::sync::oneshot::channel();
+    handle
+        .send(state_coordinator::StateMsg::SettingsChanged {
+            settings: Box::new(settings.clone()),
+            generation: 1,
+            applied,
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("state coordinator shut down during watcher startup"))?;
+    confirmed
+        .await
+        .map_err(|_| anyhow::anyhow!("state coordinator dropped watcher startup acknowledgment"))
 }

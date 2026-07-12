@@ -2,7 +2,7 @@
 //!
 //! The OPPOSITE direction to `claude_statusline`'s `statusline.snapshot.json`:
 //! the host that owns the coordinator (the Tauri app, or `balanze-cli watch`)
-//! WRITES the live `Snapshot` on every coordinator update via `SnapshotFileSink`
+//! WRITES the live `Snapshot` through the coordinator's coalescing writer task
 //! (added in the next task), and the one-shot `balanze-cli statusline` process
 //! READS it to fill the cross-provider (Codex / OpenAI) segments without any
 //! network I/O of its own (AGENTS.md §3.1; the statusline design's Hybrid read
