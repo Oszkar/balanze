@@ -3,12 +3,12 @@
 //! per-source helpers are the I/O adapters (AGENTS.md §4 #8 - glue, not logic).
 
 use anyhow::{Result, anyhow};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use std::fs;
 
 use anthropic_oauth::{
-    ClaudeOAuthSnapshot, DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, REFRESH_MARGIN,
-    fetch_usage, load_from_source, locate_credentials, refresh_and_persist, token_needs_refresh,
+    ClaudeOAuthSnapshot, DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, fetch_usage,
+    load_from_source, locate_credentials,
 };
 use claude_parser::{
     UsageEvent, dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir,
@@ -164,13 +164,12 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
     // macOS that can block on a Keychain access prompt), so run it on a
     // blocking worker rather than stalling a tokio runtime thread (AGENTS.md
     // §2.1).
-    let (source, creds) = tokio::task::spawn_blocking(|| {
+    let creds = tokio::task::spawn_blocking(|| {
         let source = locate_credentials()?;
-        let creds = load_from_source(&source)?;
-        Ok::<_, OAuthError>((source, creds))
+        load_from_source(&source)
     })
     .await??;
-    let mut oauth = creds.claude_ai_oauth;
+    let oauth = creds.claude_ai_oauth;
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
         // Bound a single stalled request - fail_fast() stops retries, not a hung
@@ -181,15 +180,9 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
     // One-shot CLI must not block on provider backoff; the watcher passes standard().
     let policy = backoff::BackoffPolicy::fail_fast();
 
-    // Refresh only a source we own (a file). The macOS Keychain entry is Claude
-    // Code's - read-only (AGENTS.md §3.4): use the token while valid; if it has
-    // already expired, surface an actionable error rather than refresh it.
-    if let Some(path) = source.writable_path() {
-        if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
-            info!("oauth: token expired/near-expiry - refreshing pre-flight");
-            oauth = refresh_and_persist(&client, path, oauth, &policy).await?;
-        }
-    } else if token_needs_refresh(oauth.expires_at, Utc::now(), Duration::zero()) {
+    // Claude Code owns every credential source. Never exchange its rotating
+    // refresh token or write credentials; an expired bearer requires login.
+    if oauth.is_expired_at(Utc::now()) {
         return Err(OAuthError::CredentialExpiredReadOnly.into());
     }
 
@@ -207,31 +200,7 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
             info!("oauth: fetched {} cadence bars", s.cadences.len());
             Ok(s)
         }
-        Err(OAuthError::AuthExpired) => {
-            // 401 despite the pre-flight check. For a file source, refresh +
-            // retry once (bounded - the retry uses `?`, so a second AuthExpired
-            // propagates, no loop). For the read-only Keychain source we can't
-            // refresh, so surface the actionable error.
-            let Some(path) = source.writable_path() else {
-                return Err(OAuthError::CredentialExpiredReadOnly.into());
-            };
-            warn!("oauth: 401 despite pre-flight - one refresh+retry");
-            let oauth = refresh_and_persist(&client, path, oauth, &policy).await?;
-            let s = fetch_usage(
-                &client,
-                ANTHROPIC_API_BASE,
-                &oauth.access_token,
-                oauth.subscription_type,
-                oauth.rate_limit_tier,
-                &policy,
-            )
-            .await?;
-            info!(
-                "oauth: fetched {} cadence bars after refresh",
-                s.cadences.len()
-            );
-            Ok(s)
-        }
+        Err(OAuthError::AuthExpired) => Err(OAuthError::CredentialExpiredReadOnly.into()),
         Err(e) => Err(e.into()),
     }
 }

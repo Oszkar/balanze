@@ -12,8 +12,7 @@
 //! Claude Code's `settings.json` (that is `wiring.rs`) nor the
 //! statusLine wire format (that is `parse.rs`).
 //!
-//! Both functions follow the atomic tmp+fsync+rename discipline mirrored from
-//! `anthropic_oauth::credentials::write_back` (AGENTS.md §3.4).  Error
+//! Writes use the shared `atomic_file` tmp+fsync+rename discipline. Error
 //! messages include the file path only - never file contents (defense in
 //! depth).
 

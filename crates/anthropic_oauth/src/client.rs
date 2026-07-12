@@ -74,10 +74,11 @@ struct RawExtraUsage {
 /// (the endpoint itself doesn't echo them, but they're useful to plumb into
 /// the snapshot for display).
 ///
-/// Returns `OAuthError::AuthExpired` on HTTP 401 (caller decides whether to
-/// attempt a token refresh). Unknown future cadence keys are preserved
-/// verbatim in the response so newly-added Anthropic meters render with a
-/// titlecased fallback label.
+/// Returns `OAuthError::AuthExpired` on HTTP 401. Read-only credential
+/// callers may re-read once to observe a concurrent Claude Code rotation, then
+/// surface `CredentialExpiredReadOnly`; they never exchange a refresh token.
+/// Unknown future cadence keys are preserved verbatim in the response so
+/// newly-added Anthropic meters render with a titlecased fallback label.
 ///
 /// `policy` controls backoff+retry for transient errors (429, 5xx, network).
 /// Pass `BackoffPolicy::fail_fast()` from one-shot CLI callers so the user is
@@ -99,9 +100,10 @@ pub async fn fetch_usage(
         OAuthError::UnexpectedStatus { status, .. } if (500..=599).contains(status) => {
             backoff::RetryDecision::RetryAfter(None)
         }
-        // AuthExpired / RefreshFailed / ResponseShape / CredentialsMissing / etc.
-        // must NOT be retried - especially AuthExpired, which triggers the
-        // caller's refresh+retry-once path.
+        // AuthExpired / ResponseShape / CredentialsMissing / etc. must NOT be
+        // retried here. Read-only callers handle AuthExpired by re-reading once
+        // to observe a concurrent Claude Code rotation, then surface
+        // CredentialExpiredReadOnly without exchanging a refresh token.
         _ => backoff::RetryDecision::DoNotRetry,
     };
 

@@ -4,6 +4,12 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 - minor bumps may break; patch bumps are fixes only.
 
+## [Unreleased]
+
+### Changed
+- **Claude credentials are read-only on every platform** - Balanze no longer exchanges Claude Code's rotating refresh token or writes file-backed credentials. Expired or rejected credentials now consistently ask the user to run `claude login`; a future explicit file-refresh opt-in may be added separately.
+- **Atomic-write durability errors are honest** - Unix parent-directory fsync failures are returned after rename instead of being silently treated as a fully durable success.
+
 ## [0.4.3] - Codex maturity - 2026-07-10
 
 Codex gets first-class treatment: both rolling windows (5-hour and weekly) now surface across the tray, popover, cards, CLI, and statusline, alongside a parser-reliability fix, honest file logging, and a quieter macOS Keychain path.

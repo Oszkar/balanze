@@ -1,34 +1,73 @@
 //! OAuth poll task. Polls `GET /api/oauth/usage` at a configurable interval
 //! (default 300s; clamped to a 300s floor at the call site per §3.1). Each tick:
-//! 1. Re-locates and re-loads credentials from disk (handles atomic rewrite by
-//!    Claude Code between polls). A still-valid credential from a read-only
-//!    source (the macOS Keychain) is instead reused from `poll_once`'s
-//!    `keychain_cache` across ticks, to avoid shelling out to `/usr/bin/security`
-//!    (and potentially re-prompting for Keychain access) every 5 minutes.
-//! 2. Pre-flight refreshes the bearer if expired or near-expiry (within 5min).
-//! 3. Calls `fetch_usage` with `BackoffPolicy::standard()`.
-//! 4. On `AuthExpired`, refreshes once and retries (same pattern as the CLI).
+//! 1. Re-locates and re-loads file credentials so Claude Code's atomic rewrites
+//!    are observed. A still-valid macOS Keychain credential is cached to avoid
+//!    repeated `/usr/bin/security` prompts.
+//! 2. Rejects an expired credential with an actionable `claude login` error.
+//! 3. On HTTP 401, re-reads once and retries only when Claude Code rotated the
+//!    bearer during the poll.
+//! 4. Holds rejected/expired Keychain state for a bounded cooldown so a broken
+//!    credential cannot prompt every tick.
 //! 5. Emits `Update(ClaudeOAuth, ...)` to the state coordinator.
 //!
-//! The write-back itself is the shared `anthropic_oauth::refresh_and_persist`
-//! (policy-parameterized). The pre-flight + 401-retry *orchestration* still
-//! mirrors `balanze_cli::live_fetch_oauth` and stays inline here, because it
-//! differs in two ways that resist a clean shared extraction: the watcher's
-//! `standard()` backoff (vs the CLI's `fail_fast()`) and the read-only-Keychain
-//! credential cache kept across ticks below.
+//! Every credential source is read-only. Balanze never exchanges Claude Code's
+//! rotating refresh token and never writes either credential representation.
 
-use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anthropic_oauth::{
-    CredentialsClaudeAiOauth, DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, REFRESH_MARGIN,
-    fetch_usage, load_from_source, locate_credentials, refresh_and_persist, token_needs_refresh,
+    CredentialsClaudeAiOauth, DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, fetch_usage,
+    load_from_source, locate_credentials,
 };
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
 use crate::tasks::get_or_build_client;
+
+// An invalid Keychain credential is terminal for six normal poll intervals.
+// This keeps recovery bounded without bringing back a password prompt every
+// five minutes. File credentials are never put in this cache.
+const KEYCHAIN_RECHECK_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Default)]
+enum KeychainCache {
+    #[default]
+    Empty,
+    Ready(CredentialsClaudeAiOauth),
+    RecheckAfter(Instant),
+}
+
+impl KeychainCache {
+    fn store_ready(&mut self, oauth: CredentialsClaudeAiOauth) {
+        *self = Self::Ready(oauth);
+    }
+
+    fn mark_terminal(&mut self, now: Instant) {
+        *self = Self::RecheckAfter(now + KEYCHAIN_RECHECK_COOLDOWN);
+    }
+
+    fn take_ready(
+        &mut self,
+        now: Instant,
+        wall_now: chrono::DateTime<Utc>,
+    ) -> Result<Option<CredentialsClaudeAiOauth>, OAuthError> {
+        match std::mem::take(self) {
+            Self::Empty => Ok(None),
+            Self::Ready(oauth) if oauth.is_expired_at(wall_now) => {
+                self.mark_terminal(now);
+                Err(OAuthError::CredentialExpiredReadOnly)
+            }
+            Self::Ready(oauth) => Ok(Some(oauth)),
+            Self::RecheckAfter(recheck_at) if now < recheck_at => {
+                *self = Self::RecheckAfter(recheck_at);
+                Err(OAuthError::CredentialExpiredReadOnly)
+            }
+            Self::RecheckAfter(_) => Ok(None),
+        }
+    }
+}
 
 /// Spawn the OAuth poll task and return its `JoinHandle`.
 ///
@@ -75,10 +114,10 @@ pub(crate) fn spawn(
         })
         .await;
 
-        let mut keychain_cache: Option<CredentialsClaudeAiOauth> = None;
+        let mut keychain_cache = KeychainCache::default();
         match startup_probe {
-            Ok(Ok((source, creds))) if source.writable_path().is_none() => {
-                keychain_cache = Some(creds.claude_ai_oauth);
+            Ok(Ok((source, creds))) if source.cache_between_polls() => {
+                keychain_cache.store_ready(creds.claude_ai_oauth);
             }
             Ok(Err(OAuthError::CredentialsMissing { .. })) => {
                 tracing::info!(
@@ -96,8 +135,8 @@ pub(crate) fn spawn(
                     .await;
                 return Ok(());
             }
-            // A writable File source isn't cached (re-reading it on the first
-            // tick is a cheap fs read), and any other startup error is left for
+            // A File source isn't cached (re-reading it on the first tick is a
+            // cheap fs read), and any other startup error is left for
             // the first tick's fresh `poll_once` read to retry and surface.
             _ => {}
         }
@@ -132,8 +171,7 @@ pub(crate) fn spawn(
             let result = poll_once(client, &mut keychain_cache).await;
             let update = match result {
                 Ok(snapshot) => {
-                    // Per-tick success detail: debug, not info (fires every
-                    // poll; §3.2). The refresh lifecycle events stay at info.
+                    // Per-tick success detail: debug, not info (fires every poll; §3.2).
                     tracing::debug!(
                         "watcher/oauth_poll: fetched {} cadence bars",
                         snapshot.cadences.len()
@@ -156,104 +194,185 @@ pub(crate) fn spawn(
     })
 }
 
-/// One poll tick: load credentials, pre-flight refresh if needed, fetch usage.
-/// On `AuthExpired`, refresh + retry once (mirrors `live_fetch_oauth` in balanze_cli).
-///
-/// `keychain_cache` carries a still-valid credential from a read-only source
-/// (the macOS Keychain) across ticks. Re-locating + re-loading such a source
-/// every tick would shell out to `/usr/bin/security` on every poll (every 5
-/// minutes), which can re-prompt the user for Keychain access each time -
-/// this is the "keeps asking for my password" complaint. A writable File
-/// source is never cached: re-reading it is a plain, cheap fs read (no OS
-/// prompt) and is how we notice Claude Code's own atomic rewrites between
-/// polls, so it always takes the fresh-read path below.
+/// One poll tick: load a read-only credential, reject it if expired, fetch
+/// usage, and re-read once after a 401 to observe a concurrent Claude Code
+/// rotation. Keychain authentication failures enter a bounded terminal state;
+/// file sources continue to re-read every tick.
 async fn poll_once(
     client: &reqwest::Client,
-    keychain_cache: &mut Option<CredentialsClaudeAiOauth>,
+    keychain_cache: &mut KeychainCache,
 ) -> anyhow::Result<anthropic_oauth::ClaudeOAuthSnapshot> {
-    let (writable_path, mut oauth): (Option<PathBuf>, CredentialsClaudeAiOauth) =
-        match keychain_cache.take() {
-            Some(oauth) if !token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) => {
-                (None, oauth)
-            }
-            _ => {
-                // locate+load is sync I/O (a file read, or a `security`
-                // subprocess on macOS), so run it on a blocking worker to keep
-                // tokio runtime threads free (AGENTS.md §2.1).
-                let (source, creds) = tokio::task::spawn_blocking(|| {
-                    let source = locate_credentials()?;
-                    let creds = load_from_source(&source)?;
-                    Ok::<_, OAuthError>((source, creds))
-                })
-                .await??;
-                (
-                    source.writable_path().map(Path::to_path_buf),
-                    creds.claude_ai_oauth,
-                )
-            }
-        };
+    let now = Instant::now();
+    let (cacheable, oauth) = match keychain_cache.take_ready(now, Utc::now())? {
+        Some(oauth) => (true, oauth),
+        None => load_read_only_credential().await?,
+    };
 
     let policy = backoff::BackoffPolicy::standard();
 
-    // Pre-flight refresh only for a source we own (a file). The macOS Keychain
-    // entry is Claude Code's - read-only (AGENTS.md §3.4): use the token while
-    // valid; if it has already expired, surface an actionable error.
-    if let Some(path) = &writable_path {
-        if token_needs_refresh(oauth.expires_at, Utc::now(), REFRESH_MARGIN) {
-            tracing::info!("watcher/oauth_poll: token expired/near-expiry - refreshing pre-flight");
-            oauth = refresh_and_persist(client, path, oauth, &policy).await?;
+    if oauth.is_expired_at(Utc::now()) {
+        if cacheable {
+            keychain_cache.mark_terminal(now);
         }
-    } else if token_needs_refresh(oauth.expires_at, Utc::now(), Duration::zero()) {
         return Err(OAuthError::CredentialExpiredReadOnly.into());
     }
 
-    let result = fetch_usage(
+    match fetch_for_credential(client, &oauth, &policy).await {
+        Ok(snapshot) => {
+            if cacheable {
+                keychain_cache.store_ready(oauth);
+            }
+            Ok(snapshot)
+        }
+        Err(OAuthError::AuthExpired) => {
+            retry_after_credential_reread(client, keychain_cache, cacheable, &oauth, &policy).await
+        }
+        Err(e) => {
+            // A transient provider/network failure does not invalidate a
+            // Keychain credential or justify another access prompt next tick.
+            if cacheable {
+                keychain_cache.store_ready(oauth);
+            }
+            Err(e.into())
+        }
+    }
+}
+
+async fn load_read_only_credential() -> anyhow::Result<(bool, CredentialsClaudeAiOauth)> {
+    tokio::task::spawn_blocking(|| {
+        let source = locate_credentials()?;
+        let creds = load_from_source(&source)?;
+        Ok::<_, OAuthError>((source.cache_between_polls(), creds.claude_ai_oauth))
+    })
+    .await?
+    .map_err(Into::into)
+}
+
+async fn fetch_for_credential(
+    client: &reqwest::Client,
+    oauth: &CredentialsClaudeAiOauth,
+    policy: &backoff::BackoffPolicy,
+) -> Result<anthropic_oauth::ClaudeOAuthSnapshot, OAuthError> {
+    fetch_usage(
         client,
         ANTHROPIC_API_BASE,
         &oauth.access_token,
         oauth.subscription_type.clone(),
         oauth.rate_limit_tier.clone(),
-        &policy,
+        policy,
     )
-    .await;
+    .await
+}
 
-    // Keep caching a read-only credential across ticks unless it was actually
-    // rejected (AuthExpired) - a transient network/rate-limit error doesn't
-    // mean the credential itself is bad, so don't force a Keychain re-read
-    // (and possible re-prompt) over a mere network hiccup.
-    if writable_path.is_none() && !matches!(result, Err(OAuthError::AuthExpired)) {
-        *keychain_cache = Some(oauth.clone());
+async fn retry_after_credential_reread(
+    client: &reqwest::Client,
+    keychain_cache: &mut KeychainCache,
+    prior_cacheable: bool,
+    prior: &CredentialsClaudeAiOauth,
+    policy: &backoff::BackoffPolicy,
+) -> anyhow::Result<anthropic_oauth::ClaudeOAuthSnapshot> {
+    let now = Instant::now();
+    let (cacheable, current) = match load_read_only_credential().await {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            if prior_cacheable {
+                keychain_cache.mark_terminal(now);
+            }
+            return Err(e);
+        }
+    };
+
+    // A re-read closes the race with Claude Code's atomic rotation. If the
+    // bearer did not change, another request cannot succeed and would only add
+    // provider traffic.
+    if current.is_expired_at(Utc::now()) || current.access_token == prior.access_token {
+        if cacheable {
+            keychain_cache.mark_terminal(now);
+        }
+        return Err(OAuthError::CredentialExpiredReadOnly.into());
     }
 
-    match result {
-        Ok(s) => Ok(s),
-        Err(OAuthError::AuthExpired) => {
-            // Pre-flight refresh already happened but we still got 401. For a
-            // file source, one more refresh + retry (bounded - the retry uses
-            // `?` so a second AuthExpired propagates rather than looping). For
-            // the read-only Keychain source we can't refresh, so surface the
-            // actionable error - the cache was left empty above, so the next
-            // tick re-reads fresh and picks up any refresh Claude Code did.
-            let Some(path) = writable_path else {
-                return Err(OAuthError::CredentialExpiredReadOnly.into());
-            };
-            tracing::warn!("watcher/oauth_poll: 401 despite pre-flight - one refresh+retry");
-            let oauth = refresh_and_persist(client, &path, oauth, &policy).await?;
-            let s = fetch_usage(
-                client,
-                ANTHROPIC_API_BASE,
-                &oauth.access_token,
-                oauth.subscription_type,
-                oauth.rate_limit_tier,
-                &policy,
-            )
-            .await?;
-            tracing::info!(
-                "watcher/oauth_poll: fetched {} cadence bars after refresh",
-                s.cadences.len()
-            );
-            Ok(s)
+    match fetch_for_credential(client, &current, policy).await {
+        Ok(snapshot) => {
+            if cacheable {
+                keychain_cache.store_ready(current);
+            }
+            Ok(snapshot)
         }
-        Err(e) => Err(e.into()),
+        Err(OAuthError::AuthExpired) => {
+            if cacheable {
+                keychain_cache.mark_terminal(now);
+            }
+            Err(OAuthError::CredentialExpiredReadOnly.into())
+        }
+        Err(e) => {
+            if cacheable {
+                keychain_cache.store_ready(current);
+            }
+            Err(e.into())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone as _;
+
+    fn credential(expires_at: i64) -> CredentialsClaudeAiOauth {
+        CredentialsClaudeAiOauth {
+            access_token: "secret".into(),
+            refresh_token: None,
+            expires_at,
+            subscription_type: None,
+            rate_limit_tier: None,
+            scopes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn valid_keychain_credential_is_reused_without_recheck() {
+        let wall_now = Utc.with_ymd_and_hms(2026, 7, 12, 12, 0, 0).unwrap();
+        let mut cache = KeychainCache::default();
+        cache.store_ready(credential(wall_now.timestamp_millis() + 60_000));
+
+        assert!(
+            cache
+                .take_ready(Instant::now(), wall_now)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn expired_keychain_credential_enters_terminal_cooldown() {
+        let wall_now = Utc.with_ymd_and_hms(2026, 7, 12, 12, 0, 0).unwrap();
+        let now = Instant::now();
+        let mut cache = KeychainCache::default();
+        cache.store_ready(credential(wall_now.timestamp_millis()));
+
+        assert!(matches!(
+            cache.take_ready(now, wall_now),
+            Err(OAuthError::CredentialExpiredReadOnly)
+        ));
+        assert!(matches!(
+            cache.take_ready(now + Duration::from_secs(5 * 60), wall_now),
+            Err(OAuthError::CredentialExpiredReadOnly)
+        ));
+    }
+
+    #[test]
+    fn terminal_keychain_state_rechecks_after_bounded_cooldown() {
+        let wall_now = Utc.with_ymd_and_hms(2026, 7, 12, 12, 0, 0).unwrap();
+        let now = Instant::now();
+        let mut cache = KeychainCache::default();
+        cache.mark_terminal(now);
+
+        assert!(
+            cache
+                .take_ready(now + KEYCHAIN_RECHECK_COOLDOWN, wall_now)
+                .unwrap()
+                .is_none()
+        );
     }
 }

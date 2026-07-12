@@ -45,8 +45,20 @@ pub enum Permissions {
 /// the exact sequence. The parent directory must already exist.
 ///
 /// Returns the underlying [`io::Error`] on failure (callers map it to their own
-/// error type); the tmp file is cleaned up first.
+/// error type). Failures before rename leave the target untouched and clean up
+/// the tmp file. A Unix parent-directory fsync failure is returned after the
+/// target has been replaced, because the new bytes are visible but the rename's
+/// crash durability could not be confirmed.
 pub fn atomic_write(path: &Path, bytes: &[u8], perms: Permissions) -> io::Result<()> {
+    atomic_write_with_parent_sync(path, bytes, perms, sync_parent_directory)
+}
+
+fn atomic_write_with_parent_sync(
+    path: &Path,
+    bytes: &[u8],
+    perms: Permissions,
+    sync_parent: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
     let parent = resolve_parent(path);
     let tmp = parent.join(tmp_name(path));
 
@@ -81,13 +93,21 @@ pub fn atomic_write(path: &Path, bytes: &[u8], perms: Permissions) -> io::Result
         return Err(e);
     }
 
-    // fsync the parent directory so the rename is durable (unix only; Windows
-    // cannot open a directory as a File for sync). Best-effort: the data is
-    // already renamed into place, so a dir-fsync failure must not fail the write.
-    #[cfg(unix)]
-    {
-        let _ = fs::File::open(parent).and_then(|f| f.sync_all());
-    }
+    // The rename has committed at this point. Propagate a Unix directory-sync
+    // failure so callers are never told the durable sequence completed when it
+    // did not. The target still contains the new bytes, as documented above.
+    sync_parent(parent)
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(parent: &Path) -> io::Result<()> {
+    fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_parent: &Path) -> io::Result<()> {
+    // Windows has no portable directory fsync. File sync + same-directory
+    // rename is the strongest guarantee exposed by the standard library.
     Ok(())
 }
 
@@ -181,6 +201,19 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = dir.path().join("nope").join("f.json");
         assert!(atomic_write(&p, b"x", Permissions::Default).is_err());
+    }
+
+    #[test]
+    fn post_rename_sync_error_is_returned_with_new_bytes_visible() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("f.json");
+        fs::write(&p, b"old").unwrap();
+        let error = atomic_write_with_parent_sync(&p, b"new", Permissions::Default, |_| {
+            Err(io::Error::other("injected parent sync failure"))
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "injected parent sync failure");
+        assert_eq!(fs::read(&p).unwrap(), b"new");
     }
 
     #[test]

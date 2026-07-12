@@ -27,6 +27,13 @@ pub struct CredentialsClaudeAiOauth {
     pub scopes: Vec<String>,
 }
 
+impl CredentialsClaudeAiOauth {
+    /// Whether this read-only credential is expired at `now`.
+    pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
+        now.timestamp_millis() >= self.expires_at
+    }
+}
+
 impl std::fmt::Debug for CredentialsClaudeAiOauth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CredentialsClaudeAiOauth")
@@ -134,27 +141,6 @@ impl ClaudeOAuthSnapshot {
     }
 }
 
-/// Result of a successful refresh-token grant. Hand-written `Debug` (NOT
-/// derived) so the tokens cannot leak via `{:?}` - identical discipline to
-/// `CredentialsClaudeAiOauth` (AGENTS.md §3.4).
-#[derive(Clone)]
-pub struct RefreshedTokens {
-    pub access_token: String,
-    pub refresh_token: String,
-    /// Milliseconds since Unix epoch (matches `CredentialsClaudeAiOauth::expires_at`).
-    pub expires_at_ms: i64,
-}
-
-impl std::fmt::Debug for RefreshedTokens {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RefreshedTokens")
-            .field("access_token", &"<redacted>")
-            .field("refresh_token", &"<redacted>")
-            .field("expires_at_ms", &self.expires_at_ms)
-            .finish()
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum OAuthError {
     #[error("credentials file not found (looked at {searched:?})")]
@@ -173,13 +159,8 @@ pub enum OAuthError {
         source: std::io::Error,
     },
 
-    #[error(
-        "oauth bearer expired or invalid (HTTP 401) - user must re-run `claude login` or refresh token must be exchanged"
-    )]
+    #[error("oauth bearer expired or invalid (HTTP 401) - re-run `claude login` in Claude Code")]
     AuthExpired,
-
-    #[error("oauth refresh-token grant failed (HTTP {status}): {body}")]
-    RefreshFailed { status: u16, body: String },
 
     #[error("rate limited by Anthropic (HTTP 429)")]
     RateLimited {
@@ -187,12 +168,7 @@ pub enum OAuthError {
     },
 
     #[error(
-        "credentials file has no refreshToken - cannot refresh; user must re-run `claude login`"
-    )]
-    RefreshTokenMissing,
-
-    #[error(
-        "Anthropic token from the macOS login Keychain is expired, and Balanze can't refresh a credential it doesn't own - re-run `claude login` in Claude Code"
+        "Claude Code OAuth credential is expired and read-only - re-run `claude login` in Claude Code"
     )]
     CredentialExpiredReadOnly,
 
@@ -209,6 +185,23 @@ pub enum OAuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_expiry_is_inclusive_at_boundary() {
+        let now = DateTime::parse_from_rfc3339("2026-05-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let credential = CredentialsClaudeAiOauth {
+            access_token: "secret".into(),
+            refresh_token: None,
+            expires_at: now.timestamp_millis(),
+            subscription_type: None,
+            rate_limit_tier: None,
+            scopes: Vec::new(),
+        };
+        assert!(credential.is_expired_at(now));
+        assert!(!credential.is_expired_at(now - chrono::Duration::milliseconds(1)));
+    }
 
     #[test]
     fn five_hour_reset_returns_the_five_hour_cadence_timestamp() {

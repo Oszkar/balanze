@@ -85,46 +85,26 @@ impl CheckResult {
     }
 }
 
-/// Strict 'is it expired right now' check: now >= expires (zero margin).
-/// Mirrors the private `token_needs_refresh` in sources.rs / oauth_poll.rs
-/// with a zero margin (those use a 300s near-expiry band; doctor wants a hard
-/// expiry answer). Reimplemented here because that fn is not exported.
-fn token_expired(expires_at_ms: i64, now: DateTime<Utc>) -> bool {
-    now.timestamp_millis() >= expires_at_ms
-}
-
 /// Pure OAuth severity rule, factored out of `probe_claude_oauth` so the
-/// expired/read-only matrix is unit-testable without a real credential.
+/// read-only expiry rule is unit-testable without a real credential.
 ///
-/// - File source, valid       -> Ok
-/// - File source, expired     -> Warn (Balanze owns the file; the poller refreshes it)
-/// - Keychain source, valid   -> Ok
-/// - Keychain source, expired -> Fail + Auth (CredentialExpiredReadOnly: re-run `claude login`)
-fn oauth_check_from_parts(
-    writable: bool,
-    expires_at_ms: i64,
-    now: DateTime<Utc>,
-    location: &str,
-) -> CheckResult {
-    let expired = token_expired(expires_at_ms, now);
-    match (writable, expired) {
-        (_, false) => CheckResult::ok(
-            CheckCategory::Auth,
-            format!("Claude OAuth credential found and valid ({location})"),
-        ),
-        (true, true) => CheckResult::warn(
-            CheckCategory::Auth,
-            format!("Claude OAuth token expired ({location})"),
-            Some("Balanze will refresh it on the next poll; no action needed.".to_string()),
-        ),
-        (false, true) => CheckResult::fail(
+/// - Any source, valid   -> Ok
+/// - Any source, expired -> Fail + Auth (re-run `claude login`)
+fn oauth_check_from_parts(expired: bool, location: &str) -> CheckResult {
+    if expired {
+        CheckResult::fail(
             CheckCategory::Auth,
             format!("Claude OAuth token expired and read-only ({location})"),
             Some(
-                "re-run `claude login` in Claude Code (Balanze cannot refresh a credential it does not own)."
+                "re-run `claude login` in Claude Code (Balanze never modifies Claude Code credentials)."
                     .to_string(),
             ),
-        ),
+        )
+    } else {
+        CheckResult::ok(
+            CheckCategory::Auth,
+            format!("Claude OAuth credential found and valid ({location})"),
+        )
     }
 }
 
@@ -232,13 +212,7 @@ pub fn probe_claude_oauth(now: DateTime<Utc>) -> CheckResult {
             );
         }
     };
-    let writable = source.writable_path().is_some();
-    oauth_check_from_parts(
-        writable,
-        creds.claude_ai_oauth.expires_at,
-        now,
-        &source.describe(),
-    )
+    oauth_check_from_parts(creds.claude_ai_oauth.is_expired_at(now), &source.describe())
 }
 
 /// Probe 2: Claude JSONL projects dir(s) + file count. An empty dir vec means
@@ -535,40 +509,31 @@ pub fn probe_settings_and_keychain(keychain_health: KeychainHealth) -> CheckResu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
     use watcher::KeyProbe;
-
-    // Fixed now, mirroring the json_output.rs test convention.
-    fn fixed_now() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()
-    }
 
     #[test]
     fn oauth_file_valid_token_is_ok() {
-        let now = fixed_now();
-        let expires = now.timestamp_millis() + 3_600_000;
-        let r = oauth_check_from_parts(/* writable */ true, expires, now, "the file path");
+        let r = oauth_check_from_parts(false, "the file path");
         assert_eq!(r.level, CheckLevel::Ok);
         assert_eq!(r.category, CheckCategory::Auth);
     }
 
     #[test]
-    fn oauth_file_expired_token_is_warn_refreshable() {
-        // A FILE source expired is refreshable, not fatal: Balanze owns the
-        // file and the poller refreshes it. Warn, not Fail.
-        let now = fixed_now();
-        let expires = now.timestamp_millis() - 1;
-        let r = oauth_check_from_parts(true, expires, now, "the file path");
-        assert_eq!(r.level, CheckLevel::Warn);
+    fn oauth_file_expired_token_is_fail_readonly() {
+        let r = oauth_check_from_parts(true, "the file path");
+        assert_eq!(r.level, CheckLevel::Fail);
+        assert_eq!(r.category, CheckCategory::Auth);
+        assert!(
+            r.hint
+                .as_deref()
+                .unwrap_or_default()
+                .contains("claude login")
+        );
     }
 
     #[test]
     fn oauth_keychain_expired_token_is_fail_readonly() {
-        // macOS Keychain (writable_path == None) + expired -> CredentialExpiredReadOnly:
-        // Fail + Auth, hint must name `claude login`.
-        let now = fixed_now();
-        let expires = now.timestamp_millis() - 1;
-        let r = oauth_check_from_parts(/* writable */ false, expires, now, "keychain");
+        let r = oauth_check_from_parts(true, "keychain");
         assert_eq!(r.level, CheckLevel::Fail);
         assert_eq!(r.category, CheckCategory::Auth);
         assert!(
@@ -583,9 +548,7 @@ mod tests {
 
     #[test]
     fn oauth_keychain_valid_token_is_ok() {
-        let now = fixed_now();
-        let expires = now.timestamp_millis() + 3_600_000;
-        let r = oauth_check_from_parts(false, expires, now, "keychain");
+        let r = oauth_check_from_parts(false, "keychain");
         assert_eq!(r.level, CheckLevel::Ok);
     }
 
