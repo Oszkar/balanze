@@ -86,21 +86,34 @@ async fn run_writer(
     write: WriteFn,
 ) {
     let mut written_sequence = 0;
+    let mut failed_sequence = None;
     loop {
         let changed = rx.changed().await;
         let pending = rx.borrow_and_update().clone();
+        let mut retry_failed_on_closed_channel = false;
 
         if let Some(pending) = pending.filter(|value| value.sequence > written_sequence) {
+            let was_failed_before_attempt = failed_sequence == Some(pending.sequence);
             let write_path = path.clone();
             let write_fn = Arc::clone(&write);
             let payload = pending.payload;
             let result = tokio::task::spawn_blocking(move || write_fn(&write_path, &payload)).await;
             match result {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => tracing::warn!("snapshot.json write failed: {error}"),
-                Err(error) => tracing::error!("snapshot.json blocking writer failed: {error}"),
+                Ok(Ok(())) => {
+                    written_sequence = pending.sequence;
+                    failed_sequence = None;
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!("snapshot.json write failed: {error}");
+                    failed_sequence = Some(pending.sequence);
+                    retry_failed_on_closed_channel = was_failed_before_attempt;
+                }
+                Err(error) => {
+                    tracing::error!("snapshot.json blocking writer failed: {error}");
+                    failed_sequence = Some(pending.sequence);
+                    retry_failed_on_closed_channel = was_failed_before_attempt;
+                }
             }
-            written_sequence = pending.sequence;
         }
 
         if changed.is_err() {
@@ -108,6 +121,13 @@ async fn run_writer(
             // watch value, including one published while the previous blocking
             // write was in flight, so returning here explicitly flushes or
             // reports the final pending state.
+            // A first failure observed at or before closure gets one final
+            // retry. A second failure is already explicitly reported above and
+            // must terminate rather than spin forever on a permanently bad
+            // path.
+            if failed_sequence.is_some() && !retry_failed_on_closed_channel {
+                continue;
+            }
             return;
         }
     }
@@ -136,6 +156,51 @@ pub(crate) mod tests {
 
         let persisted = read_snapshot_file(&path).unwrap();
         assert_eq!(persisted.captured_at, snapshot(7).fetched_at);
+    }
+
+    #[tokio::test]
+    async fn shutdown_retries_a_transient_final_write_failure() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let first_attempt = Arc::new(tokio::sync::Notify::new());
+        let write = {
+            let calls = Arc::clone(&calls);
+            let first_attempt = Arc::clone(&first_attempt);
+            Arc::new(move |_path: &Path, _payload: &SnapshotFilePayload| {
+                let attempt = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if attempt == 0 {
+                    first_attempt.notify_one();
+                    Err("transient failure".to_string())
+                } else {
+                    Ok(())
+                }
+            }) as WriteFn
+        };
+        let (mut publisher, writer) = spawn_snapshot_writer_with("unused".into(), write);
+        publisher.publish(&snapshot(8));
+        first_attempt.notified().await;
+
+        drop(publisher);
+        writer.shutdown().await;
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn shutdown_reports_and_stops_after_final_retry_failure() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let write = {
+            let calls = Arc::clone(&calls);
+            Arc::new(move |_path: &Path, _payload: &SnapshotFilePayload| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err("persistent failure".to_string())
+            }) as WriteFn
+        };
+        let (mut publisher, writer) = spawn_snapshot_writer_with("unused".into(), write);
+        publisher.publish(&snapshot(9));
+        drop(publisher);
+        writer.shutdown().await;
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
