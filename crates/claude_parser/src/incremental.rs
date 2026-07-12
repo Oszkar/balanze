@@ -1,9 +1,9 @@
 //! Stateful byte-cursor incremental reader for Claude Code JSONL files.
 //!
 //! Tracks a per-file `(byte_pos, size, mtime)` cursor so subsequent reads
-//! only parse newly-appended bytes. Designed for the future watcher /
-//! state_coordinator to consume; the CLI is stateless and re-parses fully on
-//! each invocation, so it doesn't use this directly.
+//! only parse newly-appended bytes. The result distinguishes append deltas
+//! from replacement snapshots so the watcher can maintain per-file ownership;
+//! the CLI is stateless and re-parses fully on each invocation.
 //!
 //! Limitations:
 //! - "Atomic rewrite to a strictly larger size" is not detected (the new
@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -33,6 +34,37 @@ pub struct FileCursor {
     pub size: u64,
     /// File modification time at the last call.
     pub mtime: SystemTime,
+}
+
+/// Events parsed by one incremental read and how the caller must apply them
+/// to that file's existing contribution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IncrementalRead {
+    /// Newly appended complete lines. Extend the file's existing events.
+    Append(Vec<UsageEvent>),
+    /// A first read, truncation, rewrite, or explicit invalidation. Replace
+    /// the file's existing events with this complete-prefix snapshot.
+    Replace(Vec<UsageEvent>),
+}
+
+impl IncrementalRead {
+    pub fn events(&self) -> &[UsageEvent] {
+        match self {
+            Self::Append(events) | Self::Replace(events) => events,
+        }
+    }
+
+    pub fn is_replacement(&self) -> bool {
+        matches!(self, Self::Replace(_))
+    }
+}
+
+impl Deref for IncrementalRead {
+    type Target = [UsageEvent];
+
+    fn deref(&self) -> &Self::Target {
+        self.events()
+    }
 }
 
 /// Stateful per-file byte-cursor reader. Construct once, call
@@ -59,16 +91,17 @@ impl IncrementalParser {
     /// First call (or after `invalidate` / `clear`) reads the whole file.
     /// On a detected truncation (size shrank below the previous cursor) or
     /// same-size atomic rewrite (size unchanged but mtime advanced), the
-    /// cursor is reset to 0 and the file is re-read in full.
+    /// cursor is reset to 0 and the result is [`IncrementalRead::Replace`].
     ///
-    /// Partial trailing lines (no terminating `\n`) are excluded; the cursor
-    /// is parked at the start of the partial line so the next call picks it
-    /// up once the writer finishes.
-    pub fn read_incremental(&mut self, path: &Path) -> Result<Vec<UsageEvent>, ParseError> {
+    /// Partial trailing lines (no terminating `\n`) are excluded at the byte
+    /// level before UTF-8 decoding; the cursor parks at the partial line so a
+    /// mid-codepoint write is harmless until the writer finishes it.
+    pub fn read_incremental(&mut self, path: &Path) -> Result<IncrementalRead, ParseError> {
         let metadata = fs::metadata(path).map_err(|e| io_to_parse_err(path, e))?;
         let current_size = metadata.len();
         let current_mtime = metadata.modified().map_err(|e| io_to_parse_err(path, e))?;
 
+        let replacement = requires_replacement(self.cursors.get(path), current_size, current_mtime);
         let start_offset = next_start_offset(self.cursors.get(path), current_size, current_mtime);
 
         let (events, parsed_byte_count) = if start_offset >= current_size {
@@ -77,14 +110,20 @@ impl IncrementalParser {
             let mut file = fs::File::open(path).map_err(|e| io_to_parse_err(path, e))?;
             file.seek(SeekFrom::Start(start_offset))
                 .map_err(|e| io_to_parse_err(path, e))?;
-            let mut buf = String::new();
-            file.read_to_string(&mut buf)
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)
                 .map_err(|e| io_to_parse_err(path, e))?;
             let prefix_len = complete_prefix_len(&buf);
             let events = if prefix_len == 0 {
                 Vec::new()
             } else {
-                let parsed = parse_str_lossy(&buf[..prefix_len]);
+                let prefix = std::str::from_utf8(&buf[..prefix_len]).map_err(|source| {
+                    io_to_parse_err(
+                        path,
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, source),
+                    )
+                })?;
+                let parsed = parse_str_lossy(prefix);
                 if !parsed.skipped_lines.is_empty() {
                     // Skip-and-advance: a schema-drift or malformed *complete*
                     // line must not park the cursor in front of the batch. The
@@ -118,7 +157,11 @@ impl IncrementalParser {
             },
         );
 
-        Ok(events)
+        Ok(if replacement {
+            IncrementalRead::Replace(events)
+        } else {
+            IncrementalRead::Append(events)
+        })
     }
 
     /// Forget cursor state for one file. The next `read_incremental` for that
@@ -172,20 +215,26 @@ fn next_start_offset(
     current_size: u64,
     current_mtime: SystemTime,
 ) -> u64 {
-    let Some(c) = cursor else { return 0 };
-    if current_size < c.size {
-        return 0;
+    if requires_replacement(cursor, current_size, current_mtime) {
+        0
+    } else {
+        cursor.map_or(0, |cursor| cursor.byte_pos)
     }
-    if current_size == c.size && current_mtime != c.mtime {
-        return 0;
-    }
-    c.byte_pos
+}
+
+fn requires_replacement(
+    cursor: Option<&FileCursor>,
+    current_size: u64,
+    current_mtime: SystemTime,
+) -> bool {
+    let Some(cursor) = cursor else { return true };
+    current_size < cursor.size || (current_size == cursor.size && current_mtime != cursor.mtime)
 }
 
 /// Byte length of the longest `\n`-terminated prefix of `buf`.
 /// Used both for parsing and for advancing the byte cursor.
-fn complete_prefix_len(buf: &str) -> usize {
-    match buf.rfind('\n') {
+fn complete_prefix_len(buf: impl AsRef<[u8]>) -> usize {
+    match buf.as_ref().iter().rposition(|byte| *byte == b'\n') {
         Some(idx) => idx + 1, // include the newline itself
         None => 0,            // no complete line yet
     }
@@ -309,6 +358,7 @@ mod tests {
 
         let mut p = IncrementalParser::new();
         let events = p.read_incremental(&path).unwrap();
+        assert!(events.is_replacement());
         assert_eq!(events.len(), 2);
         assert_eq!(p.cursor_for(&path).unwrap().byte_pos, content.len() as u64);
     }
@@ -325,6 +375,7 @@ mod tests {
         let first = p.read_incremental(&path).unwrap();
         assert_eq!(first.len(), 1);
         let second = p.read_incremental(&path).unwrap();
+        assert!(!second.is_replacement());
         assert!(second.is_empty(), "second call must return no new events");
     }
 
@@ -421,6 +472,44 @@ mod tests {
     }
 
     #[test]
+    fn partial_utf8_codepoint_after_complete_prefix_parks_without_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut first_line = String::new();
+        write_assistant_line(&mut first_line, "msg_a", "req_1", 100);
+
+        let mut second_line = String::new();
+        write_assistant_line(&mut second_line, "msg_b", "req_2", 200);
+        let model = second_line.find("\"model\":\"m").unwrap() + "\"model\":\"m".len();
+        second_line.insert(model, 'é');
+        let split = second_line.find('é').unwrap() + 1;
+
+        let mut partial = first_line.as_bytes().to_vec();
+        partial.extend_from_slice(&second_line.as_bytes()[..split]);
+        std::fs::write(&path, &partial).unwrap();
+
+        let mut parser = IncrementalParser::new();
+        let first = parser.read_incremental(&path).unwrap();
+        assert_eq!(first.events().len(), 1);
+        assert_eq!(
+            parser.cursor_for(&path).unwrap().byte_pos,
+            first_line.len() as u64,
+            "cursor must park before the incomplete UTF-8 line"
+        );
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        use std::io::Write as _;
+        file.write_all(&second_line.as_bytes()[split..]).unwrap();
+
+        let second = parser.read_incremental(&path).unwrap();
+        assert_eq!(second.events().len(), 1);
+        assert_eq!(second.events()[0].message_id.as_deref(), Some("msg_b"));
+    }
+
+    #[test]
     fn truncation_re_reads_from_zero() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
@@ -439,6 +528,7 @@ mod tests {
         std::fs::write(&path, &truncated).unwrap();
 
         let second = p.read_incremental(&path).unwrap();
+        assert!(second.is_replacement());
         assert_eq!(second.len(), 1, "truncation should restart from byte 0");
         assert_eq!(second[0].message_id.as_deref(), Some("msg_x"));
     }
