@@ -14,7 +14,9 @@ use std::time::Duration;
 use claude_statusline::{FileIoError, read_snapshot};
 use notify::{RecursiveMode, Watcher as _};
 use settings::statusline_snapshot_path;
-use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
+use state_coordinator::{
+    Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg, WatcherGeneration,
+};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
@@ -39,7 +41,10 @@ const DEBOUNCE: Duration = Duration::from_millis(100);
 ///
 /// `FileMissing` is not emitted - it's the expected state for users who
 /// haven't wired `statusLine` in their Claude Code settings yet.
-pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), WatcherError>> {
+pub(crate) fn spawn(
+    coord: StateCoordinatorHandle,
+    generation: WatcherGeneration,
+) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
         let snapshot_path = match statusline_snapshot_path() {
             Some(p) => p,
@@ -116,12 +121,12 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
         }
 
         // Initial read on task startup - covers the file already existing.
-        emit_statusline_snapshot(&coord, &snapshot_path).await;
+        emit_statusline_snapshot(&coord, &snapshot_path, generation).await;
 
         loop {
             signal.notified().await;
             tokio::time::sleep(DEBOUNCE).await;
-            emit_statusline_snapshot(&coord, &snapshot_path).await;
+            emit_statusline_snapshot(&coord, &snapshot_path, generation).await;
         }
     })
 }
@@ -129,7 +134,11 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
 /// Read the statusline snapshot from disk (sync) and emit an update to the
 /// coordinator. `FileMissing` is silently swallowed - it means the user hasn't
 /// wired statusLine yet and is not an error state.
-async fn emit_statusline_snapshot(coord: &StateCoordinatorHandle, path: &std::path::Path) {
+async fn emit_statusline_snapshot(
+    coord: &StateCoordinatorHandle,
+    path: &std::path::Path,
+    generation: WatcherGeneration,
+) {
     let path_owned = path.to_path_buf();
     let result = tokio::task::spawn_blocking(move || read_snapshot(&path_owned)).await;
 
@@ -139,6 +148,7 @@ async fn emit_statusline_snapshot(coord: &StateCoordinatorHandle, path: &std::pa
             tracing::error!("watcher/statusline: read task panicked: {join_err}");
             let _ = coord
                 .send(StateMsg::Update(SourceUpdate {
+                    generation,
                     source: Source::ClaudeStatusline,
                     result: Err(format!("read task panicked: {join_err}")),
                 }))
@@ -151,6 +161,7 @@ async fn emit_statusline_snapshot(coord: &StateCoordinatorHandle, path: &std::pa
         Ok(payload) => {
             let _ = coord
                 .send(StateMsg::Update(SourceUpdate {
+                    generation,
                     source: Source::ClaudeStatusline,
                     result: Ok(SourcePartial::ClaudeStatusline(payload)),
                 }))
@@ -163,6 +174,7 @@ async fn emit_statusline_snapshot(coord: &StateCoordinatorHandle, path: &std::pa
         Err(e) => {
             let _ = coord
                 .send(StateMsg::Update(SourceUpdate {
+                    generation,
                     source: Source::ClaudeStatusline,
                     result: Err(format!("{e}")),
                 }))

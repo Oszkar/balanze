@@ -12,6 +12,11 @@ use tokio::sync::oneshot;
 
 use crate::snapshot::Snapshot;
 
+/// Monotonically increasing identifier for one watcher task generation.
+/// Generation zero is reserved for coordinator-only tests and callers that do
+/// not run a watcher supervisor. Live supervisors start at generation one.
+pub type WatcherGeneration = u64;
+
 /// Which source produced an update or failure.
 ///
 /// The six sources map onto the cells / inputs of Balanze's display matrix:
@@ -93,6 +98,8 @@ impl SourcePartial {
 }
 
 /// What a poller sends to the coordinator after a fetch attempt.
+/// `generation` identifies the supervised task set that produced it; updates
+/// from any generation other than the coordinator's active one are ignored.
 ///
 /// `result: Ok(partial)` → merge_partial into the snapshot, clear the source's
 /// error slot, notify `Sink::on_snapshot`.
@@ -102,6 +109,7 @@ impl SourcePartial {
 /// stale-with-indicator rather than blank).
 #[derive(Debug, Clone)]
 pub struct SourceUpdate {
+    pub generation: WatcherGeneration,
     pub source: Source,
     pub result: Result<SourcePartial, String>,
 }
@@ -118,16 +126,25 @@ pub enum StateMsg {
     /// so it can repaint. The coordinator itself does NOT fetch - refreshes are
     /// re-paints, not re-fetches. Pollers run on their own cadence.
     Refresh,
-    /// Settings file changed. Scaffold stores the value; future pollers will
-    /// subscribe to a settings-change broadcast and reconfigure themselves.
+    /// The supervisor has joined the prior watcher generation and is applying
+    /// settings for the replacement generation. The coordinator advances its
+    /// acceptance gate, clears disabled cells, and confirms through `applied`.
     /// Boxed: `Settings` carries the full statusline config (~450 bytes), which
     /// would otherwise dominate this enum's size (clippy `large_enum_variant`).
-    SettingsChanged(Box<Settings>),
+    SettingsChanged {
+        settings: Box<Settings>,
+        generation: WatcherGeneration,
+        applied: oneshot::Sender<()>,
+    },
     /// A source reports it is intentionally unavailable / not configured - e.g.
     /// Claude Code isn't installed, so the OAuth poller has no credential to
     /// read. A NEUTRAL state, distinct from `Update(Err(..))`: the cell reads
     /// "not configured" rather than degraded, and the tray stays on the neutral
     /// bucket (no `on_degraded`, no red). Only `ClaudeOAuth` carries a slot for
     /// it today; other sources are logged and ignored.
-    SourceUnavailable { source: Source, reason: String },
+    SourceUnavailable {
+        generation: WatcherGeneration,
+        source: Source,
+        reason: String,
+    },
 }

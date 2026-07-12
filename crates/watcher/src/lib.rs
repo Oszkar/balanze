@@ -17,9 +17,9 @@ pub use errors::WatcherError;
 pub use validate::{KeyProbe, validate_openai_key};
 
 use settings::Settings;
-use state_coordinator::StateCoordinatorHandle;
+use state_coordinator::{StateCoordinatorHandle, WatcherGeneration};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 
 pub struct Watcher;
 
@@ -62,13 +62,17 @@ impl Watcher {
     pub fn spawn(
         handle: StateCoordinatorHandle,
         settings: &Settings,
+        generation: WatcherGeneration,
     ) -> Vec<(&'static str, JoinHandle<Result<(), WatcherError>>)> {
         let mut tasks: Vec<(&'static str, JoinHandle<Result<(), WatcherError>>)> = vec![
-            ("jsonl", tasks::jsonl::spawn(handle.clone())),
-            ("statusline", tasks::statusline::spawn(handle.clone())),
+            ("jsonl", tasks::jsonl::spawn(handle.clone(), generation)),
+            (
+                "statusline",
+                tasks::statusline::spawn(handle.clone(), generation),
+            ),
             (
                 "safety",
-                tasks::safety::spawn(handle.clone(), settings.providers.codex_enabled),
+                tasks::safety::spawn(handle.clone(), settings.providers.codex_enabled, generation),
             ),
         ];
         // OpenAI: gated on the toggle, OR on a present `BALANZE_OPENAI_KEY` env
@@ -77,13 +81,21 @@ impl Watcher {
         if settings.providers.openai_enabled || openai_env_key_present() {
             tasks.push((
                 "openai_poll",
-                tasks::openai_poll::spawn(handle.clone(), settings.oauth_poll_interval_secs),
+                tasks::openai_poll::spawn(
+                    handle.clone(),
+                    settings.oauth_poll_interval_secs,
+                    generation,
+                ),
             ));
         }
         if settings.providers.anthropic_enabled {
             tasks.push((
                 "oauth_poll",
-                tasks::oauth_poll::spawn(handle.clone(), settings.oauth_poll_interval_secs),
+                tasks::oauth_poll::spawn(
+                    handle.clone(),
+                    settings.oauth_poll_interval_secs,
+                    generation,
+                ),
             ));
         }
         tasks
@@ -104,15 +116,48 @@ fn openai_env_key_present() -> bool {
 /// (a reload-abort) are NOT signalled: treating either as fatal would break
 /// `watch` for the common single-provider user, or fire spuriously on shutdown.
 ///
-/// Consumes the handles. A caller that also needs to abort the tasks later (the
-/// Tauri host's live-reload path) should collect their `abort_handle()`s first.
+/// Consumes the handles and returns their lifecycle owner. The owner retains
+/// abort handles and monitor joins so a supervisor can prove a generation is
+/// fully stopped before acknowledging replacement settings.
+pub struct WatchedTasks {
+    aborts: Vec<AbortHandle>,
+    monitors: Vec<JoinHandle<()>>,
+    death_rx: mpsc::UnboundedReceiver<&'static str>,
+}
+
+impl WatchedTasks {
+    /// Wait for an unexpected task exit. Clean task completion is intentionally
+    /// not reported because an unavailable provider is a valid terminal state.
+    pub async fn recv_death(&mut self) -> Option<&'static str> {
+        self.death_rx.recv().await
+    }
+
+    /// Cancel every task in this generation and join its watchdog. Returning
+    /// guarantees no task from the generation can emit another update.
+    pub async fn shutdown(self) {
+        for abort in self.aborts {
+            abort.abort();
+        }
+        for monitor in self.monitors {
+            if let Err(error) = monitor.await {
+                tracing::error!("watcher task monitor failed during shutdown: {error}");
+            }
+        }
+    }
+}
+
 pub fn watch_for_task_death(
     handles: Vec<(&'static str, JoinHandle<Result<(), WatcherError>>)>,
-) -> mpsc::UnboundedReceiver<&'static str> {
+) -> WatchedTasks {
     let (tx, rx) = mpsc::unbounded_channel();
+    let aborts = handles
+        .iter()
+        .map(|(_, handle)| handle.abort_handle())
+        .collect();
+    let mut monitors = Vec::with_capacity(handles.len());
     for (label, h) in handles {
         let tx = tx.clone();
-        tokio::spawn(async move {
+        monitors.push(tokio::spawn(async move {
             match h.await {
                 Ok(Ok(())) => tracing::debug!("watcher/{label}: exited Ok(())"),
                 Ok(Err(e)) => {
@@ -125,9 +170,13 @@ pub fn watch_for_task_death(
                     let _ = tx.send(label);
                 }
             }
-        });
+        }));
     }
-    rx
+    WatchedTasks {
+        aborts,
+        monitors,
+        death_rx: rx,
+    }
 }
 
 /// Map a watcher task label (as returned by [`Watcher::spawn`]) to the

@@ -194,6 +194,7 @@ Recommended architecture:
 - Tauri desktop shell for tray behavior, windows, OS integration and packaging.
 - Shared frontend for popup and dashboard views.
 - Connector abstraction layer per provider so future Android or hosted surfaces can reuse the same normalized model.
+- A bounded actor owns the live snapshot. Settings changes are acknowledged only after the previous poller generation is joined and the replacement generation is active; stale-generation updates are rejected. Durable snapshot publication is coalesced on a dedicated blocking writer so local storage latency cannot freeze the tray or IPC queries.
 
 ### Design implications
 

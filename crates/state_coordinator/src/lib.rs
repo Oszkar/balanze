@@ -36,9 +36,10 @@ mod test_support;
 
 pub use coordinator::{StateCoordinatorHandle, spawn, spawn_with_optional_file};
 pub use jsonl::{JsonlCells, summarize_jsonl};
-pub use messages::{ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateMsg};
+pub use messages::{
+    ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateMsg, WatcherGeneration,
+};
 pub use sink::{LogSink, NullSink, Sink};
-pub use sink_file::SnapshotFileSink;
 pub use snapshot::{
     JsonlSnapshot, SNAPSHOT_SCHEMA_VERSION, STATUSLINE_FRESHNESS_SECS, Snapshot, WindowPace,
     pace_for_oauth, record_error,

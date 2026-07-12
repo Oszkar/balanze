@@ -20,7 +20,9 @@ use anthropic_oauth::{
     load_from_source, locate_credentials,
 };
 use chrono::Utc;
-use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
+use state_coordinator::{
+    Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg, WatcherGeneration,
+};
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
@@ -84,6 +86,7 @@ impl KeychainCache {
 pub(crate) fn spawn(
     coord: StateCoordinatorHandle,
     interval_secs: u32,
+    generation: WatcherGeneration,
 ) -> JoinHandle<Result<(), WatcherError>> {
     // Enforce the 5-minute (300s) API-politeness floor per AGENTS.md §3.1.
     // The setting default is also 300s, so this clamp only kicks in if a
@@ -129,6 +132,7 @@ pub(crate) fn spawn(
                 // skeleton. A later restart with credentials clears it on first poll.
                 let _ = coord
                     .send(StateMsg::SourceUnavailable {
+                        generation,
                         source: Source::ClaudeOAuth,
                         reason: "Claude Code not detected".to_string(),
                     })
@@ -160,6 +164,7 @@ pub(crate) fn spawn(
                     tracing::error!("watcher/oauth_poll: reqwest client build failed: {e}");
                     let _ = coord
                         .send(StateMsg::Update(SourceUpdate {
+                            generation,
                             source: Source::ClaudeOAuth,
                             result: Err(format!("reqwest client build failed: {e}")),
                         }))
@@ -177,6 +182,7 @@ pub(crate) fn spawn(
                         snapshot.cadences.len()
                     );
                     SourceUpdate {
+                        generation,
                         source: Source::ClaudeOAuth,
                         result: Ok(SourcePartial::ClaudeOAuth(snapshot)),
                     }
@@ -184,6 +190,7 @@ pub(crate) fn spawn(
                 Err(e) => {
                     tracing::warn!("watcher/oauth_poll: fetch error: {e}");
                     SourceUpdate {
+                        generation,
                         source: Source::ClaudeOAuth,
                         result: Err(format!("{e}")),
                     }

@@ -16,7 +16,9 @@
 use claude_statusline::{FileIoError, read_snapshot};
 use codex_local::{ParseError, read_codex_quota};
 use settings::statusline_snapshot_path;
-use state_coordinator::{Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg};
+use state_coordinator::{
+    Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg, WatcherGeneration,
+};
 use tokio::task::JoinHandle;
 
 use crate::errors::WatcherError;
@@ -34,6 +36,7 @@ use crate::errors::WatcherError;
 pub(crate) fn spawn(
     coord: StateCoordinatorHandle,
     codex_enabled: bool,
+    generation: WatcherGeneration,
 ) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
         let statusline_path = statusline_snapshot_path();
@@ -62,6 +65,7 @@ pub(crate) fn spawn(
                     Ok(Ok(payload)) => {
                         let _ = coord
                             .send(StateMsg::Update(SourceUpdate {
+                                generation,
                                 source: Source::ClaudeStatusline,
                                 result: Ok(SourcePartial::ClaudeStatusline(payload)),
                             }))
@@ -76,6 +80,7 @@ pub(crate) fn spawn(
                     Ok(Err(e)) => {
                         let _ = coord
                             .send(StateMsg::Update(SourceUpdate {
+                                generation,
                                 source: Source::ClaudeStatusline,
                                 result: Err(format!("{e}")),
                             }))
@@ -91,6 +96,7 @@ pub(crate) fn spawn(
                         );
                         let _ = coord
                             .send(StateMsg::Update(SourceUpdate {
+                                generation,
                                 source: Source::ClaudeStatusline,
                                 result: Err(format!("statusline read task panicked: {join_err}")),
                             }))
@@ -108,6 +114,7 @@ pub(crate) fn spawn(
                         Some(result) => {
                             let _ = coord
                                 .send(StateMsg::Update(SourceUpdate {
+                                    generation,
                                     source: Source::CodexQuota,
                                     result,
                                 }))
@@ -125,6 +132,7 @@ pub(crate) fn spawn(
                         tracing::error!("watcher/safety: codex read task panicked: {join_err}");
                         let _ = coord
                             .send(StateMsg::Update(SourceUpdate {
+                                generation,
                                 source: Source::CodexQuota,
                                 result: Err(format!("codex read task panicked: {join_err}")),
                             }))

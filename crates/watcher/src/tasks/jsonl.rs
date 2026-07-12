@@ -23,6 +23,7 @@ use claude_parser::{
 use notify::{RecursiveMode, Watcher as _};
 use state_coordinator::{
     ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg,
+    WatcherGeneration,
 };
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -71,7 +72,10 @@ impl ScanState {
 ///    and re-emits the accumulated deduped events.
 ///
 /// The task exits `Ok(())` when the notify channel closes (tx dropped).
-pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), WatcherError>> {
+pub(crate) fn spawn(
+    coord: StateCoordinatorHandle,
+    generation: WatcherGeneration,
+) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
         let roots = find_all_claude_projects_dirs();
         if roots.is_empty() {
@@ -133,7 +137,7 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
         // `watcher.watch(...)` above registers atomically with the OS; writes
         // after it returns are buffered by the OS and drained by the callback.
         let mut state = ScanState::new();
-        state = emit_incremental(&coord, &roots, state).await;
+        state = emit_incremental(&coord, &roots, state, generation).await;
 
         loop {
             tokio::select! {
@@ -145,7 +149,7 @@ pub(crate) fn spawn(coord: StateCoordinatorHandle) -> JoinHandle<Result<(), Watc
                 }
                 _ = fallback.tick() => {}
             }
-            state = emit_incremental(&coord, &roots, state).await;
+            state = emit_incremental(&coord, &roots, state, generation).await;
         }
     })
 }
@@ -172,6 +176,7 @@ async fn emit_incremental(
     coord: &StateCoordinatorHandle,
     roots: &[PathBuf],
     state: ScanState,
+    generation: WatcherGeneration,
 ) -> ScanState {
     let roots_owned: Vec<PathBuf> = roots.to_vec();
 
@@ -192,6 +197,7 @@ async fn emit_incremental(
         )) => {
             let _ = coord
                 .send(StateMsg::Update(SourceUpdate {
+                    generation,
                     source: Source::ClaudeJsonl,
                     result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
                         events: Arc::new(events),
@@ -204,6 +210,7 @@ async fn emit_incremental(
         Ok((state, ScanResult::Fatal { error })) => {
             let _ = coord
                 .send(StateMsg::Update(SourceUpdate {
+                    generation,
                     source: Source::ClaudeJsonl,
                     result: Err(error),
                 }))
@@ -214,6 +221,7 @@ async fn emit_incremental(
             tracing::error!("watcher/jsonl: scan task panicked: {join_err}");
             let _ = coord
                 .send(StateMsg::Update(SourceUpdate {
+                    generation,
                     source: Source::ClaudeJsonl,
                     result: Err(format!("scan task panicked: {join_err}")),
                 }))
