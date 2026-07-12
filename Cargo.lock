@@ -117,7 +117,6 @@ name = "anthropic_oauth"
 version = "0.4.3"
 dependencies = [
  "anyhow",
- "atomic_file",
  "backoff",
  "chrono",
  "reqwest 0.12.28",

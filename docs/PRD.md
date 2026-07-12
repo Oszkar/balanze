@@ -159,7 +159,7 @@ The product should support API usage and billing-related visibility using offici
 
 #### Anthropic
 
-The product should support Claude-related usage views across API billing and subscription usage where reliable access is available. Claude documents subscription usage and length limits as dynamic and plan-dependent, so the app should present these carefully and avoid overstating precision.
+The product should support Claude-related usage views across API billing and subscription usage where reliable access is available. Claude Code owns its OAuth credential in every storage form; Balanze reads it without refreshing, modifying, mirroring, or backing it up, and directs the user to `claude login` when it expires. An explicit file-refresh opt-in may be considered during settings and configurability work, but must remain off by default and can never make the macOS Keychain source writable. Claude documents subscription usage and length limits as dynamic and plan-dependent, so the app should present these carefully and avoid overstating precision.
 
 ### Alerts
 
