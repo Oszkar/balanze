@@ -5,12 +5,9 @@
 //! from replacement snapshots so the watcher can maintain per-file ownership;
 //! the CLI is stateless and re-parses fully on each invocation.
 //!
-//! Limitations:
-//! - "Atomic rewrite to a strictly larger size" is not detected (the new
-//!   file looks like a normal append). In practice Claude Code only appends
-//!   to JSONLs, so this case doesn't arise on real data.
-//! - Detection is mtime + size based, not content-hash. Truncation and
-//!   same-size rewrites ARE detected.
+//! Replacement detection combines file identity with mtime and size. File
+//! identity catches atomic replacements of any size; mtime and size catch
+//! in-place truncations and same-size rewrites.
 
 use std::collections::HashMap;
 use std::fs;
@@ -34,7 +31,13 @@ pub struct FileCursor {
     pub size: u64,
     /// File modification time at the last call.
     pub mtime: SystemTime,
+    /// Physical file identity used to distinguish a growing append from an
+    /// atomic replacement at the same path.
+    identity: Option<FileIdentity>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity(u128);
 
 /// Events parsed by one incremental read and how the caller must apply them
 /// to that file's existing contribution.
@@ -97,17 +100,24 @@ impl IncrementalParser {
     /// level before UTF-8 decoding; the cursor parks at the partial line so a
     /// mid-codepoint write is harmless until the writer finishes it.
     pub fn read_incremental(&mut self, path: &Path) -> Result<IncrementalRead, ParseError> {
-        let metadata = fs::metadata(path).map_err(|e| io_to_parse_err(path, e))?;
+        let mut file = fs::File::open(path).map_err(|e| io_to_parse_err(path, e))?;
+        let metadata = file.metadata().map_err(|e| io_to_parse_err(path, e))?;
         let current_size = metadata.len();
         let current_mtime = metadata.modified().map_err(|e| io_to_parse_err(path, e))?;
+        let current_identity = file_identity(&file, &metadata);
 
-        let replacement = requires_replacement(self.cursors.get(path), current_size, current_mtime);
-        let start_offset = next_start_offset(self.cursors.get(path), current_size, current_mtime);
+        let cursor = self.cursors.get(path);
+        let replacement = requires_replacement(cursor, current_size, current_mtime)
+            || identity_changed(cursor, current_identity);
+        let start_offset = if replacement {
+            0
+        } else {
+            next_start_offset(cursor, current_size, current_mtime)
+        };
 
         let (events, parsed_byte_count) = if start_offset >= current_size {
             (Vec::new(), 0usize)
         } else {
-            let mut file = fs::File::open(path).map_err(|e| io_to_parse_err(path, e))?;
             file.seek(SeekFrom::Start(start_offset))
                 .map_err(|e| io_to_parse_err(path, e))?;
             let mut buf = Vec::new();
@@ -117,14 +127,19 @@ impl IncrementalParser {
             let events = if prefix_len == 0 {
                 Vec::new()
             } else {
-                let prefix = std::str::from_utf8(&buf[..prefix_len]).map_err(|source| {
-                    io_to_parse_err(
-                        path,
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, source),
-                    )
-                })?;
-                let parsed = parse_str_lossy(prefix);
-                if !parsed.skipped_lines.is_empty() {
+                let mut events = Vec::new();
+                let mut skipped_lines = 0usize;
+                for line in buf[..prefix_len].split_inclusive(|byte| *byte == b'\n') {
+                    match std::str::from_utf8(line) {
+                        Ok(line) => {
+                            let parsed = parse_str_lossy(line);
+                            skipped_lines += parsed.skipped_lines.len();
+                            events.extend(parsed.events);
+                        }
+                        Err(_) => skipped_lines += 1,
+                    }
+                }
+                if skipped_lines != 0 {
                     // Skip-and-advance: a schema-drift or malformed *complete*
                     // line must not park the cursor in front of the batch. The
                     // strict `parse_str` would `?`-abort here and, since the
@@ -134,12 +149,12 @@ impl IncrementalParser {
                     // let the cursor advance past the whole complete prefix.
                     tracing::warn!(
                         "claude_parser: skipped {} unparseable line(s) in {} (batch at byte {}); continuing without them",
-                        parsed.skipped_lines.len(),
+                        skipped_lines,
                         path.display(),
                         start_offset,
                     );
                 }
-                parsed.events
+                events
             };
             (events, prefix_len)
         };
@@ -154,6 +169,7 @@ impl IncrementalParser {
                 byte_pos: new_byte_pos,
                 size: current_size,
                 mtime: current_mtime,
+                identity: current_identity,
             },
         );
 
@@ -231,6 +247,76 @@ fn requires_replacement(
     current_size < cursor.size || (current_size == cursor.size && current_mtime != cursor.mtime)
 }
 
+fn identity_changed(cursor: Option<&FileCursor>, current: Option<FileIdentity>) -> bool {
+    matches!((cursor.and_then(|cursor| cursor.identity), current), (Some(previous), Some(current)) if previous != current)
+}
+
+#[cfg(unix)]
+fn file_identity(_file: &fs::File, metadata: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    Some(FileIdentity(
+        (u128::from(metadata.dev()) << 64) | u128::from(metadata.ino()),
+    ))
+}
+
+#[cfg(windows)]
+fn file_identity(file: &fs::File, _metadata: &fs::Metadata) -> Option<FileIdentity> {
+    use std::ffi::c_void;
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle as _;
+
+    #[repr(C)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+
+    #[repr(C)]
+    struct ByHandleFileInformation {
+        file_attributes: u32,
+        creation_time: FileTime,
+        last_access_time: FileTime,
+        last_write_time: FileTime,
+        volume_serial_number: u32,
+        file_size_high: u32,
+        file_size_low: u32,
+        number_of_links: u32,
+        file_index_high: u32,
+        file_index_low: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut c_void,
+            information: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+
+    let mut information = MaybeUninit::<ByHandleFileInformation>::uninit();
+    // SAFETY: `file` owns a valid open Windows handle, `information` points to
+    // writable storage with the exact BY_HANDLE_FILE_INFORMATION C layout, and
+    // the value is read only when the system call reports success.
+    let succeeded =
+        unsafe { GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr()) != 0 };
+    if !succeeded {
+        return None;
+    }
+    // SAFETY: the successful call initialized the complete output structure.
+    let information = unsafe { information.assume_init() };
+    let file_index =
+        (u64::from(information.file_index_high) << 32) | u64::from(information.file_index_low);
+    Some(FileIdentity(
+        (u128::from(information.volume_serial_number) << 64) | u128::from(file_index),
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_identity(_file: &fs::File, _metadata: &fs::Metadata) -> Option<FileIdentity> {
+    None
+}
+
 /// Byte length of the longest `\n`-terminated prefix of `buf`.
 /// Used both for parsing and for advancing the byte cursor.
 fn complete_prefix_len(buf: impl AsRef<[u8]>) -> usize {
@@ -254,6 +340,7 @@ mod tests {
             byte_pos,
             size,
             mtime: mtime_at(mtime_secs),
+            identity: None,
         }
     }
 
@@ -510,6 +597,30 @@ mod tests {
     }
 
     #[test]
+    fn invalid_utf8_complete_line_is_skipped_without_stalling_later_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut first = String::new();
+        write_assistant_line(&mut first, "msg_a", "req_1", 100);
+        let mut last = String::new();
+        write_assistant_line(&mut last, "msg_b", "req_2", 200);
+        let mut content = first.into_bytes();
+        content.extend_from_slice(&[0xff, b'\n']);
+        content.extend_from_slice(last.as_bytes());
+        std::fs::write(&path, &content).unwrap();
+
+        let mut parser = IncrementalParser::new();
+        let events = parser.read_incremental(&path).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_a"));
+        assert_eq!(events[1].message_id.as_deref(), Some("msg_b"));
+        assert_eq!(
+            parser.cursor_for(&path).unwrap().byte_pos,
+            content.len() as u64
+        );
+    }
+
+    #[test]
     fn truncation_re_reads_from_zero() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
@@ -531,6 +642,37 @@ mod tests {
         assert!(second.is_replacement());
         assert_eq!(second.len(), 1, "truncation should restart from byte 0");
         assert_eq!(second[0].message_id.as_deref(), Some("msg_x"));
+    }
+
+    #[test]
+    fn larger_atomic_replacement_is_not_misclassified_as_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut original = String::new();
+        write_assistant_line(&mut original, "msg_a", "req_1", 100);
+        std::fs::write(&path, &original).unwrap();
+
+        let mut parser = IncrementalParser::new();
+        assert!(parser.read_incremental(&path).unwrap().is_replacement());
+
+        let mut replacement = String::new();
+        write_assistant_line(&mut replacement, "msg_b", "req_2", 200);
+        write_assistant_line(&mut replacement, "msg_c", "req_3", 300);
+        assert!(replacement.len() > original.len());
+        replace_file(&path, replacement.as_bytes());
+
+        let second = parser.read_incremental(&path).unwrap();
+        assert!(second.is_replacement());
+        assert_eq!(second.len(), 2);
+        assert_eq!(second[0].message_id.as_deref(), Some("msg_b"));
+    }
+
+    fn replace_file(path: &Path, bytes: &[u8]) {
+        let replacement = path.with_extension("replacement");
+        std::fs::write(&replacement, bytes).unwrap();
+        #[cfg(windows)]
+        std::fs::remove_file(path).unwrap();
+        std::fs::rename(replacement, path).unwrap();
     }
 
     #[test]

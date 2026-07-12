@@ -236,13 +236,22 @@ async fn emit_incremental(
 /// - any other parse / IO error logs and retains the last good contribution.
 fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
     let mut files: Vec<PathBuf> = Vec::new();
-    let mut successful_roots: Vec<&PathBuf> = Vec::new();
+    let mut reconciled_roots: Vec<&PathBuf> = Vec::new();
     let mut walk_err: Option<String> = None;
     for root in roots {
         match find_jsonl_files(root) {
             Ok(mut f) => {
-                successful_roots.push(root);
+                reconciled_roots.push(root);
                 files.append(&mut f);
+            }
+            Err(ParseError::FileMissing(_)) => {
+                // A watched root that disappeared is authoritative empty
+                // state, not a failed read. Reconcile its owned events away.
+                reconciled_roots.push(root);
+                tracing::debug!(
+                    "watcher/jsonl: root disappeared; clearing contributions under {}",
+                    root.display()
+                );
             }
             Err(e) => {
                 let msg = format!("find_jsonl_files {}: {e}", root.display());
@@ -251,7 +260,7 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
             }
         }
     }
-    if files.is_empty() {
+    if reconciled_roots.is_empty() {
         if let Some(error) = walk_err {
             return ScanResult::Fatal { error };
         }
@@ -263,7 +272,7 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
         .by_file
         .keys()
         .filter(|path| {
-            successful_roots.iter().any(|root| path.starts_with(root)) && !discovered.contains(path)
+            reconciled_roots.iter().any(|root| path.starts_with(root)) && !discovered.contains(path)
         })
         .cloned()
         .collect();
@@ -383,6 +392,29 @@ mod tests {
     }
 
     #[test]
+    fn larger_atomic_rewrite_replaces_obsolete_file_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let original = assistant_line("msg_a", "req_1", 100);
+        std::fs::write(&path, &original).unwrap();
+        let mut state = ScanState::new();
+        assert_eq!(scanned_events(dir.path(), &mut state).len(), 1);
+
+        let replacement =
+            assistant_line("msg_b", "req_2", 200) + &assistant_line("msg_c", "req_3", 300);
+        assert!(replacement.len() > original.len());
+        replace_file(&path, replacement.as_bytes());
+
+        let events = scanned_events(dir.path(), &mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.message_id.as_deref() != Some("msg_a"))
+        );
+    }
+
+    #[test]
     fn duplicate_ids_across_files_remain_deduplicated() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -410,5 +442,78 @@ mod tests {
 
         std::fs::remove_file(path).unwrap();
         assert!(scanned_events(dir.path(), &mut state).is_empty());
+    }
+
+    #[test]
+    fn disappeared_root_removes_its_owned_contribution() {
+        let dir = tempfile::tempdir().unwrap();
+        let removed_root = dir.path().join("removed");
+        let surviving_root = dir.path().join("surviving");
+        std::fs::create_dir_all(&removed_root).unwrap();
+        std::fs::create_dir_all(&surviving_root).unwrap();
+        std::fs::write(
+            removed_root.join("a.jsonl"),
+            assistant_line("msg_a", "req_1", 100),
+        )
+        .unwrap();
+        std::fs::write(
+            surviving_root.join("b.jsonl"),
+            assistant_line("msg_b", "req_2", 200),
+        )
+        .unwrap();
+        let roots = vec![removed_root.clone(), surviving_root];
+        let mut state = ScanState::new();
+        assert!(matches!(
+            scan_incremental(&roots, &mut state),
+            ScanResult::Ok { .. }
+        ));
+
+        std::fs::remove_dir_all(&removed_root).unwrap();
+        let events = match scan_incremental(&roots, &mut state) {
+            ScanResult::Ok { events, .. } => events,
+            ScanResult::Fatal { error } => panic!("scan failed: {error}"),
+        };
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_b"));
+    }
+
+    #[test]
+    fn successful_empty_root_reconciles_when_another_root_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let emptied_root = dir.path().join("emptied");
+        let failing_root = dir.path().join("failing");
+        std::fs::create_dir_all(&emptied_root).unwrap();
+        std::fs::create_dir_all(&failing_root).unwrap();
+        let emptied_file = emptied_root.join("a.jsonl");
+        std::fs::write(&emptied_file, assistant_line("msg_a", "req_1", 100)).unwrap();
+        std::fs::write(
+            failing_root.join("b.jsonl"),
+            assistant_line("msg_b", "req_2", 200),
+        )
+        .unwrap();
+        let roots = vec![emptied_root.clone(), failing_root.clone()];
+        let mut state = ScanState::new();
+        assert!(matches!(
+            scan_incremental(&roots, &mut state),
+            ScanResult::Ok { .. }
+        ));
+
+        std::fs::remove_file(emptied_file).unwrap();
+        std::fs::remove_dir_all(&failing_root).unwrap();
+        std::fs::write(&failing_root, "not a directory").unwrap();
+        let events = match scan_incremental(&roots, &mut state) {
+            ScanResult::Ok { events, .. } => events,
+            ScanResult::Fatal { error } => panic!("successful root must prevent fatal: {error}"),
+        };
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_b"));
+    }
+
+    fn replace_file(path: &std::path::Path, bytes: &[u8]) {
+        let replacement = path.with_extension("replacement");
+        std::fs::write(&replacement, bytes).unwrap();
+        #[cfg(windows)]
+        std::fs::remove_file(path).unwrap();
+        std::fs::rename(replacement, path).unwrap();
     }
 }
