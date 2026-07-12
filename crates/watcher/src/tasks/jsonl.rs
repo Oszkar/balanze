@@ -11,13 +11,14 @@
 //! longer re-scans JSONL (the 60s fallback here replaces that leg), so there is
 //! exactly one byte-cursor set and one emitter for the `ClaudeJsonl` source.
 
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use claude_parser::{
-    IncrementalParser, ParseError, UsageEvent, dedup_events, find_all_claude_projects_dirs,
-    find_jsonl_files,
+    IncrementalParser, IncrementalRead, ParseError, UsageEvent, dedup_events,
+    find_all_claude_projects_dirs, find_jsonl_files,
 };
 use notify::{RecursiveMode, Watcher as _};
 use state_coordinator::{
@@ -37,19 +38,19 @@ const DEBOUNCE: Duration = Duration::from_millis(300);
 /// incrementally (only new bytes), so it costs nothing like a full reparse.
 const FALLBACK_POLL: Duration = Duration::from_secs(60);
 
-/// Per-task incremental scan state: the byte-cursor parser plus the running
-/// deduped event set. Threaded through `spawn_blocking` (moved in, moved back
-/// out) so the blocking file I/O never runs on a tokio worker (AGENTS.md §2.1).
+/// Per-task incremental scan state: the byte-cursor parser plus each file's
+/// owned event contribution. Threaded through `spawn_blocking` (moved in,
+/// moved back out) so blocking file I/O never runs on a tokio worker.
 struct ScanState {
     parser: IncrementalParser,
-    accumulated: Vec<UsageEvent>,
+    by_file: BTreeMap<PathBuf, Vec<UsageEvent>>,
 }
 
 impl ScanState {
     fn new() -> Self {
         Self {
             parser: IncrementalParser::new(),
-            accumulated: Vec::new(),
+            by_file: BTreeMap::new(),
         }
     }
 }
@@ -164,7 +165,7 @@ enum ScanResult {
 
 /// Run the incremental scan off the tokio runtime, then emit the result to the
 /// coordinator. `state` is moved into the blocking task and moved back out so
-/// the byte cursors + accumulated events persist across calls. On a panic the
+/// the byte cursors + per-file events persist across calls. On a panic the
 /// state is lost and a fresh one is returned - the next scan then re-reads
 /// every file from byte 0 (the launch path), which is the safe recovery.
 async fn emit_incremental(
@@ -222,35 +223,36 @@ async fn emit_incremental(
     }
 }
 
-/// Walk all roots, incrementally read newly-appended bytes from each file via
-/// the per-file byte cursor, accumulate into the running deduped event set, and
-/// return it. Only NEW bytes are read + parsed after a file's first scan, so
-/// this stays flat-CPU during active Claude Code sessions (AGENTS.md §3.1).
+/// Walk all roots, incrementally update each file's owned event contribution,
+/// then flatten and deduplicate across files. Appends extend one contribution;
+/// truncations and rewrites replace it so vanished events cannot linger.
 /// Runs on a blocking worker via `spawn_blocking`; does NOT touch the runtime.
 ///
 /// Per-root walk failures are logged + skipped so one bad root doesn't lose the
 /// others. `Fatal` is returned only when NO files were collected from any root
 /// AND at least one root failed - so an unreadable root can't masquerade as an
 /// empty-but-fine window. Per-file read errors:
-/// - `FileMissing` (the file vanished between walk and read): drop its cursor so
-///   a re-created file is re-read from byte 0; skip it this round.
-/// - any other parse / IO error: log + leave the cursor parked. The good prefix
-///   already parsed stays accumulated, and only the small un-parsed tail is
-///   retried next time - never a full re-read.
-///
-/// Accumulation note: `read_incremental` returns per-file deltas, so we keep a
-/// running `accumulated` set and `dedup_events` it each round. Claude Code only
-/// appends to JSONL, so a file's events arrive once; the dedup collapses the
-/// rare same-event-twice (a defensive cursor reset, or a session mirrored under
-/// two roots). Events from a deleted file linger in `accumulated` (Claude does
-/// not delete sessions), and old events are not pruned - both match the prior
-/// full-scan behavior, which also held every event from every file.
+/// - `FileMissing` removes the vanished file's cursor and contribution.
+/// - any other parse / IO error logs and retains the last good contribution.
 fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
     let mut files: Vec<PathBuf> = Vec::new();
+    let mut reconciled_roots: Vec<&PathBuf> = Vec::new();
     let mut walk_err: Option<String> = None;
     for root in roots {
         match find_jsonl_files(root) {
-            Ok(mut f) => files.append(&mut f),
+            Ok(mut f) => {
+                reconciled_roots.push(root);
+                files.append(&mut f);
+            }
+            Err(ParseError::FileMissing(_)) => {
+                // A watched root that disappeared is authoritative empty
+                // state, not a failed read. Reconcile its owned events away.
+                reconciled_roots.push(root);
+                tracing::debug!(
+                    "watcher/jsonl: root disappeared; clearing contributions under {}",
+                    root.display()
+                );
+            }
             Err(e) => {
                 let msg = format!("find_jsonl_files {}: {e}", root.display());
                 tracing::warn!("watcher/jsonl: skipping root ({msg})");
@@ -258,20 +260,42 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
             }
         }
     }
-    if files.is_empty() {
+    if reconciled_roots.is_empty() {
         if let Some(error) = walk_err {
             return ScanResult::Fatal { error };
         }
     }
 
     let files_scanned = files.len();
+    let discovered: HashSet<&PathBuf> = files.iter().collect();
+    let removed: Vec<PathBuf> = state
+        .by_file
+        .keys()
+        .filter(|path| {
+            reconciled_roots.iter().any(|root| path.starts_with(root)) && !discovered.contains(path)
+        })
+        .cloned()
+        .collect();
+    for path in removed {
+        state.by_file.remove(&path);
+        state.parser.invalidate(&path);
+    }
+
     for path in &files {
         match state.parser.read_incremental(path) {
-            Ok(new_events) => state.accumulated.extend(new_events),
+            Ok(IncrementalRead::Append(new_events)) => {
+                state
+                    .by_file
+                    .entry(path.clone())
+                    .or_default()
+                    .extend(new_events);
+            }
+            Ok(IncrementalRead::Replace(events)) => {
+                state.by_file.insert(path.clone(), events);
+            }
             Err(ParseError::FileMissing(_)) => {
-                // Vanished between walk and read; forget the cursor so a
-                // re-created file at this path is re-read from byte 0.
                 state.parser.invalidate(path);
+                state.by_file.remove(path);
             }
             Err(e) => {
                 tracing::warn!(
@@ -281,10 +305,215 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
             }
         }
     }
-    dedup_events(&mut state.accumulated);
+    // Preserve the walker's newest-first order for the normal path so the
+    // existing first-wins dedup behavior stays stable. Contributions retained
+    // from a temporarily unreadable root follow in deterministic path order.
+    let mut emitted = HashSet::new();
+    let mut events = Vec::new();
+    for path in &files {
+        if emitted.insert(path.clone()) {
+            if let Some(file_events) = state.by_file.get(path) {
+                events.extend(file_events.iter().cloned());
+            }
+        }
+    }
+    for (path, file_events) in &state.by_file {
+        if emitted.insert(path.clone()) {
+            events.extend(file_events.iter().cloned());
+        }
+    }
+    dedup_events(&mut events);
 
     ScanResult::Ok {
-        events: state.accumulated.clone(),
+        events,
         files_scanned,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn assistant_line(msg_id: &str, req_id: &str, output: u64) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"2026-05-06T14:28:06.800Z","requestId":"{req_id}","message":{{"id":"{msg_id}","model":"m","usage":{{"input_tokens":1,"output_tokens":{output}}}}}}}"#
+        ) + "\n"
+    }
+
+    fn scanned_events(root: &std::path::Path, state: &mut ScanState) -> Vec<UsageEvent> {
+        match scan_incremental(&[root.to_path_buf()], state) {
+            ScanResult::Ok { events, .. } => events,
+            ScanResult::Fatal { error } => panic!("scan failed: {error}"),
+        }
+    }
+
+    fn advance_mtime(path: &std::path::Path) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(SystemTime::now() + Duration::from_secs(2))
+            .unwrap();
+    }
+
+    #[test]
+    fn truncation_replaces_file_contribution_and_removes_vanished_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            assistant_line("msg_a", "req_1", 100) + &assistant_line("msg_b", "req_2", 200),
+        )
+        .unwrap();
+        let mut state = ScanState::new();
+        assert_eq!(scanned_events(dir.path(), &mut state).len(), 2);
+
+        std::fs::write(&path, assistant_line("msg_c", "req_3", 300)).unwrap();
+        let events = scanned_events(dir.path(), &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_c"));
+    }
+
+    #[test]
+    fn same_size_rewrite_replaces_changed_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let original = assistant_line("msg_a", "req_1", 100);
+        let replacement = assistant_line("msg_b", "req_2", 200);
+        assert_eq!(original.len(), replacement.len());
+        std::fs::write(&path, original).unwrap();
+        let mut state = ScanState::new();
+        assert_eq!(scanned_events(dir.path(), &mut state)[0].output_tokens, 100);
+
+        std::fs::write(&path, replacement).unwrap();
+        advance_mtime(&path);
+        let events = scanned_events(dir.path(), &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_b"));
+        assert_eq!(events[0].output_tokens, 200);
+    }
+
+    #[test]
+    fn larger_atomic_rewrite_replaces_obsolete_file_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let original = assistant_line("msg_a", "req_1", 100);
+        std::fs::write(&path, &original).unwrap();
+        let mut state = ScanState::new();
+        assert_eq!(scanned_events(dir.path(), &mut state).len(), 1);
+
+        let replacement =
+            assistant_line("msg_b", "req_2", 200) + &assistant_line("msg_c", "req_3", 300);
+        assert!(replacement.len() > original.len());
+        replace_file(&path, replacement.as_bytes());
+
+        let events = scanned_events(dir.path(), &mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.message_id.as_deref() != Some("msg_a"))
+        );
+    }
+
+    #[test]
+    fn duplicate_ids_across_files_remain_deduplicated() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("a.jsonl"),
+            assistant_line("msg_shared", "req_shared", 100),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("b.jsonl"),
+            assistant_line("msg_shared", "req_shared", 100),
+        )
+        .unwrap();
+
+        let events = scanned_events(dir.path(), &mut ScanState::new());
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn deleted_file_removes_its_owned_contribution() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, assistant_line("msg_a", "req_1", 100)).unwrap();
+        let mut state = ScanState::new();
+        assert_eq!(scanned_events(dir.path(), &mut state).len(), 1);
+
+        std::fs::remove_file(path).unwrap();
+        assert!(scanned_events(dir.path(), &mut state).is_empty());
+    }
+
+    #[test]
+    fn disappeared_root_removes_its_owned_contribution() {
+        let dir = tempfile::tempdir().unwrap();
+        let removed_root = dir.path().join("removed");
+        let surviving_root = dir.path().join("surviving");
+        std::fs::create_dir_all(&removed_root).unwrap();
+        std::fs::create_dir_all(&surviving_root).unwrap();
+        std::fs::write(
+            removed_root.join("a.jsonl"),
+            assistant_line("msg_a", "req_1", 100),
+        )
+        .unwrap();
+        std::fs::write(
+            surviving_root.join("b.jsonl"),
+            assistant_line("msg_b", "req_2", 200),
+        )
+        .unwrap();
+        let roots = vec![removed_root.clone(), surviving_root];
+        let mut state = ScanState::new();
+        assert!(matches!(
+            scan_incremental(&roots, &mut state),
+            ScanResult::Ok { .. }
+        ));
+
+        std::fs::remove_dir_all(&removed_root).unwrap();
+        let events = match scan_incremental(&roots, &mut state) {
+            ScanResult::Ok { events, .. } => events,
+            ScanResult::Fatal { error } => panic!("scan failed: {error}"),
+        };
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_b"));
+    }
+
+    #[test]
+    fn successful_empty_root_reconciles_when_another_root_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let emptied_root = dir.path().join("emptied");
+        let failing_root = dir.path().join("failing");
+        std::fs::create_dir_all(&emptied_root).unwrap();
+        std::fs::create_dir_all(&failing_root).unwrap();
+        let emptied_file = emptied_root.join("a.jsonl");
+        std::fs::write(&emptied_file, assistant_line("msg_a", "req_1", 100)).unwrap();
+        std::fs::write(
+            failing_root.join("b.jsonl"),
+            assistant_line("msg_b", "req_2", 200),
+        )
+        .unwrap();
+        let roots = vec![emptied_root.clone(), failing_root.clone()];
+        let mut state = ScanState::new();
+        assert!(matches!(
+            scan_incremental(&roots, &mut state),
+            ScanResult::Ok { .. }
+        ));
+
+        std::fs::remove_file(emptied_file).unwrap();
+        std::fs::remove_dir_all(&failing_root).unwrap();
+        std::fs::write(&failing_root, "not a directory").unwrap();
+        let events = match scan_incremental(&roots, &mut state) {
+            ScanResult::Ok { events, .. } => events,
+            ScanResult::Fatal { error } => panic!("successful root must prevent fatal: {error}"),
+        };
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_b"));
+    }
+
+    fn replace_file(path: &std::path::Path, bytes: &[u8]) {
+        let replacement = path.with_extension("replacement");
+        std::fs::write(&replacement, bytes).unwrap();
+        #[cfg(windows)]
+        std::fs::remove_file(path).unwrap();
+        std::fs::rename(replacement, path).unwrap();
     }
 }

@@ -7,6 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 ## [Unreleased]
 
 ### Changed
+- **Local source ingestion follows file replacement** - Claude JSONL truncations, atomic rewrites, and deletions now replace or remove only that file's owned events before cross-file deduplication; partial UTF-8 writes wait for a terminating newline, and Codex session traversal stays inside its configured root without following directory cycles.
 - **Claude credentials are read-only on every platform** - Balanze no longer exchanges Claude Code's rotating refresh token or writes file-backed credentials. Expired or rejected credentials now consistently ask the user to run `claude login`; a future explicit file-refresh opt-in may be added separately.
 - **Atomic-write durability errors are honest** - Unix parent-directory fsync failures are returned after rename instead of being silently treated as a fully durable success.
 

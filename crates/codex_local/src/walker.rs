@@ -7,6 +7,7 @@
 //! tree don't immediately break us - anything matching the
 //! `rollout-*.jsonl` filename pattern is considered a session file.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -96,18 +97,30 @@ pub fn find_codex_sessions_dir() -> Result<PathBuf, ParseError> {
 ///   data crates") but the choice is intentional: a single unreadable
 ///   entry should not break the whole snapshot.
 ///
-/// Walks arbitrarily deep - the YYYY/MM/DD nesting Codex CLI uses
-/// today is not assumed; any depth works.
+/// Walks arbitrarily deep - the YYYY/MM/DD nesting Codex CLI uses today is not
+/// assumed. Canonical containment and a visited-directory set prevent linked
+/// subtrees from escaping `root` or forming traversal cycles.
 pub fn find_latest_session(root: &Path) -> Result<Option<PathBuf>, ParseError> {
     if !root.exists() {
         return Err(ParseError::FileMissing(root.to_path_buf()));
     }
+    let canonical_root = canonicalize(root)?;
+    let mut visited = HashSet::new();
     let mut best: Option<(SystemTime, PathBuf)> = None;
-    walk(root, &mut best)?;
+    walk(root, &canonical_root, &mut visited, &mut best)?;
     Ok(best.map(|(_, p)| p))
 }
 
-fn walk(dir: &Path, best: &mut Option<(SystemTime, PathBuf)>) -> Result<(), ParseError> {
+fn walk(
+    dir: &Path,
+    canonical_root: &Path,
+    visited: &mut HashSet<PathBuf>,
+    best: &mut Option<(SystemTime, PathBuf)>,
+) -> Result<(), ParseError> {
+    let canonical_dir = canonicalize(dir)?;
+    if !canonical_dir.starts_with(canonical_root) || !visited.insert(canonical_dir) {
+        return Ok(());
+    }
     let entries = std::fs::read_dir(dir).map_err(|source| ParseError::IoError {
         path: dir.to_path_buf(),
         source,
@@ -121,12 +134,16 @@ fn walk(dir: &Path, best: &mut Option<(SystemTime, PathBuf)>) -> Result<(), Pars
             Err(_) => continue,
         };
         let path = entry.path();
+        match std::fs::canonicalize(&path) {
+            Ok(path) if path.starts_with(canonical_root) => {}
+            Ok(_) | Err(_) => continue,
+        }
         let metadata = match entry.metadata() {
             Ok(m) => m,
             Err(_) => continue, // best-effort skip; see doc-comment
         };
         if metadata.is_dir() {
-            walk(&path, best)?; // subtree IO errors propagate (loud)
+            walk(&path, canonical_root, visited, best)?;
             continue;
         }
         if !metadata.is_file() {
@@ -164,15 +181,26 @@ pub fn collect_sessions_newest_first(root: &Path) -> Result<Vec<PathBuf>, ParseE
     if !root.exists() {
         return Err(ParseError::FileMissing(root.to_path_buf()));
     }
+    let canonical_root = canonicalize(root)?;
+    let mut visited = HashSet::new();
     let mut all: Vec<(SystemTime, PathBuf)> = Vec::new();
-    walk_all(root, &mut all)?;
+    walk_all(root, &canonical_root, &mut visited, &mut all)?;
     // Descending by mtime; PathBuf tiebreaker keeps the order deterministic
     // when two files share an mtime (filesystem mtime resolution varies).
     all.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     Ok(all.into_iter().map(|(_, p)| p).collect())
 }
 
-fn walk_all(dir: &Path, out: &mut Vec<(SystemTime, PathBuf)>) -> Result<(), ParseError> {
+fn walk_all(
+    dir: &Path,
+    canonical_root: &Path,
+    visited: &mut HashSet<PathBuf>,
+    out: &mut Vec<(SystemTime, PathBuf)>,
+) -> Result<(), ParseError> {
+    let canonical_dir = canonicalize(dir)?;
+    if !canonical_dir.starts_with(canonical_root) || !visited.insert(canonical_dir) {
+        return Ok(());
+    }
     let entries = std::fs::read_dir(dir).map_err(|source| ParseError::IoError {
         path: dir.to_path_buf(),
         source,
@@ -183,12 +211,16 @@ fn walk_all(dir: &Path, out: &mut Vec<(SystemTime, PathBuf)>) -> Result<(), Pars
             Err(_) => continue,
         };
         let path = entry.path();
+        match std::fs::canonicalize(&path) {
+            Ok(path) if path.starts_with(canonical_root) => {}
+            Ok(_) | Err(_) => continue,
+        }
         let metadata = match entry.metadata() {
             Ok(m) => m,
             Err(_) => continue,
         };
         if metadata.is_dir() {
-            walk_all(&path, out)?;
+            walk_all(&path, canonical_root, visited, out)?;
             continue;
         }
         if !metadata.is_file() {
@@ -205,6 +237,13 @@ fn walk_all(dir: &Path, out: &mut Vec<(SystemTime, PathBuf)>) -> Result<(), Pars
         out.push((mtime, path));
     }
     Ok(())
+}
+
+fn canonicalize(path: &Path) -> Result<PathBuf, ParseError> {
+    std::fs::canonicalize(path).map_err(|source| ParseError::IoError {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(test)]
@@ -385,6 +424,59 @@ mod tests {
             Err(ParseError::FileMissing(p)) => assert_eq!(p, nonexistent),
             other => panic!("expected FileMissing, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walkers_skip_symlink_cycles_and_tree_escapes() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("sessions");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        touch_jsonl(&root.join("rollout-inside.jsonl"), "{}", -60);
+        touch_jsonl(&outside.join("rollout-outside.jsonl"), "{}", 0);
+        symlink(&root, root.join("nested/cycle")).unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+
+        let latest = find_latest_session(&root).unwrap().unwrap();
+        assert!(latest.ends_with("rollout-inside.jsonl"));
+        let all = collect_sessions_newest_first(&root).unwrap();
+        assert_eq!(all, vec![root.join("rollout-inside.jsonl")]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn walkers_skip_directory_link_cycles_and_tree_escapes_when_supported() {
+        use std::io::ErrorKind;
+        use std::os::windows::fs::symlink_dir;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("sessions");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        touch_jsonl(&root.join("rollout-inside.jsonl"), "{}", -60);
+        touch_jsonl(&outside.join("rollout-outside.jsonl"), "{}", 0);
+
+        for (target, link) in [
+            (&root, root.join("nested/cycle")),
+            (&outside, root.join("escape")),
+        ] {
+            if let Err(error) = symlink_dir(target, link) {
+                if error.kind() == ErrorKind::PermissionDenied {
+                    return;
+                }
+                panic!("failed to create directory link: {error}");
+            }
+        }
+
+        let latest = find_latest_session(&root).unwrap().unwrap();
+        assert!(latest.ends_with("rollout-inside.jsonl"));
+        let all = collect_sessions_newest_first(&root).unwrap();
+        assert_eq!(all, vec![root.join("rollout-inside.jsonl")]);
     }
 
     #[test]
