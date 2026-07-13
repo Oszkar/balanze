@@ -10,7 +10,7 @@ If the handler is attached correctly (above) and clicks still don't fire on macO
 
 ## "JSONL parser eats 100% CPU during an active Claude session"
 
-The incremental-read cursor isn't working - the parser is doing a full re-parse on every notify event. Check `crates/claude_parser/`: on each watch event the parser should seek to the saved `byte_pos`, read to EOF, parse new lines only, then update the cursor. Full reparse happens only on launch and on explicit `refresh_now()`. Detect atomic rewrites via `(current.size, current.mtime)` vs the stored cursor - never just file size.
+The incremental-read cursor isn't working - the parser is doing a full re-parse on every notify event. Check `crates/claude_parser/`: on each watch event the parser should seek to the saved `byte_pos`, read to EOF, parse new lines only, then update the cursor. Full reparse happens only on launch and on explicit `refresh_now()`. Detect atomic replacements via platform file identity (device/inode on Unix, volume/file-index on Windows) combined with mtime/size - never file size alone - and detect a growing in-place rewrite via bounded probes of the committed prefix (see AGENTS.md §3.1).
 
 ## "Two app instances running simultaneously"
 
@@ -18,7 +18,7 @@ The incremental-read cursor isn't working - the parser is doing a full re-parse 
 
 ## "Tray icon flickers"
 
-Tray repaint isn't deduped. The coordinator notifies the `Sink` on every snapshot update (and on a `StateMsg::Refresh` from popover-open / `refresh_now`); the production `TauriSink` should only call `tray.set_icon`/`tray.set_title` when the `(ColorBucket, title_text)` tuple differs from its `last_painted`. If you see flicker during idle, that dedup check is missing or comparing the wrong fields.
+Tray repaint isn't deduped. The coordinator notifies the `Sink` on every snapshot update (and on a `StateMsg::Refresh` from popover-open / `refresh_now`); the production `TauriSink` should only call `tray.set_icon`/`set_title`/`set_tooltip` when the `(ColorBucket, title, tooltip)` tuple differs from its `last_painted` - the tooltip is part of the key because it names the worst window, so a same-color/same-title repaint that only changed the tooltip must still paint. If you see flicker during idle, that dedup check is missing or comparing the wrong fields.
 
 ## "`cargo check` fails after bumping a Tauri dep"
 

@@ -7,9 +7,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 ## [Unreleased]
 
 ### Changed
-- **Local source ingestion follows file replacement** - Claude JSONL truncations, atomic rewrites, and deletions now replace or remove only that file's owned events before cross-file deduplication; partial UTF-8 writes wait for a terminating newline, and Codex session traversal stays inside its configured root without following directory cycles.
+- **Local source ingestion follows file replacement** - Claude JSONL truncations, atomic rewrites, growing in-place rewrites (detected via bounded probes of the committed prefix), and deletions now replace or remove only that file's owned events before cross-file deduplication; partial UTF-8 writes wait for a terminating newline, and Codex session traversal stays inside its configured root without following directory cycles.
 - **Claude credentials are read-only on every platform** - Balanze no longer exchanges Claude Code's rotating refresh token or writes file-backed credentials. Expired or rejected credentials now consistently ask the user to run `claude login`; a future explicit file-refresh opt-in may be added separately.
 - **Atomic-write durability errors are honest** - Unix parent-directory fsync failures are returned after rename instead of being silently treated as a fully durable success.
+- **Live settings changes no longer drop or race** - provider toggles and key changes now go through one supervised, acknowledged transition: the old watcher generation is joined before a disabled provider's cell clears, so a stale-generation update can never resurrect it. Snapshot writes move to a dedicated coalescing writer task, so a slow disk can't stall the tray or a status query.
+- **Claude Code OAuth re-reads and retries on token rotation again** - the CLI regained its one-time credential re-read and retry after a 401, matching the watcher's behavior; a transient watcher read failure no longer counts against the 30-minute rejected-credential cooldown. Provider errors now persist to `snapshot.json` without triggering a redundant `usage_updated` event or extra tray work.
 
 ## [0.4.3] - Codex maturity - 2026-07-10
 
