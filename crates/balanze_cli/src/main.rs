@@ -5,7 +5,7 @@
 //!   balanze-cli status               Compact status; --json for machine-readable, --sections for detail
 //!   balanze-cli watch                Live view: streaming compact view (--json for JSONL stream)
 //!   balanze-cli doctor               Diagnose each integration; exit codes: auth=3, net=4, other=1, strict-warn=5
-//!   balanze-cli export               Export usage history as CSV (not yet implemented)
+//!   balanze-cli export               Re-derive usage history and export it as CSV
 //!   balanze-cli completions <shell>  Print a shell completion script to stdout
 //!   balanze-cli man                  Print the man page (roff) to stdout [hidden]
 //!   balanze-cli setup                Interactive auth wizard

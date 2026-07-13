@@ -69,6 +69,7 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
 
     let mut coordinator_exited = false;
     let mut command_error = None;
+    let mut fatal = None;
     tokio::select! {
         res = tokio::signal::ctrl_c() => {
             // `ctrl_c()` returns io::Result<()> - installing the OS signal
@@ -86,18 +87,19 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
         res = &mut coord_join => {
             coordinator_exited = true;
             tracing::error!("coordinator task exited unexpectedly: {res:?}");
-            eprintln!(
-                "\nfatal: state_coordinator task exited unexpectedly. \
+            fatal = Some(
+                "state_coordinator task exited unexpectedly. \
                  See `BALANZE_LOG=debug` output for detail. Restart `--watch` to recover."
+                    .to_string(),
             );
         }
         Some(label) = watched.recv_death() => {
             tracing::error!("watcher task '{label}' exited unexpectedly");
-            eprintln!(
-                "\nfatal: watcher task '{label}' exited unexpectedly. \
+            fatal = Some(format!(
+                "watcher task '{label}' exited unexpectedly. \
                  The data source it covers is no longer live. \
                  See `BALANZE_LOG=debug` output for detail. Restart `--watch` to recover."
-            );
+            ));
         }
     }
     watched.shutdown().await;
@@ -107,7 +109,18 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
             .await
             .map_err(|error| anyhow::anyhow!("coordinator shutdown failed: {error}"))?;
     }
-    command_error.map_or(Ok(()), Err)
+    finish_watch(command_error, fatal)
+}
+
+/// Fold the supervisor outcome into the command result. Fatal task death must
+/// cross the CLI boundary as an error so `main` returns `ExitClass::Other` (1),
+/// while Ctrl-C and a user TUI quit remain successful exits.
+fn finish_watch(command_error: Option<anyhow::Error>, fatal: Option<String>) -> Result<()> {
+    match (command_error, fatal) {
+        (Some(error), _) => Err(error),
+        (None, Some(message)) => Err(anyhow::anyhow!(message)),
+        (None, None) => Ok(()),
+    }
 }
 
 /// TUI variant of the watch supervisor. Spawns the coordinator with a
@@ -186,10 +199,29 @@ async fn run_tui_mode() -> Result<()> {
             .map_err(|error| anyhow::anyhow!("coordinator shutdown failed: {error}"))?;
     }
     // The select dropped run_tui's TerminalGuard on the way out, restoring the
-    // terminal. Print any fatal hint NOW, on the normal screen (not the alt
-    // screen, which the restore just tore down).
-    if let Some(msg) = fatal {
-        eprintln!("\nfatal: {msg}");
+    // terminal. Returning the fatal error now lets `main` print it on the normal
+    // screen and classify the process exit as non-zero.
+    finish_watch(command_error, fatal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::finish_watch;
+
+    #[test]
+    fn clean_watch_shutdown_is_successful() {
+        assert!(finish_watch(None, None).is_ok());
     }
-    command_error.map_or(Ok(()), Err)
+
+    #[test]
+    fn fatal_watcher_and_coordinator_shutdowns_are_errors() {
+        for message in [
+            "watcher task exited unexpectedly",
+            "state_coordinator task exited unexpectedly",
+        ] {
+            let error = finish_watch(None, Some(message.to_string()))
+                .expect_err("fatal supervisor outcome must produce exit code 1");
+            assert_eq!(error.to_string(), message);
+        }
+    }
 }

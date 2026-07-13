@@ -704,6 +704,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tui_matches_cross_surface_rounded_threshold_table() {
+        let cases = [
+            (49.4, Color::Green),
+            (49.5, Color::Yellow),
+            (74.4, Color::Yellow),
+            (
+                74.5,
+                Color::Rgb(TRAY_ORANGE.0, TRAY_ORANGE.1, TRAY_ORANGE.2),
+            ),
+            (
+                89.4,
+                Color::Rgb(TRAY_ORANGE.0, TRAY_ORANGE.1, TRAY_ORANGE.2),
+            ),
+            (89.5, Color::Red),
+        ];
+
+        for (percent, expected) in cases {
+            let backend = TestBackend::new(20, 1);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| frame.render_widget(quota_gauge("quota", percent), frame.area()))
+                .unwrap();
+            assert_eq!(
+                terminal.backend().buffer()[(0, 0)].fg,
+                expected,
+                "percent={percent}"
+            );
+        }
+    }
+
     // -- draw_ui goldens ---------------------------------------------------
 
     /// Flatten a TestBackend buffer into a single string for substring asserts.

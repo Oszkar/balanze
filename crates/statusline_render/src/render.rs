@@ -740,6 +740,37 @@ mod tests {
     }
 
     #[test]
+    fn statusline_matches_cross_surface_rounded_threshold_table() {
+        let cases = [
+            (49.4, "\x1b[38;2;158;206;106m"),
+            (49.5, "\x1b[38;2;224;175;104m"),
+            (74.4, "\x1b[38;2;224;175;104m"),
+            (74.5, "\x1b[38;2;255;158;100m"),
+            (89.4, "\x1b[38;2;255;158;100m"),
+            (89.5, "\x1b[1;38;2;247;118;142m"),
+        ];
+
+        for (percent, expected_style) in cases {
+            let c = cfg();
+            let mut s = snap();
+            for window in &mut s.rate_limits.as_mut().unwrap().windows {
+                window.used_percent = percent;
+            }
+            let out = render(&RenderInput {
+                snapshot: &s,
+                cross: None,
+                config: &c,
+                now: now(),
+                color: true,
+            });
+            assert!(
+                out.contains(expected_style),
+                "percent={percent}, output={out:?}"
+            );
+        }
+    }
+
+    #[test]
     fn color_true_oranges_band_75_to_90() {
         // 5h at 80% -> Orange (>=75, <90); orange = fg:#ff9e64 = rgb(255,158,100).
         let c = cfg();

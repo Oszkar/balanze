@@ -15,22 +15,20 @@ const base: Snapshot = {
 };
 
 describe('quota', () => {
-  it('tone is 4-stage green/yellow/orange/red at 50/75/90 (matching window::Severity)', () => {
-    expect(quotaTone(20)).toBe('ok');
-    expect(quotaTone(49)).toBe('ok');
-    expect(quotaTone(50)).toBe('warn');
-    expect(quotaTone(74)).toBe('warn');
-    expect(quotaTone(75)).toBe('orange');
-    expect(quotaTone(89)).toBe('orange');
-    expect(quotaTone(90)).toBe('bad');
-    expect(quotaTone(95)).toBe('bad');
-  });
-  it('classifies the rounded value so tone matches the toFixed(0) label', () => {
-    expect(quotaTone(49.6)).toBe('warn'); // shows "50%"
-    expect(quotaTone(74.6)).toBe('orange'); // shows "75%"
-    expect(quotaTone(89.6)).toBe('bad'); // shows "90%"
-    expect(quotaTone(49.4)).toBe('ok'); // shows "49%"
-    expect(quotaTone(74.4)).toBe('warn'); // shows "74%"
+  it('keeps Grid and Cards on the cross-surface rounded threshold table', () => {
+    // Both frontend views receive their tone from quotaTone. These cases match
+    // the tray, CLI, TUI, and statusline parity tables at every rounded cutoff.
+    const cases = [
+      [49.4, 'ok'],
+      [49.5, 'warn'],
+      [74.4, 'warn'],
+      [74.5, 'orange'],
+      [89.4, 'orange'],
+      [89.5, 'bad'],
+      [125, 'bad'],
+    ] as const;
+
+    for (const [pct, expected] of cases) expect(quotaTone(pct)).toBe(expected);
   });
   it('prefers statusline over oauth', () => {
     const s: Snapshot = { ...base,

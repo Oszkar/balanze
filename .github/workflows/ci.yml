@@ -91,6 +91,9 @@ jobs:
       - name: svelte-check
         run: bun run check
 
+      - name: frontend unit tests
+        run: bun run test
+
   cross-platform:
     name: cross-platform
     # Only fires on the weekly schedule + manual dispatch. NOT on PR or push,
