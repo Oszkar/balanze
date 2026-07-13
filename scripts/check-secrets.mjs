@@ -77,7 +77,7 @@ function redact(line) {
 // Only scan staged diff, skip .example files and this script. Markdown is
 // deliberately NOT excluded: a real key pasted into docs is still a leak.
 const diff = run(
-  'git diff --cached -U0 --diff-filter=ACMR -- . ":!*.example" ":!*.example.*" ":!*check-secrets*"',
+  'git diff --cached -U0 --diff-filter=ACMR -- . ":!*.example" ":!*.example.*" ":!scripts/check-secrets.mjs"',
 );
 
 if (diff) {

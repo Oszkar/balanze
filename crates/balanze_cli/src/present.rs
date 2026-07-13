@@ -32,7 +32,8 @@ pub(crate) const TRAY_ORANGE: (u8, u8, u8) = (0xd9, 0x6a, 0x2a);
 /// color bucket via the shared `window::Severity` classifier, so the CLI matrix
 /// agrees with the tray, popover, and statusline at 50 / 75 / 90.
 pub(crate) fn bucket_for_fraction(used: f64) -> Bucket {
-    match window::Severity::from_util((used * 100.0) as f32) {
+    let displayed_percent = (used * 100.0).round() as f32;
+    match window::Severity::from_util(displayed_percent) {
         window::Severity::Green => Bucket::Ok,
         window::Severity::Yellow => Bucket::Warn,
         window::Severity::Orange => Bucket::Orange,
@@ -58,17 +59,22 @@ mod tests {
 
     #[test]
     fn bucket_for_fraction_matches_severity_bands() {
-        // The CLI matrix inherits the shared `window::Severity` scale
-        // (Green/Yellow/Orange/Red at 50 / 75 / 90, inclusive `>=`); a change to
-        // those cutoffs flows here automatically, no manual cross-crate sync.
-        assert_eq!(bucket_for_fraction(0.0), Bucket::Ok);
-        assert_eq!(bucket_for_fraction(0.499), Bucket::Ok);
-        assert_eq!(bucket_for_fraction(0.50), Bucket::Warn);
-        assert_eq!(bucket_for_fraction(0.749), Bucket::Warn);
-        assert_eq!(bucket_for_fraction(0.75), Bucket::Orange);
-        assert_eq!(bucket_for_fraction(0.899), Bucket::Orange);
-        assert_eq!(bucket_for_fraction(0.90), Bucket::Critical);
-        assert_eq!(bucket_for_fraction(1.25), Bucket::Critical);
+        // The status and TUI surfaces inherit the shared `window::Severity`
+        // scale. Every quota surface classifies the rounded integer it presents,
+        // so values half a point below a cutoff enter the next band too.
+        let cases = [
+            (0.494, Bucket::Ok),
+            (0.495, Bucket::Warn),
+            (0.744, Bucket::Warn),
+            (0.745, Bucket::Orange),
+            (0.894, Bucket::Orange),
+            (0.895, Bucket::Critical),
+            (1.25, Bucket::Critical),
+        ];
+
+        for (used, expected) in cases {
+            assert_eq!(bucket_for_fraction(used), expected, "used={used}");
+        }
     }
 
     #[test]

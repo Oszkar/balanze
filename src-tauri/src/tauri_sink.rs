@@ -387,14 +387,24 @@ mod tests {
     }
 
     #[test]
-    fn bucket_thresholds() {
-        assert_eq!(ColorBucket::from_util(0.0), ColorBucket::Green);
-        assert_eq!(ColorBucket::from_util(49.9), ColorBucket::Green);
-        assert_eq!(ColorBucket::from_util(50.0), ColorBucket::Yellow);
-        assert_eq!(ColorBucket::from_util(74.9), ColorBucket::Yellow);
-        assert_eq!(ColorBucket::from_util(75.0), ColorBucket::Orange);
-        assert_eq!(ColorBucket::from_util(90.0), ColorBucket::Red);
-        assert_eq!(ColorBucket::from_util(150.0), ColorBucket::Red);
+    fn tray_matches_cross_surface_rounded_threshold_table() {
+        let cases = [
+            (49.4, ColorBucket::Green),
+            (49.5, ColorBucket::Yellow),
+            (74.4, ColorBucket::Yellow),
+            (74.5, ColorBucket::Orange),
+            (89.4, ColorBucket::Orange),
+            (89.5, ColorBucket::Red),
+            (125.0, ColorBucket::Red),
+        ];
+
+        for (util, expected) in cases {
+            let view = TrayView {
+                claude_5h: Some(util),
+                ..TrayView::default()
+            };
+            assert_eq!(bucket_for_view(&view, false), expected, "util={util}");
+        }
     }
 
     /// Build a Claude OAuth snapshot carrying a single 5-hour cadence at the
