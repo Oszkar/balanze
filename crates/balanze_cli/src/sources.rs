@@ -312,7 +312,36 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
 /// The real cross-provider sources for the statusline self-compose path.
 /// Codex = local files; OpenAI = Admin Costs API behind a short timeout. Calls
 /// NEITHER the Anthropic OAuth path NOR `snapshot_composer::compose` (AGENTS.md §3.1).
-pub(crate) struct LiveCrossSources;
+pub(crate) struct LiveCrossSources {
+    /// Resolve once per statusline invocation. The same owned value drives both
+    /// the on-disk fingerprint and the Authorization header, so an account
+    /// switch cannot mix one key's cache identity with another key's request.
+    openai_key: Result<Option<String>, String>,
+    openai_api_base: String,
+}
+
+impl LiveCrossSources {
+    pub(crate) fn resolve_once() -> Self {
+        Self {
+            openai_key: resolve_openai_key().map_err(|error| error.to_string()),
+            openai_api_base: openai_api_base(),
+        }
+    }
+
+    pub(crate) fn openai_fingerprint(&self) -> String {
+        statusline_render::cache::key_fingerprint(
+            self.openai_key.as_ref().ok().and_then(|key| key.as_deref()),
+        )
+    }
+
+    #[cfg(test)]
+    fn from_resolved(openai_key: Result<Option<String>, String>, openai_api_base: String) -> Self {
+        Self {
+            openai_key,
+            openai_api_base,
+        }
+    }
+}
 
 impl statusline_render::CrossSources for LiveCrossSources {
     async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String> {
@@ -320,15 +349,15 @@ impl statusline_render::CrossSources for LiveCrossSources {
         // `Err`, so self_compose serves the last-known value marked stale and
         // starts the cooldown instead of silently dropping the cell. Either way
         // the statusline never errors: self_compose handles both outcomes.
-        let key = match resolve_openai_key() {
-            Ok(Some(k)) => k,
+        let key = match &self.openai_key {
+            Ok(Some(key)) => key,
             Ok(None) => return Ok(None),
-            Err(e) => return Err(e.to_string()),
+            Err(error) => return Err(error.clone()),
         };
         // Short timeout: the statusline runs every turn; never hang the prompt.
         let costs = costs_this_month_with(
-            &openai_api_base(),
-            &key,
+            &self.openai_api_base,
+            key,
             std::time::Duration::from_secs(3),
             &backoff::BackoffPolicy::fail_fast(),
         )
@@ -354,6 +383,8 @@ mod tests {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    use statusline_render::CrossSources as _;
+
     fn oauth(token: &str) -> CredentialsClaudeAiOauth {
         CredentialsClaudeAiOauth {
             access_token: token.to_string(),
@@ -363,6 +394,32 @@ mod tests {
             rate_limit_tier: None,
             scopes: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn statusline_uses_the_same_resolved_key_for_fingerprint_and_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/organization/costs"))
+            .and(header("authorization", "Bearer resolved-once"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"object":"page","data":[],"has_more":false,"next_page":null}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let sources =
+            LiveCrossSources::from_resolved(Ok(Some("resolved-once".to_string())), server.uri());
+
+        assert_eq!(
+            sources.openai_fingerprint(),
+            statusline_render::cache::key_fingerprint(Some("resolved-once"))
+        );
+        assert_eq!(
+            sources.fetch_openai_total_micro_usd().await.unwrap(),
+            Some(0)
+        );
     }
 
     #[tokio::test]

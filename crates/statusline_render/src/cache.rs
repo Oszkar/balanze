@@ -8,7 +8,11 @@
 //! (3.4 secret hygiene). The 300s TTL IS the 3.1 politeness gate; the failure
 //! cooldown keeps a broken API from being retried every turn.
 
+use std::fs::OpenOptions;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -22,6 +26,47 @@ pub const OPENAI_TTL_SECS: i64 = 300;
 pub const NEGATIVE_COOLDOWN_SECS: i64 = 300;
 
 const FILE_NAME: &str = "openai-cost.json";
+const LEASE_FILE_PREFIX: &str = "openai-cost.refresh.";
+const LEASE_FILE_SUFFIX: &str = ".lease";
+// Recognized during a rolling upgrade so a process running the original
+// single-path protocol still excludes new contenders while its lease is live.
+const LEGACY_LEASE_FILE_NAME: &str = "openai-cost.refresh.lease";
+const REFRESH_LEASE_STALE_AFTER: StdDuration = StdDuration::from_secs(10);
+static LEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Result of attempting to become the single process allowed to refresh the
+/// OpenAI cache. `Busy` is not an error: the caller should serve stale data or
+/// wait for the current owner for a bounded period.
+pub(crate) enum LeaseAttempt {
+    Acquired(RefreshLease),
+    Busy,
+}
+
+/// A dependency-free interprocess lease backed by a uniquely named
+/// `create_new` candidate. Stale candidates are ignored, never deleted during
+/// acquisition, so a recovery contender cannot remove a live successor.
+pub(crate) struct RefreshLease {
+    path: PathBuf,
+    token: String,
+}
+
+impl Drop for RefreshLease {
+    fn drop(&mut self) {
+        match std::fs::read_to_string(&self.path) {
+            Ok(current) if current == self.token => {
+                if let Err(error) = std::fs::remove_file(&self.path) {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        tracing::debug!("statusline cache lease cleanup failed: {error}");
+                    }
+                }
+            }
+            Ok(_) | Err(_) => {
+                // Missing or replaced: a stale owner must not remove the
+                // successor lease now occupying the canonical path.
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpenAiCostEntry {
@@ -75,6 +120,87 @@ pub fn in_cooldown(entry: &OpenAiCostEntry, now: DateTime<Utc>) -> bool {
         .is_some_and(|t| now.signed_duration_since(t).num_seconds() < NEGATIVE_COOLDOWN_SECS)
 }
 
+/// Try to acquire the machine-wide OpenAI refresh lease. Each contender first
+/// creates a unique candidate and then yields if any other candidate is still
+/// live. Because acquisition never deletes a shared stale path, two recovery
+/// contenders cannot delete and replace each other's leases. A candidate older
+/// than the maximum 3-second HTTP request window plus scheduling margin is
+/// ignored as abandoned. A process suspended beyond that 10-second expiry has
+/// forfeited ownership and may overlap its successor after resuming; that is
+/// the deliberate stale-recovery boundary of this portable file lease.
+pub(crate) fn try_acquire_refresh_lease(dir: &Path) -> std::io::Result<LeaseAttempt> {
+    std::fs::create_dir_all(dir)?;
+
+    // Collisions are not expected because the token includes time, pid, and a
+    // process-local sequence, but retry rather than turning one into a failure.
+    for _ in 0..4 {
+        let token = lease_token();
+        let path = lease_path(dir, &token);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                if let Err(error) = file
+                    .write_all(token.as_bytes())
+                    .and_then(|()| file.sync_all())
+                {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error);
+                }
+                let lease = RefreshLease { path, token };
+                if has_live_competitor(dir, &lease.path, SystemTime::now())? {
+                    drop(lease);
+                    return Ok(LeaseAttempt::Busy);
+                }
+                return Ok(LeaseAttempt::Acquired(lease));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(LeaseAttempt::Busy)
+}
+
+fn lease_path(dir: &Path, token: &str) -> PathBuf {
+    dir.join(format!("{LEASE_FILE_PREFIX}{token}{LEASE_FILE_SUFFIX}"))
+}
+
+fn has_live_competitor(dir: &Path, own_path: &Path, now: SystemTime) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == own_path || !is_lease_candidate(&entry.file_name()) {
+            continue;
+        }
+        if !lease_is_stale(&path, now) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn is_lease_candidate(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    name == LEGACY_LEASE_FILE_NAME
+        || (name.starts_with(LEASE_FILE_PREFIX) && name.ends_with(LEASE_FILE_SUFFIX))
+}
+
+fn lease_token() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = LEASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{nanos}-{sequence}", std::process::id())
+}
+
+fn lease_is_stale(path: &Path, now: SystemTime) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| now.duration_since(modified).ok())
+        .is_some_and(|age| age >= REFRESH_LEASE_STALE_AFTER)
+}
+
 pub fn write_success(dir: &Path, fingerprint: &str, total_micro_usd: i64, now: DateTime<Utc>) {
     write(
         dir,
@@ -100,8 +226,8 @@ pub fn write_failure(dir: &Path, fingerprint: &str, now: DateTime<Utc>) {
     );
 }
 
-/// Best-effort atomic write (tmp + rename). Errors are logged at debug and
-/// swallowed - a cache write failure must never break the statusline.
+/// Best-effort durable atomic write. Errors are logged at debug and swallowed:
+/// a cache write failure must never break the statusline.
 fn write(dir: &Path, entry: &OpenAiCostEntry) {
     if let Err(e) = try_write(dir, entry) {
         tracing::debug!("statusline cache write failed: {e}");
@@ -111,13 +237,8 @@ fn write(dir: &Path, entry: &OpenAiCostEntry) {
 fn try_write(dir: &Path, entry: &OpenAiCostEntry) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let final_path = dir.join(FILE_NAME);
-    // Fixed tmp name: concurrent writers from distinct processes can silently lose the race (rename is still atomic, so the file is never corrupt). Acceptable for a best-effort cache.
-    let tmp_path = dir.join(format!("{FILE_NAME}.tmp"));
     let bytes = serde_json::to_vec(entry).map_err(std::io::Error::other)?;
-    std::fs::write(&tmp_path, &bytes)?;
-    // No sync_all: best-effort cache; a crash before flush just triggers a refetch.
-    std::fs::rename(&tmp_path, &final_path)?;
-    Ok(())
+    atomic_file::atomic_write(&final_path, &bytes, atomic_file::Permissions::Default)
 }
 
 #[cfg(test)]
@@ -221,5 +342,182 @@ mod tests {
         let p = cache_dir_path().expect("path");
         assert_eq!(p, dir.path().join("statusline"));
         unsafe { std::env::remove_var("BALANZE_CACHE_DIR_OVERRIDE") };
+    }
+
+    #[test]
+    fn live_lease_excludes_a_second_owner() {
+        let dir = tempdir().unwrap();
+        let first = match try_acquire_refresh_lease(dir.path()).unwrap() {
+            LeaseAttempt::Acquired(lease) => lease,
+            LeaseAttempt::Busy => panic!("first lease must be acquired"),
+        };
+        assert!(matches!(
+            try_acquire_refresh_lease(dir.path()).unwrap(),
+            LeaseAttempt::Busy
+        ));
+
+        drop(first);
+        assert!(matches!(
+            try_acquire_refresh_lease(dir.path()).unwrap(),
+            LeaseAttempt::Acquired(_)
+        ));
+    }
+
+    #[test]
+    fn abandoned_lease_recovers_and_old_owner_cannot_remove_successor() {
+        let dir = tempdir().unwrap();
+        let old = match try_acquire_refresh_lease(dir.path()).unwrap() {
+            LeaseAttempt::Acquired(lease) => lease,
+            LeaseAttempt::Busy => panic!("first lease must be acquired"),
+        };
+        let old_path = old.path.clone();
+        let file = OpenOptions::new().write(true).open(&old_path).unwrap();
+        file.set_modified(
+            SystemTime::now() - REFRESH_LEASE_STALE_AFTER - StdDuration::from_secs(1),
+        )
+        .unwrap();
+
+        let successor = match try_acquire_refresh_lease(dir.path()).unwrap() {
+            LeaseAttempt::Acquired(lease) => lease,
+            LeaseAttempt::Busy => panic!("stale lease must be recovered"),
+        };
+        let successor_path = successor.path.clone();
+        assert_ne!(old_path, successor_path, "recovery uses a unique candidate");
+        assert!(
+            old_path.exists(),
+            "acquisition must not delete the abandoned candidate"
+        );
+        drop(old);
+        assert!(
+            successor_path.exists(),
+            "old owner must preserve successor lease"
+        );
+        drop(successor);
+        assert!(
+            !successor_path.exists(),
+            "successor cleans up its own lease"
+        );
+    }
+
+    #[test]
+    fn concurrent_cache_publication_is_always_valid_json() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let dir = tempdir().unwrap();
+        write_success(dir.path(), "fp", 0, t0());
+        let running = Arc::new(AtomicUsize::new(4));
+        let mut writers = Vec::new();
+        for writer_id in 0..4 {
+            let path = dir.path().to_path_buf();
+            let running = Arc::clone(&running);
+            writers.push(std::thread::spawn(move || {
+                for value in 0..100 {
+                    write_success(&path, "fp", writer_id * 100 + value, t0());
+                }
+                running.fetch_sub(1, Ordering::AcqRel);
+            }));
+        }
+
+        while running.load(Ordering::Acquire) != 0 {
+            let bytes = std::fs::read(dir.path().join(FILE_NAME)).unwrap();
+            let entry: OpenAiCostEntry = serde_json::from_slice(&bytes)
+                .expect("atomic publication must expose a complete JSON document");
+            assert_eq!(entry.fingerprint, "fp");
+        }
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        assert!(read(dir.path(), "fp").is_some());
+    }
+
+    #[test]
+    fn stale_lease_recovery_is_exclusive_across_processes() {
+        let dir = tempdir().unwrap();
+        let abandoned = dir
+            .path()
+            .join(format!("{LEASE_FILE_PREFIX}abandoned{LEASE_FILE_SUFFIX}"));
+        std::fs::write(&abandoned, b"abandoned").unwrap();
+        let file = OpenOptions::new().write(true).open(&abandoned).unwrap();
+        file.set_modified(
+            SystemTime::now() - REFRESH_LEASE_STALE_AFTER - StdDuration::from_secs(1),
+        )
+        .unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let mut children = Vec::new();
+        for child_id in 0..2 {
+            children.push(
+                std::process::Command::new(&executable)
+                    .args([
+                        "--exact",
+                        "cache::tests::refresh_lease_process_helper",
+                        "--nocapture",
+                    ])
+                    .env("BALANZE_LEASE_TEST_DIR", dir.path())
+                    .env("BALANZE_LEASE_TEST_CHILD", child_id.to_string())
+                    .spawn()
+                    .unwrap(),
+            );
+        }
+
+        wait_for_test_file(&dir.path().join("ready-0"));
+        wait_for_test_file(&dir.path().join("ready-1"));
+        std::fs::write(dir.path().join("start"), b"go").unwrap();
+        for mut child in children {
+            assert!(child.wait().unwrap().success());
+        }
+        assert!(
+            abandoned.exists(),
+            "racing recovery processes must not delete the abandoned candidate"
+        );
+
+        let outcomes = [
+            std::fs::read_to_string(dir.path().join("result-0")).unwrap(),
+            std::fs::read_to_string(dir.path().join("result-1")).unwrap(),
+        ];
+        assert!(
+            outcomes
+                .iter()
+                .filter(|outcome| *outcome == "acquired")
+                .count()
+                <= 1,
+            "stale recovery must never produce two owners: {outcomes:?}"
+        );
+        assert!(matches!(
+            try_acquire_refresh_lease(dir.path()).unwrap(),
+            LeaseAttempt::Acquired(_)
+        ));
+    }
+
+    #[test]
+    fn refresh_lease_process_helper() {
+        let Some(dir) = std::env::var_os("BALANZE_LEASE_TEST_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let child_id = std::env::var("BALANZE_LEASE_TEST_CHILD").unwrap();
+        std::fs::write(dir.join(format!("ready-{child_id}")), b"ready").unwrap();
+        wait_for_test_file(&dir.join("start"));
+
+        let outcome = match try_acquire_refresh_lease(&dir).unwrap() {
+            LeaseAttempt::Acquired(_lease) => {
+                std::fs::write(dir.join(format!("result-{child_id}")), b"acquired").unwrap();
+                std::thread::sleep(StdDuration::from_millis(500));
+                return;
+            }
+            LeaseAttempt::Busy => "busy",
+        };
+        std::fs::write(dir.join(format!("result-{child_id}")), outcome).unwrap();
+    }
+
+    fn wait_for_test_file(path: &Path) {
+        let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+        while !path.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {}",
+                path.display()
+            );
+            std::thread::sleep(StdDuration::from_millis(5));
+        }
     }
 }
