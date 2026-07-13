@@ -81,9 +81,29 @@ impl StateCoordinatorHandle {
             .map_err(|_| QueryError::CoordinatorClosed)?;
         reply_rx.await.map_err(|_| QueryError::CoordinatorClosed)
     }
+
+    /// Apply settings for a watcher generation and await the actor's
+    /// acknowledgment. Hosts call this only after joining the prior generation
+    /// and before spawning replacement pollers.
+    pub async fn transition_settings(
+        &self,
+        settings: Settings,
+        generation: WatcherGeneration,
+    ) -> Result<(), QueryError> {
+        let (applied, confirmed) = oneshot::channel();
+        self.tx
+            .send(StateMsg::SettingsChanged {
+                settings: Box::new(settings),
+                generation,
+                applied,
+            })
+            .await
+            .map_err(|_| QueryError::CoordinatorClosed)?;
+        confirmed.await.map_err(|_| QueryError::CoordinatorClosed)
+    }
 }
 
-/// Errors that can surface from [`StateCoordinatorHandle::query`].
+/// Errors that can surface from acknowledged coordinator operations.
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
     /// The coordinator's tokio task has exited - usually because all handle
@@ -150,6 +170,12 @@ impl<S: Sink> Sink for PublishingSink<S> {
 
     fn on_degraded(&mut self, source: Source, error: &str) {
         self.inner.on_degraded(source, error);
+    }
+
+    fn on_snapshot_durable(&mut self, snapshot: &Snapshot) {
+        if let Some(publisher) = &mut self.publisher {
+            publisher.publish(snapshot);
+        }
     }
 }
 
@@ -256,10 +282,10 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             }
             Err(err) => {
                 record_error(&mut state.snapshot, source, &err);
-                // Error slots are part of the durable Snapshot contract. Emit
-                // the changed snapshot before the degraded notification so the
-                // nonblocking snapshot writer publishes the transition too.
-                sink.on_snapshot(&state.snapshot);
+                // Error slots are part of the durable Snapshot contract, but
+                // the data cells did not change. Publish only to durability;
+                // presentation sinks receive the dedicated degraded event.
+                sink.on_snapshot_durable(&state.snapshot);
                 sink.on_degraded(source, &err);
             }
         },
@@ -551,16 +577,10 @@ mod tests {
         settings: Settings,
         generation: WatcherGeneration,
     ) {
-        let (applied, confirmed) = oneshot::channel();
         handle
-            .send(StateMsg::SettingsChanged {
-                settings: Box::new(settings),
-                generation,
-                applied,
-            })
+            .transition_settings(settings, generation)
             .await
             .unwrap();
-        confirmed.await.unwrap();
     }
 
     #[tokio::test]
@@ -602,11 +622,7 @@ mod tests {
         let snap = handle.query().await.unwrap();
         assert_eq!(snap.openai_error.as_deref(), Some("network unreachable"));
         assert!(snap.openai.is_none(), "no data on error");
-        assert_eq!(
-            sink.snapshot_count(),
-            1,
-            "error-slot transitions must publish the changed snapshot"
-        );
+        assert_eq!(sink.snapshot_count(), 0);
         assert_eq!(sink.error_count(), 1);
         let (src, msg) = sink.last_error().unwrap();
         assert_eq!(src, Source::OpenAiCosts);

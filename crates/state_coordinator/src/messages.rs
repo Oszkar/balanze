@@ -102,7 +102,7 @@ impl SourcePartial {
 /// from any generation other than the coordinator's active one are ignored.
 ///
 /// `result: Ok(partial)` → merge_partial into the snapshot, clear the source's
-/// error slot, notify `Sink::on_snapshot`.
+/// error slot, publish the durable snapshot, and notify the degraded sink.
 ///
 /// `result: Err(message)` → keep any existing data, set the source's error
 /// slot, notify `Sink::on_degraded`. Existing data stays visible (UI renders

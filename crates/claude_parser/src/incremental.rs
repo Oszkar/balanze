@@ -5,9 +5,13 @@
 //! from replacement snapshots so the watcher can maintain per-file ownership;
 //! the CLI is stateless and re-parses fully on each invocation.
 //!
-//! Replacement detection combines file identity with mtime and size. File
-//! identity catches atomic replacements of any size; mtime and size catch
-//! in-place truncations and same-size rewrites.
+//! Replacement detection combines file identity, mtime, size, and bounded
+//! probes of the committed prefix. File identity catches atomic replacements;
+//! metadata catches truncations and same-size rewrites; probes catch growing
+//! in-place rewrites that alter the sampled committed prefix without turning
+//! each append into a full-file read. A writer that preserves both bounded
+//! samples while changing only unsampled committed bytes is indistinguishable
+//! from an append without rereading the full prefix.
 
 use std::collections::HashMap;
 use std::fs;
@@ -34,10 +38,22 @@ pub struct FileCursor {
     /// Physical file identity used to distinguish a growing append from an
     /// atomic replacement at the same path.
     identity: Option<FileIdentity>,
+    /// Bounded samples of bytes already committed below `byte_pos`. A normal
+    /// append cannot change them; a changed sample means the file contribution
+    /// must be replaced even when the inode stayed the same and size grew.
+    probe: FileProbe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileIdentity(u128);
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FileProbe {
+    head: Vec<u8>,
+    tail: Vec<u8>,
+}
+
+const PROBE_BYTES: u64 = 64;
 
 /// Events parsed by one incremental read and how the caller must apply them
 /// to that file's existing contribution.
@@ -107,8 +123,15 @@ impl IncrementalParser {
         let current_identity = file_identity(&file, &metadata);
 
         let cursor = self.cursors.get(path);
+        let probe_changed = match cursor {
+            Some(cursor) if current_size >= cursor.byte_pos => {
+                read_probe(&mut file, cursor.byte_pos, path)? != cursor.probe
+            }
+            _ => false,
+        };
         let replacement = requires_replacement(cursor, current_size, current_mtime)
-            || identity_changed(cursor, current_identity);
+            || identity_changed(cursor, current_identity)
+            || probe_changed;
         let start_offset = if replacement {
             0
         } else {
@@ -163,6 +186,7 @@ impl IncrementalParser {
         // trailing line leaves the cursor parked at its start so the next
         // call retries once the writer finishes.
         let new_byte_pos = start_offset + parsed_byte_count as u64;
+        let probe = read_probe(&mut file, new_byte_pos, path)?;
         self.cursors.insert(
             path.to_path_buf(),
             FileCursor {
@@ -170,6 +194,7 @@ impl IncrementalParser {
                 size: current_size,
                 mtime: current_mtime,
                 identity: current_identity,
+                probe,
             },
         );
 
@@ -198,6 +223,30 @@ impl IncrementalParser {
     pub fn cursor_for(&self, path: &Path) -> Option<&FileCursor> {
         self.cursors.get(path)
     }
+}
+
+fn read_probe(
+    file: &mut fs::File,
+    committed_end: u64,
+    path: &Path,
+) -> Result<FileProbe, ParseError> {
+    if committed_end == 0 {
+        return Ok(FileProbe::default());
+    }
+
+    let head_len = committed_end.min(PROBE_BYTES) as usize;
+    let mut head = vec![0; head_len];
+    file.seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_exact(&mut head))
+        .map_err(|error| io_to_parse_err(path, error))?;
+
+    let tail_start = committed_end.saturating_sub(PROBE_BYTES);
+    let mut tail = vec![0; (committed_end - tail_start) as usize];
+    file.seek(SeekFrom::Start(tail_start))
+        .and_then(|_| file.read_exact(&mut tail))
+        .map_err(|error| io_to_parse_err(path, error))?;
+
+    Ok(FileProbe { head, tail })
 }
 
 fn io_to_parse_err(path: &Path, e: std::io::Error) -> ParseError {
@@ -341,6 +390,7 @@ mod tests {
             size,
             mtime: mtime_at(mtime_secs),
             identity: None,
+            probe: FileProbe::default(),
         }
     }
 
@@ -665,6 +715,39 @@ mod tests {
         assert!(second.is_replacement());
         assert_eq!(second.len(), 2);
         assert_eq!(second[0].message_id.as_deref(), Some("msg_b"));
+    }
+
+    #[test]
+    fn growing_in_place_rewrite_replaces_the_old_contribution() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut original = String::new();
+        write_assistant_line(&mut original, "msg_old", "req_old", 100);
+        std::fs::write(&path, &original).unwrap();
+
+        let mut parser = IncrementalParser::new();
+        let first = parser.read_incremental(&path).unwrap();
+        assert_eq!(first[0].message_id.as_deref(), Some("msg_old"));
+        let original_identity = parser.cursor_for(&path).unwrap().identity;
+
+        let mut rewritten = String::new();
+        write_assistant_line(&mut rewritten, "msg_new_a", "req_new_a", 200);
+        write_assistant_line(&mut rewritten, "msg_new_b", "req_new_b", 300);
+        assert!(rewritten.len() > original.len());
+        // `fs::write` truncates and rewrites the existing file handle rather
+        // than publishing a renamed replacement, so its physical identity is
+        // stable while both the committed prefix and total size change.
+        std::fs::write(&path, &rewritten).unwrap();
+
+        let second = parser.read_incremental(&path).unwrap();
+        assert_eq!(
+            parser.cursor_for(&path).unwrap().identity,
+            original_identity
+        );
+        assert!(second.is_replacement());
+        assert_eq!(second.len(), 2);
+        assert_eq!(second[0].message_id.as_deref(), Some("msg_new_a"));
+        assert_eq!(second[1].message_id.as_deref(), Some("msg_new_b"));
     }
 
     fn replace_file(path: &Path, bytes: &[u8]) {

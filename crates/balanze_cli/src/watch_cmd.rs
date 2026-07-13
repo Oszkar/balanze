@@ -55,7 +55,7 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
     let settings = settings::load_or_default();
 
     let (handle, mut coord_join) = state_coordinator::spawn_with_optional_file(sink);
-    activate_initial_generation(&handle, &settings).await?;
+    handle.transition_settings(settings.clone(), 1).await?;
     let watcher_handles = Watcher::spawn(handle.clone(), &settings, 1);
 
     // Per-task watchdog: `watch_for_task_death` signals *unexpected* completion
@@ -122,7 +122,7 @@ async fn run_tui_mode() -> Result<()> {
 
     let (sink, rx) = ChannelSink::new();
     let (handle, mut coord_join) = state_coordinator::spawn_with_optional_file(sink);
-    activate_initial_generation(&handle, &settings).await?;
+    handle.transition_settings(settings.clone(), 1).await?;
     let watcher_handles = Watcher::spawn(handle.clone(), &settings, 1);
 
     // Per-task watchdog mirroring `run_with_sink` (AGENTS.md §3.2): surface an
@@ -192,22 +192,4 @@ async fn run_tui_mode() -> Result<()> {
         eprintln!("\nfatal: {msg}");
     }
     command_error.map_or(Ok(()), Err)
-}
-
-async fn activate_initial_generation(
-    handle: &state_coordinator::StateCoordinatorHandle,
-    settings: &settings::Settings,
-) -> Result<()> {
-    let (applied, confirmed) = tokio::sync::oneshot::channel();
-    handle
-        .send(state_coordinator::StateMsg::SettingsChanged {
-            settings: Box::new(settings.clone()),
-            generation: 1,
-            applied,
-        })
-        .await
-        .map_err(|_| anyhow::anyhow!("state coordinator shut down during watcher startup"))?;
-    confirmed
-        .await
-        .map_err(|_| anyhow::anyhow!("state coordinator dropped watcher startup acknowledgment"))
 }

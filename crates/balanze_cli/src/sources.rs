@@ -7,8 +7,8 @@ use chrono::Utc;
 use std::fs;
 
 use anthropic_oauth::{
-    ClaudeOAuthSnapshot, DEFAULT_API_BASE as ANTHROPIC_API_BASE, OAuthError, fetch_usage,
-    load_from_source, locate_credentials,
+    ClaudeOAuthSnapshot, CredentialsClaudeAiOauth, DEFAULT_API_BASE as ANTHROPIC_API_BASE,
+    OAuthError, fetch_usage, load_from_source, locate_credentials,
 };
 use claude_parser::{
     UsageEvent, dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir,
@@ -177,31 +177,77 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
-    // One-shot CLI must not block on provider backoff; the watcher passes standard().
-    let policy = backoff::BackoffPolicy::fail_fast();
+    fetch_oauth_read_only_with(&client, ANTHROPIC_API_BASE, oauth, || async {
+        tokio::task::spawn_blocking(|| {
+            let source = locate_credentials()?;
+            load_from_source(&source).map(|credentials| credentials.claude_ai_oauth)
+        })
+        .await?
+        .map_err(Into::into)
+    })
+    .await
+}
 
-    // Claude Code owns every credential source. Never exchange its rotating
-    // refresh token or write credentials; an expired bearer requires login.
+/// Fetch once with Claude Code's current bearer. A 401 may race Claude Code
+/// rotating that bearer, so re-read its read-only credential once and retry
+/// only when the access token changed. Balanze never refreshes or writes it.
+async fn fetch_oauth_read_only_with<F, Fut>(
+    client: &reqwest::Client,
+    api_base: &str,
+    oauth: CredentialsClaudeAiOauth,
+    reload: F,
+) -> Result<ClaudeOAuthSnapshot>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<CredentialsClaudeAiOauth>>,
+{
     if oauth.is_expired_at(Utc::now()) {
         return Err(OAuthError::CredentialExpiredReadOnly.into());
     }
 
+    let policy = backoff::BackoffPolicy::fail_fast();
+    let first_token = oauth.access_token.clone();
     match fetch_usage(
-        &client,
-        ANTHROPIC_API_BASE,
+        client,
+        api_base,
         &oauth.access_token,
-        oauth.subscription_type.clone(),
-        oauth.rate_limit_tier.clone(),
+        oauth.subscription_type,
+        oauth.rate_limit_tier,
         &policy,
     )
     .await
     {
-        Ok(s) => {
-            info!("oauth: fetched {} cadence bars", s.cadences.len());
-            Ok(s)
+        Ok(snapshot) => {
+            info!("oauth: fetched {} cadence bars", snapshot.cadences.len());
+            Ok(snapshot)
         }
-        Err(OAuthError::AuthExpired) => Err(OAuthError::CredentialExpiredReadOnly.into()),
-        Err(e) => Err(e.into()),
+        Err(OAuthError::AuthExpired) => {
+            let current = reload().await?;
+            if current.is_expired_at(Utc::now()) || current.access_token == first_token {
+                return Err(OAuthError::CredentialExpiredReadOnly.into());
+            }
+            match fetch_usage(
+                client,
+                api_base,
+                &current.access_token,
+                current.subscription_type,
+                current.rate_limit_tier,
+                &policy,
+            )
+            .await
+            {
+                Ok(snapshot) => {
+                    info!(
+                        "oauth: fetched {} cadence bars after credential re-read",
+                        snapshot.cadences.len()
+                    );
+                    Ok(snapshot)
+                }
+                Err(OAuthError::AuthExpired) => Err(OAuthError::CredentialExpiredReadOnly.into()),
+                Err(error) => Err(error.into()),
+            }
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -299,5 +345,81 @@ impl statusline_render::CrossSources for LiveCrossSources {
             ),
             _ => (None, None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn oauth(token: &str) -> CredentialsClaudeAiOauth {
+        CredentialsClaudeAiOauth {
+            access_token: token.to_string(),
+            refresh_token: None,
+            expires_at: i64::MAX,
+            subscription_type: Some("pro".to_string()),
+            rate_limit_tier: None,
+            scopes: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_401_rereads_rotated_bearer_once() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .and(header("authorization", "Bearer old-token"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .and(header("authorization", "Bearer new-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"five_hour":{"utilization":23.0,"resets_at":"2026-05-13T18:00:00+00:00"}}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let snapshot =
+            fetch_oauth_read_only_with(&client, &server.uri(), oauth("old-token"), || async {
+                Ok(oauth("new-token"))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(snapshot.cadences.len(), 1);
+        assert_eq!(snapshot.cadences[0].key, "five_hour");
+    }
+
+    #[tokio::test]
+    async fn oauth_401_preserves_transient_reread_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let error =
+            fetch_oauth_read_only_with(&client, &server.uri(), oauth("old-token"), || async {
+                Err(anyhow!("temporary credential read failure"))
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("temporary credential read failure")
+        );
     }
 }

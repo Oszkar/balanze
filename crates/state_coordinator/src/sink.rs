@@ -21,6 +21,12 @@ pub trait Sink: Send + 'static {
     /// no-op when unchanged.
     fn on_snapshot(&mut self, snapshot: &Snapshot);
 
+    /// Called when snapshot state must be durably published without notifying
+    /// presentation sinks. Error-slot transitions use this path so
+    /// `snapshot.json` stays current without re-emitting an unchanged data
+    /// snapshot to the frontend on every failed provider poll.
+    fn on_snapshot_durable(&mut self, _snapshot: &Snapshot) {}
+
     /// Called when an `Update` arrives with `result: Err(...)`. The
     /// snapshot's `_error` slot is already set before this is called.
     fn on_degraded(&mut self, source: Source, error: &str);
