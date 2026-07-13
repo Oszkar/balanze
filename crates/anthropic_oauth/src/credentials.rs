@@ -77,7 +77,7 @@ pub fn locate_credentials() -> Result<CredentialSource, OAuthError> {
     }
     #[cfg(target_os = "macos")]
     {
-        return Ok(CredentialSource::MacosKeychain);
+        Ok(CredentialSource::MacosKeychain)
     }
     #[cfg(not(target_os = "macos"))]
     Err(OAuthError::CredentialsMissing {
