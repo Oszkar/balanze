@@ -26,7 +26,11 @@ pub const OPENAI_TTL_SECS: i64 = 300;
 pub const NEGATIVE_COOLDOWN_SECS: i64 = 300;
 
 const FILE_NAME: &str = "openai-cost.json";
-const LEASE_FILE_NAME: &str = "openai-cost.refresh.lease";
+const LEASE_FILE_PREFIX: &str = "openai-cost.refresh.";
+const LEASE_FILE_SUFFIX: &str = ".lease";
+// Recognized during a rolling upgrade so a process running the original
+// single-path protocol still excludes new contenders while its lease is live.
+const LEGACY_LEASE_FILE_NAME: &str = "openai-cost.refresh.lease";
 const REFRESH_LEASE_STALE_AFTER: StdDuration = StdDuration::from_secs(10);
 static LEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -38,9 +42,9 @@ pub(crate) enum LeaseAttempt {
     Busy,
 }
 
-/// A dependency-free interprocess lease backed by `create_new`. Cleanup is
-/// token-checked so an old owner can never remove a successor's lease after a
-/// stale-lock takeover.
+/// A dependency-free interprocess lease backed by a uniquely named
+/// `create_new` candidate. Stale candidates are ignored, never deleted during
+/// acquisition, so a recovery contender cannot remove a live successor.
 pub(crate) struct RefreshLease {
     path: PathBuf,
     token: String,
@@ -116,18 +120,22 @@ pub fn in_cooldown(entry: &OpenAiCostEntry, now: DateTime<Utc>) -> bool {
         .is_some_and(|t| now.signed_duration_since(t).num_seconds() < NEGATIVE_COOLDOWN_SECS)
 }
 
-/// Try to acquire the machine-wide OpenAI refresh lease. A lease older than
-/// the maximum 3-second HTTP request window plus scheduling margin is treated
-/// as abandoned and removed before one retry. Ordinary live contention returns
-/// `Busy` immediately. A process suspended beyond that 10-second expiry has
+/// Try to acquire the machine-wide OpenAI refresh lease. Each contender first
+/// creates a unique candidate and then yields if any other candidate is still
+/// live. Because acquisition never deletes a shared stale path, two recovery
+/// contenders cannot delete and replace each other's leases. A candidate older
+/// than the maximum 3-second HTTP request window plus scheduling margin is
+/// ignored as abandoned. A process suspended beyond that 10-second expiry has
 /// forfeited ownership and may overlap its successor after resuming; that is
 /// the deliberate stale-recovery boundary of this portable file lease.
 pub(crate) fn try_acquire_refresh_lease(dir: &Path) -> std::io::Result<LeaseAttempt> {
     std::fs::create_dir_all(dir)?;
-    let path = dir.join(LEASE_FILE_NAME);
 
-    for _ in 0..2 {
+    // Collisions are not expected because the token includes time, pid, and a
+    // process-local sequence, but retry rather than turning one into a failure.
+    for _ in 0..4 {
         let token = lease_token();
+        let path = lease_path(dir, &token);
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
                 if let Err(error) = file
@@ -137,23 +145,43 @@ pub(crate) fn try_acquire_refresh_lease(dir: &Path) -> std::io::Result<LeaseAtte
                     let _ = std::fs::remove_file(&path);
                     return Err(error);
                 }
-                return Ok(LeaseAttempt::Acquired(RefreshLease { path, token }));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if !lease_is_stale(&path, SystemTime::now()) {
+                let lease = RefreshLease { path, token };
+                if has_live_competitor(dir, &lease.path, SystemTime::now())? {
+                    drop(lease);
                     return Ok(LeaseAttempt::Busy);
                 }
-                match std::fs::remove_file(&path) {
-                    Ok(()) => continue,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(error),
-                }
+                return Ok(LeaseAttempt::Acquired(lease));
             }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
         }
     }
 
     Ok(LeaseAttempt::Busy)
+}
+
+fn lease_path(dir: &Path, token: &str) -> PathBuf {
+    dir.join(format!("{LEASE_FILE_PREFIX}{token}{LEASE_FILE_SUFFIX}"))
+}
+
+fn has_live_competitor(dir: &Path, own_path: &Path, now: SystemTime) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == own_path || !is_lease_candidate(&entry.file_name()) {
+            continue;
+        }
+        if !lease_is_stale(&path, now) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn is_lease_candidate(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    name == LEGACY_LEASE_FILE_NAME
+        || (name.starts_with(LEASE_FILE_PREFIX) && name.ends_with(LEASE_FILE_SUFFIX))
 }
 
 fn lease_token() -> String {
@@ -342,8 +370,8 @@ mod tests {
             LeaseAttempt::Acquired(lease) => lease,
             LeaseAttempt::Busy => panic!("first lease must be acquired"),
         };
-        let lease_path = dir.path().join(LEASE_FILE_NAME);
-        let file = OpenOptions::new().write(true).open(&lease_path).unwrap();
+        let old_path = old.path.clone();
+        let file = OpenOptions::new().write(true).open(&old_path).unwrap();
         file.set_modified(
             SystemTime::now() - REFRESH_LEASE_STALE_AFTER - StdDuration::from_secs(1),
         )
@@ -353,13 +381,22 @@ mod tests {
             LeaseAttempt::Acquired(lease) => lease,
             LeaseAttempt::Busy => panic!("stale lease must be recovered"),
         };
+        let successor_path = successor.path.clone();
+        assert_ne!(old_path, successor_path, "recovery uses a unique candidate");
+        assert!(
+            old_path.exists(),
+            "acquisition must not delete the abandoned candidate"
+        );
         drop(old);
         assert!(
-            lease_path.exists(),
+            successor_path.exists(),
             "old owner must preserve successor lease"
         );
         drop(successor);
-        assert!(!lease_path.exists(), "successor cleans up its own lease");
+        assert!(
+            !successor_path.exists(),
+            "successor cleans up its own lease"
+        );
     }
 
     #[test]
@@ -395,8 +432,17 @@ mod tests {
     }
 
     #[test]
-    fn refresh_lease_is_exclusive_across_processes() {
+    fn stale_lease_recovery_is_exclusive_across_processes() {
         let dir = tempdir().unwrap();
+        let abandoned = dir
+            .path()
+            .join(format!("{LEASE_FILE_PREFIX}abandoned{LEASE_FILE_SUFFIX}"));
+        std::fs::write(&abandoned, b"abandoned").unwrap();
+        let file = OpenOptions::new().write(true).open(&abandoned).unwrap();
+        file.set_modified(
+            SystemTime::now() - REFRESH_LEASE_STALE_AFTER - StdDuration::from_secs(1),
+        )
+        .unwrap();
         let executable = std::env::current_exe().unwrap();
         let mut children = Vec::new();
         for child_id in 0..2 {
@@ -420,24 +466,27 @@ mod tests {
         for mut child in children {
             assert!(child.wait().unwrap().success());
         }
+        assert!(
+            abandoned.exists(),
+            "racing recovery processes must not delete the abandoned candidate"
+        );
 
         let outcomes = [
             std::fs::read_to_string(dir.path().join("result-0")).unwrap(),
             std::fs::read_to_string(dir.path().join("result-1")).unwrap(),
         ];
-        assert_eq!(
+        assert!(
             outcomes
                 .iter()
                 .filter(|outcome| *outcome == "acquired")
-                .count(),
-            1,
-            "exactly one process may own the refresh lease: {outcomes:?}"
+                .count()
+                <= 1,
+            "stale recovery must never produce two owners: {outcomes:?}"
         );
-        assert_eq!(
-            outcomes.iter().filter(|outcome| *outcome == "busy").count(),
-            1,
-            "the competing process must observe a live lease: {outcomes:?}"
-        );
+        assert!(matches!(
+            try_acquire_refresh_lease(dir.path()).unwrap(),
+            LeaseAttempt::Acquired(_)
+        ));
     }
 
     #[test]
