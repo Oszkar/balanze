@@ -25,7 +25,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::sleep;
 
-use state_coordinator::{LogSink, StateCoordinatorHandle, StateMsg, spawn as spawn_coord};
+use state_coordinator::{LogSink, StateCoordinatorHandle, spawn as spawn_coord};
 use watcher::Watcher;
 
 /// A minimal well-formed, newline-terminated assistant `UsageEvent` line whose
@@ -109,16 +109,10 @@ async fn jsonl_initial_scan_then_incremental_append_propagate() {
 
     let settings = settings::Settings::default();
     let (handle, _join) = spawn_coord(LogSink);
-    let (applied, confirmed) = tokio::sync::oneshot::channel();
     handle
-        .send(StateMsg::SettingsChanged {
-            settings: Box::new(settings.clone()),
-            generation: 1,
-            applied,
-        })
+        .transition_settings(settings.clone(), 1)
         .await
         .unwrap();
-    confirmed.await.unwrap();
     // Keep alive for the test duration: dropping the `Vec<JoinHandle>` would
     // not cancel the spawned tasks (tokio task lifetime is independent of
     // JoinHandle), but holding it makes the intent explicit.

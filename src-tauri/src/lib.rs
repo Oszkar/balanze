@@ -545,18 +545,10 @@ async fn activate_watcher_generation(
     settings: &settings::Settings,
     generation: state_coordinator::WatcherGeneration,
 ) -> Result<watcher::WatchedTasks, String> {
-    let (applied, confirmed) = tokio::sync::oneshot::channel();
     handle
-        .send(state_coordinator::StateMsg::SettingsChanged {
-            settings: Box::new(settings.clone()),
-            generation,
-            applied,
-        })
+        .transition_settings(settings.clone(), generation)
         .await
-        .map_err(|_| "state coordinator has shut down".to_string())?;
-    confirmed
-        .await
-        .map_err(|_| "state coordinator dropped settings acknowledgment".to_string())?;
+        .map_err(|error| error.to_string())?;
 
     let tasks = watcher::Watcher::spawn(handle.clone(), settings, generation);
     tracing::info!(

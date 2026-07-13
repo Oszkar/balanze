@@ -232,7 +232,7 @@ async fn poll_once(
             Ok(snapshot)
         }
         Err(OAuthError::AuthExpired) => {
-            retry_after_credential_reread(client, keychain_cache, cacheable, &oauth, &policy).await
+            retry_after_credential_reread(client, keychain_cache, &oauth, &policy).await
         }
         Err(e) => {
             // A transient provider/network failure does not invalidate a
@@ -274,19 +274,37 @@ async fn fetch_for_credential(
 async fn retry_after_credential_reread(
     client: &reqwest::Client,
     keychain_cache: &mut KeychainCache,
-    prior_cacheable: bool,
     prior: &CredentialsClaudeAiOauth,
     policy: &backoff::BackoffPolicy,
 ) -> anyhow::Result<anthropic_oauth::ClaudeOAuthSnapshot> {
+    retry_after_credential_reread_with(
+        client,
+        keychain_cache,
+        prior,
+        policy,
+        load_read_only_credential,
+    )
+    .await
+}
+
+async fn retry_after_credential_reread_with<F, Fut>(
+    client: &reqwest::Client,
+    keychain_cache: &mut KeychainCache,
+    prior: &CredentialsClaudeAiOauth,
+    policy: &backoff::BackoffPolicy,
+    reload: F,
+) -> anyhow::Result<anthropic_oauth::ClaudeOAuthSnapshot>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<(bool, CredentialsClaudeAiOauth)>>,
+{
     let now = Instant::now();
-    let (cacheable, current) = match load_read_only_credential().await {
+    let (cacheable, current) = match reload().await {
         Ok(loaded) => loaded,
-        Err(e) => {
-            if prior_cacheable {
-                keychain_cache.mark_terminal(now);
-            }
-            return Err(e);
-        }
+        // A read failure says nothing about credential validity. Leave the
+        // cache empty so the next normal poll retries the source instead of
+        // imposing the rejected-credential cooldown.
+        Err(e) => return Err(e),
     };
 
     // A re-read closes the race with Claude Code's atomic rotation. If the
@@ -381,5 +399,48 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn transient_post_401_reread_failure_does_not_enter_terminal_cooldown() {
+        let prior = credential(Utc::now().timestamp_millis() + 60_000);
+        let mut cache = KeychainCache::Empty;
+        let error = retry_after_credential_reread_with(
+            &reqwest::Client::new(),
+            &mut cache,
+            &prior,
+            &backoff::BackoffPolicy::fail_fast(),
+            || async { Err(anyhow::anyhow!("temporary keychain read failure")) },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("temporary keychain read failure")
+        );
+        assert!(matches!(cache, KeychainCache::Empty));
+    }
+
+    #[tokio::test]
+    async fn unchanged_keychain_bearer_after_401_enters_terminal_cooldown() {
+        let prior = credential(Utc::now().timestamp_millis() + 60_000);
+        let mut cache = KeychainCache::Empty;
+        let error = retry_after_credential_reread_with(
+            &reqwest::Client::new(),
+            &mut cache,
+            &prior,
+            &backoff::BackoffPolicy::fail_fast(),
+            || async { Ok((true, prior.clone())) },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<OAuthError>(),
+            Some(OAuthError::CredentialExpiredReadOnly)
+        ));
+        assert!(matches!(cache, KeychainCache::RecheckAfter(_)));
     }
 }

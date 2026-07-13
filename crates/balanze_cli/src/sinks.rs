@@ -190,9 +190,9 @@ impl Sink for StdoutSink {
 /// `on_snapshot` event produces exactly one line; there is no debounce because
 /// each event is a discrete data point.
 ///
-/// `on_degraded` is intentionally a no-op: errors ride in the next snapshot's
-/// `*_error` slots, and emitting a separate line on degraded events would break
-/// the "one JSON object per line" invariant that jq and similar tools rely on.
+/// `on_degraded` is intentionally a no-op: error transitions arrive through
+/// `on_snapshot_durable` with their `*_error` slots populated, preserving the
+/// same one-object-per-line contract as successful snapshots.
 pub struct JsonlSink {
     out: Box<dyn Write + Send>,
     verbose: bool,
@@ -230,6 +230,12 @@ impl Sink for JsonlSink {
 
     fn on_degraded(&mut self, _source: Source, _error: &str) {
         // Intentional no-op - see module doc.
+    }
+
+    fn on_snapshot_durable(&mut self, snapshot: &Snapshot) {
+        // Machine-readable watch consumers need error-only state transitions
+        // even though UI/tray sinks should not repaint for them.
+        self.on_snapshot(snapshot);
     }
 }
 
@@ -361,6 +367,21 @@ mod tests {
         assert!(!output.contains("org_test_123"));
         assert!(!output.contains("session_test_456"));
         assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn jsonl_sink_durable_snapshot_emits_error_transition() {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let writer = TestWriter(Arc::clone(&buf));
+        let mut sink = JsonlSink::new_with(Box::new(writer), false);
+        let mut snapshot = fixture_snapshot();
+        snapshot.openai_error = Some("temporary provider failure".to_string());
+
+        sink.on_snapshot_durable(&snapshot);
+
+        let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(output.contains(r#""openai_error":"temporary provider failure""#));
+        assert_eq!(output.lines().count(), 1);
     }
 
     /// `Write` impl that returns `BrokenPipe` on every `write` call - used

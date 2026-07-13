@@ -423,6 +423,29 @@ mod tests {
     }
 
     #[test]
+    fn growing_in_place_rewrite_replaces_obsolete_file_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let original = assistant_line("msg_old", "req_old", 100);
+        std::fs::write(&path, &original).unwrap();
+        let mut state = ScanState::new();
+        assert_eq!(scanned_events(dir.path(), &mut state).len(), 1);
+
+        let replacement = assistant_line("msg_new_a", "req_new_a", 200)
+            + &assistant_line("msg_new_b", "req_new_b", 300);
+        assert!(replacement.len() > original.len());
+        std::fs::write(&path, replacement).unwrap();
+
+        let events = scanned_events(dir.path(), &mut state);
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.message_id.as_deref() != Some("msg_old"))
+        );
+    }
+
+    #[test]
     fn duplicate_ids_across_files_remain_deduplicated() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
