@@ -176,6 +176,7 @@ impl<S: Sink> Sink for PublishingSink<S> {
         if let Some(publisher) = &mut self.publisher {
             publisher.publish(snapshot);
         }
+        self.inner.on_snapshot_durable(snapshot);
     }
 }
 

@@ -422,4 +422,25 @@ mod tests {
         );
         assert!(matches!(cache, KeychainCache::Empty));
     }
+
+    #[tokio::test]
+    async fn unchanged_keychain_bearer_after_401_enters_terminal_cooldown() {
+        let prior = credential(Utc::now().timestamp_millis() + 60_000);
+        let mut cache = KeychainCache::Empty;
+        let error = retry_after_credential_reread_with(
+            &reqwest::Client::new(),
+            &mut cache,
+            &prior,
+            &backoff::BackoffPolicy::fail_fast(),
+            || async { Ok((true, prior.clone())) },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<OAuthError>(),
+            Some(OAuthError::CredentialExpiredReadOnly)
+        ));
+        assert!(matches!(cache, KeychainCache::RecheckAfter(_)));
+    }
 }

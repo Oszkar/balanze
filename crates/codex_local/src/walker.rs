@@ -403,6 +403,11 @@ mod tests {
         touch_jsonl(&outside.join("rollout-outside.jsonl"), "{}", 0);
         symlink(&root, root.join("nested/cycle")).unwrap();
         symlink(&outside, root.join("escape")).unwrap();
+        symlink(
+            outside.join("rollout-outside.jsonl"),
+            root.join("rollout-file-escape.jsonl"),
+        )
+        .unwrap();
 
         let latest = find_latest_session(&root).unwrap().unwrap();
         assert!(latest.ends_with("rollout-inside.jsonl"));
@@ -414,7 +419,7 @@ mod tests {
     #[test]
     fn walkers_skip_directory_link_cycles_and_tree_escapes_when_supported() {
         use std::io::ErrorKind;
-        use std::os::windows::fs::symlink_dir;
+        use std::os::windows::fs::{symlink_dir, symlink_file};
 
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().join("sessions");
@@ -434,6 +439,15 @@ mod tests {
                 }
                 panic!("failed to create directory link: {error}");
             }
+        }
+        if let Err(error) = symlink_file(
+            outside.join("rollout-outside.jsonl"),
+            root.join("rollout-file-escape.jsonl"),
+        ) {
+            if error.kind() == ErrorKind::PermissionDenied {
+                return;
+            }
+            panic!("failed to create file link: {error}");
         }
 
         let latest = find_latest_session(&root).unwrap().unwrap();

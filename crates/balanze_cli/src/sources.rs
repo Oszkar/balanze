@@ -422,4 +422,28 @@ mod tests {
                 .contains("temporary credential read failure")
         );
     }
+
+    #[tokio::test]
+    async fn oauth_401_does_not_retry_an_unchanged_bearer() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/oauth/usage"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let error =
+            fetch_oauth_read_only_with(&client, &server.uri(), oauth("old-token"), || async {
+                Ok(oauth("old-token"))
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<OAuthError>(),
+            Some(OAuthError::CredentialExpiredReadOnly)
+        ));
+    }
 }
