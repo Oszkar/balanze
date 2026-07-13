@@ -1,18 +1,17 @@
 //! Owns the `statusLine` stanza in Claude Code's `settings.json`.
 //!
-//! Mirrors the dual-responsibility pattern of `anthropic_oauth::credentials`:
-//! this module is the ONLY code that reads/writes the `statusLine` key in
-//! Claude's `settings.json`, exactly as `anthropic_oauth` is the only code
-//! that reads/writes `~/.claude/.credentials.json`.
+//! This module is the only code that reads or writes the `statusLine` key in
+//! Claude's `settings.json`. That is the same ownership-boundary pattern used
+//! by `anthropic_oauth`, which is the only reader of Claude's OAuth credential.
 //!
 //! Search order (first existing path wins):
 //!   1. `$XDG_CONFIG_HOME/claude/settings.json` (if XDG_CONFIG_HOME is set)
 //!   2. `~/.claude/settings.json` - legacy, still used on Windows + many macOS installs
 //!   3. `~/.config/claude/settings.json` - Claude Code v1.0.30+ on some platforms
 //!
-//! `wire_statusline` is the ONLY writer and uses atomic tmp+rename, preserves
-//! all other keys, and creates the file+parent dir if absent (AGENTS.md §3.4
-//! pattern - no secret so no 0o600 requirement; plain ACL inheritance is fine).
+//! All writes in this module use atomic tmp+rename, preserve all other keys,
+//! and create the file and parent directory if absent (AGENTS.md §3.4 pattern:
+//! no secret, so no 0o600 requirement; plain ACL inheritance is fine).
 
 use std::path::{Path, PathBuf};
 
@@ -35,7 +34,7 @@ pub const NON_STRING_STATUSLINE_COMMAND: &str = "<non-string statusLine>";
 pub enum WireStatus {
     /// No `settings.json` exists, or the file has no `statusLine` key.
     Unwired,
-    /// `statusLine.command` contains both `"balanze-cli"` and `"statusline"`.
+    /// `statusLine.command` is exactly [`STATUSLINE_INVOCATION`].
     WiredToBalanze,
     /// `statusLine.command` is a string but belongs to something else, or
     /// `statusLine` is present but `.command` is not a string.
@@ -89,7 +88,7 @@ fn home_dir() -> Option<PathBuf> {
 ///
 /// - `path` does not exist                              → `Ok(Unwired)`
 /// - exists, valid JSON, no `"statusLine"` key          → `Ok(Unwired)`
-/// - exists, `statusLine.command` contains both `"balanze-cli"` and `"statusline"`
+/// - exists, `statusLine.command` is exactly [`STATUSLINE_INVOCATION`]
 ///   → `Ok(WiredToBalanze)`
 /// - exists, a different `statusLine.command` string → `Ok(OccupiedBy(cmd))`
 /// - exists, `statusLine` present but `.command` is not a string
@@ -128,10 +127,7 @@ pub fn read_wire_status(path: &Path) -> Result<WireStatus, StatuslineError> {
     };
 
     match status_line.get("command").and_then(|v| v.as_str()) {
-        // Substring heuristic: "are we already wired" guard, not a security boundary. A user wrapper containing both tokens would read as ours; acceptable for this CLI.
-        Some(cmd) if cmd.contains("balanze-cli") && cmd.contains("statusline") => {
-            Ok(WireStatus::WiredToBalanze)
-        }
+        Some(STATUSLINE_INVOCATION) => Ok(WireStatus::WiredToBalanze),
         Some(cmd) => Ok(WireStatus::OccupiedBy(cmd.to_string())),
         None => Ok(WireStatus::OccupiedBy(
             NON_STRING_STATUSLINE_COMMAND.to_string(),
@@ -145,16 +141,15 @@ pub fn read_wire_status(path: &Path) -> Result<WireStatus, StatuslineError> {
 /// (mkdir -p parent) as `{"statusLine":{...}}`.
 ///
 /// Unconditionally sets `statusLine` - the no-clobber policy belongs to the
-/// caller (Task 5 will call `read_wire_status` first). Safe to call repeatedly
-/// (idempotent).
+/// caller, which must call [`read_wire_status`] first. Safe to call repeatedly
+/// with the canonical invocation (idempotent).
 ///
 /// Note: the file is rewritten via `serde_json::to_vec_pretty`, so it is
 /// normalized to pretty-printed JSON with object keys sorted
 /// (`serde_json::Value` is a `BTreeMap`; the workspace does not enable
 /// `preserve_order`). Semantically safe - Claude Code re-parses by key -
 /// but a user who hand-ordered their settings.json will see keys sorted
-/// after the first wire. Same accepted trade-off as `anthropic_oauth`'s
-/// credentials write-back.
+/// after the first wire.
 pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineError> {
     // Load + parse existing content, or start with an empty object.
     // A single match on std::fs::read avoids the TOCTOU race of `if path.exists()
@@ -275,9 +270,8 @@ pub fn unwire_statusline(path: &Path) -> Result<(), StatuslineError> {
 /// Normalizes to pretty-printed JSON with object keys sorted (`serde_json::Value`
 /// is a `BTreeMap`; the workspace does not enable `preserve_order`). Semantically
 /// safe - Claude Code re-parses by key - but a hand-ordered settings.json will
-/// see keys sorted after the first write. Same accepted trade-off as
-/// `anthropic_oauth`'s credentials write-back. No 0o600 requirement -
-/// settings.json is not a secret file.
+/// see keys sorted after the first write. No 0o600 requirement: settings.json
+/// is not a secret file.
 fn atomic_write_json(path: &Path, root: &serde_json::Value) -> Result<(), StatuslineError> {
     let serialized =
         serde_json::to_vec_pretty(root).map_err(|e| StatuslineError::SettingsMalformed {
@@ -341,6 +335,46 @@ mod tests {
             r#"{"statusLine":{"type":"command","command":"balanze-cli statusline"}}"#,
         );
         assert_eq!(read_wire_status(&path).unwrap(), WireStatus::WiredToBalanze);
+    }
+
+    #[test]
+    fn read_wire_status_foreign_wrapper_is_occupied() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let command = "foreign-wrapper balanze-cli statusline";
+        write_settings(
+            &path,
+            &format!(r#"{{"statusLine":{{"type":"command","command":"{command}"}}}}"#),
+        );
+
+        assert_eq!(
+            read_wire_status(&path).unwrap(),
+            WireStatus::OccupiedBy(command.to_string())
+        );
+        assert!(
+            !restore_statusline(&path, None).unwrap(),
+            "a foreign wrapper must never be removed"
+        );
+        assert_eq!(
+            read_wire_status(&path).unwrap(),
+            WireStatus::OccupiedBy(command.to_string())
+        );
+    }
+
+    #[test]
+    fn read_wire_status_composed_command_is_occupied() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let command = "balanze-cli statusline | foreign-filter";
+        write_settings(
+            &path,
+            &format!(r#"{{"statusLine":{{"type":"command","command":"{command}"}}}}"#),
+        );
+
+        assert_eq!(
+            read_wire_status(&path).unwrap(),
+            WireStatus::OccupiedBy(command.to_string())
+        );
     }
 
     #[test]

@@ -117,7 +117,7 @@ Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (levera
 | 4 | network: a provider was unreachable |
 | 5 | degraded: a source was stale or errored (only with `--strict`) |
 
-**Claude Code statusLine.** `balanze-cli statusline` is a zero-auth status line for your Claude Code prompt - live 5h/7d Claude subscription quota and session cost, plus cross-provider signal (both Codex rate-limit windows, 5h and weekly, and real OpenAI spend), with no rate limit. `balanze-cli setup` offers to wire it; if another tool already owns `statusLine.command`, setup offers to replace it with consent, backing the previous command up so `balanze-cli statusline restore` can put it back.
+**Claude Code statusLine.** `balanze-cli statusline` is a zero-auth status line for your Claude Code prompt - live 5h/7d Claude subscription quota and session cost, plus cross-provider signal (both Codex rate-limit windows, 5h and weekly, and real OpenAI spend), with no rate limit. Concurrent prompt processes share one atomically published OpenAI cache and refresh lease, so stale data remains available without duplicating upstream requests. `balanze-cli setup` offers to wire the exact canonical `balanze-cli statusline` command; wrappers and composed commands remain foreign unless the user explicitly replaces them. A replaced command is backed up so `balanze-cli statusline restore` can put it back.
 
 **Shell completions.** `balanze-cli completions <shell>` prints a script to stdout (bash, zsh, fish, powershell, elvish):
 

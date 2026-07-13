@@ -148,18 +148,14 @@ fn self_compose_cross(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<statusline_render::CrossProvider> {
     let cache_dir = statusline_render::cache::cache_dir_path()?;
-    let fingerprint = statusline_render::cache::key_fingerprint(
-        crate::sources::resolve_openai_key()
-            .ok()
-            .flatten()
-            .as_deref(),
-    );
+    let sources = crate::sources::LiveCrossSources::resolve_once();
+    let fingerprint = sources.openai_fingerprint();
     // One-shot CLI: a fresh per-turn runtime is acceptable; the OpenAI fetch
     // inside self_compose is cache-gated (300s), so the network is not hit every
     // turn even though the runtime is built every turn.
     let rt = tokio::runtime::Runtime::new().ok()?;
     Some(rt.block_on(statusline_render::self_compose(
-        &crate::sources::LiveCrossSources,
+        &sources,
         &cache_dir,
         &fingerprint,
         now,
