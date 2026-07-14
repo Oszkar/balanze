@@ -82,8 +82,18 @@ const SNAPSHOT_FRESHNESS_SECS: i64 = 120;
 /// false, the self-compose path skips the OpenAI cost entirely: no cache read,
 /// no refresh lease, no HTTP. The segment is off in the default template, so
 /// this is the common case.
+///
+/// The predicate matches `render.rs::fill_line`'s token rule exactly: a line
+/// is split on whitespace and a token only counts as the placeholder when it
+/// equals `{openai_cost}` verbatim. A substring match here would be broader
+/// than the renderer's - e.g. `"spend:{openai_cost}"` would set the gate while
+/// the renderer treats that token as literal text and never renders the
+/// segment, polling OpenAI for a value that could never be displayed.
 fn want_openai(config: &settings::StatuslineConfig) -> bool {
-    config.lines.iter().any(|l| l.contains("{openai_cost}"))
+    config
+        .lines
+        .iter()
+        .any(|l| l.split_whitespace().any(|t| t == "{openai_cost}"))
 }
 
 /// Resolve cross-provider data (Codex %, OpenAI $) for the statusline.
@@ -121,6 +131,14 @@ fn statusline_cross_provider(
 /// self-compose when present (current) and otherwise from the stale snapshot
 /// (shown with its `⚠` marker), so a last-known value stays visible when only
 /// one source has it. `None` when neither has any cell. Pure - unit-tested.
+///
+/// When `want_openai` was false, `composed.openai_cost_micro_usd` is always
+/// `None`, so a stale snapshot's OpenAI cell can still flow through here into
+/// the merged result. That is harmless: `render_segment("openai_cost", ...)`
+/// only runs for a template containing `{openai_cost}`, which is exactly the
+/// condition that makes `want_openai` true - so a merged OpenAI cell carried
+/// through while `want_openai` is false is structurally unreachable from any
+/// render path.
 fn pick_cross(
     composed: Option<statusline_render::CrossProvider>,
     stale_snapshot: Option<statusline_render::CrossProvider>,
@@ -577,6 +595,43 @@ mod statusline_tests {
         assert!(
             !super::want_openai(&settings::StatuslineConfig::default()),
             "the shipped default template must not request the OpenAI segment"
+        );
+    }
+
+    /// The gate must match `fill_line`'s token rule exactly: a `{openai_cost}`
+    /// token only counts as a placeholder when it is a whole whitespace-delimited
+    /// token, not a substring of one. `render.rs::fill_line` splits on whitespace
+    /// and requires an exact `{key}` match, so `"spend:{openai_cost}"` is literal
+    /// text there - the OpenAI segment never renders for that template. Before
+    /// this fix, `want_openai`'s substring `contains` check set the gate true
+    /// anyway, polling OpenAI for a value that could never be displayed.
+    #[test]
+    fn want_openai_matches_the_renderer_exact_token_rule() {
+        let glued = settings::StatuslineConfig {
+            lines: vec!["spend:{openai_cost}".to_string()],
+            ..Default::default()
+        };
+        assert!(
+            !super::want_openai(&glued),
+            "a glued substring must not set the gate: the renderer treats it as literal text"
+        );
+
+        let trailing_punct = settings::StatuslineConfig {
+            lines: vec!["{openai_cost}.".to_string()],
+            ..Default::default()
+        };
+        assert!(
+            !super::want_openai(&trailing_punct),
+            "trailing punctuation on the token must not set the gate either"
+        );
+
+        let exact = settings::StatuslineConfig {
+            lines: vec!["{usage} {openai_cost}".to_string()],
+            ..Default::default()
+        };
+        assert!(
+            super::want_openai(&exact),
+            "an exact whitespace-delimited token must set the gate"
         );
     }
 

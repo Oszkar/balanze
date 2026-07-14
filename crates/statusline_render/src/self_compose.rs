@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(f.calls.get(), 0, "no upstream fetch when not wanted");
         assert!(
             cache::read(dir.path(), "fp").is_none(),
-            "the cache is not even touched when not wanted"
+            "no value is published to the cache when not wanted"
         );
         assert_eq!(cp.codex_five_hour, Some(12.0), "Codex still composed");
     }
