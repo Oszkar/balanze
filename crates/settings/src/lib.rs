@@ -218,7 +218,34 @@ pub fn load_from(path: &Path) -> Result<Settings, SettingsError> {
     if parsed.version == 0 {
         parsed.version = SCHEMA_VERSION;
     }
+    migrate_statusline_lines(&mut parsed);
     Ok(parsed)
+}
+
+/// The statusline default line templates from before the `{openai_cost}`
+/// segment left the default line. Kept only so [`migrate_statusline_lines`]
+/// can recognize a persisted value that still matches this stale default.
+const PREVIOUS_DEFAULT_STATUSLINE_LINE_1: &str = "{model} {agent}";
+const PREVIOUS_DEFAULT_STATUSLINE_LINE_2: &str =
+    "{context_bar} {cost} {usage} {codex} {openai_cost}";
+
+/// One-time load-path migration: `StatuslineConfig.lines` is always
+/// serialized into `settings.json`, so any file saved before the
+/// `{openai_cost}` segment left the default line has that old default pinned
+/// literally - for those users the new default never takes effect on its own.
+/// If the persisted value is byte-identical to the previous default, this
+/// replaces it with the current default (`statusline::default_lines`). A
+/// customized value is definitionally not byte-identical to the previous
+/// default, so it is never touched - a user who deliberately wants
+/// `{openai_cost}` back keeps it.
+fn migrate_statusline_lines(settings: &mut Settings) {
+    let previous_default = [
+        PREVIOUS_DEFAULT_STATUSLINE_LINE_1.to_string(),
+        PREVIOUS_DEFAULT_STATUSLINE_LINE_2.to_string(),
+    ];
+    if settings.statusline.lines == previous_default {
+        settings.statusline.lines = statusline::default_lines();
+    }
 }
 
 /// Load settings for a read-modify-**save** path. Identical to [`load`] on the
@@ -611,6 +638,85 @@ mod tests {
         save_to(&s, &path).expect("save");
         let loaded = load_from(&path).expect("load");
         assert_eq!(s, loaded);
+    }
+
+    #[test]
+    fn migrates_previous_default_statusline_lines_to_current_default() {
+        // A settings.json saved before the `{openai_cost}` segment left the
+        // default line pins the OLD default literally. On load it must be
+        // replaced with the CURRENT default so the segment (and the OpenAI
+        // billing-API polling it demand-gates) turns off for anyone who never
+        // customized `statusline.lines`.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            crate::statusline::default_lines(),
+            "old default lines must be migrated to the current default"
+        );
+    }
+
+    #[test]
+    fn customized_statusline_lines_are_not_touched_by_migration() {
+        // A user-customized `statusline.lines` is definitionally not
+        // byte-identical to the previous default, so the migration must leave
+        // it alone - including when it deliberately keeps `{openai_cost}`.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{usage} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            vec!["{usage} {openai_cost}".to_string()],
+            "customized lines must survive the migration untouched"
+        );
+    }
+
+    #[test]
+    fn already_migrated_statusline_lines_are_left_unchanged() {
+        // The migration must be a no-op once a file already carries the
+        // current default (e.g. a file this migration already rewrote once,
+        // or a fresh save).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let current = crate::statusline::default_lines();
+        let contents = serde_json::json!({
+            "version": 1,
+            "statusline": { "lines": current },
+        });
+        fs::write(&path, serde_json::to_vec(&contents).unwrap()).unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(s.statusline.lines, current);
+    }
+
+    #[test]
+    fn load_for_update_from_migrates_statusline_lines_too() {
+        // The migration must apply on the read-modify-save path as well -
+        // otherwise a settings save right after load would persist the stale
+        // old default straight back to disk.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_for_update_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            crate::statusline::default_lines(),
+            "load_for_update_from must apply the migration too"
+        );
     }
 
     #[test]

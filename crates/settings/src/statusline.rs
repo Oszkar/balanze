@@ -54,7 +54,7 @@ fn default_theme() -> String {
     "dark".to_string()
 }
 
-fn default_lines() -> Vec<String> {
+pub(crate) fn default_lines() -> Vec<String> {
     vec![
         "{model} {agent}".to_string(),
         // `openai_cost` is deliberately absent: it is an uncapped dollar figure
