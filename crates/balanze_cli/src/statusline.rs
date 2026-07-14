@@ -78,30 +78,42 @@ pub(crate) fn cmd_statusline() -> Result<()> {
 /// update (safety-poll floor 60s), so a running host stays well inside this.
 const SNAPSHOT_FRESHNESS_SECS: i64 = 120;
 
+/// True when any configured line asks for the `{openai_cost}` segment. When
+/// false, the self-compose path skips the OpenAI cost entirely: no cache read,
+/// no refresh lease, no HTTP. The segment is off in the default template, so
+/// this is the common case.
+fn want_openai(config: &settings::StatuslineConfig) -> bool {
+    config.lines.iter().any(|l| l.contains("{openai_cost}"))
+}
+
 /// Resolve cross-provider data (Codex %, OpenAI $) for the statusline.
 ///
 /// Precedence: a fresh host-written `snapshot.json` wins (zero network);
 /// otherwise self-compose Codex + OpenAI directly (AGENTS.md §3.1: never via the
 /// OAuth-touching composer), then merge with a stale snapshot per cell so the
 /// line never blanks; otherwise Claude-only.
-fn statusline_cross_provider() -> Option<statusline_render::CrossProvider> {
+fn statusline_cross_provider(
+    config: &settings::StatuslineConfig,
+) -> Option<statusline_render::CrossProvider> {
     let now = chrono::Utc::now();
+    let want_openai = want_openai(config);
 
     // Read the host snapshot once: it feeds both the fresh-path short-circuit and
     // the seed that lets the self-compose OpenAI gate honor the watcher's fetch.
     let payload = read_snapshot_payload();
     let snapshot_cross = payload.as_ref().map(|p| cross_from_payload(p, now));
 
-    // 1. Fresh snapshot wins (zero network).
+    // 1. Fresh snapshot wins (zero network). A stale OpenAI cell is only a
+    //    reason to self-compose when the OpenAI segment is actually rendered.
     if let Some(cross) = &snapshot_cross {
-        if !cross.openai_stale && !cross.codex_stale {
+        if (!want_openai || !cross.openai_stale) && !cross.codex_stale {
             return snapshot_cross;
         }
     }
 
     // 2. Self-compose; then merge composed cells over the (stale) snapshot
     //    cells per cell so a last-known value stays visible (never-blank).
-    pick_cross(self_compose_cross(now), snapshot_cross)
+    pick_cross(self_compose_cross(now, want_openai), snapshot_cross)
 }
 
 /// Merge the self-composed result with a (possibly stale) snapshot, once the
@@ -146,19 +158,22 @@ fn pick_cross(
 /// `block_on` below would panic if called from within an async runtime).
 fn self_compose_cross(
     now: chrono::DateTime<chrono::Utc>,
+    want_openai: bool,
 ) -> Option<statusline_render::CrossProvider> {
     let cache_dir = statusline_render::cache::cache_dir_path()?;
     let sources = crate::sources::LiveCrossSources::resolve_once();
     let fingerprint = sources.openai_fingerprint();
     // One-shot CLI: a fresh per-turn runtime is acceptable; the OpenAI fetch
-    // inside self_compose is cache-gated (300s), so the network is not hit every
-    // turn even though the runtime is built every turn.
+    // inside self_compose is cache-gated (300s) and skipped entirely when the
+    // segment is not configured, so the network is not hit every turn even
+    // though the runtime is built every turn.
     let rt = tokio::runtime::Runtime::new().ok()?;
     Some(rt.block_on(statusline_render::self_compose(
         &sources,
         &cache_dir,
         &fingerprint,
         now,
+        want_openai,
     )))
 }
 
@@ -218,7 +233,7 @@ fn cross_from_payload(
 fn render_line(snap: &claude_statusline::StatuslineSnapshot) -> String {
     let settings = settings::load().unwrap_or_default();
     let color = std::env::var_os("NO_COLOR").is_none();
-    let cross = statusline_cross_provider();
+    let cross = statusline_cross_provider(&settings.statusline);
     render_with(snap, &settings.statusline, color, cross.as_ref())
 }
 
@@ -534,7 +549,25 @@ mod statusline_tests {
         // No snapshot.json -> self-compose triggers.
         // No OpenAI key + no Codex data -> self-compose yields no cells.
         // pick_cross(Some(empty), None) -> None.
-        assert!(super::statusline_cross_provider().is_none());
+        assert!(super::statusline_cross_provider(&settings::StatuslineConfig::default()).is_none());
+    }
+
+    #[test]
+    fn want_openai_follows_the_configured_lines() {
+        let asks = settings::StatuslineConfig {
+            lines: vec!["{usage} {openai_cost}".to_string()],
+            ..Default::default()
+        };
+        assert!(super::want_openai(&asks), "template asks for the segment");
+
+        let silent = settings::StatuslineConfig {
+            lines: vec!["{usage} {codex}".to_string()],
+            ..Default::default()
+        };
+        assert!(
+            !super::want_openai(&silent),
+            "template does not ask for the segment"
+        );
     }
 
     fn cp(codex: Option<f32>, openai: Option<i64>) -> statusline_render::CrossProvider {
