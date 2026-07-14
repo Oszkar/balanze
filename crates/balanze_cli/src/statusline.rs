@@ -83,17 +83,17 @@ const SNAPSHOT_FRESHNESS_SECS: i64 = 120;
 /// no refresh lease, no HTTP. The segment is off in the default template, so
 /// this is the common case.
 ///
-/// The predicate matches `render.rs::fill_line`'s token rule exactly: a line
-/// is split on whitespace and a token only counts as the placeholder when it
-/// equals `{openai_cost}` verbatim. A substring match here would be broader
-/// than the renderer's - e.g. `"spend:{openai_cost}"` would set the gate while
-/// the renderer treats that token as literal text and never renders the
-/// segment, polling OpenAI for a value that could never be displayed.
+/// The predicate defers to `statusline_render::template_uses_segment`, the same
+/// authority the renderer uses to decide whether a line draws a segment. Sharing
+/// it means the gate can never be broader than what the renderer will actually
+/// draw - e.g. `"spend:{openai_cost}"` is literal text to the renderer, so it
+/// must not set the gate and make Balanze poll OpenAI for a value that could
+/// never be displayed.
 fn want_openai(config: &settings::StatuslineConfig) -> bool {
     config
         .lines
         .iter()
-        .any(|l| l.split_whitespace().any(|t| t == "{openai_cost}"))
+        .any(|l| statusline_render::template_uses_segment(l, "openai_cost"))
 }
 
 /// Resolve cross-provider data (Codex %, OpenAI $) for the statusline.

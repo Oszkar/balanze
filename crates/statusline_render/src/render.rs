@@ -65,7 +65,7 @@ pub fn render(input: &RenderInput) -> String {
 fn fill_line(template: &str, input: &RenderInput) -> String {
     let mut parts: Vec<String> = Vec::new();
     for tok in template.split_whitespace() {
-        if let Some(key) = tok.strip_prefix('{').and_then(|t| t.strip_suffix('}')) {
+        if let Some(key) = segment_key(tok) {
             if let Some(v) = render_segment(key, input) {
                 if !v.is_empty() {
                     parts.push(v);
@@ -77,6 +77,26 @@ fn fill_line(template: &str, input: &RenderInput) -> String {
         }
     }
     parts.join(" ")
+}
+
+/// The segment key a template token names, or `None` when the token is literal
+/// text. A token is a placeholder only when it is exactly `{key}` after the
+/// whitespace split - the single grammar rule `fill_line` applies. Both the
+/// renderer and any consumer that needs to know whether a template will draw a
+/// given segment go through here, so the two can never diverge.
+fn segment_key(tok: &str) -> Option<&str> {
+    tok.strip_prefix('{').and_then(|t| t.strip_suffix('}'))
+}
+
+/// True when `template` uses `{segment}` as a placeholder token under the exact
+/// grammar `fill_line` renders with. This is the shared authority for "will
+/// this line draw `segment`?" - the CLI's OpenAI demand gate calls it so a
+/// change to the token rule here can never leave the gate polling for a value
+/// the renderer would treat as literal text.
+pub fn template_uses_segment(template: &str, segment: &str) -> bool {
+    template
+        .split_whitespace()
+        .any(|tok| segment_key(tok) == Some(segment))
 }
 
 /// Render a single segment by key. `None` -> the segment is omitted entirely.
@@ -427,6 +447,26 @@ mod tests {
             model_display_name: Some("Opus".to_string()),
             context_used_percent: Some(42.0),
         }
+    }
+
+    #[test]
+    fn template_uses_segment_matches_the_fill_line_token_rule() {
+        // Exact `{key}` tokens count.
+        assert!(template_uses_segment(
+            "{context_bar} {openai_cost}",
+            "openai_cost"
+        ));
+        assert!(template_uses_segment("{openai_cost}", "openai_cost"));
+        // A different segment does not.
+        assert!(!template_uses_segment(
+            "{context_bar} {cost}",
+            "openai_cost"
+        ));
+        // Substrings and glued text are literal to the renderer, so they must
+        // not match - this is the property the CLI demand gate relies on.
+        assert!(!template_uses_segment("spend:{openai_cost}", "openai_cost"));
+        assert!(!template_uses_segment("{openai_cost}.", "openai_cost"));
+        assert!(!template_uses_segment("{openai_cost", "openai_cost"));
     }
 
     #[test]
