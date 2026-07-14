@@ -9,7 +9,7 @@
 //! file is plaintext JSON; treat anything written here as visible to anyone
 //! with read access to the user's home directory.
 //!
-//! Schema is versioned (currently `version: 1`). Adding a field: add it
+//! Schema is versioned (currently `version: 2`). Adding a field: add it
 //! `#[serde(default)]` so old files still parse. Removing/renaming a field
 //! requires bumping the version and adding a migration step in `load_from`.
 
@@ -23,7 +23,7 @@ use tracing::{debug, warn};
 pub mod statusline;
 pub use statusline::StatuslineConfig;
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
@@ -215,35 +215,61 @@ pub fn load_from(path: &Path) -> Result<Settings, SettingsError> {
             "settings: file written by newer Balanze; some fields may be ignored"
         );
     }
-    if parsed.version == 0 {
+    // Migrations (including the version-0 pre-versioning sentinel) run only
+    // for files older than the current schema, then the in-memory version is
+    // normalized to SCHEMA_VERSION so a subsequent save persists the bump and
+    // no migration in this block reconsiders the file again.
+    if parsed.version < SCHEMA_VERSION {
+        migrate_statusline_lines(&mut parsed);
         parsed.version = SCHEMA_VERSION;
     }
-    migrate_statusline_lines(&mut parsed);
     Ok(parsed)
 }
 
 /// The statusline default line templates from before the `{openai_cost}`
 /// segment left the default line. Kept only so [`migrate_statusline_lines`]
 /// can recognize a persisted value that still matches this stale default.
-const PREVIOUS_DEFAULT_STATUSLINE_LINE_1: &str = "{model} {agent}";
-const PREVIOUS_DEFAULT_STATUSLINE_LINE_2: &str =
-    "{context_bar} {cost} {usage} {codex} {openai_cost}";
+/// A `const` array of `&str` (not `String`) so the comparison in
+/// [`migrate_statusline_lines`] allocates nothing.
+const PREVIOUS_DEFAULT_LINES: [&str; 2] = [
+    "{model} {agent}",
+    "{context_bar} {cost} {usage} {codex} {openai_cost}",
+];
 
-/// One-time load-path migration: `StatuslineConfig.lines` is always
-/// serialized into `settings.json`, so any file saved before the
-/// `{openai_cost}` segment left the default line has that old default pinned
-/// literally - for those users the new default never takes effect on its own.
-/// If the persisted value is byte-identical to the previous default, this
-/// replaces it with the current default (`statusline::default_lines`). A
-/// customized value is definitionally not byte-identical to the previous
-/// default, so it is never touched - a user who deliberately wants
-/// `{openai_cost}` back keeps it.
+/// Load-path migration, gated to files written before schema version 2:
+/// `StatuslineConfig.lines` is always serialized into `settings.json`, so any
+/// file saved before the `{openai_cost}` segment left the default line has
+/// that old default pinned literally - for those users the new default never
+/// takes effect on its own. If a `version < 2` file's persisted value is
+/// byte-identical to the previous default, this replaces it with the current
+/// default (`statusline::default_lines`). A customized value is definitionally
+/// not byte-identical to the previous default, so it is never touched.
+///
+/// This only fires once per file: `load_from` normalizes `version` to
+/// `SCHEMA_VERSION` immediately after calling this, and the next [`save`]
+/// persists that bump. So a user who deliberately hand-edits `statusline.lines`
+/// back to include `{openai_cost}` - even if the resulting line is
+/// byte-identical to `PREVIOUS_DEFAULT_LINES` - keeps it: their file is
+/// already at `version: 2` and this function is not called for it. The
+/// unversioned form of this migration used to be a fixed-point trap - the
+/// documented re-enable path (append ` {openai_cost}` to the current default)
+/// produced a string byte-identical to the previous default, so the very next
+/// load stripped it right back out.
+///
+/// Deletion criterion: once no `version < 2` file is expected in the wild
+/// (i.e. every user has loaded Balanze at least once past this change), this
+/// function, [`PREVIOUS_DEFAULT_LINES`], and its call site can be removed.
 fn migrate_statusline_lines(settings: &mut Settings) {
-    let previous_default = [
-        PREVIOUS_DEFAULT_STATUSLINE_LINE_1.to_string(),
-        PREVIOUS_DEFAULT_STATUSLINE_LINE_2.to_string(),
-    ];
-    if settings.statusline.lines == previous_default {
+    if settings
+        .statusline
+        .lines
+        .iter()
+        .map(String::as_str)
+        .eq(PREVIOUS_DEFAULT_LINES.iter().copied())
+    {
+        debug!(
+            "settings: migrated pre-schema-version-2 statusline lines from the previous default to the current default"
+        );
         settings.statusline.lines = statusline::default_lines();
     }
 }
@@ -487,12 +513,18 @@ mod tests {
     #[test]
     fn loads_minimal_file_with_only_version_field() {
         // Backwards-compat: a settings file written by an older Balanze with
-        // only `{"version":1}` should fill in defaults for new fields.
+        // only `{"version":1}` should fill in defaults for new fields. A
+        // version-1 file is below SCHEMA_VERSION, so load_from also bumps the
+        // in-memory version to current - see `loads_minimal_file...` and the
+        // SCHEMA_VERSION migration gate in `load_from`.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(&path, br#"{"version":1}"#).unwrap();
         let s = load_from(&path).expect("load");
-        assert_eq!(s.version, 1);
+        assert_eq!(
+            s.version, SCHEMA_VERSION,
+            "version 1 must migrate to current"
+        );
         assert!(s.providers.anthropic_enabled);
         assert!(!s.providers.openai_enabled);
     }
@@ -518,7 +550,7 @@ mod tests {
         // Distinct from the omitted-version case below: a file that
         // *explicitly* carries `version: 0` (the pre-versioning sentinel)
         // must be migrated up to the current schema on load. Exercises the
-        // `parsed.version == 0` branch in load_from, which the
+        // `parsed.version < SCHEMA_VERSION` branch in load_from, which the
         // serde-defaulted (omitted) case never reaches.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -642,11 +674,12 @@ mod tests {
 
     #[test]
     fn migrates_previous_default_statusline_lines_to_current_default() {
-        // A settings.json saved before the `{openai_cost}` segment left the
-        // default line pins the OLD default literally. On load it must be
-        // replaced with the CURRENT default so the segment (and the OpenAI
-        // billing-API polling it demand-gates) turns off for anyone who never
-        // customized `statusline.lines`.
+        // A version-1 settings.json saved before the `{openai_cost}` segment
+        // left the default line pins the OLD default literally. On load it
+        // must be replaced with the CURRENT default so the segment (and the
+        // OpenAI billing-API polling it demand-gates) turns off for anyone
+        // who never customized `statusline.lines`, and the file's version
+        // must be bumped so the migration does not reconsider it again.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(
@@ -659,6 +692,84 @@ mod tests {
             s.statusline.lines,
             crate::statusline::default_lines(),
             "old default lines must be migrated to the current default"
+        );
+        assert_eq!(
+            s.version, SCHEMA_VERSION,
+            "a migrated file must be normalized to the current schema version"
+        );
+    }
+
+    #[test]
+    fn reenabled_openai_cost_on_schema_version_2_survives_migration() {
+        // The critical regression: a user who reads the changelog and hand-
+        // appends ` {openai_cost}` back onto the current default line ends up
+        // with a `lines` value that is byte-identical to the OLD default. If
+        // the migration were unversioned, the very next load would strip it
+        // right back out - a fixed-point trap. Because this file is already
+        // at schema version 2, migrate_statusline_lines must not even run for
+        // it, so the hand-edit sticks.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":2,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            vec![
+                "{model} {agent}".to_string(),
+                "{context_bar} {cost} {usage} {codex} {openai_cost}".to_string(),
+            ],
+            "a deliberate re-add of {{openai_cost}} on a version-2 file must survive"
+        );
+        assert_eq!(s.version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn near_miss_double_space_line_survives_migration() {
+        // The migration comparison must be byte-exact, not a trim/normalize
+        // match: a double space is a different string from the previous
+        // default and must never be touched, even though this file is a
+        // version-1 file where the migration is eligible to fire.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar}  {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            vec![
+                "{model} {agent}".to_string(),
+                "{context_bar}  {cost} {usage} {codex} {openai_cost}".to_string(),
+            ],
+            "a near-miss (double space) line must not be treated as the previous default"
+        );
+    }
+
+    #[test]
+    fn near_miss_second_line_only_survives_migration() {
+        // Same near-miss guard, but for the shape of the previous default
+        // rather than its spacing: a single-line file that matches only the
+        // previous default's SECOND line is not the previous default and
+        // must survive, even though this file is a version-1 file where the
+        // migration is eligible to fire.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            vec!["{context_bar} {cost} {usage} {codex} {openai_cost}".to_string()],
+            "a near-miss (second-default-line-only) file must not be treated as the previous default"
         );
     }
 
@@ -685,25 +796,26 @@ mod tests {
     #[test]
     fn already_migrated_statusline_lines_are_left_unchanged() {
         // The migration must be a no-op once a file already carries the
-        // current default (e.g. a file this migration already rewrote once,
-        // or a fresh save).
+        // current default AND is already at the current schema version (e.g.
+        // a file this migration already rewrote once, or a fresh save).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         let current = crate::statusline::default_lines();
         let contents = serde_json::json!({
-            "version": 1,
+            "version": SCHEMA_VERSION,
             "statusline": { "lines": current },
         });
         fs::write(&path, serde_json::to_vec(&contents).unwrap()).unwrap();
         let s = load_from(&path).expect("load");
         assert_eq!(s.statusline.lines, current);
+        assert_eq!(s.version, SCHEMA_VERSION);
     }
 
     #[test]
     fn load_for_update_from_migrates_statusline_lines_too() {
         // The migration must apply on the read-modify-save path as well -
         // otherwise a settings save right after load would persist the stale
-        // old default straight back to disk.
+        // old default (and the stale version) straight back to disk.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(
@@ -716,6 +828,10 @@ mod tests {
             s.statusline.lines,
             crate::statusline::default_lines(),
             "load_for_update_from must apply the migration too"
+        );
+        assert_eq!(
+            s.version, SCHEMA_VERSION,
+            "load_for_update_from must persist the version bump so a subsequent save doesn't write the old lines back"
         );
     }
 
