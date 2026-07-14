@@ -301,6 +301,34 @@ fn notify_first_run(app: &App) {
     }
 }
 
+/// Persist the settings.json schema-version bump on disk, once, at startup.
+///
+/// `settings::load_from` (and therefore every settings read, including
+/// `maybe_first_run_welcome`'s) already applies load-path migrations and
+/// normalizes the in-memory version - but that bump only reaches disk when
+/// something else happens to save the file. An existing user whose file is
+/// pinned to the old default `statusline.lines` and who never otherwise
+/// triggers a save stays at `version: 1` forever, so the migration in
+/// `settings::migrate_statusline_lines` keeps stripping `{openai_cost}` back
+/// out on every single load - including after a user reads the changelog and
+/// hand-adds the segment back, since that re-add reproduces the exact old
+/// default string the migration matches on. Calling this once here closes
+/// that gap: the file lands at the current schema version and the migration
+/// never reconsiders it again.
+///
+/// Best-effort like the rest of startup: logged and never fatal. Logs at
+/// `info` only when a write actually happened (a once-per-upgrade event, not
+/// a per-launch one) and says nothing otherwise.
+fn normalize_settings_on_disk() {
+    match settings::normalize_on_disk() {
+        Ok(true) => tracing::info!("settings: normalized on-disk schema version to current"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(
+            "settings: on-disk normalization failed ({e}); the load-path migration will keep running until this succeeds"
+        ),
+    }
+}
+
 fn setup_tray(app: &mut App) -> tauri::Result<()> {
     let open = MenuItemBuilder::with_id("open", "Open Balanze").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -620,6 +648,15 @@ pub fn run() {
             }
         })
         .setup(move |app| {
+            // Runs first, before anything else can read or write settings.json:
+            // the tray/popover isn't shown yet and the watcher supervisor hasn't
+            // spawned, so this write cannot race a settings command triggered by
+            // the popover or a watcher-originated save. Independent of
+            // `maybe_first_run_welcome` on purpose - gating this on
+            // `seen_welcome` was the bug (an existing user's plain launch never
+            // persists the schema-version bump, so the statusline-lines
+            // migration in `settings::load_from` keeps re-firing forever).
+            normalize_settings_on_disk();
             setup_tray(app)?;
             boot_backend(app, &rt_handle);
             maybe_first_run_welcome(app, &rt_handle);

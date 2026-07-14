@@ -308,6 +308,83 @@ pub fn save(settings: &Settings) -> Result<(), SettingsError> {
     save_to(settings, &path)
 }
 
+/// Persist a settings file written under an older schema version, so the
+/// load-path migrations in [`load_from`] run once instead of on every load.
+///
+/// Without this, the in-memory version bump `load_from` applies only reaches
+/// disk the next time something else happens to save the file. An existing
+/// user whose file is already at the OLD default `statusline.lines` stays at
+/// `version: 1` indefinitely if nothing else ever triggers a save, so
+/// [`migrate_statusline_lines`] keeps stripping `{openai_cost}` back out on
+/// every single load - including a user who reads the changelog and manually
+/// re-adds the segment, since a hand re-add on a still-`version: 1` file
+/// reproduces the exact previous-default string the migration matches on.
+///
+/// Returns `Ok(true)` if a write happened, `Ok(false)` if the file was
+/// already current or absent. **Callers: the desktop app at startup only.**
+/// Not the statusline path (`balanze-cli statusline`), which runs once per
+/// prompt turn and must stay read-only per AGENTS.md §3.1.
+pub fn normalize_on_disk() -> Result<bool, SettingsError> {
+    let path = default_path()?;
+    normalize_on_disk_at(&path)
+}
+
+/// Minimal shape for the on-disk version probe in [`normalize_on_disk_at`]:
+/// only the `version` field matters for the decision to write, so this reads
+/// nothing else. Mirrors [`Settings::version`]'s own `#[serde(default)]` so
+/// an omitted field is treated as already-current, exactly like a full
+/// [`Settings`] parse would treat it.
+#[derive(Deserialize)]
+struct VersionProbe {
+    #[serde(default = "default_version")]
+    version: u32,
+}
+
+/// Explicit-path variant of [`normalize_on_disk`], for tests and any future
+/// `--config` override path.
+///
+/// A file that fails to parse at all - even just the `version` field - is
+/// malformed and this returns `Err(Malformed)` without writing anything: the
+/// only path that ever touches disk here is `load_for_update_from` (which
+/// itself refuses to collapse a corrupt file to defaults) followed by
+/// `save_to`, so a save can only happen once a full, valid `Settings` has
+/// been loaded.
+pub fn normalize_on_disk_at(path: &Path) -> Result<bool, SettingsError> {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            debug!(path = %path.display(), "settings: normalize_on_disk found no file, nothing to do");
+            return Ok(false);
+        }
+        Err(e) => {
+            return Err(SettingsError::Io {
+                path: path.to_path_buf(),
+                source: e,
+            });
+        }
+    };
+
+    let probe: VersionProbe =
+        serde_json::from_slice(&bytes).map_err(|e| SettingsError::Malformed {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+    if probe.version >= SCHEMA_VERSION {
+        debug!(path = %path.display(), "settings: normalize_on_disk found current schema, nothing to do");
+        return Ok(false);
+    }
+
+    let settings = load_for_update_from(path)?;
+    save_to(&settings, path)?;
+    debug!(
+        path = %path.display(),
+        from = probe.version,
+        to = SCHEMA_VERSION,
+        "settings: normalize_on_disk persisted the schema version bump"
+    );
+    Ok(true)
+}
+
 pub fn save_to(settings: &Settings, path: &Path) -> Result<(), SettingsError> {
     debug!(path = %path.display(), "settings: save");
     // Normalize the parent (a bare relative target's `parent()` is `Some("")`)
@@ -833,6 +910,107 @@ mod tests {
             s.version, SCHEMA_VERSION,
             "load_for_update_from must persist the version bump so a subsequent save doesn't write the old lines back"
         );
+    }
+
+    #[test]
+    fn normalize_on_disk_migrates_version_one_file_and_persists_the_bump() {
+        // The remaining gap this function closes: a version-1 file with the
+        // OLD default lines must land on disk at version 2 with the NEW
+        // default lines, so the load-path migration in `load_from` never has
+        // to reconsider this file again.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+
+        let wrote = normalize_on_disk_at(&path).expect("normalize");
+        assert!(wrote, "a version-1 file must be rewritten");
+
+        let reloaded = load_from(&path).expect("reload");
+        assert_eq!(
+            reloaded.version, SCHEMA_VERSION,
+            "on-disk version must be bumped to current"
+        );
+        assert_eq!(
+            reloaded.statusline.lines,
+            crate::statusline::default_lines(),
+            "on-disk lines must be the current default after normalization"
+        );
+    }
+
+    #[test]
+    fn normalize_on_disk_is_idempotent_on_a_version_two_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+
+        assert!(normalize_on_disk_at(&path).expect("first call"));
+        let after_first = fs::read(&path).unwrap();
+
+        let wrote_again = normalize_on_disk_at(&path).expect("second call");
+        assert!(
+            !wrote_again,
+            "a file already at the current schema version must not be rewritten"
+        );
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            after_first,
+            "second call must not touch the file"
+        );
+    }
+
+    #[test]
+    fn normalize_on_disk_leaves_a_deliberate_reenable_untouched() {
+        // The regression guard for the whole fixed-point trap: a version-2
+        // file whose lines were hand-edited to re-add {openai_cost} must
+        // survive byte-for-byte. normalize_on_disk must not treat "already at
+        // the current version" as an invitation to re-run the migration.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original: &[u8] = br#"{"version":2,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#;
+        fs::write(&path, original).unwrap();
+
+        let wrote = normalize_on_disk_at(&path).expect("normalize");
+        assert!(!wrote, "a version-2 file must not be rewritten");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            original,
+            "a deliberate re-enable on a version-2 file must be left byte-for-byte unchanged"
+        );
+    }
+
+    #[test]
+    fn normalize_on_disk_errors_on_malformed_file_and_leaves_it_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original: &[u8] = b"{ hand-edited into broken json ";
+        fs::write(&path, original).unwrap();
+
+        match normalize_on_disk_at(&path) {
+            Err(SettingsError::Malformed { path: p, .. }) => assert_eq!(p, path),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            original,
+            "a malformed file must never be overwritten by normalize_on_disk"
+        );
+    }
+
+    #[test]
+    fn normalize_on_disk_is_a_noop_when_file_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let wrote = normalize_on_disk_at(&path).expect("normalize");
+        assert!(!wrote, "an absent file must not be created");
+        assert!(!path.exists(), "normalize_on_disk must not create a file");
     }
 
     #[test]
