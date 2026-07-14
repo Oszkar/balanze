@@ -856,7 +856,7 @@ mod tests {
 
     #[test]
     fn codex_severity_classifies_rounded_value_at_cutoff() {
-        // 89.6% shows "◇5h 90%" and must read Red, not Orange - same
+        // 89.6% shows "🌀 5h 90%" and must read Red, not Orange - same
         // round-before-classify rule as the usage windows.
         let mut c = cfg();
         c.lines = vec!["{codex}".to_string()];
