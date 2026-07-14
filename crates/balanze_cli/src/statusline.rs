@@ -478,12 +478,14 @@ mod statusline_tests {
             codex_stale: false,
             openai_stale: false,
         };
-        let out = super::render_with(
-            &snap,
-            &settings::StatuslineConfig::default(),
-            false,
-            Some(&cross),
-        );
+        // `openai_cost` is off by default (see `default_lines`), so this test -
+        // which exercises the glue rendering both segments together - asks for
+        // it explicitly rather than relying on the shipped default template.
+        let config = settings::StatuslineConfig {
+            lines: vec!["{codex} {openai_cost}".to_string()],
+            ..Default::default()
+        };
+        let out = super::render_with(&snap, &config, false, Some(&cross));
         assert!(out.contains("🌀 5h 6%"), "{out}");
         assert!(out.contains("🌀 $4.20"), "{out}");
     }
@@ -567,6 +569,14 @@ mod statusline_tests {
         assert!(
             !super::want_openai(&silent),
             "template does not ask for the segment"
+        );
+    }
+
+    #[test]
+    fn default_template_does_not_want_openai() {
+        assert!(
+            !super::want_openai(&settings::StatuslineConfig::default()),
+            "the shipped default template must not request the OpenAI segment"
         );
     }
 
