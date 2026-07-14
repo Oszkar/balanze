@@ -465,21 +465,20 @@ Add to the `#[cfg(test)] mod tests` block in `crates/balanze_cli/src/statusline.
 ```rust
     #[test]
     fn want_openai_follows_the_configured_lines() {
-        // The default template does not request the segment.
-        let default_cfg = settings::StatuslineConfig::default();
-        assert!(
-            !super::want_openai(&default_cfg),
-            "default template must not request the OpenAI segment"
-        );
+        let mut asks = settings::StatuslineConfig::default();
+        asks.lines = vec!["{usage} {openai_cost}".to_string()];
+        assert!(super::want_openai(&asks), "template asks for the segment");
 
-        // An explicit template that asks for it does.
-        let mut custom = settings::StatuslineConfig::default();
-        custom.lines = vec!["{usage} {openai_cost}".to_string()];
-        assert!(super::want_openai(&custom));
+        let mut silent = settings::StatuslineConfig::default();
+        silent.lines = vec!["{usage} {codex}".to_string()];
+        assert!(
+            !super::want_openai(&silent),
+            "template does not ask for the segment"
+        );
     }
 ```
 
-Note: `want_openai_follows_the_configured_lines` will FAIL its first assertion until Task 4 removes `{openai_cost}` from the default. That is expected and is the point of the ordering; Step 2 below records it, and Task 4 Step 5 is where it turns green.
+This asserts the predicate against explicit templates only, so it is green the moment `want_openai` exists. Task 4 adds the separate assertion that the *shipped default* template does not ask for the segment - that one belongs with the change that makes it true.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -489,8 +488,8 @@ cargo nextest run -p balanze_cli want_openai
 ```
 
 Expected:
-- `want_openai_false_skips_the_fetch_entirely` and `want_openai_false_still_composes_codex`: FAIL to compile - `self_compose` takes 4 arguments, not 5.
-- `want_openai_follows_the_configured_lines`: FAIL to compile - `want_openai` is not defined.
+- `want_openai_false_skips_the_fetch_entirely`: FAILS to compile - `self_compose` takes 4 arguments, not 5.
+- `want_openai_follows_the_configured_lines`: FAILS to compile - `want_openai` is not defined.
 
 - [ ] **Step 3: Add the parameter to `self_compose`**
 
@@ -647,7 +646,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
 ```
 
-Expected: all PASS **except** `want_openai_follows_the_configured_lines`, which fails its first assertion because the default template still contains `{openai_cost}`. That is the expected state after this task. Do not "fix" it by weakening the assertion; Task 4 removes the placeholder and turns it green.
+Expected: all PASS. The default template still contains `{openai_cost}`, so `want_openai` is `true` on the default path and observable behavior is unchanged. This task builds the switch; Task 4 flips it.
 
 - [ ] **Step 7: Commit**
 
@@ -671,7 +670,8 @@ reason to self-compose when the value is not wanted."
 This flips the gate built in Task 3 and rewires the self-compose integration test, which currently asserts on a segment the default template no longer renders. Both must land together to keep the tree green.
 
 **Files:**
-- Modify: `crates/settings/src/statusline.rs` (`default_lines`, module doc, `lines` doc comment, tests)
+- Modify: `crates/settings/src/statusline.rs` (`default_lines`, tests)
+- Modify: `crates/balanze_cli/src/statusline.rs` (one new test)
 - Modify: `crates/balanze_cli/tests/integration_statusline_self_compose.rs`
 
 **Interfaces:**
@@ -700,13 +700,26 @@ Add to the `#[cfg(test)] mod tests` block in `crates/settings/src/statusline.rs`
     }
 ```
 
+And add the companion assertion in `crates/balanze_cli/src/statusline.rs`, next to `want_openai_follows_the_configured_lines` from Task 3. This is the assertion that ties the predicate to the shipped default, and it only becomes true with the change in Step 3:
+
+```rust
+    #[test]
+    fn default_template_does_not_want_openai() {
+        assert!(
+            !super::want_openai(&settings::StatuslineConfig::default()),
+            "the shipped default template must not request the OpenAI segment"
+        );
+    }
+```
+
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
 cargo nextest run -p settings default_lines_omit_the_openai_cost_segment
+cargo nextest run -p balanze_cli default_template_does_not_want_openai
 ```
 
-Expected: FAIL - the default second line still contains `{openai_cost}`.
+Expected: both FAIL - the default second line still contains `{openai_cost}`.
 
 - [ ] **Step 3: Change the default template**
 
@@ -895,7 +908,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
 ```
 
-Expected: all PASS, including `want_openai_follows_the_configured_lines` from Task 3, which turns green here.
+Expected: all PASS.
 
 - [ ] **Step 6: Verify against the real binary**
 
@@ -910,7 +923,7 @@ Expected: a line beginning `🤖 Opus` on one row and `🧠 [` on the next, with
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/settings/src/statusline.rs crates/balanze_cli/tests/integration_statusline_self_compose.rs
+git add crates/settings/src/statusline.rs crates/balanze_cli/src/statusline.rs crates/balanze_cli/tests/integration_statusline_self_compose.rs
 git commit -m "feat(statusline): drop OpenAI spend from the default line
 
 OpenAI API spend is an uncapped dollar figure with no rolling window, so
