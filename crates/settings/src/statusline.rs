@@ -37,6 +37,8 @@ pub struct StatuslineConfig {
     /// Line templates: each is a space-separated layout of `{segment}`
     /// placeholders (model, agent, context_bar, cost, usage, codex,
     /// openai_cost). Empty segments are dropped; literal text is kept.
+    /// `openai_cost` is available but absent from the default lines - see
+    /// `default_lines`.
     #[serde(default = "default_lines")]
     pub lines: Vec<String>,
     #[serde(default)]
