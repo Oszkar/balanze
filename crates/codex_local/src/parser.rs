@@ -112,11 +112,19 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
         // interleaved with - and often trailing - the account-wide ones in the
         // same file. Those report the model's own allowance, so folding them in
         // would report an unrelated (usually near-zero) percentage as the
-        // account quota. Skip them BEFORE drift accounting: they are well-formed
-        // events, just not ours.
+        // account quota. See [`classify_limit`] for the three outcomes.
         let rate_limits = payload.get("rate_limits");
-        if rate_limits.is_some_and(is_per_model_limit) {
-            continue;
+        match rate_limits.map(classify_limit) {
+            // Well-formed, just not ours. Skip BEFORE drift accounting.
+            Some(LimitScope::PerModel) => continue,
+            // We can't tell whose quota this is, so we refuse to guess: count
+            // it as drift rather than banking an unknown limit as the account's.
+            Some(LimitScope::Unknown) => {
+                token_count_attempts += 1;
+                last_drift_line = line_no;
+                continue;
+            }
+            _ => {}
         }
 
         // From here on, we're committed: this line is a token_count
@@ -216,16 +224,27 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
 /// only one Balanze reports. Per-model limits use their own ids.
 const ACCOUNT_LIMIT_ID: &str = "codex";
 
-/// True when this `rate_limits` block describes a per-model limit rather than
-/// the account-wide one. A missing, null, or non-string `limit_id` is NOT
-/// treated as per-model: pre-`limit_id` payloads are account limits, and a
-/// malformed one should reach the drift path below rather than be skipped
-/// silently.
-fn is_per_model_limit(rate_limits: &Value) -> bool {
-    rate_limits
-        .get("limit_id")
-        .and_then(|v| v.as_str())
-        .is_some_and(|id| id != ACCOUNT_LIMIT_ID)
+/// Whose quota a `rate_limits` block describes.
+enum LimitScope {
+    /// The account-wide quota: `limit_id` is `"codex"`, or absent/null (which
+    /// is what pre-`limit_id` Codex CLI payloads look like).
+    Account,
+    /// Some model's own allowance (e.g. `"codex_bengalfox"` / Spark), not the
+    /// account's. Well-formed - we simply don't report it.
+    PerModel,
+    /// `limit_id` is present but not a string. We cannot tell whose quota this
+    /// is. Reporting it as the account's could silently under-report exactly
+    /// the way a per-model block would, so this is drift, not a reading.
+    Unknown,
+}
+
+fn classify_limit(rate_limits: &Value) -> LimitScope {
+    match rate_limits.get("limit_id") {
+        None | Some(Value::Null) => LimitScope::Account,
+        Some(Value::String(id)) if id == ACCOUNT_LIMIT_ID => LimitScope::Account,
+        Some(Value::String(_)) => LimitScope::PerModel,
+        Some(_) => LimitScope::Unknown,
+    }
 }
 
 /// Parse a `RateLimitWindow` from a JSON value. Returns `None` on any
@@ -375,6 +394,32 @@ mod tests {
         let f = write_jsonl(&[SESSION_META, TOKEN_COUNT_SPARK_0PCT]);
         let snap = read_latest_quota_snapshot(f.path()).expect("not drift");
         assert!(snap.is_none());
+    }
+
+    #[test]
+    fn non_string_limit_id_is_drift_not_an_account_reading() {
+        // If Codex ever re-types `limit_id`, we cannot tell WHOSE quota the
+        // block describes. Guessing "account" would silently reintroduce the
+        // per-model under-report this fix exists to prevent, so an unknown
+        // shape must reach the drift path instead.
+        let typed_limit_id = r#"{"timestamp":"2026-07-14T09:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":42,"primary":{"used_percent":0.0,"window_minutes":10080,"resets_at":1784557584},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+        let f = write_jsonl(&[SESSION_META, typed_limit_id]);
+        let err =
+            read_latest_quota_snapshot(f.path()).expect_err("unknown limit_id shape is drift");
+        assert!(
+            matches!(err, ParseError::SchemaDrift { .. }),
+            "expected SchemaDrift, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_valid_account_reading_still_wins_over_a_later_malformed_one() {
+        // Consistent with `missing_primary_block_skipped_not_fatal`: drift only
+        // surfaces when it left us with NOTHING. A good reading is still good.
+        let typed_limit_id = r#"{"timestamp":"2026-07-14T09:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":42,"primary":{"used_percent":0.0,"window_minutes":10080,"resets_at":1784557584},"plan_type":"pro"}}}"#;
+        let f = write_jsonl(&[SESSION_META, TOKEN_COUNT_5PCT, typed_limit_id]);
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        assert_eq!(snap.primary.used_percent, 5.0);
     }
 
     #[test]
