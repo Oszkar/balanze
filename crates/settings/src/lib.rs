@@ -124,7 +124,14 @@ pub enum SettingsError {
 
 /// Conventional settings.json path for this user. Lazy: doesn't create the
 /// directory.
+///
+/// `BALANZE_CONFIG_DIR_OVERRIDE` is intended for tests that need an isolated
+/// config directory, mirroring `BALANZE_DATA_DIR_OVERRIDE` and
+/// `BALANZE_CACHE_DIR_OVERRIDE`.
 pub fn default_path() -> Result<PathBuf, SettingsError> {
+    if let Ok(dir) = std::env::var("BALANZE_CONFIG_DIR_OVERRIDE") {
+        return Ok(PathBuf::from(dir).join("settings.json"));
+    }
     let pd = project_dirs().ok_or(SettingsError::NoConfigDir)?;
     Ok(pd.config_dir().join("settings.json"))
 }
@@ -277,7 +284,10 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+    /// Serializes env-mutating tests in this module. `cargo nextest` runs each
+    /// test in its own process, but plain `cargo test` shares one, so the lock
+    /// keeps both runners honest.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_settings_have_current_schema_version() {
@@ -355,9 +365,9 @@ mod tests {
 
     #[test]
     fn statusline_snapshot_path_honors_env_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: this env-mutating test is serialized via ENV_MUTEX; the
+        // SAFETY: this env-mutating test is serialized via ENV_LOCK; the
         // override is test-only and removed before assertions run.
         unsafe { std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", dir.path()) };
         let path = statusline_snapshot_path();
@@ -368,15 +378,26 @@ mod tests {
 
     #[test]
     fn log_dir_honors_env_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: this env-mutating test is serialized via ENV_MUTEX; the
+        // SAFETY: this env-mutating test is serialized via ENV_LOCK; the
         // override is test-only and removed before assertions run.
         unsafe { std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", dir.path()) };
         let path = log_dir();
         unsafe { std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE") };
 
         assert_eq!(path, Some(dir.path().join("logs")));
+    }
+
+    #[test]
+    fn default_path_honors_config_dir_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: ENV_LOCK serializes env-mutating tests in this module; restored below.
+        unsafe { std::env::set_var("BALANZE_CONFIG_DIR_OVERRIDE", dir.path()) };
+        let p = default_path().expect("path");
+        assert_eq!(p, dir.path().join("settings.json"));
+        unsafe { std::env::remove_var("BALANZE_CONFIG_DIR_OVERRIDE") };
     }
 
     #[test]
