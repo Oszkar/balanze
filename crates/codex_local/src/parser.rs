@@ -107,11 +107,23 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
             continue;
         }
 
+        // Since 2026-07-12 a session can also carry PER-MODEL limits (e.g.
+        // `limit_id: "codex_bengalfox"`, `limit_name: "GPT-5.3-Codex-Spark"`),
+        // interleaved with - and often trailing - the account-wide ones in the
+        // same file. Those report the model's own allowance, so folding them in
+        // would report an unrelated (usually near-zero) percentage as the
+        // account quota. Skip them BEFORE drift accounting: they are well-formed
+        // events, just not ours.
+        let rate_limits = payload.get("rate_limits");
+        if rate_limits.is_some_and(is_per_model_limit) {
+            continue;
+        }
+
         // From here on, we're committed: this line is a token_count
         // attempt. Any structural failure below counts as drift.
         token_count_attempts += 1;
 
-        let rate_limits = match payload.get("rate_limits") {
+        let rate_limits = match rate_limits {
             Some(rl) => rl,
             None => {
                 last_drift_line = line_no;
@@ -198,6 +210,22 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
         }),
         None => Ok(None),
     }
+}
+
+/// `limit_id` of the account-wide Codex quota - the one every plan has and the
+/// only one Balanze reports. Per-model limits use their own ids.
+const ACCOUNT_LIMIT_ID: &str = "codex";
+
+/// True when this `rate_limits` block describes a per-model limit rather than
+/// the account-wide one. A missing, null, or non-string `limit_id` is NOT
+/// treated as per-model: pre-`limit_id` payloads are account limits, and a
+/// malformed one should reach the drift path below rather than be skipped
+/// silently.
+fn is_per_model_limit(rate_limits: &Value) -> bool {
+    rate_limits
+        .get("limit_id")
+        .and_then(|v| v.as_str())
+        .is_some_and(|id| id != ACCOUNT_LIMIT_ID)
 }
 
 /// Parse a `RateLimitWindow` from a JSON value. Returns `None` on any
@@ -318,6 +346,44 @@ mod tests {
         let f = write_jsonl(&[SESSION_META, TOKEN_COUNT_3PCT, TOKEN_COUNT_5PCT]);
         let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
         assert_eq!(snap.primary.used_percent, 5.0);
+    }
+
+    /// Per-model limit, as emitted from 2026-07-12 onward alongside the
+    /// account limit in the SAME session file. Its window is that model's own
+    /// allowance, not the account's.
+    const TOKEN_COUNT_SPARK_0PCT: &str = r#"{"timestamp":"2026-07-13T14:26:29.084Z","type":"event_msg","payload":{"type":"token_count","info":{"model_context_window":258400},"rate_limits":{"limit_id":"codex_bengalfox","limit_name":"GPT-5.3-Codex-Spark","primary":{"used_percent":0.0,"window_minutes":10080,"resets_at":1784557584},"secondary":null,"credits":{"has_credits":false,"unlimited":false,"balance":null},"individual_limit":null,"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+
+    #[test]
+    fn per_model_limit_does_not_override_the_account_limit() {
+        // Real shape since 2026-07-12: a Spark session appends its own
+        // per-model rate_limits AFTER the account ones. Taking the last
+        // token_count blindly would report the model's 0% as the account
+        // quota - a silent under-report, the worst direction for a quota tool.
+        let f = write_jsonl(&[SESSION_META, TOKEN_COUNT_5PCT, TOKEN_COUNT_SPARK_0PCT]);
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        assert_eq!(
+            snap.primary.used_percent, 5.0,
+            "account limit (limit_id=codex) must win over the per-model limit"
+        );
+    }
+
+    #[test]
+    fn only_per_model_limits_yields_none_not_drift() {
+        // A session that only ever talked to Spark carries no account-limit
+        // reading. That's "nothing for us here" (so the walker falls through
+        // to the next-newest session), NOT schema drift.
+        let f = write_jsonl(&[SESSION_META, TOKEN_COUNT_SPARK_0PCT]);
+        let snap = read_latest_quota_snapshot(f.path()).expect("not drift");
+        assert!(snap.is_none());
+    }
+
+    #[test]
+    fn payload_without_limit_id_is_treated_as_the_account_limit() {
+        // Pre-limit_id Codex CLI payloads (and any future null) stay parseable.
+        let no_limit_id = r#"{"timestamp":"2026-05-14T09:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":8.0,"window_minutes":300,"resets_at":1779344607},"secondary":null,"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+        let f = write_jsonl(&[SESSION_META, no_limit_id]);
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        assert_eq!(snap.primary.used_percent, 8.0);
     }
 
     #[test]
