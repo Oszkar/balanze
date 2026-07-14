@@ -214,3 +214,21 @@ Apply these via the same /plan-eng-review flow if you want them re-reviewed; or 
 - **Windows vary by plan.** "go" reports ONE window (weekly, `window_minutes: 10080`) in `primary`, `secondary: null`. "plus"/"pro" report TWO: `primary` = 5-hour (300), `secondary` = weekly (10080). Confirmed across 447 files spanning CLI 0.130.0 -> 0.143.0. Classify by `window_minutes` (`RateLimitWindow::kind()`), never by slot. The old "primary is 7-day" comment was only ever true on "go".
 - **Token/context: internal only.** `info.total_token_usage`, `info.last_token_usage`, `info.model_context_window` are parsed into `CodexTokenUsage` (`#[serde(skip)]`), tested, but NOT surfaced in any UI yet. LIMITATION: Codex's cap is percentage-windows, not tokens, so token burn does NOT predict quota exhaustion (unlike Claude). The eventual actionable metric is context-window fill. Exposure and presentation deferred.
 - **Backend-only fields.** `individual_limit` (per-model GPT-5.3-Codex-Spark caps) is `null` in 0 of 447 files, including sessions that invoked Spark; it is backend/web-only. `credits.balance` is only ever `"0"`/null for observed plans. Neither the Spark caps nor a real credits balance is obtainable from local files; that would require the ChatGPT backend API + Codex OAuth (out of scope).
+
+---
+
+## 2026-07-14 update: the 5-hour window vanished, and `limit_id` now matters
+
+Both findings come from the same source change and were confirmed against live `~/.codex/sessions/` data.
+
+- **The 5-hour window is gone (upstream, temporary).** From 2026-07-13 onward, every `rate_limits` block on plan "pro" carries the weekly window alone (`primary.window_minutes: 10080`, `secondary: null`). The last 300-minute window appears on 2026-07-12; it disappears mid-session in a file that spans the boundary, on an unchanged CLI (0.144.1 both sides) - so this is server-side, not a CLI upgrade. It matches OpenAI temporarily lifting the 5-hour limit for Plus/Business/Pro on 2026-07-12 after the GPT-5.6 launch. Not a bug and nothing to fix: `RateLimitWindow::kind()` classifies by duration, so the window's return needs no code change. Any surface that assumes a 5-hour window always exists is the thing that would break.
+- **Per-model limits share the file (`limit_id`).** A session that invokes Spark appends `rate_limits` with `limit_id: "codex_bengalfox"` / `limit_name: "GPT-5.3-Codex-Spark"`, carrying THAT MODEL's window (typically 0%), interleaved with - and often trailing - the account-wide `limit_id: "codex"` blocks. The parser previously took the last `token_count` in the newest file regardless, so a Spark-trailing session would report ~0% as the account quota: a silent under-report. It now classifies every block by `limit_id` before reading it:
+
+| `limit_id` | Treated as | Why |
+|---|---|---|
+| `"codex"`, or absent/null | account limit | The account-wide quota, and the shape of pre-`limit_id` payloads. |
+| any other string (`"codex_bengalfox"`, ...) | per-model limit, skipped | Well-formed, just not ours. Not drift: a session with only these yields `Ok(None)`, so the walker falls through to the next-newest session. |
+| present but not a string | drift | We cannot tell whose quota it is. Banking it as the account's would silently under-report exactly the way a per-model block does, so we refuse to guess. |
+
+As elsewhere in this parser, drift only surfaces as `SchemaDrift` when it left us with nothing - a valid account reading in the same file still wins.
+- **New fields, no action.** `limit_name`, and `credits.unlimited` alongside `credits.has_credits`/`balance`. Neither is read.

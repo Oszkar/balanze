@@ -11,9 +11,13 @@ use serde::{Deserialize, Serialize};
 /// Which rolling window a [`RateLimitWindow`] represents, classified by its
 /// duration. Codex reports two lengths in practice: 300 minutes (5 hours)
 /// and 10080 minutes (7 days / weekly). Which JSON slot (`primary`/`secondary`)
-/// holds which VARIES by plan and CLI version: on "go" a single weekly window
-/// sits in `primary`; on "plus"/"pro" `primary` is the 5-hour window and
-/// `secondary` is weekly. Consumers MUST classify by duration, never by slot.
+/// holds which VARIES by plan, CLI version, and over time: on "go" a single
+/// weekly window sits in `primary`; on "plus"/"pro" `primary` WAS the 5-hour
+/// window with `secondary` weekly, until 2026-07-12, when OpenAI temporarily
+/// lifted the 5-hour limit and those plans began reporting the weekly window
+/// alone in `primary` (`secondary: null`). Consumers MUST classify by duration,
+/// never by slot, and MUST tolerate either window being absent - that is how a
+/// window's removal or return arrives, with no code change on our side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowKind {
     FiveHour,
