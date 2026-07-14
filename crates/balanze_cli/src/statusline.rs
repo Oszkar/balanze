@@ -469,8 +469,8 @@ mod statusline_tests {
             false,
             Some(&cross),
         );
-        assert!(out.contains("◇5h 6%"), "{out}");
-        assert!(out.contains("OpenAI $4.20"), "{out}");
+        assert!(out.contains("🌀 5h 6%"), "{out}");
+        assert!(out.contains("🌀 $4.20"), "{out}");
     }
 
     /// Like `EnvGuard` but for multiple env vars under a single `ENV_LOCK`

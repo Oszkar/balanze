@@ -103,7 +103,7 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             let c = &segs.context_bar;
             let tone = tone_pct(pct, c.warn, c.critical);
             let shown = pct.round() as i64;
-            let text = format!("{} {shown}%", bar(pct, c.width));
+            let text = format!("🧠 {} {shown}%", bar(pct, c.width));
             Some(paint(
                 &text,
                 resolve(&c.style, theme, "context_bar", Tone::Base),
@@ -133,23 +133,25 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             let cross = input.cross?;
             let mut windows = Vec::new();
             if let Some(pct) = cross.codex_five_hour {
-                windows.push(render_codex_window("◇5h", pct, input));
+                windows.push(render_codex_window("🌀 5h", pct, input));
             }
             if let Some(pct) = cross.codex_weekly {
-                windows.push(render_codex_window("◇wk", pct, input));
+                // "7d", not "wk": every other surface calls this window 7d, and
+                // the provider glyph is what separates it from Claude's 7d.
+                windows.push(render_codex_window("🌀 7d", pct, input));
             }
             if windows.is_empty() {
                 return None;
             }
-            let mark = if cross.codex_stale { " ⚠" } else { "" };
+            let mark = if cross.codex_stale { " ⚠️" } else { "" };
             Some(format!("{}{mark}", windows.join(" ")))
         }
         "openai_cost" => {
             let cross = input.cross?;
             let micro = cross.openai_cost_micro_usd?;
-            let mark = if cross.openai_stale { " ⚠" } else { "" };
+            let mark = if cross.openai_stale { " ⚠️" } else { "" };
             Some(paint(
-                &format!("OpenAI {}{mark}", fmt_money(micro)),
+                &format!("🌀 {}{mark}", fmt_money(micro)),
                 resolve(&segs.openai_cost.style, theme, "openai_cost", Tone::Base),
                 "",
                 "",
@@ -167,10 +169,10 @@ fn render_usage(input: &RenderInput) -> Option<String> {
     let c = &input.config.segments.usage;
     let mut windows: Vec<String> = Vec::new();
     if let Some(w) = rl.five_hour() {
-        windows.push(render_window("⌛5h", w, Duration::hours(5), c, input));
+        windows.push(render_window("✳️ 5h", w, Duration::hours(5), c, input));
     }
     if let Some(w) = rl.seven_day() {
-        windows.push(render_window("📅7d", w, Duration::days(7), c, input));
+        windows.push(render_window("✳️ 7d", w, Duration::days(7), c, input));
     }
     if windows.is_empty() {
         None
@@ -844,7 +846,7 @@ mod tests {
             now: now(),
             color: true,
         });
-        assert!(out.contains("◇5h 80%"), "codex label: {out}");
+        assert!(out.contains("🌀 5h 80%"), "codex label: {out}");
         // 80% -> Orange = fg:#ff9e64 = rgb(255,158,100).
         assert!(
             out.contains("\x1b[38;2;255;158;100m"),
@@ -870,7 +872,7 @@ mod tests {
             now: now(),
             color: true,
         });
-        assert!(out.contains("◇5h 90%"), "codex rounds to 90: {out}");
+        assert!(out.contains("🌀 5h 90%"), "codex rounds to 90: {out}");
         // Red = bold fg:#f7768e = rgb(247,118,142).
         assert!(
             out.contains("\x1b[1;38;2;247;118;142m"),
@@ -896,7 +898,152 @@ mod tests {
             now: now(),
             color: false,
         });
-        assert!(out.contains("◇5h 2%"), "5h window: {out}");
-        assert!(out.contains("◇wk 3%"), "weekly window: {out}");
+        assert!(out.contains("🌀 5h 2%"), "5h window: {out}");
+        assert!(out.contains("🌀 7d 3%"), "weekly window labeled 7d: {out}");
+    }
+
+    /// A full-config render exercising every segment's glyph at once. This is
+    /// the glyph table: provider glyph for rate windows, metric glyph for the
+    /// Claude-only figures, exactly one space after each.
+    #[test]
+    fn glyph_table() {
+        let mut c = cfg();
+        c.lines = vec!["{model} {context_bar} {cost} {usage} {codex} {openai_cost}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_five_hour: Some(12.0),
+            codex_weekly: Some(7.0),
+            openai_cost_micro_usd: Some(0),
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: false,
+        });
+        assert!(out.contains("🤖 Opus"), "model: {out}");
+        // snap() has context 42% and the default bar width is 10 -> 4 filled cells.
+        assert!(out.contains("🧠 [####------] 42%"), "context: {out}");
+        assert!(out.contains("💰 ~$2.50"), "cost: {out}");
+        assert!(out.contains("✳️ 5h 82%"), "claude 5h: {out}");
+        assert!(out.contains("✳️ 7d 88%"), "claude 7d: {out}");
+        assert!(out.contains("🌀 5h 12%"), "codex 5h: {out}");
+        assert!(out.contains("🌀 7d 7%"), "codex weekly labeled 7d: {out}");
+        assert!(out.contains("🌀 $0.00"), "openai cost: {out}");
+    }
+
+    /// The Codex weekly window must read "7d", never "wk". Every other surface
+    /// in the repo already calls it 7d (see balanze_cli/src/render.rs), and the
+    /// provider glyph is what distinguishes it from Claude's 7d window.
+    #[test]
+    fn codex_weekly_is_labeled_7d_not_wk() {
+        let mut c = cfg();
+        c.lines = vec!["{codex}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_weekly: Some(7.0),
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: false,
+        });
+        assert!(out.contains("🌀 7d 7%"), "{out}");
+        assert!(!out.contains("wk"), "the 'wk' label is retired: {out}");
+    }
+
+    /// The one spacing rule: every glyph is followed by exactly one space, and
+    /// the line never contains a double space.
+    #[test]
+    fn every_glyph_is_followed_by_exactly_one_space() {
+        let mut c = cfg();
+        c.lines = vec!["{model} {context_bar} {cost} {usage} {codex} {openai_cost}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_five_hour: Some(12.0),
+            codex_weekly: Some(7.0),
+            openai_cost_micro_usd: Some(0),
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: false,
+        });
+        for glyph in ["🤖", "🧠", "💰", "✳️", "🌀"] {
+            for (idx, _) in out.match_indices(glyph) {
+                let rest = &out[idx + glyph.len()..];
+                assert!(
+                    rest.starts_with(' '),
+                    "glyph {glyph} must be followed by a space: {out:?}"
+                );
+                assert!(
+                    !rest.starts_with("  "),
+                    "glyph {glyph} must be followed by exactly one space: {out:?}"
+                );
+            }
+        }
+        assert!(!out.contains("  "), "no double spaces anywhere: {out:?}");
+    }
+
+    /// The retired glyphs and labels must not survive anywhere in a full render.
+    #[test]
+    fn retired_glyphs_are_gone() {
+        let mut c = cfg();
+        c.lines = vec!["{model} {context_bar} {cost} {usage} {codex} {openai_cost}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_five_hour: Some(12.0),
+            codex_weekly: Some(7.0),
+            openai_cost_micro_usd: Some(0),
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: false,
+        });
+        for retired in ['⌛', '📅', '◇'] {
+            assert!(!out.contains(retired), "retired glyph {retired}: {out}");
+        }
+        assert!(
+            !out.contains("OpenAI"),
+            "the bare 'OpenAI' literal is replaced by the 🌀 glyph: {out}"
+        );
+    }
+
+    /// The stale marker carries the VS16 variation selector so it advances two
+    /// cells like every other glyph. A bare U+26A0 advances one and ragged the
+    /// tail of the line.
+    #[test]
+    fn stale_marker_is_emoji_presentation() {
+        let mut c = cfg();
+        c.lines = vec!["{codex}".to_string()];
+        let s = snap();
+        let cross = CrossProvider {
+            codex_five_hour: Some(12.0),
+            codex_stale: true,
+            ..Default::default()
+        };
+        let out = render(&RenderInput {
+            snapshot: &s,
+            cross: Some(&cross),
+            config: &c,
+            now: now(),
+            color: false,
+        });
+        assert!(
+            out.ends_with("\u{26A0}\u{FE0F}"),
+            "stale marker must be U+26A0 U+FE0F: {out:?}"
+        );
     }
 }

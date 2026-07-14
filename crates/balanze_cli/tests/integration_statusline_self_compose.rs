@@ -8,7 +8,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Minimal valid `/v1/organization/costs` body. Shape matches what
 /// `openai_client` parses (verified against `crates/openai_client/tests/`);
-/// value 4.20 USD -> total_micro_usd 4_200_000 -> rendered "OpenAI $4.20".
+/// value 4.20 USD -> total_micro_usd 4_200_000 -> rendered "🌀 $4.20".
 fn costs_body() -> serde_json::Value {
     serde_json::json!({
         "object": "page",
@@ -73,7 +73,7 @@ async fn self_compose_renders_openai_and_gates_to_one_fetch() {
             out.status,
         );
         assert!(
-            stdout.contains("OpenAI $"),
+            stdout.contains("🌀 $"),
             "self-composed OpenAI segment missing;\nstdout: {stdout}\nstderr: {stderr}"
         );
     }
