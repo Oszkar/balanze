@@ -20,19 +20,24 @@
   });
 </script>
 
-{#if usage.loading}
-  <div class="state">Loading...</div>
-{:else if usage.snapshot}
-  <Popover snapshot={usage.snapshot} degraded={usage.degraded} onRefresh={() => usage.refresh()} />
-{:else}
-  <EmptyState
-    title="Balanze isn't responding yet"
-    body="The background service may still be starting."
-    detail={usage.lastError}
-    actions={[{ label: 'Retry', kind: 'primary', onClick: () => void usage.refresh() }]}
-  />
-{/if}
+<main aria-label="Balanze usage">
+  <h1 class="sr-only">Balanze usage</h1>
+  {#if usage.loading}
+    <div class="state">Loading...</div>
+  {:else if usage.snapshot}
+    <Popover snapshot={usage.snapshot} degraded={usage.degraded} onRefresh={() => usage.refresh()} />
+  {:else}
+    <EmptyState
+      title="Balanze isn't responding yet"
+      body="The background service may still be starting."
+      detail={usage.lastError}
+      actions={[{ label: 'Retry', kind: 'primary', onClick: () => void usage.refresh() }]}
+    />
+  {/if}
+</main>
 
 <style>
   .state { display: flex; align-items: center; justify-content: center; min-height: 100vh; color: var(--faint); font-size: 13px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 </style>

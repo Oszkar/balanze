@@ -30,10 +30,10 @@
 
 <style>
   .banner { display: flex; gap: 8px; align-items: flex-start; margin: 0 16px 10px;
-            padding: 8px 10px; border-radius: 8px; background: var(--warn-bg, rgba(204, 120, 0, .12));
-            border: 1px solid var(--warn-hair, rgba(204, 120, 0, .35)); }
+            padding: 8px 10px; border-radius: 8px; background: var(--warn-bg);
+            border: 1px solid var(--warn-hair); }
   .dot { color: var(--warn, #c70); font-size: 12px; line-height: 1.3; flex-shrink: 0; }
   .msgs { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .row { font-size: 11px; color: var(--ink, inherit); line-height: 1.3; word-break: break-word; }
+  .row { font-size: var(--text-xs); color: var(--ink, inherit); line-height: 1.3; word-break: break-word; }
   .row b { font-weight: 600; }
 </style>
