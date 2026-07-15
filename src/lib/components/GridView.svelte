@@ -127,7 +127,7 @@
   .colhead .plan { font-size: var(--text-2xs); color: var(--faint); }
   /* Offsets compensate for the larger padding so the × stays in the corner while
      the hit target grows to ~22px (glyph weight unchanged). */
-  .dismiss { position: absolute; top: -3px; right: -3px; background: none; border: none; color: var(--faint);
+  .dismiss { position: absolute; top: -3px; right: -3px; min-width: var(--control-target-min); min-height: var(--control-target-min); background: none; border: none; color: var(--faint);
     cursor: pointer; font-size: var(--text-base); line-height: 1; padding: 5px 6px; border-radius: 4px; }
   .dismiss:hover { color: var(--ink); }
   .dismiss:focus-visible { outline: 2px solid var(--ink2); outline-offset: 1px; border-radius: 4px; }

@@ -89,13 +89,14 @@
      here, scoped to the canvas. KEEP IN SYNC WITH src/lib/theme.css. Dev-only -
      deliberately not added to the shared theme so the shipping app is untouched. */
   .canvas.light {
-    --paper: #ffffff; --ink: #1f2227; --ink2: #5a5f68; --faint: #9aa0aa;
+    --paper: #ffffff; --ink: #1f2227; --ink2: #5a5f68; --faint: #6e7580;
     --ok: #3f8f5f; --warn: #cf8a2a; --bad: #c0493a; --real: #3667a6;
     --hair: #e6e2db; --tile-bg: #fbfaf7; --tile-border: #e8e3db;
     --track: #ece8e1; --hatch: rgba(0, 0, 0, .09);
     --seg-on: #1f2227; --seg-on-text: #fff; --seg-border: #d9d4cc;
     --lev-border: #d9d4cc; --lev-bg: #faf8f4;
     --tip-bg: #26292e; --tip-ink: #f2f3f5; --tip-faint: #aab2bd;
+    --warn-bg: rgba(204, 120, 0, .12); --warn-hair: rgba(204, 120, 0, .45);
     --shadow: 0 16px 44px rgba(40, 36, 28, .18);
     --tile-face: linear-gradient(180deg, #ffffff 0%, var(--tile-bg) 72%);
     --tile-elev: inset 0 1px 0 rgba(255,255,255,.8), 0 0 0 1px rgba(40,36,28,.06), 0 1px 2px rgba(40,36,28,.05), 0 6px 16px -8px rgba(40,36,28,.16);
@@ -105,13 +106,14 @@
     background: #efede8;
   }
   .canvas.dark {
-    --paper: #171a20; --ink: #e9ecf1; --ink2: #aab2bd; --faint: #6f7886;
+    --paper: #171a20; --ink: #e9ecf1; --ink2: #b5bdc9; --faint: #aab2bd;
     --ok: #57c98a; --warn: #e6a24a; --bad: #e3685a; --real: #6ea3e6;
     --hair: rgba(255, 255, 255, .10); --tile-bg: rgba(255, 255, 255, .035); --tile-border: rgba(255, 255, 255, .08);
     --track: rgba(255, 255, 255, .10); --hatch: rgba(255, 255, 255, .10);
     --seg-on: #e9ecf1; --seg-on-text: #171a20; --seg-border: rgba(255, 255, 255, .22);
     --lev-border: rgba(255, 255, 255, .18); --lev-bg: rgba(255, 255, 255, .02);
     --tip-bg: #0d0f13; --tip-ink: #e9ecf1; --tip-faint: #8a93a0;
+    --warn-bg: rgba(230, 162, 74, .16); --warn-hair: rgba(230, 162, 74, .52);
     --shadow: 0 18px 50px rgba(0, 0, 0, .55);
     --tile-face: linear-gradient(180deg, rgba(255,255,255,.05) 0%, var(--tile-bg) 72%);
     --tile-elev: inset 0 1px 0 rgba(255,255,255,.06), 0 0 0 1px rgba(255,255,255,.07), 0 1px 2px rgba(0,0,0,.35), 0 8px 20px -8px rgba(0,0,0,.5);

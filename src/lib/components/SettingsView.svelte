@@ -362,7 +362,7 @@
 <style>
   .settings { padding: var(--sp-4) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
   .hd { display: flex; align-items: center; gap: var(--sp-2); }
-  .back { background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-md); padding: 2px var(--sp-1); border-radius: 4px; }
+  .back { display: inline-grid; place-items: center; min-width: var(--control-target-min); min-height: var(--control-target-min); background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-md); padding: 2px var(--sp-1); border-radius: 4px; }
   .back:hover { color: var(--ink); }
   .back:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .name { font-size: var(--text-lg); font-weight: 700; letter-spacing: -.01em; }

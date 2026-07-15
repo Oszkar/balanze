@@ -85,11 +85,11 @@
   .pcard:hover { box-shadow: var(--tile-elev-hover); }
   .hd { display: flex; justify-content: space-between; align-items: baseline; }
   .hd-right { display: flex; align-items: baseline; gap: 6px; }
-  .name { font-size: 14px; font-weight: 600; } .plan { font-size: 10.5px; color: var(--faint); }
+  .name { font-size: 14px; font-weight: 600; } .plan { font-size: var(--text-2xs); color: var(--faint); }
   /* Dismiss × in the card header (OpenAI column only), mirroring GridView's. */
   /* Negative margin keeps the header layout tight while the padding gives the
      × a comfortable ~22px hit target (the glyph weight is unchanged). */
-  .dismiss { background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-base);
+  .dismiss { min-width: var(--control-target-min); min-height: var(--control-target-min); background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-base);
     line-height: 1; padding: 5px 6px; margin: -5px -4px -5px 0; border-radius: 4px; align-self: center; }
   .dismiss:hover { color: var(--ink); }
   .dismiss:focus-visible { outline: 2px solid var(--ink2); outline-offset: 1px; border-radius: 4px; }
@@ -115,14 +115,14 @@
   .skeltext { display: flex; flex-direction: column; gap: 2px; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
   .brow { display: flex; flex-direction: column; gap: 4px; cursor: help; }
-  .blabel { display: flex; justify-content: space-between; font-size: 11px; gap: 8px; }
+  .blabel { display: flex; justify-content: space-between; font-size: var(--text-xs); gap: 8px; }
   .bl { color: var(--ink2); } .br { color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .br .sfb { color: var(--warn); }
   .billed { display: flex; justify-content: space-between; align-items: center; padding-top: 2px; cursor: help; }
   .amt { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; font-size: 14px; font-weight: 560; font-variant-numeric: tabular-nums; }
   /* Empty-state placeholder ("none"/"unavailable") sits in the amount slot, muted. */
   .amt.na { color: var(--faint); font-weight: 460; }
-  .cy { font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif; font-size: 10px; color: var(--faint); font-weight: 400; }
+  .cy { font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif; font-size: var(--text-2xs); color: var(--faint); font-weight: 400; }
   @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   @media (prefers-reduced-motion: reduce) { .pcard, .skelbar { animation: none; } }
 </style>
