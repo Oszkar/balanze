@@ -8,6 +8,6 @@
 </div>
 <style>
   .legend { display: flex; justify-content: space-between; align-items: center; padding: 11px 16px 0; }
-  .l { font-size: 9.5px; color: var(--faint); }
-  .b { font-size: 9.5px; color: var(--faint); }
+  .l { font-size: var(--text-2xs); color: var(--faint); }
+  .b { font-size: var(--text-2xs); color: var(--faint); }
 </style>
