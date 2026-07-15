@@ -169,18 +169,34 @@ fn pick_cross(
     .then_some(merged)
 }
 
-/// Run the self-compose path: resolve cache dir + key fingerprint, build a
-/// one-shot runtime, and call `statusline_render::self_compose` with the
-/// OAuth-free `LiveCrossSources`. `None` if there is no cache dir or the runtime
-/// cannot be built; never panics when called from a synchronous context (the
+/// Run the self-compose path: build the OAuth-free `LiveCrossSources`, a
+/// one-shot runtime, and call `statusline_render::self_compose`. `None` if the
+/// runtime cannot be built (or, when the OpenAI segment is wanted, there is no
+/// cache dir); never panics when called from a synchronous context (the
 /// `block_on` below would panic if called from within an async runtime).
+///
+/// When `want_openai` is false the OpenAI leg is fully inert: `resolve` skips
+/// the keychain read, and the cache dir and fingerprint are never resolved -
+/// Codex composition needs none of them. That keeps the shipped default
+/// statusline from touching the OpenAI keychain (a possible macOS prompt or
+/// latency) every prompt turn for a value that could not render.
 fn self_compose_cross(
     now: chrono::DateTime<chrono::Utc>,
     want_openai: bool,
 ) -> Option<statusline_render::CrossProvider> {
-    let cache_dir = statusline_render::cache::cache_dir_path()?;
-    let sources = crate::sources::LiveCrossSources::resolve_once();
-    let fingerprint = sources.openai_fingerprint();
+    let sources = crate::sources::LiveCrossSources::resolve(want_openai);
+    // The cache dir and fingerprint are consumed only on the OpenAI leg. With
+    // the segment off, do not require the cache dir (Codex has no such
+    // dependency) and do not compute the fingerprint (no key was resolved to
+    // feed it) - self_compose ignores both when want_openai is false.
+    let (cache_dir, fingerprint) = if want_openai {
+        (
+            statusline_render::cache::cache_dir_path()?,
+            sources.openai_fingerprint(),
+        )
+    } else {
+        (std::path::PathBuf::new(), String::new())
+    };
     // One-shot CLI: a fresh per-turn runtime is acceptable; the OpenAI fetch
     // inside self_compose is cache-gated (300s) and skipped entirely when the
     // segment is not configured, so the network is not hit every turn even
