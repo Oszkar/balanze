@@ -11,9 +11,10 @@
   import SettingsView from './SettingsView.svelte';
 
   let { snapshot, degraded, onRefresh }:
-    { snapshot: Snapshot; degraded: Record<string, string>; onRefresh: () => void } = $props();
-  let view = $state<'grid' | 'cards'>('grid');
+    { snapshot: Snapshot; degraded: Record<string, string>; onRefresh: () => Promise<void> } = $props();
+  let view = $state<'grid' | 'cards'>('cards');
   let mode = $state<'usage' | 'settings'>('usage');
+  let refreshing = $state(false);
   const cost = $derived(snapshot.anthropic_api_cost);
 
   // `openaiEnabled` mirrors the OpenAI *billing* opt-in (the `openai_enabled`
@@ -75,6 +76,16 @@
       // No-op on failure: don't crash the popover. The column simply stays.
     }
   }
+
+  async function refresh() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      await onRefresh();
+    } finally {
+      refreshing = false;
+    }
+  }
 </script>
 
 <div class="pop" bind:this={popEl}>
@@ -82,16 +93,18 @@
   {#if mode === 'settings'}
     <SettingsView onBack={() => { mode = 'usage'; refreshOpenaiEnabled(); }} />
   {:else}
-    <Header bind:view fetchedAt={snapshot.fetched_at} {onRefresh} onSettings={() => (mode = 'settings')} />
+    <Header bind:view {refreshing} onRefresh={refresh} onSettings={() => (mode = 'settings')} />
     <DegradedBanner {degraded} />
     {#if view === 'grid'}
       <GridView {snapshot} {degraded} {openaiEnabled} {onDismissOpenai} onSettings={() => (mode = 'settings')} />
     {:else}
       <CardsView {snapshot} {openaiEnabled} {degraded} {onDismissOpenai} onSettings={() => (mode = 'settings')} />
     {/if}
-    <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} />
-    <LeverageBox totalMicroUsd={cost?.total_micro_usd ?? 0} eventCount={cost?.total_event_count ?? 0}
-      error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error} />
+    <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} withLeverage={view === 'cards'} />
+    {#if view === 'cards'}
+      <LeverageBox totalMicroUsd={cost?.total_micro_usd ?? 0} eventCount={cost?.total_event_count ?? 0}
+        error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error} />
+    {/if}
   {/if}
 </div>
 

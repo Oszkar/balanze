@@ -2,8 +2,8 @@
   let { view = $bindable('grid') }: { view?: 'grid' | 'cards' } = $props();
 </script>
 <div class="seg">
-  <button type="button" aria-pressed={view === 'grid'} class:on={view === 'grid'} onclick={() => (view = 'grid')}>Compact</button>
-  <button type="button" aria-pressed={view === 'cards'} class:on={view === 'cards'} onclick={() => (view = 'cards')}>Details</button>
+  <button type="button" aria-pressed={view === 'cards'} class:on={view === 'cards'} onclick={() => (view = 'cards')}><span aria-hidden="true">☷</span> Details</button>
+  <button type="button" aria-pressed={view === 'grid'} class:on={view === 'grid'} onclick={() => (view = 'grid')}><span aria-hidden="true">▦</span> Compact</button>
 </div>
 <style>
   /* Machined segmented control: recessed track, raised active pill. */

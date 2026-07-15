@@ -1,13 +1,14 @@
 <script lang="ts">
   import { formatBurn } from '$lib/presentation/format';
-  let { tokensPerMin }: { tokensPerMin: number | null } = $props();
+  let { tokensPerMin, withLeverage = true }: { tokensPerMin: number | null; withLeverage?: boolean } = $props();
 </script>
-<div class="legend">
+<div class="legend" class:compact={!withLeverage}>
   <span class="l">▸ fill = used · ▏tick = elapsed</span>
   <span class="b">burn 30m {formatBurn(tokensPerMin)}</span>
 </div>
 <style>
   .legend { display: flex; justify-content: space-between; align-items: center; padding: 11px 16px 0; }
+  .legend.compact { padding-bottom: 11px; }
   .l { font-size: var(--text-2xs); color: var(--faint); }
   .b { font-size: var(--text-2xs); color: var(--faint); }
 </style>

@@ -41,10 +41,10 @@
 </script>
 
 <div class="grid" class:single={!showOpenAI}>
-  <div class="colhead"><span class="p">Anthropic</span><span class="plan">Claude · {snapshot.claude_oauth?.subscription_type ?? '-'}</span></div>
+  <div class="colhead"><span class="p">Anthropic</span></div>
   {#if showOpenAI}
     <div class="colhead">
-      <span class="p">OpenAI</span><span class="plan">API + Codex</span>
+      <span class="p">OpenAI</span>
       {#if colState.kind === 'data' || colState.kind === 'connect' || colState.kind === 'error'}
         <button class="dismiss" type="button" aria-label={OPENAI_COL_COPY.dismiss.aria} title={OPENAI_COL_COPY.dismiss.title} onclick={() => onDismissOpenai?.()}>×</button>
       {/if}
@@ -124,7 +124,6 @@
   .grid.single { grid-template-columns: 1fr; }
   .colhead { position: relative; display: flex; flex-direction: column; align-items: center; padding-bottom: 3px; }
   .colhead .p { font-size: var(--text-base); font-weight: 600; }
-  .colhead .plan { font-size: var(--text-2xs); color: var(--faint); }
   /* Offsets compensate for the larger padding so the × stays in the corner while
      the hit target grows to ~22px (glyph weight unchanged). */
   .dismiss { position: absolute; top: -3px; right: -3px; min-width: var(--control-target-min); min-height: var(--control-target-min); background: none; border: none; color: var(--faint);
