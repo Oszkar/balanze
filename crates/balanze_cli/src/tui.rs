@@ -390,7 +390,7 @@ fn draw_codex_windows(frame: &mut Frame, five_row: Rect, weekly_row: Rect, q: &C
         frame.render_widget(quota_gauge("Codex 5h", w.used_percent as f32), five_row);
     }
     if let Some(w) = weekly {
-        frame.render_widget(quota_gauge("Codex wk", w.used_percent as f32), weekly_row);
+        frame.render_widget(quota_gauge("Codex 7d", w.used_percent as f32), weekly_row);
     }
 
     // Rows the known-window branches did not claim, in fixed order (5h first) so
@@ -875,7 +875,7 @@ mod tests {
             "missing labeled Codex 5h gauge in:\n{text}"
         );
         assert!(
-            text.contains("Codex wk"),
+            text.contains("Codex 7d"),
             "missing labeled Codex weekly gauge in:\n{text}"
         );
         assert!(text.contains("12.0"), "missing 5h percent in:\n{text}");
@@ -885,14 +885,14 @@ mod tests {
     #[test]
     fn tui_render_single_window_plan_labels_the_window_and_blanks_the_other() {
         // "go" plan exposes a single weekly window in `primary`. The TUI must
-        // label it "Codex wk" (not a bare unlabeled "Codex" that hides which
+        // label it "Codex 7d" (not a bare unlabeled "Codex" that hides which
         // window it is) and leave the 5h row blank rather than reordering.
         let snap = populated_snapshot(); // codex_quota is weekly-only (10080).
         let terminal = render_to_terminal(&snap);
         let text = buffer_text(&terminal);
         assert!(
-            text.contains("Codex wk"),
-            "weekly-only plan must label the window 'Codex wk' in:\n{text}"
+            text.contains("Codex 7d"),
+            "weekly-only plan must label the window 'Codex 7d' in:\n{text}"
         );
         assert!(
             !text.contains("Codex 5h"),
