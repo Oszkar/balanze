@@ -6,6 +6,7 @@
   import CardsView from '$lib/components/CardsView.svelte';
   import SettingsView from '$lib/components/SettingsView.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import DegradedBanner from '$lib/components/DegradedBanner.svelte';
   import BurnIndicator from '$lib/components/BurnIndicator.svelte';
   import LeverageBox from '$lib/components/LeverageBox.svelte';
 
@@ -43,6 +44,7 @@
       <EmptyState title={empty.title} body={empty.body} detail={empty.detail} actions={empty.actions ?? []} />
     {:else if snapshot}
       <Header bind:view={activeView} fetchedAt={snapshot.fetched_at} onRefresh={noop} onSettings={noop} />
+      <DegradedBanner {degraded} />
       {#if activeView === 'cards'}
         <CardsView {snapshot} {openaiEnabled} {degraded} onDismissOpenai={noop} onSettings={noop} />
       {:else}
