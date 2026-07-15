@@ -37,6 +37,8 @@ pub struct StatuslineConfig {
     /// Line templates: each is a space-separated layout of `{segment}`
     /// placeholders (model, agent, context_bar, cost, usage, codex,
     /// openai_cost). Empty segments are dropped; literal text is kept.
+    /// `openai_cost` is available but absent from the default lines - see
+    /// `default_lines`.
     #[serde(default = "default_lines")]
     pub lines: Vec<String>,
     #[serde(default)]
@@ -52,10 +54,13 @@ fn default_theme() -> String {
     "dark".to_string()
 }
 
-fn default_lines() -> Vec<String> {
+pub(crate) fn default_lines() -> Vec<String> {
     vec![
         "{model} {agent}".to_string(),
-        "{context_bar} {cost} {usage} {codex} {openai_cost}".to_string(),
+        // `openai_cost` is deliberately absent: it is an uncapped dollar figure
+        // with no rolling window, so it does not read against a line that is
+        // otherwise percent-of-window. It stays implemented and configurable.
+        "{context_bar} {cost} {usage} {codex}".to_string(),
     ]
 }
 
@@ -280,5 +285,21 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         let back: StatuslineConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.replaced_command, Some("cship".to_string()));
+    }
+
+    /// OpenAI API spend is an uncapped dollar figure with no rolling window, so
+    /// it does not belong on a default line that is otherwise percent-of-window.
+    /// The segment stays implemented and configurable; it is just off by default.
+    #[test]
+    fn default_lines_omit_the_openai_cost_segment() {
+        let lines = default_lines();
+        assert!(
+            !lines.iter().any(|l| l.contains("{openai_cost}")),
+            "openai_cost must be off by default: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("{codex}")),
+            "the Codex windows stay on the default line: {lines:?}"
+        );
     }
 }

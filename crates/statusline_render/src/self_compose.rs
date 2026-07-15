@@ -37,17 +37,27 @@ pub trait CrossSources {
     fn codex_windows(&self) -> (Option<f32>, Option<f32>);
 }
 
+/// Compose the cross-provider cells without the watcher.
+///
+/// `want_openai` is false when no configured statusline line contains the
+/// `{openai_cost}` placeholder. In that case the OpenAI cost is not fetched at
+/// all - not from the cache, not from the network. The politest call to a
+/// provider is the one you do not make (AGENTS.md §3.1).
 pub async fn self_compose<S: CrossSources>(
     sources: &S,
     cache_dir: &Path,
     fingerprint: &str,
     now: DateTime<Utc>,
+    want_openai: bool,
 ) -> CrossProvider {
     // Codex: local, cheap, never cached -> current whenever present.
     let (codex_five_hour, codex_weekly) = sources.codex_windows();
 
-    let (openai_cost_micro_usd, openai_stale) =
-        openai_value(sources, cache_dir, fingerprint, now).await;
+    let (openai_cost_micro_usd, openai_stale) = if want_openai {
+        openai_value(sources, cache_dir, fingerprint, now).await
+    } else {
+        (None, false)
+    };
 
     CrossProvider {
         codex_five_hour,
@@ -203,7 +213,7 @@ mod tests {
             codex: Some(6.0),
             calls: Cell::new(0),
         };
-        let cp = self_compose(&f, dir.path(), "fp", t0()).await;
+        let cp = self_compose(&f, dir.path(), "fp", t0(), true).await;
         assert_eq!(cp.openai_cost_micro_usd, Some(4_200_000));
         assert_eq!(cp.codex_five_hour, Some(6.0));
         assert!(!cp.openai_stale && !cp.codex_stale);
@@ -219,8 +229,8 @@ mod tests {
             codex: None,
             calls: Cell::new(0),
         };
-        let _ = self_compose(&f, dir.path(), "fp", t0()).await;
-        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(120)).await;
+        let _ = self_compose(&f, dir.path(), "fp", t0(), true).await;
+        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(120), true).await;
         assert_eq!(cp.openai_cost_micro_usd, Some(10));
         assert!(!cp.openai_stale);
         assert_eq!(f.calls.get(), 1, "gated to one fetch per 300s");
@@ -234,8 +244,8 @@ mod tests {
             codex: None,
             calls: Cell::new(0),
         };
-        let _ = self_compose(&f, dir.path(), "fp", t0()).await;
-        let _ = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(301)).await;
+        let _ = self_compose(&f, dir.path(), "fp", t0(), true).await;
+        let _ = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(301), true).await;
         assert_eq!(f.calls.get(), 2);
     }
 
@@ -248,7 +258,7 @@ mod tests {
             codex: None,
             calls: Cell::new(0),
         };
-        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(400)).await;
+        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(400), true).await;
         assert_eq!(cp.openai_cost_micro_usd, Some(999));
         assert!(cp.openai_stale, "stale value marked");
         assert_eq!(f.calls.get(), 1);
@@ -264,7 +274,7 @@ mod tests {
             codex: None,
             calls: Cell::new(0),
         };
-        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(420)).await;
+        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(420), true).await;
         assert_eq!(f.calls.get(), 0, "in cooldown, no fetch");
         assert_eq!(cp.openai_cost_micro_usd, Some(999));
         assert!(cp.openai_stale);
@@ -278,7 +288,7 @@ mod tests {
             codex: Some(3.0),
             calls: Cell::new(0),
         };
-        let cp = self_compose(&f, dir.path(), "fp", t0()).await;
+        let cp = self_compose(&f, dir.path(), "fp", t0(), true).await;
         assert_eq!(cp.openai_cost_micro_usd, None);
         assert!(!cp.openai_stale);
         assert_eq!(cp.codex_five_hour, Some(3.0));
@@ -344,11 +354,14 @@ mod tests {
         };
         let path = dir.path().to_path_buf();
         let first_path = path.clone();
-        let first =
-            tokio::spawn(async move { self_compose(&first_source, &first_path, "fp", t0()).await });
+        let first = tokio::spawn(async move {
+            self_compose(&first_source, &first_path, "fp", t0(), true).await
+        });
         started.notified().await;
         let second =
-            tokio::spawn(async move { self_compose(&second_source, &path, "fp", t0()).await });
+            tokio::spawn(
+                async move { self_compose(&second_source, &path, "fp", t0(), true).await },
+            );
         tokio::time::sleep(StdDuration::from_millis(30)).await;
         release.notify_waiters();
 
@@ -374,7 +387,7 @@ mod tests {
         };
         let started = tokio::time::Instant::now();
 
-        let value = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(301)).await;
+        let value = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(301), true).await;
 
         assert!(started.elapsed() < StdDuration::from_millis(100));
         assert_eq!(value.openai_cost_micro_usd, Some(55));
@@ -396,12 +409,34 @@ mod tests {
         };
         let started = tokio::time::Instant::now();
 
-        let value = self_compose(&f, dir.path(), "fp", t0()).await;
+        let value = self_compose(&f, dir.path(), "fp", t0(), true).await;
 
         let elapsed = started.elapsed();
         assert!(elapsed >= REFRESH_WAIT_TIMEOUT);
         assert!(elapsed < REFRESH_WAIT_TIMEOUT + StdDuration::from_millis(150));
         assert_eq!(value.openai_cost_micro_usd, None);
         assert_eq!(f.calls.get(), 0);
+    }
+
+    /// want_openai=false must not touch the cache or the network at all: no
+    /// value, no staleness, and no fetch recorded on the fake. The Codex half
+    /// is unaffected - it is local and cheap, and the gate is only about OpenAI.
+    #[tokio::test]
+    async fn want_openai_false_skips_the_fetch_entirely() {
+        let dir = tempdir().unwrap();
+        let f = Fake {
+            openai: Ok(Some(4_200_000)),
+            codex: Some(12.0),
+            calls: Cell::new(0),
+        };
+        let cp = self_compose(&f, dir.path(), "fp", t0(), false).await;
+        assert_eq!(cp.openai_cost_micro_usd, None, "no value when not wanted");
+        assert!(!cp.openai_stale, "not stale, just absent");
+        assert_eq!(f.calls.get(), 0, "no upstream fetch when not wanted");
+        assert!(
+            cache::read(dir.path(), "fp").is_none(),
+            "no value is published to the cache when not wanted"
+        );
+        assert_eq!(cp.codex_five_hour, Some(12.0), "Codex still composed");
     }
 }

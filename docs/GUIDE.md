@@ -77,7 +77,7 @@ Until a key is present, the OpenAI column shows a connect prompt rather than a b
 
 ## The Claude Code statusline
 
-`balanze-cli statusline` is a zero-auth status line for your Claude Code prompt: live 5h/7d subscription quota, session cost, and - uniquely - cross-provider signal (both Codex rate-limit windows, 5-hour and weekly, and real OpenAI spend) in one line.
+`balanze-cli statusline` is a zero-auth status line for your Claude Code prompt: live 5h/7d subscription quota, session cost, and - uniquely - cross-provider signal (both Codex rate-limit windows, 5h and 7d) in one line. Real OpenAI API spend is available as an opt-in `{openai_cost}` segment, off by default.
 
 - **Wire it** during `balanze-cli setup`, or from the popover's settings panel.
 - **Replace, don't wrap.** If another tool already owns the `statusLine.command`, Balanze offers to replace it *with your consent*, backing the previous command up first. Nothing in the other tool's own config is touched.

@@ -313,17 +313,28 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
 /// Codex = local files; OpenAI = Admin Costs API behind a short timeout. Calls
 /// NEITHER the Anthropic OAuth path NOR `snapshot_composer::compose` (AGENTS.md §3.1).
 pub(crate) struct LiveCrossSources {
-    /// Resolve once per statusline invocation. The same owned value drives both
-    /// the on-disk fingerprint and the Authorization header, so an account
-    /// switch cannot mix one key's cache identity with another key's request.
+    /// Resolved at most once per statusline invocation, and only when the OpenAI
+    /// segment is wanted. The same owned value drives both the on-disk
+    /// fingerprint and the Authorization header, so an account switch cannot mix
+    /// one key's cache identity with another key's request. `Ok(None)` when the
+    /// segment is off - the key is never read in that case.
     openai_key: Result<Option<String>, String>,
     openai_api_base: String,
 }
 
 impl LiveCrossSources {
-    pub(crate) fn resolve_once() -> Self {
+    /// Build the sources for one statusline turn. `want_openai` gates the
+    /// keychain read: when the OpenAI segment is off, the key is left `Ok(None)`
+    /// unread, since Codex composition never uses it and reading it would prompt
+    /// or add latency on macOS every turn (AGENTS.md §3.1: the politest call is
+    /// the one not made).
+    pub(crate) fn resolve(want_openai: bool) -> Self {
         Self {
-            openai_key: resolve_openai_key().map_err(|error| error.to_string()),
+            openai_key: if want_openai {
+                resolve_openai_key().map_err(|error| error.to_string())
+            } else {
+                Ok(None)
+            },
             openai_api_base: openai_api_base(),
         }
     }
@@ -384,6 +395,48 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use statusline_render::CrossSources as _;
+
+    /// Serializes env-mutating tests in this module. `cargo nextest` isolates
+    /// each test in its own process, but plain `cargo test` shares one, so the
+    /// lock keeps both runners honest.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The keychain read is gated on `want_openai`: with the OpenAI segment off,
+    /// the key is left unread (`Ok(None)`) even when one is configured, so the
+    /// default statusline never touches the OpenAI keychain on a self-compose
+    /// turn. `resolve(true)` still resolves the configured key.
+    /// Removes an env var on drop, so the cleanup runs even if an assertion
+    /// between set and remove panics. nextest (the project gate) already
+    /// isolates each test in its own process, so a panic can't poison a sibling
+    /// there; this keeps a shared-process `cargo test` run honest too.
+    struct EnvGuard(&'static str);
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: the test holding this guard also holds ENV_LOCK, which
+            // serializes env mutation across this module's tests.
+            unsafe { std::env::remove_var(self.0) };
+        }
+    }
+
+    #[test]
+    fn resolve_skips_the_key_read_when_openai_is_not_wanted() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_LOCK serializes env-mutating tests in this module. The
+        // EnvGuard restores it on drop, before ENV_LOCK is released (drop runs
+        // in reverse declaration order), even if an assertion below panics.
+        unsafe { std::env::set_var("BALANZE_OPENAI_KEY", "sk-should-not-be-read") };
+        let _restore = EnvGuard("BALANZE_OPENAI_KEY");
+
+        // Wanted -> the configured key is resolved (env takes precedence over the
+        // keychain, so this is deterministic regardless of the dev machine).
+        let on = LiveCrossSources::resolve(true);
+        assert_eq!(on.openai_key, Ok(Some("sk-should-not-be-read".to_string())));
+
+        // Not wanted -> the key is never read, so it stays Ok(None) despite one
+        // being configured. This is the keychain read the demand gate elides.
+        let off = LiveCrossSources::resolve(false);
+        assert_eq!(off.openai_key, Ok(None));
+    }
 
     fn oauth(token: &str) -> CredentialsClaudeAiOauth {
         CredentialsClaudeAiOauth {

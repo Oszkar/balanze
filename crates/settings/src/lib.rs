@@ -9,7 +9,7 @@
 //! file is plaintext JSON; treat anything written here as visible to anyone
 //! with read access to the user's home directory.
 //!
-//! Schema is versioned (currently `version: 1`). Adding a field: add it
+//! Schema is versioned (currently `version: 2`). Adding a field: add it
 //! `#[serde(default)]` so old files still parse. Removing/renaming a field
 //! requires bumping the version and adding a migration step in `load_from`.
 
@@ -23,7 +23,7 @@ use tracing::{debug, warn};
 pub mod statusline;
 pub use statusline::StatuslineConfig;
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
@@ -124,7 +124,14 @@ pub enum SettingsError {
 
 /// Conventional settings.json path for this user. Lazy: doesn't create the
 /// directory.
+///
+/// `BALANZE_CONFIG_DIR_OVERRIDE` is intended for tests that need an isolated
+/// config directory, mirroring `BALANZE_DATA_DIR_OVERRIDE` and
+/// `BALANZE_CACHE_DIR_OVERRIDE`.
 pub fn default_path() -> Result<PathBuf, SettingsError> {
+    if let Ok(dir) = std::env::var("BALANZE_CONFIG_DIR_OVERRIDE") {
+        return Ok(PathBuf::from(dir).join("settings.json"));
+    }
     let pd = project_dirs().ok_or(SettingsError::NoConfigDir)?;
     Ok(pd.config_dir().join("settings.json"))
 }
@@ -208,10 +215,96 @@ pub fn load_from(path: &Path) -> Result<Settings, SettingsError> {
             "settings: file written by newer Balanze; some fields may be ignored"
         );
     }
-    if parsed.version == 0 {
+    // Migrations (including the version-0 pre-versioning sentinel) run only
+    // for files older than the current schema, then the in-memory version is
+    // normalized to SCHEMA_VERSION so a subsequent save persists the bump and
+    // no migration in this block reconsiders the file again.
+    if parsed.version < SCHEMA_VERSION {
+        migrate_statusline_lines(&mut parsed);
         parsed.version = SCHEMA_VERSION;
     }
     Ok(parsed)
+}
+
+/// The statusline default line templates from before the `{openai_cost}`
+/// segment left the default line. Kept only so [`migrate_statusline_lines`]
+/// can recognize a persisted value that still matches this stale default.
+/// A `const` array of `&str` (not `String`) so the comparison in
+/// [`migrate_statusline_lines`] allocates nothing.
+const PREVIOUS_DEFAULT_LINES: [&str; 2] = [
+    "{model} {agent}",
+    "{context_bar} {cost} {usage} {codex} {openai_cost}",
+];
+
+/// Load-path migration, gated to files written before schema version 2:
+/// `StatuslineConfig.lines` is always serialized into `settings.json`, so any
+/// file saved before the `{openai_cost}` segment left the default line has
+/// that old default pinned literally - for those users the new default never
+/// takes effect on its own. If a `version < 2` file's persisted value is
+/// byte-identical to the previous default, this replaces it with the current
+/// default (`statusline::default_lines`). A customized value is definitionally
+/// not byte-identical to the previous default, so it is never touched.
+///
+/// This only fires once per file: `load_from` normalizes `version` to
+/// `SCHEMA_VERSION` immediately after calling this, and the next [`save`]
+/// persists that bump. So a user who deliberately hand-edits `statusline.lines`
+/// back to include `{openai_cost}` - even if the resulting line is
+/// byte-identical to `PREVIOUS_DEFAULT_LINES` - keeps it: their file is
+/// already at `version: 2` and this function is not called for it. The
+/// unversioned form of this migration used to be a fixed-point trap - the
+/// documented re-enable path (append ` {openai_cost}` to the current default)
+/// produced a string byte-identical to the previous default, so the very next
+/// load stripped it right back out.
+///
+/// Deletion criterion: once no `version < 2` file is expected in the wild
+/// (i.e. every user has loaded Balanze at least once past this change), this
+/// function, [`PREVIOUS_DEFAULT_LINES`], and its call site can be removed.
+fn migrate_statusline_lines(settings: &mut Settings) {
+    if settings
+        .statusline
+        .lines
+        .iter()
+        .map(String::as_str)
+        .eq(PREVIOUS_DEFAULT_LINES.iter().copied())
+    {
+        debug!(
+            "settings: migrated pre-schema-version-2 statusline lines from the previous default to the current default"
+        );
+        settings.statusline.lines = statusline::default_lines();
+    }
+}
+
+/// Raw-JSON form of [`migrate_statusline_lines`], used by [`normalize_on_disk_at`]
+/// so the on-disk rewrite can preserve fields this binary does not model. Encodes
+/// the same rule: only a `statusline.lines` byte-identical to
+/// [`PREVIOUS_DEFAULT_LINES`] is rewritten to the current default; anything else
+/// is left untouched. Keep this in lockstep with `migrate_statusline_lines`.
+fn migrate_statusline_lines_value(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let matches_previous = obj
+        .get("statusline")
+        .and_then(|s| s.get("lines"))
+        .and_then(|l| l.as_array())
+        .is_some_and(|lines| {
+            lines.len() == PREVIOUS_DEFAULT_LINES.len()
+                && lines
+                    .iter()
+                    .zip(PREVIOUS_DEFAULT_LINES)
+                    .all(|(v, expected)| v.as_str() == Some(expected))
+        });
+    if !matches_previous {
+        return;
+    }
+    // `matches_previous` proved `statusline` is an object with a `lines` array.
+    if let Some(statusline) = obj.get_mut("statusline").and_then(|s| s.as_object_mut()) {
+        let new_lines = statusline::default_lines()
+            .into_iter()
+            .map(serde_json::Value::from)
+            .collect();
+        statusline.insert("lines".to_string(), serde_json::Value::Array(new_lines));
+        debug!(
+            "settings: migrated pre-schema-version-2 statusline lines to the current default (targeted JSON patch)"
+        );
+    }
 }
 
 /// Load settings for a read-modify-**save** path. Identical to [`load`] on the
@@ -248,8 +341,111 @@ pub fn save(settings: &Settings) -> Result<(), SettingsError> {
     save_to(settings, &path)
 }
 
+/// Persist a settings file written under an older schema version, so the
+/// load-path migrations in [`load_from`] run once instead of on every load.
+///
+/// Without this, the in-memory version bump `load_from` applies only reaches
+/// disk the next time something else happens to save the file. An existing
+/// user whose file is already at the OLD default `statusline.lines` stays at
+/// `version: 1` indefinitely if nothing else ever triggers a save, so
+/// [`migrate_statusline_lines`] keeps stripping `{openai_cost}` back out on
+/// every single load - including a user who reads the changelog and manually
+/// re-adds the segment, since a hand re-add on a still-`version: 1` file
+/// reproduces the exact previous-default string the migration matches on.
+///
+/// Returns `Ok(true)` if a write happened, `Ok(false)` if the file was
+/// already current or absent. **Callers: the desktop app at startup only.**
+/// Not the statusline path (`balanze-cli statusline`), which runs once per
+/// prompt turn and must stay read-only per AGENTS.md §3.1.
+pub fn normalize_on_disk() -> Result<bool, SettingsError> {
+    let path = default_path()?;
+    normalize_on_disk_at(&path)
+}
+
+/// Explicit-path variant of [`normalize_on_disk`], for tests and any future
+/// `--config` override path.
+///
+/// Patches the raw JSON in place rather than round-tripping through [`Settings`]:
+/// a full deserialize/reserialize would drop any field serde does not model, and
+/// this rewrite runs automatically at startup, so it must not erase a
+/// forward-compat field a newer Balanze wrote (or one a user hand-added). Only
+/// `version` and a `statusline.lines` still pinned to the previous default are
+/// touched; everything else is preserved byte-for-value.
+///
+/// A file that fails to parse as JSON is malformed and returns `Err(Malformed)`
+/// without writing anything, so a corrupt file is never overwritten.
+pub fn normalize_on_disk_at(path: &Path) -> Result<bool, SettingsError> {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            debug!(path = %path.display(), "settings: normalize_on_disk found no file, nothing to do");
+            return Ok(false);
+        }
+        Err(e) => {
+            return Err(SettingsError::Io {
+                path: path.to_path_buf(),
+                source: e,
+            });
+        }
+    };
+
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| SettingsError::Malformed {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+    let Some(obj) = doc.as_object_mut() else {
+        // A real settings.json is always a JSON object. Anything else we leave
+        // untouched rather than risk clobbering a file we do not understand.
+        debug!(path = %path.display(), "settings: normalize_on_disk found a non-object document, nothing to do");
+        return Ok(false);
+    };
+
+    // An absent `version` is treated as already-current, exactly as the
+    // `Settings::version` serde default would treat it.
+    let version = obj
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(u64::from(SCHEMA_VERSION));
+    if version >= u64::from(SCHEMA_VERSION) {
+        debug!(path = %path.display(), "settings: normalize_on_disk found current schema, nothing to do");
+        return Ok(false);
+    }
+
+    migrate_statusline_lines_value(obj);
+    obj.insert(
+        "version".to_string(),
+        serde_json::Value::from(SCHEMA_VERSION),
+    );
+
+    let out = serde_json::to_vec_pretty(&doc).map_err(|e| SettingsError::Malformed {
+        path: path.to_path_buf(),
+        reason: format!("serialization failed: {e}"),
+    })?;
+    write_json_atomic(path, &out)?;
+    debug!(
+        path = %path.display(),
+        from = version,
+        to = SCHEMA_VERSION,
+        "settings: normalize_on_disk persisted the schema version bump"
+    );
+    Ok(true)
+}
+
 pub fn save_to(settings: &Settings, path: &Path) -> Result<(), SettingsError> {
     debug!(path = %path.display(), "settings: save");
+    let bytes = serde_json::to_vec_pretty(settings).map_err(|e| SettingsError::Malformed {
+        path: path.to_path_buf(),
+        reason: format!("serialization failed: {e}"),
+    })?;
+    write_json_atomic(path, &bytes)
+}
+
+/// Atomically write already-serialized JSON to `path` (fsync'd temp + rename,
+/// plus a parent-dir fsync on unix), creating parent directories as needed.
+/// Shared by [`save_to`] (a full `Settings`) and [`normalize_on_disk_at`] (a
+/// targeted patch that preserves unknown fields).
+fn write_json_atomic(path: &Path, bytes: &[u8]) -> Result<(), SettingsError> {
     // Normalize the parent (a bare relative target's `parent()` is `Some("")`)
     // to exactly the directory `atomic_write` will write into, so a relative
     // target doesn't fail here at `create_dir_all("")` before the helper runs.
@@ -258,13 +454,7 @@ pub fn save_to(settings: &Settings, path: &Path) -> Result<(), SettingsError> {
         path: parent.to_path_buf(),
         source: e,
     })?;
-
-    let bytes = serde_json::to_vec_pretty(settings).map_err(|e| SettingsError::Malformed {
-        path: path.to_path_buf(),
-        reason: format!("serialization failed: {e}"),
-    })?;
-
-    atomic_file::atomic_write(path, &bytes, atomic_file::Permissions::Default).map_err(|source| {
+    atomic_file::atomic_write(path, bytes, atomic_file::Permissions::Default).map_err(|source| {
         SettingsError::Io {
             path: path.to_path_buf(),
             source,
@@ -277,7 +467,10 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+    /// Serializes env-mutating tests in this module. `cargo nextest` runs each
+    /// test in its own process, but plain `cargo test` shares one, so the lock
+    /// keeps both runners honest.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_settings_have_current_schema_version() {
@@ -355,9 +548,9 @@ mod tests {
 
     #[test]
     fn statusline_snapshot_path_honors_env_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: this env-mutating test is serialized via ENV_MUTEX; the
+        // SAFETY: this env-mutating test is serialized via ENV_LOCK; the
         // override is test-only and removed before assertions run.
         unsafe { std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", dir.path()) };
         let path = statusline_snapshot_path();
@@ -368,15 +561,26 @@ mod tests {
 
     #[test]
     fn log_dir_honors_env_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: this env-mutating test is serialized via ENV_MUTEX; the
+        // SAFETY: this env-mutating test is serialized via ENV_LOCK; the
         // override is test-only and removed before assertions run.
         unsafe { std::env::set_var("BALANZE_DATA_DIR_OVERRIDE", dir.path()) };
         let path = log_dir();
         unsafe { std::env::remove_var("BALANZE_DATA_DIR_OVERRIDE") };
 
         assert_eq!(path, Some(dir.path().join("logs")));
+    }
+
+    #[test]
+    fn default_path_honors_config_dir_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: ENV_LOCK serializes env-mutating tests in this module; restored below.
+        unsafe { std::env::set_var("BALANZE_CONFIG_DIR_OVERRIDE", dir.path()) };
+        let p = default_path().expect("path");
+        assert_eq!(p, dir.path().join("settings.json"));
+        unsafe { std::env::remove_var("BALANZE_CONFIG_DIR_OVERRIDE") };
     }
 
     #[test]
@@ -439,12 +643,18 @@ mod tests {
     #[test]
     fn loads_minimal_file_with_only_version_field() {
         // Backwards-compat: a settings file written by an older Balanze with
-        // only `{"version":1}` should fill in defaults for new fields.
+        // only `{"version":1}` should fill in defaults for new fields. A
+        // version-1 file is below SCHEMA_VERSION, so load_from also bumps the
+        // in-memory version to current - see `loads_minimal_file...` and the
+        // SCHEMA_VERSION migration gate in `load_from`.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(&path, br#"{"version":1}"#).unwrap();
         let s = load_from(&path).expect("load");
-        assert_eq!(s.version, 1);
+        assert_eq!(
+            s.version, SCHEMA_VERSION,
+            "version 1 must migrate to current"
+        );
         assert!(s.providers.anthropic_enabled);
         assert!(!s.providers.openai_enabled);
     }
@@ -470,7 +680,7 @@ mod tests {
         // Distinct from the omitted-version case below: a file that
         // *explicitly* carries `version: 0` (the pre-versioning sentinel)
         // must be migrated up to the current schema on load. Exercises the
-        // `parsed.version == 0` branch in load_from, which the
+        // `parsed.version < SCHEMA_VERSION` branch in load_from, which the
         // serde-defaulted (omitted) case never reaches.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -590,6 +800,315 @@ mod tests {
         save_to(&s, &path).expect("save");
         let loaded = load_from(&path).expect("load");
         assert_eq!(s, loaded);
+    }
+
+    #[test]
+    fn migrates_previous_default_statusline_lines_to_current_default() {
+        // A version-1 settings.json saved before the `{openai_cost}` segment
+        // left the default line pins the OLD default literally. On load it
+        // must be replaced with the CURRENT default so the segment (and the
+        // OpenAI billing-API polling it demand-gates) turns off for anyone
+        // who never customized `statusline.lines`, and the file's version
+        // must be bumped so the migration does not reconsider it again.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            crate::statusline::default_lines(),
+            "old default lines must be migrated to the current default"
+        );
+        assert_eq!(
+            s.version, SCHEMA_VERSION,
+            "a migrated file must be normalized to the current schema version"
+        );
+    }
+
+    #[test]
+    fn reenabled_openai_cost_on_schema_version_2_survives_migration() {
+        // The critical regression: a user who reads the changelog and hand-
+        // appends ` {openai_cost}` back onto the current default line ends up
+        // with a `lines` value that is byte-identical to the OLD default. If
+        // the migration were unversioned, the very next load would strip it
+        // right back out - a fixed-point trap. Because this file is already
+        // at schema version 2, migrate_statusline_lines must not even run for
+        // it, so the hand-edit sticks.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":2,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            vec![
+                "{model} {agent}".to_string(),
+                "{context_bar} {cost} {usage} {codex} {openai_cost}".to_string(),
+            ],
+            "a deliberate re-add of {{openai_cost}} on a version-2 file must survive"
+        );
+        assert_eq!(s.version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn near_miss_double_space_line_survives_migration() {
+        // The migration comparison must be byte-exact, not a trim/normalize
+        // match: a double space is a different string from the previous
+        // default and must never be touched, even though this file is a
+        // version-1 file where the migration is eligible to fire.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar}  {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            vec![
+                "{model} {agent}".to_string(),
+                "{context_bar}  {cost} {usage} {codex} {openai_cost}".to_string(),
+            ],
+            "a near-miss (double space) line must not be treated as the previous default"
+        );
+    }
+
+    #[test]
+    fn near_miss_second_line_only_survives_migration() {
+        // Same near-miss guard, but for the shape of the previous default
+        // rather than its spacing: a single-line file that matches only the
+        // previous default's SECOND line is not the previous default and
+        // must survive, even though this file is a version-1 file where the
+        // migration is eligible to fire.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            vec!["{context_bar} {cost} {usage} {codex} {openai_cost}".to_string()],
+            "a near-miss (second-default-line-only) file must not be treated as the previous default"
+        );
+    }
+
+    #[test]
+    fn customized_statusline_lines_are_not_touched_by_migration() {
+        // A user-customized `statusline.lines` is definitionally not
+        // byte-identical to the previous default, so the migration must leave
+        // it alone - including when it deliberately keeps `{openai_cost}`.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{usage} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            vec!["{usage} {openai_cost}".to_string()],
+            "customized lines must survive the migration untouched"
+        );
+    }
+
+    #[test]
+    fn already_migrated_statusline_lines_are_left_unchanged() {
+        // The migration must be a no-op once a file already carries the
+        // current default AND is already at the current schema version (e.g.
+        // a file this migration already rewrote once, or a fresh save).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let current = crate::statusline::default_lines();
+        let contents = serde_json::json!({
+            "version": SCHEMA_VERSION,
+            "statusline": { "lines": current },
+        });
+        fs::write(&path, serde_json::to_vec(&contents).unwrap()).unwrap();
+        let s = load_from(&path).expect("load");
+        assert_eq!(s.statusline.lines, current);
+        assert_eq!(s.version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn load_for_update_from_migrates_statusline_lines_too() {
+        // The migration must apply on the read-modify-save path as well -
+        // otherwise a settings save right after load would persist the stale
+        // old default (and the stale version) straight back to disk.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+        let s = load_for_update_from(&path).expect("load");
+        assert_eq!(
+            s.statusline.lines,
+            crate::statusline::default_lines(),
+            "load_for_update_from must apply the migration too"
+        );
+        assert_eq!(
+            s.version, SCHEMA_VERSION,
+            "load_for_update_from must persist the version bump so a subsequent save doesn't write the old lines back"
+        );
+    }
+
+    #[test]
+    fn normalize_on_disk_migrates_version_one_file_and_persists_the_bump() {
+        // The remaining gap this function closes: a version-1 file with the
+        // OLD default lines must land on disk at version 2 with the NEW
+        // default lines, so the load-path migration in `load_from` never has
+        // to reconsider this file again.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+
+        let wrote = normalize_on_disk_at(&path).expect("normalize");
+        assert!(wrote, "a version-1 file must be rewritten");
+
+        let reloaded = load_from(&path).expect("reload");
+        assert_eq!(
+            reloaded.version, SCHEMA_VERSION,
+            "on-disk version must be bumped to current"
+        );
+        assert_eq!(
+            reloaded.statusline.lines,
+            crate::statusline::default_lines(),
+            "on-disk lines must be the current default after normalization"
+        );
+    }
+
+    #[test]
+    fn normalize_on_disk_is_idempotent_on_a_version_two_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#,
+        )
+        .unwrap();
+
+        assert!(normalize_on_disk_at(&path).expect("first call"));
+        let after_first = fs::read(&path).unwrap();
+
+        let wrote_again = normalize_on_disk_at(&path).expect("second call");
+        assert!(
+            !wrote_again,
+            "a file already at the current schema version must not be rewritten"
+        );
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            after_first,
+            "second call must not touch the file"
+        );
+    }
+
+    #[test]
+    fn normalize_on_disk_leaves_a_deliberate_reenable_untouched() {
+        // The regression guard for the whole fixed-point trap: a version-2
+        // file whose lines were hand-edited to re-add {openai_cost} must
+        // survive byte-for-byte. normalize_on_disk must not treat "already at
+        // the current version" as an invitation to re-run the migration.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original: &[u8] = br#"{"version":2,"statusline":{"lines":["{model} {agent}","{context_bar} {cost} {usage} {codex} {openai_cost}"]}}"#;
+        fs::write(&path, original).unwrap();
+
+        let wrote = normalize_on_disk_at(&path).expect("normalize");
+        assert!(!wrote, "a version-2 file must not be rewritten");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            original,
+            "a deliberate re-enable on a version-2 file must be left byte-for-byte unchanged"
+        );
+    }
+
+    #[test]
+    fn normalize_on_disk_errors_on_malformed_file_and_leaves_it_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original: &[u8] = b"{ hand-edited into broken json ";
+        fs::write(&path, original).unwrap();
+
+        match normalize_on_disk_at(&path) {
+            Err(SettingsError::Malformed { path: p, .. }) => assert_eq!(p, path),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            original,
+            "a malformed file must never be overwritten by normalize_on_disk"
+        );
+    }
+
+    #[test]
+    fn normalize_on_disk_is_a_noop_when_file_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let wrote = normalize_on_disk_at(&path).expect("normalize");
+        assert!(!wrote, "an absent file must not be created");
+        assert!(!path.exists(), "normalize_on_disk must not create a file");
+    }
+
+    #[test]
+    fn normalize_on_disk_preserves_unknown_fields_while_migrating() {
+        // The automatic startup rewrite must not drop fields this binary does
+        // not model: a targeted JSON patch touches only `version` and
+        // `statusline.lines`, so a forward-compat field (written by a newer
+        // Balanze) or a hand-added one survives the version bump. A full
+        // deserialize/reserialize would silently erase them.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let raw = serde_json::json!({
+            "version": 1,
+            "statusline": {
+                "theme": "dark",
+                "lines": [
+                    "{model} {agent}",
+                    "{context_bar} {cost} {usage} {codex} {openai_cost}"
+                ],
+                "future_statusline_field": "keep me"
+            },
+            "future_top_level_field": { "nested": [1, 2, 3] }
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&raw).unwrap()).unwrap();
+
+        let wrote = normalize_on_disk_at(&path).expect("normalize");
+        assert!(wrote, "a version-1 file must be rewritten");
+
+        let back: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(back["version"], serde_json::json!(2), "version bumped");
+        assert_eq!(
+            back["statusline"]["lines"],
+            serde_json::json!(["{model} {agent}", "{context_bar} {cost} {usage} {codex}"]),
+            "lines migrated to the current default"
+        );
+        assert_eq!(
+            back["statusline"]["future_statusline_field"],
+            serde_json::json!("keep me"),
+            "unknown nested field must survive the rewrite"
+        );
+        assert_eq!(
+            back["future_top_level_field"],
+            serde_json::json!({ "nested": [1, 2, 3] }),
+            "unknown top-level field must survive the rewrite"
+        );
     }
 
     #[test]
