@@ -71,7 +71,83 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build & release
+      - name: Import Apple Developer certificate
+        # Codesigning identity for macOS - see AGENTS.md §3.4 (secrets surface)
+        # and docs/ARCHITECTURE.md. Without a stable "Developer ID Application"
+        # signature, macOS Keychain "Always Allow" grants can't persist across
+        # rebuilds (issue #160). Runner is ephemeral, so the temp keychain and
+        # decoded cert never outlive the job.
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          # Only needs to be internally consistent for this job - the keychain
+          # is unlocked for the rest of the run (set-keychain-settings -t 3600
+          # -u below), so no later step ever needs this value again. No reason
+          # to persist it as a secret.
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import "$CERT_PATH" -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm "$CERT_PATH"
+          CERT_ID=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          if [ -z "$CERT_ID" ]; then
+            echo "::error::no 'Developer ID Application' identity found in the imported certificate"
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
+
+      - name: Write App Store Connect API key
+        # Notarization credential (App Store Connect API key path, not the
+        # Apple ID + app-specific-password flow) - see AGENTS.md §3.4.
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          echo "$APPLE_API_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
+          echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Build & release (macOS)
+        # A step's env: block has no per-key `if:` - splitting macOS out of
+        # the shared step (rather than gating individual env keys) is the
+        # only way to keep the Apple secrets out of the Windows leg's
+        # process environment entirely (PoLP, AGENTS.md §3.4).
+        #
+        # APPLE_SIGNING_IDENTITY and APPLE_API_KEY_PATH are already in the
+        # job's process environment via $GITHUB_ENV (written by the two
+        # steps above) - GitHub Actions propagates those to every later
+        # step automatically, so re-mapping them here would be a no-op.
+        # APPLE_CERTIFICATE/APPLE_CERTIFICATE_PASSWORD are deliberately not
+        # passed to tauri-action: their presence triggers its own built-in
+        # certificate-import/keychain setup, which would create a second
+        # keychain alongside the one we already imported into and unlocked
+        # by hand above.
+        if: matrix.platform == 'macos-latest'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        with:
+          tagName: ${{ inputs.tag }}
+          releaseName: 'Balanze ${{ inputs.tag }}'
+          releaseBody: |
+            Auto-generated release.
+            - Windows users: unsigned - SmartScreen will warn on first run; click "More info" → "Run anyway".
+            - macOS users: signed and notarized - Gatekeeper should not warn.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Build & release (Windows)
+        if: matrix.platform == 'windows-latest'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -79,9 +155,15 @@ jobs:
           tagName: ${{ inputs.tag }}
           releaseName: 'Balanze ${{ inputs.tag }}'
           releaseBody: |
-            Auto-generated release. Unsigned binaries.
-            - Windows users: SmartScreen will warn on first run; click "More info" → "Run anyway".
-            - macOS users: Gatekeeper will warn; right-click the app → "Open" the first time.
+            Auto-generated release.
+            - Windows users: unsigned - SmartScreen will warn on first run; click "More info" → "Run anyway".
+            - macOS users: signed and notarized - Gatekeeper should not warn.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Clean up macOS signing material
+        if: always() && matrix.platform == 'macos-latest'
+        run: |
+          security delete-keychain build.keychain || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
