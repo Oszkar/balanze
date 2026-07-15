@@ -130,7 +130,7 @@ jobs:
         # keychain alongside the one we already imported into and unlocked
         # by hand above.
         if: matrix.platform == 'macos-latest'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -148,7 +148,7 @@ jobs:
 
       - name: Build & release (Windows)
         if: matrix.platform == 'windows-latest'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
