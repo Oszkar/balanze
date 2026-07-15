@@ -110,7 +110,12 @@ jobs:
           echo "$APPLE_API_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
           echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
-      - name: Build & release
+      - name: Build & release (macOS)
+        # A step's env: block has no per-key `if:` - splitting macOS out of
+        # the shared step (rather than gating individual env keys) is the
+        # only way to keep the Apple secrets out of the Windows leg's
+        # process environment entirely (PoLP, AGENTS.md §3.4).
+        if: matrix.platform == 'macos-latest'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -120,6 +125,22 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+        with:
+          tagName: ${{ inputs.tag }}
+          releaseName: 'Balanze ${{ inputs.tag }}'
+          releaseBody: |
+            Auto-generated release.
+            - Windows users: unsigned - SmartScreen will warn on first run; click "More info" → "Run anyway".
+            - macOS users: signed and notarized - Gatekeeper should not warn.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Build & release (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ inputs.tag }}
           releaseName: 'Balanze ${{ inputs.tag }}'
