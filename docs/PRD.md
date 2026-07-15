@@ -238,7 +238,7 @@ Engineering bar (what "finished-feeling" means here):
 
 The MVP lands across five release phases - Data -> Liveness -> UI -> Surfaces -> Distribution - followed by two committed enhancement phases (Alerts, then Settings & configurability) and a post-1.0 deferred tier (Dashboard, then the uncommitted Vision ideas). Each phase has **one dominant theme** so "done" is hard to fudge and risk is sequenced correctly (read-only data primitives first, asymmetric/UI work later). Shipped phases are summarized to a line here; the blow-by-blow lives in the [CHANGELOG](../CHANGELOG.md), and this section stays forward-looking.
 
-**Current status: shipped through v0.4.3 (Codex maturity).** The data layer, the live spine, the Tauri popover + settings, the UI polish pass, the first-class CLI surface, the productized cross-provider statusline, and first-class Codex treatment (both rolling windows, everywhere) are done, and the product is useful day to day. The remaining work (v0.5) distributes it to other people; v0.6 adds alerts; v0.7 deepens settings and theming.
+**Current status: shipped through v0.4.4 (Hardening).** The data layer, the live spine, the Tauri popover + settings, the UI polish pass, the first-class CLI surface, the productized cross-provider statusline, first-class Codex treatment (both rolling windows, everywhere), and a cross-cutting hardening pass are done, and the product is useful day to day. The remaining work (v0.5) distributes it to other people; v0.6 adds alerts; v0.7 deepens settings and theming.
 
 ### Phase 1 - v0.1: Data (shipped)
 
@@ -271,6 +271,8 @@ Make every surface - popover, CLI, statusline - first-class and presentable. The
 **v0.4.3 - Codex maturity.** Codex stops being a second-class quota source. `codex_local` classifies each of Codex's two rolling windows (5-hour and weekly) by duration instead of trusting a plan-dependent JSON slot, and both windows surface everywhere - tray, popover, cards, CLI, and statusline - on the same shared 50/75/90 color scale as Claude. Alongside it: a parser-reliability fix (a single bad JSONL line no longer stalls the incremental cursor for the rest of the file), honest `BALANZE_LOG` file logging, and a quieter macOS Keychain path (no more re-prompting every poll tick).
 
 **Phase 4 is done at v0.4.3.** Every surface reads as intentional, and Codex is now a peer citizen across all of them rather than an afterthought.
+
+**v0.4.4 - Hardening (follow-on).** A cross-cutting reliability and correctness patch that settles the phase before Distribution rather than a fifth surface: Codex quota reads the account-wide limit instead of a per-model window, Claude credentials are strictly read-only on every platform, live settings transitions are supervised and race-free, and the weekly-window label and reset countdown read identically across every surface.
 
 ### Phase 5 - v0.5: Distribution & Legibility
 
