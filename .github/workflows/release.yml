@@ -81,9 +81,13 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          # Only needs to be internally consistent for this job - the keychain
+          # is unlocked for the rest of the run (set-keychain-settings -t 3600
+          # -u below), so no later step ever needs this value again. No reason
+          # to persist it as a secret.
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
           echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
@@ -115,16 +119,22 @@ jobs:
         # the shared step (rather than gating individual env keys) is the
         # only way to keep the Apple secrets out of the Windows leg's
         # process environment entirely (PoLP, AGENTS.md §3.4).
+        #
+        # APPLE_SIGNING_IDENTITY and APPLE_API_KEY_PATH are already in the
+        # job's process environment via $GITHUB_ENV (written by the two
+        # steps above) - GitHub Actions propagates those to every later
+        # step automatically, so re-mapping them here would be a no-op.
+        # APPLE_CERTIFICATE/APPLE_CERTIFICATE_PASSWORD are deliberately not
+        # passed to tauri-action: their presence triggers its own built-in
+        # certificate-import/keychain setup, which would create a second
+        # keychain alongside the one we already imported into and unlocked
+        # by hand above.
         if: matrix.platform == 'macos-latest'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         with:
           tagName: ${{ inputs.tag }}
           releaseName: 'Balanze ${{ inputs.tag }}'
