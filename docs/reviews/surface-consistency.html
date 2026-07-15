@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Balanze - Surface Consistency Review</title>
+<title>Balanze - Surface Consistency Reference</title>
 <!--
-  Design record: cross-surface consistency review reflecting the state shipped in
-  v0.4.2 (#156 coloring unification, #157 tray title/tooltip). Static, self-contained,
-  theme-aware (light/dark). Open directly in a browser or serve via GitHub Pages.
-  This is a record of a design decision, not a user guide.
+  Cross-surface reference: the one color language, the statusline glyph grammar,
+  and how the tray, popover, CLI, and statusline each present usage. Static,
+  self-contained, theme-aware (light/dark). Open directly in a browser or serve
+  via GitHub Pages. Rendered examples are illustrative compositions of the real
+  segment formats - see the source files named in the footer.
 -->
 <style>
   :root {
@@ -48,26 +49,26 @@
   .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
   h1 { font-size: clamp(28px, 4.6vw, 44px); line-height: 1.08; letter-spacing: -.02em; text-wrap: balance; margin: 0 0 16px; font-weight: 700; }
   h1 .low { color: var(--ink-2); font-weight: 600; }
-  .lede { font-size: clamp(16px, 2vw, 18.5px); color: var(--ink-2); max-width: 66ch; margin: 0 0 8px; }
+  .lede { font-size: clamp(16px, 2vw, 18.5px); color: var(--ink-2); margin: 0 0 8px; }
   .lede b { color: var(--ink); font-weight: 600; }
-  .shipped-pill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--ok); background: var(--tint-ok); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; margin-top: 18px; }
-  .shipped-pill .d { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .theme-toggle { font-family: var(--mono); font-size: 12px; color: var(--ink-2); background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; white-space: nowrap; }
+  .theme-toggle:hover { color: var(--ink); border-color: var(--accent); }
 
   section { margin-top: clamp(44px, 6vw, 72px); }
   h2 { font-size: clamp(20px, 2.6vw, 25px); letter-spacing: -.01em; margin: 0 0 6px; font-weight: 680; text-wrap: balance; }
   h2 .num { font-family: var(--mono); font-size: 14px; color: var(--accent); margin-right: 12px; font-weight: 600; }
-  .sub { color: var(--ink-2); margin: 0 0 24px; max-width: 66ch; }
-  p { max-width: 66ch; }
+  .sub { color: var(--ink-2); margin: 0 0 24px; }
 
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: clamp(18px, 3vw, 30px); }
 
-  .verdict { display: grid; gap: 12px; margin-top: 32px; }
-  @media (min-width: 720px) { .verdict { grid-template-columns: repeat(3, 1fr); } }
-  .vcard { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--sev, var(--accent)); border-radius: 10px; padding: 16px 18px; box-shadow: var(--shadow); }
-  .vcard .k { font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 6px; }
-  .vcard .k .tick { color: var(--sev, var(--accent)); }
-  .vcard .v { font-size: 14.5px; margin: 0; color: var(--ink); }
-  .vcard .v b { color: var(--sev, var(--accent)); }
+  .cards { display: grid; gap: 12px; margin-top: 32px; }
+  @media (min-width: 720px) { .cards { grid-template-columns: repeat(3, 1fr); } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .card .k { font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 6px; }
+  .card .v { font-size: 14.5px; margin: 0; color: var(--ink); }
+  .card .v b { color: var(--accent); }
 
   /* threshold band diagram */
   .diagram { padding: clamp(20px, 3vw, 28px) clamp(16px, 3vw, 26px); }
@@ -80,7 +81,6 @@
   .axis-bar .probe-cap { position: absolute; top: 0; transform: translateX(-50%); font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--accent); white-space: nowrap; }
   .track-row { margin: 7px 0; }
   .track-row .name { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); text-align: right; }
-  .track-row .name .chk { color: var(--ok); }
   .track { position: relative; display: flex; height: 30px; border-radius: 7px; overflow: hidden; border: 1px solid var(--line); }
   .zone { display: flex; align-items: center; justify-content: flex-end; padding: 0 7px; min-width: 0; }
   .zone span { font-family: var(--mono); font-size: 10.5px; font-weight: 600; }
@@ -88,16 +88,12 @@
   :root[data-theme="light"] .zone span { color: rgba(0,0,0,.5); }
   @media (prefers-color-scheme: dark) { .zone span { color: rgba(0,0,0,.62); } }
   @media (prefers-color-scheme: light) { .zone span { color: rgba(0,0,0,.5); } }
-  .z-calm { background: var(--calm); } .z-calm span { color: var(--calm-ink); }
   .z-ok { background: var(--ok); } .z-warn { background: var(--warn); } .z-orange { background: var(--orange); } .z-bad { background: var(--bad); }
   .probe { position: absolute; top: -7px; bottom: -7px; width: 0; border-left: 1.5px dashed var(--accent); opacity: .8; z-index: 3; pointer-events: none; }
-  .ghost-row { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); }
-  .ghost-row .track { opacity: .5; }
-  .ghost-row .name { color: var(--ink-3); }
-  .ghost-row .name em { font-style: normal; display: block; font-size: 10.5px; color: var(--orange); }
   .legend-inline { display: flex; flex-wrap: wrap; gap: 14px 20px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
   .legend-inline .li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
   .sw { width: 13px; height: 13px; border-radius: 3px; flex: none; }
+  .gly { font-size: 15px; line-height: 1; flex: none; }
   .readout { margin-top: 22px; display: grid; gap: 10px; }
   @media (min-width: 620px) { .readout { grid-template-columns: 1fr 1fr; } }
   .ro { background: var(--tint-ok); border: 1px solid var(--line); border-radius: 9px; padding: 13px 15px; }
@@ -109,41 +105,25 @@
   .chip.warn { background: var(--warn); color: #241a08; }
   .chip.orange { background: var(--orange); color: #2a1607; }
 
-  /* before / after */
-  .ba { display: grid; gap: 16px; margin-top: 4px; }
-  @media (min-width: 700px) { .ba { grid-template-columns: 1fr auto 1fr; align-items: center; } }
-  .ba .arrow { text-align: center; color: var(--ink-3); font-size: 22px; }
-  .ba-card { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 16px 18px; box-shadow: var(--shadow); }
-  .ba-card.before { border-left: 3px solid var(--bad); }
-  .ba-card.after { border-left: 3px solid var(--ok); }
-  .ba-card .tag { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 12px; }
-  .traypill { display: inline-flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 13px; }
-  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
-  .note { font-size: 12.5px; color: var(--ink-2); margin: 11px 0 0; }
-  .note.bad b { color: var(--bad); } .note.good b { color: var(--ok); }
-  .dim { color: var(--ink-3); }
-
-  /* samples */
+  /* surface samples */
   .samples { display: grid; gap: 14px; }
+  @media (min-width: 700px) { .samples.two { grid-template-columns: 1fr 1fr; } }
   .sample { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 16px 18px; box-shadow: var(--shadow); }
   .sample .cap { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 12px; }
+  .traypill { display: inline-flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 13px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
   .term { font-family: var(--mono); font-size: 13px; line-height: 1.7; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; white-space: pre; }
+  .note { font-size: 12.5px; color: var(--ink-2); margin: 11px 0 0; }
+  .dim { color: var(--ink-3); }
   .ok { color: var(--ok); } .cwarn { color: var(--warn); } .corange { color: var(--orange); } .bad { color: var(--bad); } .acc { color: var(--accent); }
 
   /* reference table */
-  .legend-status { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; margin: 0 0 18px; font-size: 13px; color: var(--ink-2); }
-  .legend-status .grp { display: inline-flex; align-items: center; gap: 7px; }
-  .stchip { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .05em; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; white-space: nowrap; }
-  .st-ok { background: var(--tint-ok); color: var(--ok); }
-  .st-design { background: var(--panel-2); color: var(--ink-2); border: 1px solid var(--line); }
-  .st-defer { background: var(--tint-warn); color: var(--orange); }
   .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
-  table { border-collapse: collapse; width: 100%; min-width: 760px; background: var(--panel); font-size: 13.5px; }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; background: var(--panel); font-size: 13.5px; }
   th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
   thead th { background: var(--panel-2); font-size: 12px; color: var(--ink-2); font-weight: 620; }
   tbody th { font-weight: 600; color: var(--ink); white-space: nowrap; }
   tr:last-child td, tr:last-child th { border-bottom: none; }
-  td.diverge { background: var(--tint-warn); }
   td .m, td.m { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
   td .muted, td.muted { color: var(--ink-3); }
   td .em { color: var(--accent); font-style: normal; }
@@ -155,32 +135,34 @@
 <body>
 
 <div class="wrap">
-  <p class="eyebrow">Balanze / cross-surface consistency</p>
-  <h1>One color language.<br><span class="low">Four surfaces, in agreement.</span></h1>
-  <p class="lede">The review found the tray, popover, CLI, and statusline disagreeing on when to raise an alarm, and the tray icon contradicting its own label. Both fixes <b>shipped in v0.4.2</b>: a single green / yellow / orange / red scale at 50 / 75 / 90 on every gauge, and a tray whose number can never fight its color. This page is now the record of what shipped and where the surfaces still differ on purpose.</p>
-  <span class="shipped-pill"><span class="d"></span> #156 + #157 merged</span>
+  <div class="topbar">
+    <p class="eyebrow">Balanze / cross-surface reference</p>
+    <button class="theme-toggle" type="button" aria-label="Toggle light and dark theme">&#9680; theme</button>
+  </div>
+  <h1>One color language.<br><span class="low">Four surfaces, one reading.</span></h1>
+  <p class="lede">Balanze shows the same usage on four surfaces - the <b>tray icon</b>, the desktop <b>popover</b>, the <b>CLI</b>, and the Claude Code <b>statusline</b>. This page is the reference for what they share: one green / yellow / orange / red scale at 50 / 75 / 90 on every gauge, one glyph per provider on the statusline, and a tray whose number can never contradict its color.</p>
 
-  <div class="verdict">
-    <div class="vcard" style="--sev: var(--ok)">
-      <p class="k"><span class="tick">&#10003;</span> Shipped &middot; thresholds</p>
-      <p class="v">Every utilization gauge uses <b>green / yellow / orange / red at 50 / 75 / 90</b>; the statusline greens up below 50. One `Severity` classifier, mirrored to the Svelte popover. <b>#156</b>.</p>
+  <div class="cards">
+    <div class="card">
+      <p class="k">The scale</p>
+      <p class="v">Every utilization gauge uses <b>green / yellow / orange / red at 50 / 75 / 90</b>. One <code style="font-family:var(--mono)">window::Severity</code> classifier owns the cutoffs; the tray, CLI, and statusline import it, and the Svelte popover mirrors it.</p>
     </div>
-    <div class="vcard" style="--sev: var(--ok)">
-      <p class="k"><span class="tick">&#10003;</span> Shipped &middot; tray</p>
-      <p class="v">Ring, title, and tooltip derive from one view, so a red icon can't sit beside a low number. The tooltip names the worst window and explains cold-start / degraded. <b>#157</b>.</p>
+    <div class="card">
+      <p class="k">The tray</p>
+      <p class="v">Ring, title, and tooltip derive from <b>one view</b>, so a red icon can't sit beside a low number. A header names the worst window and explains cold-start / degraded states.</p>
     </div>
-    <div class="vcard" style="--sev: var(--accent)">
-      <p class="k">Reference</p>
-      <p class="v">Section 04 is the current state: what's <b>unified</b>, what differs <b>by design</b> (a glance surface shows less than a detail one), and the few <b>deferred</b> nits.</p>
+    <div class="card">
+      <p class="k">The surfaces</p>
+      <p class="v">All four share the scale and the vocabulary. They differ only in <b>depth</b>: a glance surface (tray) shows less than a detail surface (popover, CLI).</p>
     </div>
   </div>
 
   <section>
-    <h2><span class="num">01</span>The severity bands line up</h2>
-    <p class="sub">Read any vertical slice: all four surfaces now land in the same band. The statusline's old calm-until-70 zone (shown faded below) became green / yellow / orange / red like the rest.</p>
+    <h2><span class="num">01</span>The severity scale</h2>
+    <p class="sub">Read any vertical slice: all four surfaces land in the same band. The cutoffs are inclusive lower bounds - exactly 50 is yellow, 75 is orange, 90 is red - and every surface classifies the rounded displayed value, so 89.6 shows "90%" and reads red.</p>
 
     <div class="panel diagram">
-      <p class="diag-head">Now &middot; all four aligned to 50 / 75 / 90</p>
+      <p class="diag-head">Every gauge &middot; 50 / 75 / 90</p>
       <div class="axis">
         <div class="name">x</div>
         <div class="axis-bar">
@@ -189,13 +171,13 @@
           <span class="tick" style="left:50%">50</span>
           <span class="tick" style="left:75%">75</span>
           <span class="tick" style="left:100%">100%</span>
-          <span class="probe-cap" style="left:60%">probe 60%</span>
+          <span class="probe-cap" style="left:60%">60%</span>
           <span class="probe-cap" style="left:82%">82%</span>
         </div>
       </div>
 
       <div class="track-row">
-        <div class="name"><span class="chk">&#10003;</span> Tray icon</div>
+        <div class="name">Tray icon</div>
         <div class="track">
           <div class="zone z-ok" style="width:50%"><span>ok</span></div>
           <div class="zone z-warn" style="width:25%"><span>50</span></div>
@@ -205,7 +187,7 @@
         </div>
       </div>
       <div class="track-row">
-        <div class="name"><span class="chk">&#10003;</span> Popover</div>
+        <div class="name">Popover</div>
         <div class="track">
           <div class="zone z-ok" style="width:50%"><span>ok</span></div>
           <div class="zone z-warn" style="width:25%"><span>50</span></div>
@@ -215,7 +197,7 @@
         </div>
       </div>
       <div class="track-row">
-        <div class="name"><span class="chk">&#10003;</span> CLI / TUI</div>
+        <div class="name">CLI / TUI</div>
         <div class="track">
           <div class="zone z-ok" style="width:50%"><span>ok</span></div>
           <div class="zone z-warn" style="width:25%"><span>50</span></div>
@@ -225,22 +207,13 @@
         </div>
       </div>
       <div class="track-row">
-        <div class="name"><span class="chk">&#10003;</span> Statusline</div>
+        <div class="name">Statusline</div>
         <div class="track">
           <div class="zone z-ok" style="width:50%"><span>ok</span></div>
           <div class="zone z-warn" style="width:25%"><span>50</span></div>
           <div class="zone z-orange" style="width:15%"><span>75</span></div>
           <div class="zone z-bad" style="width:10%"><span>90</span></div>
           <div class="probe" style="left:60%"></div><div class="probe" style="left:82%"></div>
-        </div>
-      </div>
-
-      <div class="track-row ghost-row">
-        <div class="name">Statusline <em>before</em></div>
-        <div class="track">
-          <div class="zone z-calm" style="width:70%"><span>base / no alarm</span></div>
-          <div class="zone z-warn" style="width:20%"><span>70</span></div>
-          <div class="zone z-bad" style="width:10%"><span>90</span></div>
         </div>
       </div>
 
@@ -249,12 +222,11 @@
         <div class="li"><span class="sw" style="background:var(--warn)"></span>yellow &middot; 50-75</div>
         <div class="li"><span class="sw" style="background:var(--orange)"></span>orange &middot; 75-90</div>
         <div class="li"><span class="sw" style="background:var(--bad)"></span>red &middot; 90+</div>
-        <div class="li"><span class="sw" style="background:var(--calm)"></span>old statusline base</div>
       </div>
 
       <div class="readout">
         <div class="ro">
-          <p class="at">At 60% - all agree</p>
+          <p class="at">At 60%</p>
           <ul>
             <li><span class="surf">Tray icon</span><span class="chip warn">yellow</span></li>
             <li><span class="surf">Popover</span><span class="chip warn">yellow</span></li>
@@ -263,7 +235,7 @@
           </ul>
         </div>
         <div class="ro">
-          <p class="at">At 82% - all agree</p>
+          <p class="at">At 82%</p>
           <ul>
             <li><span class="surf">Tray icon</span><span class="chip orange">orange</span></li>
             <li><span class="surf">Popover</span><span class="chip orange">orange</span></li>
@@ -273,43 +245,42 @@
         </div>
       </div>
     </div>
-    <p class="note">One <code style="font-family:var(--mono)">Severity</code> classifier in the <code style="font-family:var(--mono)">window</code> crate owns the 50/75/90 cutoffs; the tray, CLI, and statusline import it, and the Svelte popover mirrors it. Every surface classifies the <b>rounded displayed</b> value, so 89.6 shows "90%" and reads Red, not Orange.</p>
+    <p class="note">One <code style="font-family:var(--mono)">Severity</code> classifier in the <code style="font-family:var(--mono)">window</code> crate owns the 50 / 75 / 90 cutoffs; the tray, CLI, and statusline import it, and the Svelte popover mirrors it.</p>
   </section>
 
   <section>
-    <h2><span class="num">02</span>The tray no longer contradicts itself</h2>
-    <p class="sub">The ring still colors on the worst window - but the title and tooltip are now a stable layout that always shows both providers, and a header names what is worst, so the red is always explained by a number you can see.</p>
+    <h2><span class="num">02</span>The tray at a glance</h2>
+    <p class="sub">The ring colors on the worst window across providers. The title and tooltip are a stable layout that always shows both providers in fixed slots, and a header names what is worst - so the color is always explained by a number you can see.</p>
 
-    <div class="ba">
-      <div class="ba-card before">
-        <p class="tag">Before - weekly 94%, 5h 20%</p>
-        <span class="traypill"><span class="dot" style="background:var(--bad)"></span>C 20% <span class="dim">&middot;</span> O 30%</span>
-        <p class="note bad"><b>Red ring, "20%" label.</b> Color came from the weekly cap; the title only ever printed the 5h. The tooltip just repeated the title.</p>
-      </div>
-      <div class="arrow">&rarr;</div>
-      <div class="ba-card after">
-        <p class="tag">After - shipped</p>
+    <div class="samples two">
+      <div class="sample">
+        <p class="cap">Title (macOS menu bar) + icon ring</p>
         <span class="traypill"><span class="dot" style="background:var(--bad)"></span>Claude 94% <span class="dim">&middot;</span> Codex 30%</span>
-        <div class="term" style="margin-top:12px">Balanze - worst: Claude 7d 94%
-Claude   5h 20%   7d 94%
-Codex    30%</div>
-        <p class="note good"><b>Ring matches the 94% on the bar.</b> Tooltip header names it; the grid never reorders. Cold start shows "connecting...", a failing source "... unavailable".</p>
+        <p class="note">Both providers in fixed slots, each showing its worst window. The ring matches the larger of the two shown numbers - here the red comes from Claude's 94%.</p>
+      </div>
+      <div class="sample">
+        <p class="cap">Hover tooltip</p>
+        <div class="term">Balanze - worst: Claude 7d 94%
+Claude  5h 20%  7d 94%
+Codex   7d 30%</div>
+        <p class="note">The header names the worst window; the grid never reorders. Cold start reads <code style="font-family:var(--mono)">Balanze - connecting...</code>, a failing source <code style="font-family:var(--mono)">quota unavailable</code>.</p>
       </div>
     </div>
   </section>
 
   <section>
-    <h2><span class="num">03</span>The same moment, three surfaces</h2>
-    <p class="sub">Claude 5h at 82% (pace 1.2x over), weekly 34%, Codex 17%, session estimate $2.50, real OpenAI spend $4.20 - the 82% reads orange everywhere it shows color.</p>
+    <h2><span class="num">03</span>One moment, every surface</h2>
+    <p class="sub">Claude 5h at 82% (pace 1.2&times; over linear), weekly 34%, Codex 17%, session estimate $2.50, real OpenAI spend $4.20. The 82% reads orange everywhere it shows color; everything under 50 stays green.</p>
     <div class="samples">
       <div class="sample">
         <p class="cap">Tray (icon + title)</p>
         <span class="traypill"><span class="dot" style="background:var(--orange)"></span>Claude 82% <span class="dim">&middot;</span> Codex 17%</span>
       </div>
       <div class="sample">
-        <p class="cap">Claude Code statusline</p>
+        <p class="cap">Claude Code statusline (two lines, default layout)</p>
         <div class="term">&#129302; Opus
-[####------] 42% &#128176; ~$2.50 <span class="corange">&#9203;5h 82% &#8593;1.2&times; (1h23m)</span> <span class="ok">&#128197;7d 34%</span> <span class="ok">&#9671;Codex 17%</span> OpenAI $4.20</div>
+&#129504; [####------] 42% &#128176; ~$2.50 <span class="corange">&#10035;&#65039; 5h 82% &#8593;1.2&times; (1h 23m)</span> <span class="ok">&#10035;&#65039; 7d 34%</span> <span class="ok">&#127744; 7d 17%</span></div>
+        <p class="note">The OpenAI spend segment (<code style="font-family:var(--mono)">&#127744; $4.20</code>) is off the default line - it is an uncapped dollar figure with no rolling window - and stays available as an opt-in <code style="font-family:var(--mono)">{openai_cost}</code> segment.</p>
       </div>
       <div class="sample">
         <p class="cap">CLI - balanze-cli status</p>
@@ -317,16 +288,24 @@ Codex    30%</div>
 OpenAI      <span class="ok">&#10003; 17.0% 7d</span> (codex go)          $4.20 (admin costs)</div>
       </div>
     </div>
+
+    <div class="panel" style="margin-top:16px; padding:16px 18px;">
+      <p class="diag-head" style="margin-bottom:12px">Statusline glyph grammar</p>
+      <div class="legend-inline" style="margin-top:0; padding-top:0; border-top:none">
+        <div class="li"><span class="gly">&#129302;</span> model</div>
+        <div class="li"><span class="gly">&#129504;</span> context bar</div>
+        <div class="li"><span class="gly">&#128176;</span> Claude session estimate</div>
+        <div class="li"><span class="gly">&#10035;&#65039;</span> Claude window</div>
+        <div class="li"><span class="gly">&#127744;</span> Codex / OpenAI</div>
+        <div class="li"><span class="gly">&#9888;&#65039;</span> stale</div>
+      </div>
+      <p class="note">One glyph per provider: <code style="font-family:var(--mono)">&#10035;&#65039;</code> for Claude's windows, <code style="font-family:var(--mono)">&#127744;</code> for Codex and OpenAI. The <code style="font-family:var(--mono)">~</code> on the cost keeps the Claude estimate distinct from a real billed OpenAI figure.</p>
+    </div>
   </section>
 
   <section>
-    <h2><span class="num">04</span>How the surfaces present things now</h2>
-    <p class="sub">The reference: where the three surfaces align, where they differ on purpose (a glance surface shows less than a detail surface), and the nits left for a follow-up.</p>
-    <div class="legend-status">
-      <span class="grp"><span class="stchip st-ok">unified</span> same across surfaces</span>
-      <span class="grp"><span class="stchip st-design">by design</span> differs to fit the surface</span>
-      <span class="grp"><span class="stchip st-defer">deferred</span> drift, follow-up nit</span>
-    </div>
+    <h2><span class="num">04</span>Surface by surface</h2>
+    <p class="sub">The same concepts, side by side. The color scale and the color-to-number rule are identical everywhere; labels and precision differ to fit each surface's space.</p>
     <div class="scroll">
       <table>
         <thead>
@@ -335,89 +314,95 @@ OpenAI      <span class="ok">&#10003; 17.0% 7d</span> (codex go)          $4.20 
             <th>Desktop (popover + tray)</th>
             <th>CLI (compact)</th>
             <th>Statusline</th>
-            <th style="width:96px">Status</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <th>Severity color</th>
             <td colspan="3" class="m muted">green / yellow / orange / red at <span class="em">50 / 75 / 90</span> - one shared classifier</td>
-            <td><span class="stchip st-ok">unified</span></td>
           </tr>
           <tr>
             <th>Color &harr; number</th>
-            <td colspan="3" class="m muted">every surface classifies the <span class="em">rounded displayed</span> value, so 89.6 shows "90%" and reads Red</td>
-            <td><span class="stchip st-ok">unified</span></td>
+            <td colspan="3" class="m muted">every surface classifies the <span class="em">rounded displayed</span> value, so 89.6 shows "90%" and reads red</td>
           </tr>
           <tr>
             <th>Estimate marker</th>
             <td class="m">~$3.10</td>
             <td class="m">~$3.10 <span class="muted">&middot; NOT billed</span></td>
             <td class="m">&#128176; ~$2.50</td>
-            <td><span class="stchip st-ok">unified</span></td>
           </tr>
           <tr>
             <th>Currency</th>
             <td colspan="3" class="m muted">$X.XX - two decimals, i64 micro-USD converted only at display</td>
-            <td><span class="stchip st-ok">unified</span></td>
           </tr>
           <tr>
             <th>5-hour window</th>
             <td class="m">5h</td>
             <td class="m">5h</td>
-            <td class="m">&#9203;5h</td>
-            <td><span class="stchip st-ok">unified</span></td>
+            <td class="m">&#10035;&#65039; 5h</td>
+          </tr>
+          <tr>
+            <th>Weekly window</th>
+            <td class="m">7d <span class="muted">(grid)</span><br><span class="muted">cards view: 7-day</span></td>
+            <td class="m">7d</td>
+            <td class="m">&#10035;&#65039; 7d</td>
           </tr>
           <tr>
             <th>Percent precision</th>
             <td class="m">42% <span class="muted">integer</span></td>
-            <td class="m">42.5% <span class="muted">1 dec (sections 2)</span></td>
+            <td class="m">42.5% <span class="muted">1 decimal</span></td>
             <td class="m">43% <span class="muted">integer</span></td>
-            <td><span class="stchip st-design">by design</span></td>
           </tr>
           <tr>
             <th>Reset countdown</th>
             <td class="m">2h 41m left</td>
             <td class="m">resets in 2h 14m</td>
-            <td class="m">(1h23m)</td>
-            <td><span class="stchip st-design">by design</span></td>
+            <td class="m">(1h 23m)</td>
           </tr>
           <tr>
             <th>Provider naming</th>
             <td class="m">Anthropic &middot; Claude<br><span class="muted">tray: Claude / Codex</span></td>
             <td class="m">Anthropic / OpenAI</td>
-            <td class="m">&#129302; model &middot; &#9671;Codex<br>OpenAI $</td>
-            <td><span class="stchip st-design">by design</span></td>
-          </tr>
-          <tr>
-            <th>Weekly window</th>
-            <td class="diverge m">7-day <span class="muted">(grid)</span></td>
-            <td class="diverge m">7d</td>
-            <td class="diverge m">&#128197;7d</td>
-            <td><span class="stchip st-defer">deferred</span></td>
+            <td class="m">&#129302; model &middot; &#127744; Codex</td>
           </tr>
           <tr>
             <th>Burn rate</th>
-            <td class="diverge m">~3.2k/min</td>
-            <td class="diverge m">~45,000 tokens/min</td>
-            <td class="diverge m muted">not shown</td>
-            <td><span class="stchip st-defer">deferred</span></td>
+            <td class="m">~3.2k/min</td>
+            <td class="m">~45,000 tokens/min</td>
+            <td class="m muted">not shown</td>
           </tr>
           <tr>
             <th>Pace signal</th>
-            <td class="diverge m muted">hover tooltip only</td>
-            <td class="diverge m">Pace: line</td>
-            <td class="diverge m">inline &#8593;1.2&times;</td>
-            <td><span class="stchip st-defer">deferred</span></td>
+            <td class="m muted">hover tooltip only</td>
+            <td class="m">Pace: line</td>
+            <td class="m">inline &#8593;1.2&times;</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <p class="note">The three <span style="color:var(--orange)">deferred</span> rows are the remaining drift, all cosmetic: the desktop grid still says <code style="font-family:var(--mono)">7-day</code> while everyone else says <code style="font-family:var(--mono)">7d</code>; burn rate is <code style="font-family:var(--mono)">k</code>-abbreviated on desktop but comma-grouped in the CLI; and pace is buried in a hover on the desktop while the statusline shows it inline. Candidates for a future polish pass, not blockers.</p>
+    <p class="note">Where the surfaces differ, it is depth, not disagreement: the statusline omits burn rate to stay one line, pace is inline on the statusline but a hover on the desktop, and the popover's alternate <code style="font-family:var(--mono)">cards</code> view spells the windows out (<code style="font-family:var(--mono)">5-hour</code> / <code style="font-family:var(--mono)">7-day</code>) where the default grid and every other glance surface use <code style="font-family:var(--mono)">5h</code> / <code style="font-family:var(--mono)">7d</code>.</p>
   </section>
 
-  <p class="foot">Colors are Balanze's own tokens: <code>theme.css</code>, <code>tauri_sink.rs</code> (tray), <code>present.rs</code> (CLI), <code>statusline_render</code>, all now sourcing 50/75/90 from <code>window::Severity</code>. Rendered examples are illustrative compositions of the real segment formats. Reflects the state shipped in v0.4.2 (#156 coloring unification, #157 tray title/tooltip).</p>
+  <p class="foot">Colors are Balanze's own tokens: <code>theme.css</code>, <code>tauri_sink.rs</code> (tray), <code>present.rs</code> + <code>render.rs</code> (CLI), <code>statusline_render</code> - all sourcing 50 / 75 / 90 from <code>window::Severity</code>. Rendered examples are illustrative compositions of the real segment formats.</p>
 </div>
+
+<script>
+  // Manual light/dark override for screenshotting either theme without changing
+  // the OS setting. Falls back to prefers-color-scheme until first click.
+  (function () {
+    var root = document.documentElement;
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    function current() {
+      return root.dataset.theme || (mq.matches ? 'dark' : 'light');
+    }
+    var btn = document.querySelector('.theme-toggle');
+    if (btn) {
+      btn.addEventListener('click', function () {
+        root.dataset.theme = current() === 'dark' ? 'light' : 'dark';
+      });
+    }
+  })();
+</script>
 
 </body>
 </html>

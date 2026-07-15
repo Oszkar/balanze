@@ -395,16 +395,16 @@ fn bar(pct: f32, width: u32) -> String {
     )
 }
 
-/// Compact reset countdown: "1h23m", "3d4h", "12m". Past/zero -> "0m".
+/// Compact reset countdown: "1h 23m", "3d 4h", "12m". Past/zero -> "0m".
 fn fmt_countdown(delta: Duration) -> String {
     let secs = delta.num_seconds().max(0);
     let d = secs / 86_400;
     let h = (secs % 86_400) / 3_600;
     let m = (secs % 3_600) / 60;
     if d > 0 {
-        format!("{d}d{h}h")
+        format!("{d}d {h}h")
     } else if h > 0 {
-        format!("{h}h{m}m")
+        format!("{h}h {m}m")
     } else {
         format!("{m}m")
     }
@@ -419,7 +419,7 @@ mod tests {
         settings::StatuslineConfig::default()
     }
 
-    // now = a fixed instant; 5h resets 1h23m later, 7d resets ~5d later.
+    // now = a fixed instant; 5h resets 1h 23m later, 7d resets ~5d later.
     fn now() -> chrono::DateTime<Utc> {
         Utc.timestamp_opt(1_767_225_600, 0).single().unwrap()
     }
@@ -482,7 +482,7 @@ mod tests {
         });
         assert!(out.contains("🤖 Opus"), "model: {out}");
         assert!(out.contains("5h 82%"), "5h pct: {out}");
-        assert!(out.contains("(1h23m)"), "5h countdown: {out}");
+        assert!(out.contains("(1h 23m)"), "5h countdown: {out}");
         assert!(out.contains('↑'), "pace arrow over pace: {out}");
         assert!(out.contains("7d 88%"), "7d pct: {out}");
         assert!(out.contains("💰 ~$2.50"), "cost (estimate-marked): {out}");

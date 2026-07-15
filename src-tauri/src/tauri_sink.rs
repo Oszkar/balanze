@@ -203,7 +203,7 @@ impl TrayView {
             ("Claude 5h", self.claude_5h),
             ("Claude 7d", self.claude_7d),
             ("Codex 5h", self.codex_5h),
-            ("Codex wk", self.codex_weekly),
+            ("Codex 7d", self.codex_weekly),
         ]
         .into_iter()
         .filter_map(|(label, pct)| pct.map(|p| (label, p)))
@@ -276,7 +276,7 @@ fn tray_tooltip(view: &TrayView, degraded: bool) -> String {
         codex.push(format!("5h {}%", p.round() as i64));
     }
     if let Some(p) = view.codex_weekly {
-        codex.push(format!("wk {}%", p.round() as i64));
+        codex.push(format!("7d {}%", p.round() as i64));
     }
     if !codex.is_empty() {
         lines.push(format!("Codex   {}", codex.join("  ")));
@@ -663,9 +663,9 @@ mod tests {
         assert_eq!(view.codex_weekly, Some(80.0));
         assert_eq!(tray_title(&view), "Codex 80%");
         let tip = tray_tooltip(&view, false);
-        assert!(tip.contains("worst: Codex wk 80%"), "{tip}");
+        assert!(tip.contains("worst: Codex 7d 80%"), "{tip}");
         assert!(tip.contains("5h 12%"), "{tip}");
-        assert!(tip.contains("wk 80%"), "{tip}");
+        assert!(tip.contains("7d 80%"), "{tip}");
     }
 
     /// The original bug: the ring colored from the worst window (weekly 94%) but

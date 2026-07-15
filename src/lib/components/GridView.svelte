@@ -54,7 +54,7 @@
   {#if anthState.kind === 'data' && aq}
     <QuotaCell pct={aq.headline.pct} used={(fivePace?.used_fraction ?? aq.headline.pct / 100) * 100}
       elapsed={fivePace ? fivePace.elapsed_fraction * 100 : null} tone={aq.tone}
-      resetsAt={aq.headline.resetsAt} secondary={aq.secondary ? `7-day ${aq.secondary.pct.toFixed(0)}%` : ''}
+      resetsAt={aq.headline.resetsAt} secondary={aq.secondary ? `7d ${aq.secondary.pct.toFixed(0)}%` : ''}
       stale={anthStale}
       title={aq.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title} />
   {:else if anthState.kind === 'error'}
@@ -93,7 +93,7 @@
       <QuotaCell pct={cq.headline.pct} used={cq.headline.pct}
         elapsed={codexElapsedFraction(cq.headline.window, snapshot.fetched_at) * 100} tone={cq.tone}
         resetsAt={cq.headline.resetsAt}
-        secondary={cq.secondaryPct !== null ? `weekly ${cq.secondaryPct.toFixed(0)}% · ${cq.plan}` : cq.plan}
+        secondary={cq.secondaryPct !== null ? `7d ${cq.secondaryPct.toFixed(0)}% · ${cq.plan}` : cq.plan}
         stale={!!degraded['codex_quota'] || codexWindowExpired(cq.headline.window, snapshot.fetched_at)} staleLabel="stale" title={PROV.codexQuota.title} />
     {:else}
       <BilledCell note="not connected" title="OpenAI Codex not configured" />
