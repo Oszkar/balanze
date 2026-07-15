@@ -53,7 +53,7 @@ A small team or technically inclined individual who wants a local dashboard and 
 - Broad Linux desktop support beyond Ubuntu GNOME.
 - Browser automation or brittle scraping as a headline feature.
 - Monetization, subscriptions, cloud sync, or team billing in the first version.
-- Heavyweight distribution (code-signing, notarization, app-store/package-manager presence, auto-update) as a committed goal - distribution stays lightweight (a runnable release); the signing/store work is optional, not a phase the roadmap depends on.
+- Heavyweight distribution (app-store/package-manager presence, auto-update) as a committed goal - distribution stays lightweight (a runnable release). macOS code-signing/notarization is done (issue #160, Keychain "Always Allow" grants need a stable signature to persist); Windows code-signing remains optional, not a phase the roadmap depends on.
 - Broad provider coverage - the product stays narrow-but-deep; additional connectors are Vision-tier.
 
 ## Product principles
@@ -278,11 +278,11 @@ Make every surface - popover, CLI, statusline - first-class and presentable. The
 
 Get it into people's hands and make the engineering legible. Deliberately **lightweight** (see Project intent) - signing/store work stays optional, not load-bearing.
 
-- **Runnable desktop release** - unsigned binaries on GitHub Releases (MSI/NSIS, DMG/app) so someone can download and run it without `cargo`.
+- **Runnable desktop release** - binaries on GitHub Releases (MSI/NSIS, signed & notarized DMG/app) so someone can download and run it without `cargo`.
 - **CLI distribution** - publish `balanze-cli` (crates.io and/or prebuilt CLI binaries + a Homebrew formula) so `cargo install --git` is no longer the only path; Linux gets a first-class install.
 - **Legibility** - a polished README with screenshots / a short GIF of the popover, and a "how it works" writeup centered on the data-provenance model (the measured-only matrix + the leverage insight), the "measured status, not forecasts" call, and the actor-model architecture / the twelve boundaries. The v0.4.0 screenshots already exist, so the README refresh can land opportunistically ahead of the rest of this phase.
 - **Price-table refresh script** (`scripts/refresh-claude-prices.*`) mechanizing the vendored LiteLLM Anthropic price-table refresh, plus a **"Send Logs"** menu item bundling rotated logs + a recent state snapshot for support.
-- **Optional (not committed):** Windows code-signing, macOS notarization, Homebrew/WinGet, Tauri auto-update - done only if the cert/admin cost feels worth it; unsigned-runnable already clears the "an evaluator can try it" bar.
+- **Optional (not committed):** Windows code-signing, Homebrew/WinGet, Tauri auto-update - done only if the cert/admin cost feels worth it; unsigned-runnable already clears the "an evaluator can try it" bar for Windows.
 
 ### Phase 6 - v0.6: Alerts
 
