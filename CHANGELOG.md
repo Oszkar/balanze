@@ -4,16 +4,22 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 - minor bumps may break; patch bumps are fixes only.
 
-## [Unreleased]
+## [0.4.4] - Hardening - 2026-07-15
+
+A reliability and correctness pass across the surfaces before v0.5 Distribution: a Codex quota under-report fix, strictly read-only Claude credentials on every platform, supervised race-free settings transitions, a consistent weekly window everywhere, and a cleaner default statusline.
 
 ### Changed
 - **Statusline glyph grammar** - every segment now renders as `<emoji> <content>` with the emoji naming the provider: `✳️` for Claude's windows, `🌀` for Codex, `🧠` for context, `💰` for the session cost estimate. All glyphs are emoji-presentation and two cells wide, so the line no longer looks ragged. Codex's weekly window is relabeled `7d`, matching Claude's own windows and the compact CLI view.
 - **OpenAI API spend is off the default statusline** - it is an uncapped dollar figure with no rolling window, so it never read well against a line that is otherwise percent-of-window. The `{openai_cost}` segment stays available; add it to `statusline.lines` in `settings.json` to bring it back. With it off, the statusline makes no calls to the OpenAI billing API at all. **If you already have a `settings.json`, this is migrated automatically on load** - a `statusline.lines` that still matches the old default template is rewritten to the new one; a customized `statusline.lines` is left untouched.
 - **Local source ingestion follows file replacement** - Claude JSONL truncations, atomic rewrites, growing in-place rewrites (detected via bounded probes of the committed prefix), and deletions now replace or remove only that file's owned events before cross-file deduplication; partial UTF-8 writes wait for a terminating newline, and Codex session traversal stays inside its configured root without following directory cycles.
 - **Claude credentials are read-only on every platform** - Balanze no longer exchanges Claude Code's rotating refresh token or writes file-backed credentials. Expired or rejected credentials now consistently ask the user to run `claude login`; a future explicit file-refresh opt-in may be added separately.
-- **Atomic-write durability errors are honest** - Unix parent-directory fsync failures are returned after rename instead of being silently treated as a fully durable success.
+
+### Fixed
+- **Codex quota reads the account limit, not a single model's** - a Codex session that touched a per-model window (for example the Spark model) could make the parser report that model's near-empty window as the whole account's quota, silently under-reporting Codex usage. Windows are now matched to the account-wide limit; a per-model-only session falls through to the next session instead of reporting ~0%, and an unrecognizable limit shape is treated as schema drift rather than banked as the account's.
+- **Consistent weekly window across surfaces** - the weekly-window label (`7d`) and its reset countdown now render identically across the tray, popover, CLI, and statusline, closing the remaining gaps where two surfaces could disagree on the same value.
 - **Live settings changes no longer drop or race** - provider toggles and key changes now go through one supervised, acknowledged transition: the old watcher generation is joined before a disabled provider's cell clears, so a stale-generation update can never resurrect it. Snapshot writes move to a dedicated coalescing writer task, so a slow disk can't stall the tray or a status query.
 - **Claude Code OAuth re-reads and retries on token rotation again** - the CLI regained its one-time credential re-read and retry after a 401, matching the watcher's behavior; a transient watcher read failure no longer counts against the 30-minute rejected-credential cooldown. Provider errors now persist to `snapshot.json` without triggering a redundant `usage_updated` event or extra tray work.
+- **Statusline fallback cache hardened** - the headless self-compose path recovers a stale OpenAI-cost refresh lease race-safely and holds cache ownership correctly, so concurrent coding-agent prompts don't stall or duplicate the machine-wide 5-minute OpenAI refresh.
 
 ## [0.4.3] - Codex maturity - 2026-07-10
 
@@ -28,6 +34,7 @@ Codex gets first-class treatment: both rolling windows (5-hour and weekly) now s
 - **Popover shows real over-limit overage instead of "none"** - the same bug the compact CLI view already fixed in v0.4.1. All other views now detect the breach from `used >= limit` and show `$X/$Y over limit (real)`, and CLI can no longer diverge.
 - **Parser no longer stalls on a bad JSONL line** - the reader now skips any bad lines if present, while keeps the good events and advances the cursor past the batch.
 - **macOS Keychain no longer re-prompts every poll** - the watcher was re-reading Claude Code's credential on every 5-minute tick, re-triggering the macOS access prompt each time.
+- **Atomic-write durability errors are honest** - Unix parent-directory fsync failures are returned after rename instead of being silently treated as a fully durable success.
 
 ## [0.4.2] - Statusline maturity - 2026-07-07
 
@@ -191,8 +198,9 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.4.3...HEAD
-[0.4.2]: https://github.com/Oszkar/balanze/compare/v0.4.2...v0.4.3
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/Oszkar/balanze/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/Oszkar/balanze/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Oszkar/balanze/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Oszkar/balanze/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Oszkar/balanze/compare/v0.3.1...v0.4.0
