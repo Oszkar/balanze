@@ -4,6 +4,8 @@ All notable changes to Balanze are documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0 - minor bumps may break; patch bumps are fixes only.
 
+## [Unreleased]
+
 ## [0.4.4] - Hardening - 2026-07-15
 
 A reliability and correctness pass across the surfaces before v0.5 Distribution: a Codex quota under-report fix, strictly read-only Claude credentials on every platform, supervised race-free settings transitions, a consistent weekly window everywhere, and a cleaner default statusline.
