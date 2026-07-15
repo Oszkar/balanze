@@ -405,11 +405,27 @@ mod tests {
     /// the key is left unread (`Ok(None)`) even when one is configured, so the
     /// default statusline never touches the OpenAI keychain on a self-compose
     /// turn. `resolve(true)` still resolves the configured key.
+    /// Removes an env var on drop, so the cleanup runs even if an assertion
+    /// between set and remove panics. nextest (the project gate) already
+    /// isolates each test in its own process, so a panic can't poison a sibling
+    /// there; this keeps a shared-process `cargo test` run honest too.
+    struct EnvGuard(&'static str);
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: the test holding this guard also holds ENV_LOCK, which
+            // serializes env mutation across this module's tests.
+            unsafe { std::env::remove_var(self.0) };
+        }
+    }
+
     #[test]
     fn resolve_skips_the_key_read_when_openai_is_not_wanted() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: ENV_LOCK serializes env-mutating tests in this module; restored below.
+        // SAFETY: ENV_LOCK serializes env-mutating tests in this module. The
+        // EnvGuard restores it on drop, before ENV_LOCK is released (drop runs
+        // in reverse declaration order), even if an assertion below panics.
         unsafe { std::env::set_var("BALANZE_OPENAI_KEY", "sk-should-not-be-read") };
+        let _restore = EnvGuard("BALANZE_OPENAI_KEY");
 
         // Wanted -> the configured key is resolved (env takes precedence over the
         // keychain, so this is deterministic regardless of the dev machine).
@@ -420,8 +436,6 @@ mod tests {
         // being configured. This is the keychain read the demand gate elides.
         let off = LiveCrossSources::resolve(false);
         assert_eq!(off.openai_key, Ok(None));
-
-        unsafe { std::env::remove_var("BALANZE_OPENAI_KEY") };
     }
 
     fn oauth(token: &str) -> CredentialsClaudeAiOauth {
