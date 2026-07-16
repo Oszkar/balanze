@@ -17,6 +17,21 @@ for (const theme of ['light', 'dark'] as const) {
     await page.goto(`/gallery.html?theme=${theme}`, { waitUntil: 'domcontentloaded' });
     await page.locator('figure.frame').first().waitFor();
     await page.evaluate(() => document.fonts.ready);
+    // Images too (the header logo): `fonts.ready` does not cover them, and on a
+    // cold first navigation a frame can otherwise be captured with the logo
+    // still decoding, leaving a blank gap beside the wordmark.
+    await page.evaluate(() =>
+      Promise.all(
+        Array.from(document.images).map((img) =>
+          img.complete
+            ? Promise.resolve()
+            : new Promise((resolve) => {
+                img.addEventListener('load', resolve, { once: true });
+                img.addEventListener('error', resolve, { once: true });
+              }),
+        ),
+      ),
+    );
 
     const frames = page.locator('figure.frame');
     const count = await frames.count();

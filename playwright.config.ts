@@ -19,7 +19,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  timeout: 180_000,
+  // Must exceed `use.navigationTimeout` below, or the test dies before the cold
+  // first navigation is allowed to finish and that allowance is unreachable.
+  timeout: 360_000,
   expect: { timeout: 30_000 },
   reporter: 'list',
   use: {
