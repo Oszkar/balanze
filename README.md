@@ -131,6 +131,8 @@ balanze-cli completions fish > ~/.config/fish/completions/balanze-cli.fish
 
 Prerequisites: Rust 1.85+ (all you need for the CLI); Bun 1.3+ (only for the Svelte popover frontend / `tauri dev`). Local builds use the Rust 1.94.0 toolchain pinned in `rust-toolchain.toml` (rustup picks it up automatically; CI uses the same version), and the repo pins Bun 1.3.13 via the `packageManager` field in `package.json`.
 
+**TypeScript 7 is intentionally deferred.** The current Svelte language tooling requires TypeScript's programmatic API to type-check `.svelte` files, and TypeScript 7.0 does not yet provide that API. Balanze therefore remains on TypeScript 6 until Svelte supports TypeScript 7. See Microsoft's [TypeScript 7.0 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/).
+
 ```bash
 # CLI from the workspace:
 cargo run --release -p balanze_cli -- status
