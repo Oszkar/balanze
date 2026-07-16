@@ -53,6 +53,12 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # TypeScript 7.0 has no programmatic API, which Svelte's tooling needs
+      # to type-check `.svelte` files. Keep the 7.x major deferred until
+      # Svelte officially supports it; TypeScript 6.x updates still land.
+      - dependency-name: "typescript"
+        versions: ["^7.0.0"]
     groups:
       npm-minor-and-patch:
         update-types:
