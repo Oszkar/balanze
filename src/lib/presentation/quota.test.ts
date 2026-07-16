@@ -106,24 +106,54 @@ describe('quota', () => {
     codex_quota: { observed_at: '2026-07-08T10:00:00Z', session_id: 's', primary, secondary, plan_type: plan, rate_limit_reached: false },
   });
 
-  it('codexQuota: 5h headline + weekly secondary on two-window plans', () => {
+  // The #169 class of bug, on the popover this time: keying the tile on the 5h
+  // slot let a nearly-exhausted weekly window hide as secondary text under a
+  // green tile, while the tray and compact CLI both painted red off the worst
+  // window. The headline is the worst window - same contract as
+  // `codex_local::worst_window` and `render.rs::codex_display_window`.
+  it('codexQuota: headline is the worst window, not the 5h slot', () => {
     const s = codexSnap(
-      { used_percent: 1, window_duration_minutes: 300, resets_at: '2026-07-08T06:03:41Z' },
+      { used_percent: 4, window_duration_minutes: 300, resets_at: '2026-07-08T06:03:41Z' },
+      { used_percent: 95, window_duration_minutes: 10080, resets_at: '2026-07-14T04:25:36Z' },
+    );
+    const q = codexQuota(s)!;
+    expect(q.headline.label).toBe('7d');
+    expect(q.headline.pct).toBe(95);
+    expect(q.tone).toBe('bad');
+    expect(q.secondary).toEqual({ pct: 4, label: '5h' });
+  });
+
+  it('codexQuota: 5h headline + weekly secondary when 5h is the worst', () => {
+    const s = codexSnap(
+      { used_percent: 60, window_duration_minutes: 300, resets_at: '2026-07-08T06:03:41Z' },
       { used_percent: 2, window_duration_minutes: 10080, resets_at: '2026-07-14T04:25:36Z' },
     );
     const q = codexQuota(s)!;
     expect(q.headline.label).toBe('5h');
-    expect(q.headline.pct).toBe(1);
-    expect(q.secondaryPct).toBe(2);
+    expect(q.headline.pct).toBe(60);
+    expect(q.secondary).toEqual({ pct: 2, label: '7d' });
     expect(q.plan).toBe('pro');
   });
 
   it('codexQuota: single weekly window becomes the headline (go plan)', () => {
     const s = codexSnap({ used_percent: 3, window_duration_minutes: 10080, resets_at: '2026-07-14T04:25:36Z' }, null, 'go');
     const q = codexQuota(s)!;
-    expect(q.headline.label).toBe('weekly');
+    expect(q.headline.label).toBe('7d');
     expect(q.headline.pct).toBe(3);
-    expect(q.secondaryPct).toBeNull();
+    expect(q.secondary).toBeNull();
+  });
+
+  // A window whose duration is neither 300 nor 10080 (a Codex taxonomy change)
+  // must still be selectable, not dropped. The TUI has the same rule.
+  it('codexQuota: an unknown-duration window can still be the headline', () => {
+    const s = codexSnap(
+      { used_percent: 10, window_duration_minutes: 300, resets_at: '2026-07-08T06:03:41Z' },
+      { used_percent: 77, window_duration_minutes: 1440, resets_at: '2026-07-09T04:25:36Z' },
+    );
+    const q = codexQuota(s)!;
+    expect(q.headline.label).toBe('window');
+    expect(q.headline.pct).toBe(77);
+    expect(q.secondary).toEqual({ pct: 10, label: '5h' });
   });
 
   it('codexQuota: null snapshot -> null', () => {

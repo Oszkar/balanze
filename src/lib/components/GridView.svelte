@@ -93,7 +93,7 @@
       <QuotaCell pct={cq.headline.pct} used={cq.headline.pct}
         elapsed={codexElapsedFraction(cq.headline.window, snapshot.fetched_at) * 100} tone={cq.tone}
         resetsAt={cq.headline.resetsAt}
-        secondary={cq.secondaryPct !== null ? `7d ${cq.secondaryPct.toFixed(0)}% · ${cq.plan}` : cq.plan}
+        secondary={cq.secondary ? `${cq.secondary.label} ${cq.secondary.pct.toFixed(0)}% · ${cq.plan}` : cq.plan}
         stale={!!degraded['codex_quota'] || codexWindowExpired(cq.headline.window, snapshot.fetched_at)} staleLabel="stale" title={PROV.codexQuota.title} />
     {:else}
       <BilledCell note="not connected" title="OpenAI Codex not configured" />

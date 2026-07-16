@@ -11,8 +11,11 @@ pub struct CrossProvider {
     /// Local Codex weekly window utilization (0..100). `None` if absent.
     pub codex_weekly: Option<f32>,
     pub openai_cost_micro_usd: Option<i64>,
-    /// True when the Codex figure is stale (e.g. an old snapshot). The
-    /// self-compose path reads Codex locally each turn, so it is false there.
+    /// True when the Codex figure is stale: an old snapshot envelope, a failed
+    /// last poll, or - on either path - a rollout whose window has already
+    /// reset. Reading Codex locally every turn does NOT make it false: the
+    /// walker returns the newest-mtime session file however old it is, so a
+    /// live read of a week-old rollout is still stale data.
     pub codex_stale: bool,
     /// True when the OpenAI figure is stale (old snapshot, or a cached value
     /// served because a fresh fetch failed / is in cooldown).

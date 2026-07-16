@@ -242,6 +242,17 @@ fn cross_from_payload(
     // while the envelope is young (e.g. Claude JSONL keeps updating while OpenAI
     // polls fail), so also mark a cell stale when its source last errored.
     let envelope_stale = age > SNAPSHOT_FRESHNESS_SECS;
+    // A FRESH envelope can still carry an EXPIRED Codex window: the rollout
+    // walker returns the newest-mtime session file however old it is, so a
+    // user who last ran Codex days ago gets a young envelope wrapping windows
+    // that reset long ago. Neither the envelope age nor the error slot can see
+    // that, so without this the cell prints a confident live figure forever.
+    // Anchored on wall-clock `now` (the statusline has a real clock, unlike the
+    // snapshot-rendering surfaces that anchor on `fetched_at`).
+    let codex_expired = snap
+        .codex_quota
+        .as_ref()
+        .is_some_and(|q| q.any_window_expired(now));
     statusline_render::CrossProvider {
         codex_five_hour: snap
             .codex_quota
@@ -254,7 +265,7 @@ fn cross_from_payload(
             .and_then(|q| q.weekly())
             .map(|w| w.used_percent as f32),
         openai_cost_micro_usd: snap.openai.as_ref().map(|c| c.total_micro_usd),
-        codex_stale: envelope_stale || snap.codex_quota_error.is_some(),
+        codex_stale: envelope_stale || snap.codex_quota_error.is_some() || codex_expired,
         openai_stale: envelope_stale || snap.openai_error.is_some(),
     }
 }

@@ -55,6 +55,26 @@ pub struct CodexCredits {
 }
 
 impl RateLimitWindow {
+    /// True when this window's counter has already reset as of `now`, making
+    /// `used_percent` a description of an ELAPSED window rather than a live cap.
+    ///
+    /// This is the crate's single expiry rule. It exists because the rollout
+    /// walker returns the newest-mtime session file regardless of age, so a
+    /// user who last ran Codex days ago still parses a complete, well-formed
+    /// snapshot whose windows long since reset. Polling never corrects that -
+    /// every poll re-reads the same expired rollout - so any surface that shows
+    /// `used_percent` without consulting this reads as confidently live forever.
+    ///
+    /// Strict `>` (not `>=`): the reset instant itself still reads live, matching
+    /// the CLI's `fetched_at > resets_at`. Callers pass the same clock anchor they
+    /// use for the rest of their render (`Snapshot::fetched_at` for snapshot-driven
+    /// surfaces, wall-clock `now` for the statusline's live local read) rather than
+    /// this crate reaching for `Utc::now()`, which keeps every consumer pure and
+    /// testable.
+    pub fn expired(&self, now: DateTime<Utc>) -> bool {
+        now > self.resets_at
+    }
+
     /// Classify this window by its duration. See [`WindowKind`].
     pub fn kind(&self) -> WindowKind {
         match self.window_duration_minutes {
@@ -84,6 +104,18 @@ impl CodexQuotaSnapshot {
     pub fn worst_window(&self) -> Option<&RateLimitWindow> {
         self.windows()
             .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
+    }
+
+    /// True when ANY present window has already reset as of `now` - i.e. this
+    /// rollout is old enough that at least its shortest window elapsed.
+    ///
+    /// For surfaces that carry one staleness flag for the whole Codex cell
+    /// (the statusline) rather than a per-window marker. `any`, not `all`, is
+    /// deliberate: once the 5h window has reset, the rollout predates it, so the
+    /// still-live weekly figure is an undercount too (usage since `observed_at`
+    /// is not in it). Flagging the cell is the honest call.
+    pub fn any_window_expired(&self, now: DateTime<Utc>) -> bool {
+        self.windows().any(|w| w.expired(now))
     }
 }
 
@@ -173,6 +205,35 @@ mod tests {
             tokens: None,
             credits: None,
         }
+    }
+
+    #[test]
+    fn expired_is_strict_so_the_reset_instant_itself_still_reads_live() {
+        let w = win(85.0, 300); // resets_at = t2000
+        assert!(!w.expired(Utc.timestamp_opt(1999, 0).unwrap()));
+        // Boundary: `>` not `>=`, matching the CLI's `fetched_at > resets_at`.
+        assert!(!w.expired(Utc.timestamp_opt(2000, 0).unwrap()));
+        assert!(w.expired(Utc.timestamp_opt(2001, 0).unwrap()));
+    }
+
+    #[test]
+    fn any_window_expired_flags_a_rollout_whose_shortest_window_has_reset() {
+        let five = RateLimitWindow {
+            used_percent: 85.0,
+            window_duration_minutes: 300,
+            resets_at: Utc.timestamp_opt(2000, 0).unwrap(),
+        };
+        let weekly = RateLimitWindow {
+            used_percent: 40.0,
+            window_duration_minutes: 10080,
+            resets_at: Utc.timestamp_opt(9000, 0).unwrap(),
+        };
+        let s = snap(five, Some(weekly));
+        assert!(!s.any_window_expired(Utc.timestamp_opt(1999, 0).unwrap()));
+        // The 5h window has reset but the weekly has not. The rollout is still
+        // old, so the weekly figure is an undercount too - the whole snapshot
+        // reads stale, which is the conservative/honest call.
+        assert!(s.any_window_expired(Utc.timestamp_opt(2001, 0).unwrap()));
     }
 
     #[test]

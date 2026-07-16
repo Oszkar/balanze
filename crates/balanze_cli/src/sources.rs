@@ -377,13 +377,16 @@ impl statusline_render::CrossSources for LiveCrossSources {
         Ok(Some(costs.total_micro_usd))
     }
 
-    fn codex_windows(&self) -> (Option<f32>, Option<f32>) {
+    fn codex_windows(&self, now: chrono::DateTime<chrono::Utc>) -> statusline_render::CodexWindows {
         match codex_local::read_codex_quota() {
-            Ok(Some(q)) => (
-                q.five_hour().map(|w| w.used_percent as f32),
-                q.weekly().map(|w| w.used_percent as f32),
-            ),
-            _ => (None, None),
+            Ok(Some(q)) => statusline_render::CodexWindows {
+                five_hour: q.five_hour().map(|w| w.used_percent as f32),
+                weekly: q.weekly().map(|w| w.used_percent as f32),
+                // The read is fresh; the rollout behind it may not be. Without
+                // this the statusline printed a week-old figure unmarked.
+                stale: q.any_window_expired(now),
+            },
+            _ => statusline_render::CodexWindows::default(),
         }
     }
 }
