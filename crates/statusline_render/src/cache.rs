@@ -54,10 +54,10 @@ impl Drop for RefreshLease {
     fn drop(&mut self) {
         match std::fs::read_to_string(&self.path) {
             Ok(current) if current == self.token => {
-                if let Err(error) = std::fs::remove_file(&self.path) {
-                    if error.kind() != std::io::ErrorKind::NotFound {
-                        tracing::debug!("statusline cache lease cleanup failed: {error}");
-                    }
+                if let Err(error) = std::fs::remove_file(&self.path)
+                    && error.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::debug!("statusline cache lease cleanup failed: {error}");
                 }
             }
             Ok(_) | Err(_) => {

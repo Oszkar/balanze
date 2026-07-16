@@ -296,10 +296,10 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
             }
         }
     }
-    if reconciled_roots.is_empty() {
-        if let Some(error) = walk_err {
-            return ScanResult::Fatal { error };
-        }
+    if reconciled_roots.is_empty()
+        && let Some(error) = walk_err
+    {
+        return ScanResult::Fatal { error };
     }
 
     let files_scanned = files.len();
@@ -347,10 +347,10 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
     let mut emitted = HashSet::new();
     let mut events = Vec::new();
     for path in &files {
-        if emitted.insert(path.clone()) {
-            if let Some(file_events) = state.by_file.get(path) {
-                events.extend(file_events.iter().cloned());
-            }
+        if emitted.insert(path.clone())
+            && let Some(file_events) = state.by_file.get(path)
+        {
+            events.extend(file_events.iter().cloned());
         }
     }
     for (path, file_events) in &state.by_file {

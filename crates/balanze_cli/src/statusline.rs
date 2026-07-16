@@ -115,10 +115,11 @@ fn statusline_cross_provider(
 
     // 1. Fresh snapshot wins (zero network). A stale OpenAI cell is only a
     //    reason to self-compose when the OpenAI segment is actually rendered.
-    if let Some(cross) = &snapshot_cross {
-        if (!want_openai || !cross.openai_stale) && !cross.codex_stale {
-            return snapshot_cross;
-        }
+    if let Some(cross) = &snapshot_cross
+        && (!want_openai || !cross.openai_stale)
+        && !cross.codex_stale
+    {
+        return snapshot_cross;
     }
 
     // 2. Self-compose; then merge composed cells over the (stale) snapshot

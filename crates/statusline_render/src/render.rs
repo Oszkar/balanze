@@ -69,10 +69,10 @@ fn fill_line(template: &str, input: &RenderInput) -> String {
     let mut parts: Vec<String> = Vec::new();
     for tok in template.split_whitespace() {
         if let Some(key) = segment_key(tok) {
-            if let Some(v) = render_segment(key, input) {
-                if !v.is_empty() {
-                    parts.push(v);
-                }
+            if let Some(v) = render_segment(key, input)
+                && !v.is_empty()
+            {
+                parts.push(v);
             }
             // Unknown key or empty value -> drop the token.
         } else {

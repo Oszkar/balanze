@@ -249,10 +249,10 @@ fn maybe_first_run_welcome(app: &App, rt: &tokio::runtime::Handle) {
 
     // Arm the blur-hide grace BEFORE showing: the startup focus race that
     // immediately follows show() must not hide the popover before it is seen.
-    if let Some(grace) = app.try_state::<WelcomeGrace>() {
-        if let Ok(mut shown) = grace.0.lock() {
-            *shown = Some(std::time::Instant::now());
-        }
+    if let Some(grace) = app.try_state::<WelcomeGrace>()
+        && let Ok(mut shown) = grace.0.lock()
+    {
+        *shown = Some(std::time::Instant::now());
     }
     // Open the popover unanchored - there is no tray click to anchor to at
     // startup. It shows the loading/empty state until the first poll lands.

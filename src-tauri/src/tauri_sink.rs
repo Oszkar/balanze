@@ -138,18 +138,17 @@ impl TrayView {
                 }
             }
         }
-        if statusline_fresh(s) {
-            if let Some(rl) = s
+        if statusline_fresh(s)
+            && let Some(rl) = s
                 .claude_statusline
                 .as_ref()
                 .and_then(|sl| sl.payload.rate_limits.as_ref())
-            {
-                for w in &rl.windows {
-                    if w.key == "five_hour" {
-                        fold_max(&mut v.claude_5h, w.used_percent);
-                    } else {
-                        fold_max(&mut v.claude_7d, w.used_percent);
-                    }
+        {
+            for w in &rl.windows {
+                if w.key == "five_hour" {
+                    fold_max(&mut v.claude_5h, w.used_percent);
+                } else {
+                    fold_max(&mut v.claude_7d, w.used_percent);
                 }
             }
         }

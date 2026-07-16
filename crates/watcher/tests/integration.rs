@@ -90,11 +90,11 @@ async fn wait_for_events(handle: &StateCoordinatorHandle, min_events: usize) {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         let snap = handle.query().await.expect("coordinator alive");
-        if let Some(jl) = snap.claude_jsonl {
-            if jl.window.total_events_in_window >= min_events {
-                assert_eq!(jl.files_scanned, 1, "expected exactly 1 JSONL file scanned");
-                return;
-            }
+        if let Some(jl) = snap.claude_jsonl
+            && jl.window.total_events_in_window >= min_events
+        {
+            assert_eq!(jl.files_scanned, 1, "expected exactly 1 JSONL file scanned");
+            return;
         }
         if std::time::Instant::now() > deadline {
             panic!("expected >= {min_events} events in window within 3 seconds");

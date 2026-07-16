@@ -80,10 +80,8 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
         // org_uuid identifies the user's Anthropic consumer org. Useful for
         // bug reports but doxes the account when pasted publicly, so it's
         // gated behind --verbose / -v.
-        if verbose {
-            if let Some(uuid) = &oauth.org_uuid {
-                writeln!(w, "org uuid:     {uuid}")?;
-            }
+        if verbose && let Some(uuid) = &oauth.org_uuid {
+            writeln!(w, "org uuid:     {uuid}")?;
         }
         writeln!(w)?;
         writeln!(w, "CADENCE BARS (from Anthropic OAuth):")?;
@@ -475,13 +473,13 @@ fn compact_anthropic_cost(s: &Snapshot) -> String {
 /// invisible in the compact view. `None` only when there's genuinely no data
 /// and no error.
 fn compact_subscription_leverage(s: &Snapshot) -> Option<String> {
-    if let Some(cost) = &s.anthropic_api_cost {
-        if cost.total_event_count > 0 {
-            return Some(format!(
-                "Subscription leverage: ~{} of Claude Code usage at API list prices (leverage - NOT billed)",
-                micro_usd_to_display_dollars(cost.total_micro_usd)
-            ));
-        }
+    if let Some(cost) = &s.anthropic_api_cost
+        && cost.total_event_count > 0
+    {
+        return Some(format!(
+            "Subscription leverage: ~{} of Claude Code usage at API list prices (leverage - NOT billed)",
+            micro_usd_to_display_dollars(cost.total_micro_usd)
+        ));
     }
     if s.anthropic_api_cost_error.is_some() {
         return Some("Subscription leverage: ✗ cost synthesis failed".to_string());

@@ -11,7 +11,7 @@
   <a href="https://github.com/Oszkar/balanze/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Oszkar/balanze/ci.yml?branch=main&label=ci&logo=github"></a>
   <a href="https://github.com/Oszkar/balanze/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/Oszkar/balanze?label=version&color=blue"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
-  <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust&logoColor=white"></a>
+  <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.89%2B-orange?logo=rust&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -55,7 +55,7 @@ Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and 
 
 ## Install
 
-Balanze currently ships **from source only** - no prebuilt binaries, installers, or crates.io release yet (signed binaries, Homebrew, and WinGet are on the [roadmap](docs/PRD.md)). Requires Rust 1.85+.
+Balanze currently ships **from source only** - no prebuilt binaries, installers, or crates.io release yet (signed binaries, Homebrew, and WinGet are on the [roadmap](docs/PRD.md)). Requires Rust 1.89+.
 
 ```bash
 # `--git` is required (not on crates.io). The repo root is a virtual workspace,
@@ -137,7 +137,7 @@ balanze-cli completions fish > ~/.config/fish/completions/balanze-cli.fish
 
 ## Develop
 
-Prerequisites: Rust 1.85+ (all you need for the CLI); Bun 1.3+ (only for the Svelte popover frontend / `tauri dev`). Local builds use the Rust 1.94.0 toolchain pinned in `rust-toolchain.toml` (rustup picks it up automatically; CI uses the same version), and the repo pins Bun 1.3.13 via the `packageManager` field in `package.json`.
+Prerequisites: Rust 1.89+ (all you need for the CLI); Bun 1.3+ (only for the Svelte popover frontend / `tauri dev`). Local builds use the Rust 1.94.0 toolchain pinned in `rust-toolchain.toml` (rustup picks it up automatically; CI uses the same version), and the repo pins Bun 1.3.13 via the `packageManager` field in `package.json`.
 
 **TypeScript 7 is intentionally deferred.** Svelte's language tooling needs TypeScript's programmatic API to type-check `.svelte` files, which TypeScript 7.0 does not yet provide, so Balanze stays on TypeScript 6. See Microsoft's [TypeScript 7.0 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/).
 
