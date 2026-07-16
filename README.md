@@ -22,11 +22,17 @@
 > Not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Reads only endpoints and files you already have access to with your own credentials.
 
 <p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/popover-dark.png">
+    <img src="docs/assets/popover-light.png" alt="The Balanze tray popover - Anthropic and OpenAI quota bars, real billed spend, and the subscription-leverage insight" width="360">
+  </picture>
+</p>
+<p align="center"><sub>The tray popover - quota per cadence with a pace tick, real billed spend badged as such, and the subscription-leverage estimate kept deliberately outside the grid.</sub></p>
+
+<p align="center">
   <img src="docs/assets/watch-tui.png" alt="balanze-cli watch - live cross-provider TUI" width="680">
 </p>
 <p align="center"><sub><code>balanze-cli watch</code> - a live, bounded TUI showing Anthropic and OpenAI usage side by side.</sub></p>
-
-<!-- TODO (v0.5 "Legibility", see docs/PRD.md): feature a tray-popover screenshot / short GIF here as the primary hero (the popover is the flagship surface; the TUI above is the CLI stand-in). Capture states via `bun run gallery` / `bun run gallery:snap`, or grab the live app; drop the asset in docs/assets/ and swap it in above the TUI. -->
 
 ## What it does
 
