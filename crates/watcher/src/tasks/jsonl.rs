@@ -61,8 +61,9 @@ impl ScanState {
 /// The task:
 /// 1. Resolves ALL existing Claude projects directories via
 ///    `find_all_claude_projects_dirs()` (a dual-install machine can have both
-///    `~/.claude/projects` and `~/.config/claude/projects`). If none, logs at
-///    `warn!` and exits `Ok(())` - not all users have Claude Code installed.
+///    `~/.claude/projects` and `~/.config/claude/projects`). If none exist yet,
+///    re-checks every `FALLBACK_POLL` until one appears rather than exiting -
+///    a clean exit here would be permanent (see the body).
 /// 2. Sets up a `notify::recommended_watcher` watching EACH root.
 ///    If that fails (OS resource exhausted), returns
 ///    `Err(WatcherError::NotifyExhausted)`.
@@ -77,10 +78,37 @@ pub(crate) fn spawn(
     generation: WatcherGeneration,
 ) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
-        let roots = find_all_claude_projects_dirs();
+        // Wait for a projects dir rather than exiting when there isn't one yet.
+        //
+        // Exiting was permanent: a clean exit is deliberately not reported to
+        // the supervisor, which only replaces tasks on an unexpected death or a
+        // settings change. So a Balanze that started before `~/.claude/projects`
+        // existed - autostarted at login ahead of Claude Code, or a fresh Claude
+        // Code install that logs in before its first session - left the Anthropic
+        // cost and pace cells blank FOREVER, even once the user began running
+        // Claude sessions. Only an app restart or an unrelated settings change
+        // recovered it, and nothing told the user either was needed.
+        //
+        // Re-checking is a local directory stat: no provider endpoint is
+        // involved, so this is governed by AGENTS.md §3.1's JSONL clause (local
+        // file I/O), not the 5-minute politeness gate. Reuses FALLBACK_POLL so
+        // discovery and the miss-recovery re-scan share one cadence. Cancellable
+        // at the sleep: `Watcher::shutdown` aborts and joins this task.
+        let mut roots = find_all_claude_projects_dirs();
         if roots.is_empty() {
-            tracing::warn!("watcher/jsonl: no Claude projects dir found; task exits clean");
-            return Ok(());
+            tracing::info!(
+                "watcher/jsonl: no Claude projects dir yet; re-checking every {}s",
+                FALLBACK_POLL.as_secs()
+            );
+            loop {
+                tokio::time::sleep(FALLBACK_POLL).await;
+                roots = find_all_claude_projects_dirs();
+                if !roots.is_empty() {
+                    break;
+                }
+                tracing::debug!("watcher/jsonl: still no Claude projects dir");
+            }
+            tracing::info!("watcher/jsonl: Claude projects dir appeared; starting scan");
         }
 
         // `Notify` coalesces "something changed" signals without queuing -
@@ -342,6 +370,78 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
 mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    /// Serializes env-mutating tests in this module. `cargo nextest` isolates
+    /// each test in its own process, but plain `cargo test` shares one (both are
+    /// supported gates per AGENTS.md §6), so HOME/USERPROFILE mutation must be
+    /// serialized. Mirrors the guard in `balanze_cli::sources`.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Restores a home-dir env var on drop, so cleanup runs even if an
+    /// assertion panics.
+    struct HomeGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+    impl HomeGuard {
+        fn set(key: &'static str, value: &std::path::Path) -> Self {
+            let prev = std::env::var_os(key);
+            // SAFETY: the test holding this guard also holds ENV_LOCK, which
+            // serializes env mutation across this module's tests.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, prev }
+        }
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: as above - the owning test still holds ENV_LOCK.
+            match &self.prev {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    /// An absent projects dir must not END the task. It used to `return Ok(())`,
+    /// and because a clean exit is deliberately not reported to the supervisor
+    /// (`watcher::lib`), nothing ever re-spawned it: the Anthropic cost and pace
+    /// cells stayed blank for the whole process lifetime even after the user
+    /// started running Claude sessions. The task must instead stay alive and
+    /// re-check. Asserting "still running shortly after spawn" keeps this fast -
+    /// waiting out a full FALLBACK_POLL rediscovery cycle would cost 60s.
+    #[test]
+    fn absent_projects_dir_keeps_the_task_alive_instead_of_exiting() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let empty = tempfile::tempdir().unwrap();
+        // Point both home vars at a tree with no `.claude/projects` (USERPROFILE
+        // is consulted first on Windows, HOME on POSIX). Guards drop before
+        // ENV_LOCK releases (reverse declaration order).
+        let _h = HomeGuard::set("HOME", empty.path());
+        let _u = HomeGuard::set("USERPROFILE", empty.path());
+        assert!(
+            find_all_claude_projects_dirs().is_empty(),
+            "fixture must have no projects dir for this test to mean anything"
+        );
+
+        // Sync test + a runtime built HERE, after the env vars are set: no tokio
+        // worker threads exist while `set_var` runs (the same reasoning the
+        // integration test documents), and the ENV_LOCK guard is never held
+        // across an await.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (coord, _coord_task) = state_coordinator::spawn(state_coordinator::LogSink);
+            let handle = spawn(coord, 1);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert!(
+                !handle.is_finished(),
+                "task must wait for a projects dir, not exit permanently"
+            );
+            handle.abort();
+        });
+    }
 
     fn assistant_line(msg_id: &str, req_id: &str, output: u64) -> String {
         format!(
