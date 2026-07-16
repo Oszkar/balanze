@@ -5,17 +5,20 @@
 //! code. Keeping the mapping pure (no I/O, no process exit) makes every case
 //! unit-testable.
 //!
-//! Codes (also documented in `--help`, AGENTS.md §9, and the README exit-code
-//! table):
+//! Codes (also documented in `--help` and the README exit-code table - keep the
+//! three in lockstep):
 //!
 //! | Code | Meaning |
 //! |------|---------|
 //! | 0    | OK (degraded sources still exit 0 unless `--strict`) |
 //! | 1    | unexpected / other |
 //! | 2    | usage error (clap default) |
-//! | 3    | auth / credentials missing or expired |
+//! | 3    | auth / credentials expired, rejected, or unreadable |
 //! | 4    | network / provider unreachable |
 //! | 5    | partial / degraded (only under `--strict`) |
+//!
+//! Code 3 means a credential was found and refused (or could not be read). An
+//! ABSENT credential is not an auth failure - see [`looks_like_auth`].
 //!
 //! This module owns the single numeric contract. The `status` path classifies
 //! a built `Snapshot` via [`classify_snapshot`]; the `doctor` path folds its
@@ -39,7 +42,10 @@ pub enum ExitClass {
     /// makes the `code()` taxonomy and the `--help` table complete (codes 0..=5).
     #[allow(dead_code)]
     Usage,
-    /// Credentials missing or expired (re-run `claude login`, or set the key).
+    /// A credential was found and the provider refused it - expired, rejected,
+    /// or unreadable (re-run `claude login`, or refresh the key). NOT an absent
+    /// credential: an unconfigured provider is neutral and exits `Ok` (see
+    /// [`looks_like_auth`]). The variant name predates that distinction.
     AuthMissing,
     /// A provider was unreachable (transport / timeout).
     Network,

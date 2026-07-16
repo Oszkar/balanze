@@ -187,7 +187,7 @@ Post-spike plan:
 
 1. **Multiple Codex CLI installs**: does Codex have an equivalent of `CLAUDE_CONFIG_DIR` that points its install at a non-default location? Spike didn't surface one. Honor `CODEX_CONFIG_DIR` env var anyway (cheap), but don't promise it works the same way.
 
-2. **Codex CLI version compatibility**: this schema was captured from `cli_version: "0.130.0"`. If Codex CLI bumps schema in a breaking way, our parser breaks. Treat schema drift as `DegradedState` per AGENTS.md §3.3.
+2. **Codex CLI version compatibility**: this schema was captured from `cli_version: "0.130.0"`. If Codex CLI bumps schema in a breaking way, our parser breaks. Treat schema drift as a degraded source (the `Snapshot::codex_quota_error` slot + the `degraded_state` event) per AGENTS.md §3.2.
 
 3. **What about ChatGPT Pro / Pro+ plans?** Sample is from `plan_type: "go"`. **(RESOLVED - see the 2026-07-08 update below: plus/pro populate `primary` = 5h and `secondary` = weekly, not the reverse; both windows are classified by duration and surfaced across the UI.)**
 

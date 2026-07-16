@@ -119,9 +119,11 @@ Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (levera
 | 0 | OK (a degraded source still exits 0 unless `--strict`) |
 | 1 | unexpected / other error |
 | 2 | usage error (bad flags / unknown subcommand; clap owns this) |
-| 3 | auth: credentials missing or expired (re-run `claude login`, or set the OpenAI key) |
+| 3 | auth: credentials expired, rejected, or unreadable (re-run `claude login`, or refresh the OpenAI key) |
 | 4 | network: a provider was unreachable |
 | 5 | degraded: a source was stale or errored (only with `--strict`) |
+
+A provider you simply have not configured is **not** an auth failure and does not exit 3. An absent credential is neutral - `status` exits 0 (or 5 under `--strict`), matching `doctor`, which warns rather than fails for one. Code 3 means a credential was found and the provider refused it (or it could not be read).
 
 **Claude Code statusLine.** `balanze-cli statusline` is a zero-auth status line for your Claude Code prompt - live 5h/7d Claude subscription quota and session cost, plus cross-provider signal (both Codex rate-limit windows). Real OpenAI API spend is an opt-in `{openai_cost}` segment, off by default because it is an uncapped dollar figure with no rolling window. `balanze-cli setup` offers to wire the canonical command; a replaced command is backed up first, so `balanze-cli statusline restore` can put it back.
 

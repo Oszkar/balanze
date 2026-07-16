@@ -51,7 +51,7 @@ balanze/
 │   ├── state_coordinator/      actor: owns Snapshot; bounded-mpsc StateMsg loop; generation-gated updates; owns the coalescing snapshot.json writer
 │   ├── watcher/                only importer of notify; spawns jsonl/statusline/openai_poll/safety/oauth_poll tasks
 │   ├── backoff/                pure exponential-backoff policy + generic async retry combinator
-│   ├── atomic_file/            perms-preserving durable atomic file replace (create_new tmp + fsync + perms-copy + rename + parent-dir fsync); one home for the byte-level sequence AGENTS.md §3.4 relies on, used by the snapshot / statusline / settings / OAuth-credential writers
+│   ├── atomic_file/            perms-preserving durable atomic file replace (create_new tmp + fsync + perms-copy + rename + parent-dir fsync); one home for the byte-level sequence AGENTS.md §3.4 relies on, used by the snapshot / statusline / settings / statusline-cache writers. There is no OAuth-credential writer: Claude Code's credential is strictly read-only to Balanze (boundary #3 below, AGENTS.md §3.4), and `anthropic_oauth` does not depend on this crate
 │   ├── keychain/               only importer of `keyring-core`
 │   ├── settings/               owns settings.json (atomic, schema-versioned, non-secrets only)
 │   ├── logging/                shared `tracing` subscriber setup (BALANZE_LOG env filter + daily-rotating file sink); owns tracing-subscriber/tracing-appender so they stay out of the pure library crates; used only by the two binaries via `init_tracing(prefix)`
@@ -115,7 +115,8 @@ The statusline does no network on the `snapshot.json` read path; Claude segments
 ## Errors and degraded state
 
 - App-level results use `anyhow::Result<T>`. No `.unwrap()` outside tests.
-- `thiserror` enums live only in `claude_parser` - variants include `FileMissing`, `IoError`, `SchemaDrift { line, message }` so the StateCoordinator can pattern-match and set the right `DegradedState`.
+- A library crate exposes its own `thiserror` enum where a consumer pattern-matches the variants or needs typed classification (AGENTS.md §2.1): `claude_parser` (`FileMissing`, `IoError`, `SchemaDrift { line, message }`), the IPC-file readers `claude_statusline::FileIoError` / `state_coordinator::SnapshotFileError`, `settings`, `keychain`, `codex_local`, `watcher`, and the provider clients. Keep each variant surface minimal and path/content-safe.
+- There is no `DegradedState` type. Degraded state is carried by the `Snapshot`'s per-source `*_error: Option<String>` slots plus the `degraded_state` IPC event; the coordinator's boundary is string-erased (see boundary #7). A typed error category on the Snapshot - so `status` and `doctor` share real types rather than substring sniffing - is a known open item (`balanze_cli::exit::looks_like_auth`) and needs a Snapshot schema change.
 - Long-running tasks (file watcher, polling, the coordinator itself) are supervised with a retained `JoinHandle` + `tokio::select!`. A coordinator exit/panic is fatal on both hosts (the CLI returns; the Tauri host calls `AppHandle::exit` on a genuine panic, but not on a shutdown abort). A watcher-task `Ok(Err)` / panic is fatal in the CLI (`watch` exits with a restart hint); the Tauri host surfaces a `degraded_state` for the affected source and re-spawns the set with bounded backoff (self-heal, not silent freeze).
 - External I/O retries via `backoff` (`standard` = 30 s × 2ⁿ cap 10 min; `fail_fast` = 0). Idempotent GETs retry on 429 + 5xx + transport. Balanze never calls Anthropic's token-refresh endpoint.
 - IPC errors surface to the UI as a `degraded_state` event; the tray icon shows a warning dot.

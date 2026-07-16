@@ -22,11 +22,13 @@
 //!
 //! # Failure modes
 //!
-//! Every fallible function returns `Result<_, ParseError>`. The four
-//! outcomes are designed to map cleanly into the eventual
-//! `state_coordinator::DegradedState` enum (per AGENTS.md §3.2; the
-//! enum itself lands when state_coordinator is wired
-//! to consume codex_local's output):
+//! Every fallible function returns `Result<_, ParseError>`. The four outcomes
+//! map onto the coordinator's degraded model (AGENTS.md §3.2), which is the
+//! `Snapshot::codex_quota_error` slot plus the `degraded_state` event - there
+//! is no `DegradedState` enum; the coordinator boundary is string-erased. The
+//! mapping lives in `watcher::tasks::safety::codex_update`: `FileMissing` and
+//! `Ok(None)` are QUIET (no emit, cell reads "not configured"), while `IoError`
+//! and `SchemaDrift` are loud (they set the error slot):
 //!
 //! - `Err(FileMissing)` - Codex CLI isn't installed (sessions
 //!   directory absent). Caller treats as "Codex data not available";

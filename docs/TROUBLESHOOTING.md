@@ -32,9 +32,9 @@ The command needs three things wired: (1) function declared `#[tauri::command]`,
 
 The `settings` crate must use the atomic-write pattern: write to `settings.json.tmp`, then `rename` over `settings.json`. Direct writes truncate the existing file before writing new content; a crash mid-write leaves it empty. If you see this, the atomic-write pattern was bypassed.
 
-## "Anthropic Console scrape stopped working overnight"
+## "If the Anthropic Console scrape ever lands and breaks overnight"
 
-Expected. Console UI changes will break scrapes regularly - that's why the design defers this to v0.3 (now opt-in) and treats it as best-effort. Mark the data stale via `DegradedState::parse_error` and inform the user. Don't try to "make the scrape more robust" by spending a week on it; if the official endpoint isn't there, that's the answer.
+Not a live entry: the Console cookie-paste scrape is **not implemented** (`DataSource::AnthropicConsoleScrape` exists in `claude_parser` as a reserved variant only), and it is opt-in-if-ever per AGENTS.md §3.3. Kept here because the guidance is the point: Console UI changes would break a scrape regularly, so it would be best-effort by design - mark the data stale via the source's `*_error` slot / `degraded_state` event and tell the user. Don't try to "make the scrape more robust" by spending a week on it; if the official endpoint isn't there, that's the answer.
 
 ## "balanze-cli statusline is wired but the Claude Code status line is blank (Windows)"
 
