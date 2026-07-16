@@ -69,7 +69,7 @@ struct RawAmount {
 
 fn deserialize_amount_value<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
     let raw = serde_json::Value::deserialize(d)?;
-    match raw {
+    let parsed = match raw {
         serde_json::Value::Number(n) => n
             .as_f64()
             .ok_or_else(|| de::Error::custom("amount.value: number was not representable as f64")),
@@ -81,7 +81,23 @@ fn deserialize_amount_value<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::E
         other => Err(de::Error::custom(format!(
             "amount.value: expected number or string, got {other:?}"
         ))),
+    }?;
+    // Reject NaN / ±inf at the boundary, where a bad amount is still a shape
+    // error we can name. The number branch cannot produce them (JSON has no
+    // NaN/Infinity literal and serde_json rejects float overflow), but the
+    // string branch can: `f64::from_str` accepts "NaN" / "inf" / "Infinity"
+    // case-insensitively and overflows "1e400" to inf - and OpenAI serializes
+    // amounts as strings, so that is the live path. Left unchecked they reach
+    // the saturating `as i64` cast below, where NaN silently becomes $0 and inf
+    // becomes ~$9.2 trillion, either way published as a successful, non-degraded
+    // billed total. Erroring here also makes "NaN" consistent with "not a
+    // number", which this deserializer already rejects.
+    if !parsed.is_finite() {
+        return Err(de::Error::custom(format!(
+            "amount.value: expected a finite amount, got {parsed}"
+        )));
     }
+    Ok(parsed)
 }
 
 /// User agent for every Balanze OpenAI request. Centralized here so the CLI,
@@ -534,6 +550,34 @@ mod tests {
         assert_eq!(parsed.by_line_item[0].amount_micro_usd, 1_500_000);
         assert_eq!(parsed.by_line_item[1].line_item, "gpt-5");
         assert_eq!(parsed.by_line_item[1].amount_micro_usd, 21_000);
+    }
+
+    /// `f64::from_str` accepts "NaN"/"inf"/"Infinity" and overflows "1e400" to
+    /// inf, and the live API sends amounts as STRINGS - so these reach the
+    /// parser. Unguarded they hit the saturating `as i64` cast: NaN silently
+    /// becomes $0, inf becomes ~$9.2 trillion, both published as a successful
+    /// billed total with no degraded marker. A malformed amount is a shape
+    /// error, exactly as "not a number" already was.
+    #[test]
+    fn non_finite_amount_strings_are_shape_errors_not_silent_zero_or_saturation() {
+        for bad in ["NaN", "nan", "inf", "-inf", "Infinity", "1e400"] {
+            let body = format!(
+                r#"{{
+                    "object": "page",
+                    "data": [{{"object":"bucket","start_time":1,"end_time":2,"results":[
+                        {{"object":"organization.costs.result","amount":{{"value":"{bad}","currency":"usd"}},"line_item":"gpt-5"}}
+                    ]}}],
+                    "has_more": false
+                }}"#
+            );
+            let (start, end) = fixed_window();
+            match parse_response(&body, start, end, Utc::now()) {
+                Err(OpenAiError::ResponseShape(msg)) => {
+                    assert!(msg.contains("finite"), "{bad}: msg: {msg}")
+                }
+                other => panic!("{bad}: expected ResponseShape, got {other:?}"),
+            }
+        }
     }
 
     #[test]
