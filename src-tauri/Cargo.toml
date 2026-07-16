@@ -19,6 +19,7 @@ tauri-build = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-notification = { workspace = true }
+tauri-plugin-autostart = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

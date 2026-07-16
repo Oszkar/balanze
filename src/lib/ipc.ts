@@ -19,6 +19,15 @@ export const hideWindow = (): Promise<void> => invoke<void>('hide_window');
 export const resizePopover = (height: number): Promise<void> =>
   invoke<void>('resize_popover', { height });
 
+// Launch-at-login (autostart). Goes through Rust app commands that drive the
+// `tauri-plugin-autostart` plugin, so the webview needs no `autostart:`
+// capability. The OS login-item state is the source of truth (`get` reads it
+// live on mount), so there is no `settings.json` flag to keep in sync.
+export const getLaunchAtLogin = (): Promise<boolean> =>
+  invoke<boolean>('get_launch_at_login');
+export const setLaunchAtLogin = (enabled: boolean): Promise<void> =>
+  invoke<void>('set_launch_at_login', { enabled });
+
 // Non-secret settings (settings.json shape). `get_settings` never returns any
 // API key; `set_api_key` writes the key to the OS keychain and flips the
 // provider's enable flag backend-side (AGENTS.md §3.4).
