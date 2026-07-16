@@ -276,13 +276,20 @@ Make every surface - popover, CLI, statusline - first-class and presentable. The
 
 ### Phase 5 - v0.5: Distribution & Legibility
 
-Get it into people's hands and make the engineering legible. Deliberately **lightweight** (see Project intent) - signing/store work stays optional, not load-bearing.
+Get it into people's hands and make the engineering legible. Deliberately **lightweight** (see Project intent) - signing/store work stays optional, not load-bearing. Like Phase 4, it ships as bounded sub-milestones under patch bumps rather than one tag.
 
-- **Runnable desktop release** - binaries on GitHub Releases (MSI/NSIS, signed & notarized DMG/app) so someone can download and run it without `cargo`.
-- **CLI distribution** - publish `balanze-cli` (crates.io and/or prebuilt CLI binaries + a Homebrew formula) so `cargo install --git` is no longer the only path; Linux gets a first-class install.
-- **Legibility** - a polished README with screenshots / a short GIF of the popover, and a "how it works" writeup centered on the data-provenance model (the measured-only matrix + the leverage insight), the "measured status, not forecasts" call, and the actor-model architecture / the twelve boundaries. The v0.4.0 screenshots already exist, so the README refresh can land opportunistically ahead of the rest of this phase.
+**v0.5.0 - Runnable release & discoverability.** The first binary release: signed & notarized macOS DMG/app plus unsigned Windows MSI/NSIS on GitHub Releases, so someone can download and run it without `cargo` (the macOS signing path landed ahead of the tag). Alongside it: **launch-at-login** so the tray app behaves like a tray app after a reboot, a **README refresh** with a popover screenshot and the download install path, and a recorded **docs-site decision** (adopt mdBook; the site itself is built in v0.5.1). Done when the signed/notarized macOS release publishes successfully with assets attached.
+
+**v0.5.1+ - CLI distribution, deeper legibility, support tooling.** The rest of Phase 5, sequenced after the desktop release:
+
+- **CLI distribution** - prebuilt `balanze-cli` binaries on Releases + a Homebrew tap so `cargo install --git` is no longer the only path; Linux gets a first-class install. crates.io is **out by design**: the workspace is deliberately unpublishable (`publish = false`, and generic-named internal path crates like `window` / `keychain` / `settings`), so publishing the CLI would mean publishing its whole dependency graph into a shared namespace.
+- **"How it works" writeup** - the data-provenance model (the measured-only matrix + the leverage insight), the "measured status, not forecasts" call, and the actor-model architecture / the twelve boundaries.
+- **Docs site (mdBook)** - the skeleton, a GitHub Pages deploy, and a rendered home for the user guide, the how-it-works writeup, and the surface-consistency design record (the decision to use mdBook is recorded in v0.5.0).
 - **Price-table refresh script** (`scripts/refresh-claude-prices.*`) mechanizing the vendored LiteLLM Anthropic price-table refresh, plus a **"Send Logs"** menu item bundling rotated logs + a recent state snapshot for support.
-- **Optional (not committed):** Windows code-signing, Homebrew/WinGet, Tauri auto-update - done only if the cert/admin cost feels worth it; unsigned-runnable already clears the "an evaluator can try it" bar for Windows.
+
+The v0.4.0 screenshots already exist, so the README refresh lands in v0.5.0 ahead of the rest.
+
+**Optional (not committed):** Windows code-signing, Homebrew/WinGet, Tauri auto-update - done only if the cert/admin cost feels worth it; unsigned-runnable already clears the "an evaluator can try it" bar for Windows.
 
 ### Phase 6 - v0.6: Alerts
 
@@ -293,7 +300,7 @@ Kept deliberately minimal - table-stakes, not gold-plated. OS notifications for:
 Deepen the configuration surface once there is enough to configure. The theme is **"make it yours."** The v0.3.1 settings UI already covers keys, provider toggles, and statusLine wiring; this phase grows it:
 
 - **Color themes** - popover (and statusline) theming beyond the existing light/dark, so a screenshot can match a user's taste; the visible-polish win for a showcase.
-- **Refresh cadence & startup** - user-set poll cadence (still floor-clamped per §3.1), launch-at-login, and start-hidden behavior.
+- **Refresh cadence & startup** - user-set poll cadence (still floor-clamped per §3.1) and start-hidden behavior. (Launch-at-login shipped earlier, in v0.5.0.)
 - **Statusline config in the UI** - surface the v0.4.2 segment / color choices in the settings panel, not just a config file.
 - **Deeper alert UX** - the threshold / notification controls alerts (v0.6) shipped inline, refined into a proper per-alert configuration surface, now informed by real v0.6 usage.
 
