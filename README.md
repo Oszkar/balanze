@@ -36,20 +36,20 @@
 
 ## What it does
 
-Balanze surfaces one normalized snapshot two ways - the `balanze-cli` CLI and a **tray popover** (a color-shifting gauge icon, a glanceable grid/cards view, and a settings panel for keys and provider toggles). Both render the same data, and that data holds **measured reality only** - server-reported quota % and real billed $ - so every cell in a column is the same *kind* of number:
+Balanze surfaces one normalized snapshot two ways - the `balanze-cli` CLI and the tray popover above. Both render the same data, and that data holds **measured reality only** - server-reported quota % and real billed $ - so every cell in a column is the same *kind* of number:
 
 |               | Quota %                              | API $ (real billed)                                 |
 |---------------|--------------------------------------|-----------------------------------------------------|
 | **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
 | **OpenAI**    | Codex CLI rate-limit % (5h / weekly) | real billed spend (Admin Costs API)                 |
 
-The Claude list-price figure is deliberately **not** a matrix cell - it lives outside the grid as a separate *Subscription leverage* insight (below), so a counterfactual estimate can never be mistaken for billed spend.
+The Claude list-price figure is deliberately **not** a matrix cell - it sits outside the grid as a separate *Subscription leverage* insight, so a counterfactual estimate can never be mistaken for billed spend.
 
 - **Anthropic quota** - the same `/api/oauth/usage` endpoint Claude Code uses: live 5-hour / 7-day / per-model bars with `resets_at` clocks. No scraping.
-- **Anthropic API $ - real or nothing.** Anthropic exposes no per-user API spend, so this cell shows the real `extra_usage` pay-as-you-go overage *if* you enabled it on claude.ai (the same billed cents claude.ai's overage meter shows), and otherwise reads as **not available** - never backfilled with a substitute number.
-- **OpenAI Codex quota** - the server-computed rate-limit % for both rolling windows, the 5-hour and the weekly (classified by duration, mirroring Claude's 5h / 7-day bars), read from the local Codex CLI rollout files (`~/.codex/sessions/`).
+- **Anthropic API $ - real or nothing.** Anthropic exposes no per-user API spend, so this cell shows the real `extra_usage` overage *if* you enabled it on claude.ai, and otherwise reads **not available** - never backfilled with a substitute number.
+- **OpenAI Codex quota** - the server-computed rate-limit % for both rolling windows (5-hour and weekly), read from the local Codex CLI rollout files (`~/.codex/sessions/`).
 - **OpenAI API $** - this-month spend plus a per-line-item breakdown from `/v1/organization/costs`, using an `sk-admin-...` key. Real billing data.
-- **Subscription leverage (a separate estimate)** - `claude_cost` multiplies your local Claude Code JSONL by a vendored LiteLLM price table to show what that usage *would* cost at API list prices. For Pro/Max users that is leverage from the subscription, **never billed** - so it sits outside the matrix as its own insight.
+- **Subscription leverage (a separate estimate)** - `claude_cost` multiplies your local Claude Code JSONL by a vendored LiteLLM price table to show what that usage *would* cost at API list prices. For Pro/Max users that is leverage from the subscription, **never billed**.
 
 Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); common gotchas in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md).
 
@@ -69,9 +69,9 @@ balanze-cli            # 4-quadrant status
 
 **The CLI has zero system-library dependencies.** Windows 11, macOS 15+, and Linux build with just the Rust toolchain (Linux also needs a C compiler for the `ring` TLS dependency). No GTK/GLib/Cairo/WebKit - that native stack belongs to the desktop app, not the CLI.
 
-The Claude side needs no setup if Claude Code is already configured: Balanze reads its OAuth credential directly from `~/.claude/.credentials.json` (or `~/.config/claude/.credentials.json`), and on recent macOS falls back to Claude Code's login Keychain entry. Every Claude credential source is read-only to Balanze. If it expires, re-run `claude login`; Balanze never exchanges the refresh token or modifies Claude Code's credential. A future explicit file-refresh opt-in is tracked in [#186](https://github.com/Oszkar/balanze/issues/186). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, the popover's settings panel, or the `BALANZE_OPENAI_KEY` env var.
+The Claude side needs no setup if Claude Code is already configured: Balanze reads its OAuth credential (from `~/.claude/.credentials.json`, `~/.config/claude/.credentials.json`, or Claude Code's login Keychain entry on recent macOS) strictly **read-only** - it never refreshes, modifies, or copies it. If it expires, re-run `claude login`. An opt-in file-refresh mode is tracked in [#186](https://github.com/Oszkar/balanze/issues/186). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, the popover's settings panel, or the `BALANZE_OPENAI_KEY` env var.
 
-> **macOS note:** builds are not code-signed yet (no Apple Developer ID), so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds/relaunches - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key. Tracked in [#160](https://github.com/Oszkar/balanze/issues/160).
+> **macOS note:** builds you compile yourself are not code-signed, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key. Signed and notarized release binaries land with v0.5.0.
 
 For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](docs/GUIDE.md).
 
@@ -123,7 +123,7 @@ Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (levera
 | 4 | network: a provider was unreachable |
 | 5 | degraded: a source was stale or errored (only with `--strict`) |
 
-**Claude Code statusLine.** `balanze-cli statusline` is a zero-auth status line for your Claude Code prompt - live 5h/7d Claude subscription quota and session cost, plus cross-provider signal (both Codex rate-limit windows, 5h and 7d), with no rate limit. Real OpenAI API spend is available as an opt-in `{openai_cost}` segment; it is off by default because it is an uncapped dollar figure with no rolling window. Concurrent prompt processes share one atomically published OpenAI cache and refresh lease, so stale data remains available without duplicating upstream requests. `balanze-cli setup` offers to wire the exact canonical `balanze-cli statusline` command; wrappers and composed commands remain foreign unless the user explicitly replaces them. A replaced command is backed up so `balanze-cli statusline restore` can put it back.
+**Claude Code statusLine.** `balanze-cli statusline` is a zero-auth status line for your Claude Code prompt - live 5h/7d Claude subscription quota and session cost, plus cross-provider signal (both Codex rate-limit windows). Real OpenAI API spend is an opt-in `{openai_cost}` segment, off by default because it is an uncapped dollar figure with no rolling window. `balanze-cli setup` offers to wire the canonical command; a replaced command is backed up first, so `balanze-cli statusline restore` can put it back.
 
 **Shell completions.** `balanze-cli completions <shell>` prints a script to stdout (bash, zsh, fish, powershell, elvish):
 
@@ -137,7 +137,7 @@ balanze-cli completions fish > ~/.config/fish/completions/balanze-cli.fish
 
 Prerequisites: Rust 1.85+ (all you need for the CLI); Bun 1.3+ (only for the Svelte popover frontend / `tauri dev`). Local builds use the Rust 1.94.0 toolchain pinned in `rust-toolchain.toml` (rustup picks it up automatically; CI uses the same version), and the repo pins Bun 1.3.13 via the `packageManager` field in `package.json`.
 
-**TypeScript 7 is intentionally deferred.** The current Svelte language tooling requires TypeScript's programmatic API to type-check `.svelte` files, and TypeScript 7.0 does not yet provide that API. Balanze therefore remains on TypeScript 6 until Svelte supports TypeScript 7. See Microsoft's [TypeScript 7.0 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/).
+**TypeScript 7 is intentionally deferred.** Svelte's language tooling needs TypeScript's programmatic API to type-check `.svelte` files, which TypeScript 7.0 does not yet provide, so Balanze stays on TypeScript 6. See Microsoft's [TypeScript 7.0 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/).
 
 ```bash
 # CLI from the workspace:
@@ -156,7 +156,7 @@ bun run tauri dev
 bun run gallery                                # standalone CSR gallery on :1430
 ```
 
-**States gallery (dev-only).** `bun run gallery` opens a standalone page (port 1430) showing every popover screen and cell state at once - cold-start loading, the OpenAI connect CTA, fetch errors, stale windows, single vs two providers, billed overage, and the settings panel - in both light and dark, rendered with the real Svelte components and `theme.css` tokens. It is a SvelteKit-free CSR page with no Tauri host (IPC is stubbed and every write is a no-op, so it can't touch your keychain or settings). `bun run gallery:snap` captures the states with Playwright - handy for screenshots. Source: `gallery.html` + `src/gallery-main.ts` + `src/lib/gallery/`.
+**States gallery (dev-only).** `bun run gallery` opens a standalone page (port 1430) showing every popover screen and cell state at once - cold start, the OpenAI connect CTA, fetch errors, stale windows, billed overage, the settings panel - in both light and dark, rendered with the real Svelte components and `theme.css` tokens. It is a SvelteKit-free CSR page with no Tauri host (IPC is stubbed and every write is a no-op, so it can't touch your keychain or settings). `bun run gallery:snap` captures the states with Playwright. Source: `gallery.html` + `src/gallery-main.ts` + `src/lib/gallery/`.
 
 `bun install` runs `lefthook install` (skipped without `.git/`), wiring `commit-msg` (Conventional Commits - blocking), `pre-commit` (rustfmt + svelte-check) and `pre-push` (clippy + tests) so the gates CI enforces fail locally first. Bypass one commit with `git commit --no-verify`, or `LEFTHOOK=0` for a session.
 
@@ -174,7 +174,7 @@ The workspace is a set of small, single-responsibility crates under `crates/`: o
 
 - **Provider connectors** - `anthropic_oauth`, `openai_client`, `codex_local`, and `claude_parser` (the Claude JSONL wire format) each own one source. Adding a provider means a new connector crate wired into the `SnapshotSources` fetches that `snapshot_composer::compose` orchestrates (plus the watcher/coordinator for live updates) - the normalized `Snapshot` and the actor stay put. That connector abstraction is the design's central bet.
 - **Domain math** - `window` (rolling-window + pace) and `claude_cost` (the pure list-price estimate). Pure functions, no I/O, tested first.
-- **Composition + glue** - `snapshot_composer` (one-shot) and `state_coordinator` (the live actor) both assemble the same `Snapshot`; `balanze_cli` and `src-tauri` are thin glue over them, never logic. Live settings changes are acknowledged transitions: the host joins the old watcher generation, advances the coordinator generation, then starts replacement pollers. Snapshot file durability runs in a coalescing writer task, so a slow disk cannot stall the actor or tray.
+- **Composition + glue** - `snapshot_composer` (one-shot) and `state_coordinator` (the live actor) both assemble the same `Snapshot`; `balanze_cli` and `src-tauri` are thin glue over them, never logic.
 
 Hitting a wall? [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) collects the non-obvious traps (double tray icons, JSONL CPU spikes, Tauri dep-version mismatches). Test discipline and the per-crate validation matrix live in `AGENTS.md` §6-§7.
 

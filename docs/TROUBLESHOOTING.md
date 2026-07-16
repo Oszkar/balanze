@@ -48,8 +48,8 @@ Expected behavior - not a bug. `balanze-cli statusline` self-composes these segm
 
 ## "`bun run tauri dev` hangs with `transport invoke timed out after 60000ms`"
 
-This was a known deadlock in Vite 8's module runner `fetchModule` RPC on Windows during SvelteKit server runtime evaluation, tracked in [#136](https://github.com/Oszkar/balanze/issues/136).
+**Open, unresolved** - tracked in [#136](https://github.com/Oszkar/balanze/issues/136). Vite 8's module runner deadlocks on Windows while evaluating SvelteKit's server runtime, so the dev server accepts the connection but never serves a page. The Rust side is unaffected: the app compiles and the tray appears, only the webview stays blank.
 
-Root Cause: On Windows, Node.js defaults to resolving `localhost` to the IPv6 address (`::1`) first. If the Vite server binds to `127.0.0.1` or `localhost` (in a dual-stack configuration that acts inconsistently on loopback), SvelteKit's module runner WebSocket client's connection attempt via `localhost` can fail or hang, creating a circular event loop deadlock on the main thread and triggering the 60-second timeout.
+Two mitigations are already in place and are **not** sufficient on Vite 8.1.3: binding the Vite server to `127.0.0.1` (`vite.config.ts`) with a matching `devUrl` in `src-tauri/tauri.conf.json`. Forcing IPv4 resolution (`NODE_OPTIONS=--dns-result-order=ipv4first`) does not help either. The deadlock reproduces deterministically with `bun run dev` alone on a warm cache, so the original "Node resolves `localhost` to `::1` first" root cause does not explain the current failure. See #136 for the evidence and candidate next steps.
 
-Fix: Force the Vite server host to `127.0.0.1` in `vite.config.js` and change `devUrl` in `src-tauri/tauri.conf.json` to `http://127.0.0.1:1420`. This bypasses DNS resolution entirely, establishing direct loopback connection over IPv4 which executes cleanly and prevents the deadlock.
+Workaround: this is the **dev server only** - production builds embed the frontend and never invoke the module runner. `bun run tauri build --no-bundle` then running `target/release/balanze.exe` works, as does the states gallery (`bun run gallery`), which is SvelteKit-free.

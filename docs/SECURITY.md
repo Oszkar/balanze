@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Balanze is a personal-use side project. The latest commit on `main` is the only supported version. Tagged releases (`v0.1.0+` once they exist) receive patch-level fixes only while they're current; older tags are not back-patched.
+Balanze is a personal-use side project. The latest commit on `main` is the only supported version. Tagged releases receive patch-level fixes only while they're current; older tags are not back-patched.
 
 ## Reporting a vulnerability
 
