@@ -10,6 +10,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 - **Launch at login** - a Settings toggle registers Balanze with the OS (the Windows `Run` key, a macOS LaunchAgent) so the tray app comes back after a reboot instead of waiting for a manual launch. The OS login item is the source of truth, so the toggle still reads correctly if you clear the item outside Balanze.
 
 ### Changed
+- **Balanze branding replaces the scaffold placeholders** - the app icon (file manager, taskbar, installer, DMG, and the tray's boot icon) and the webview favicon were still the stock Tauri/Vite artwork; every platform size is now generated from the Balanze mark. The popover header also shows the mark beside the wordmark.
 - **The popover opens in Details** - Details is now the default view and leads the display selector, and Compact becomes a true glance view (no provider-plan subtitles, no Subscription Leverage box). The two modes are now named **Compact** and **Details**.
 - **macOS release builds are signed and notarized** - the release workflow imports an Apple Developer ID certificate and notarizes the app, so Gatekeeper does not warn on a downloaded build. Builds you compile yourself are still unsigned.
 
