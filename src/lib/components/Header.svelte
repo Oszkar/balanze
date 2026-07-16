@@ -19,7 +19,10 @@
     <button class="icon" type="button" aria-label="Settings" title="Settings" onclick={onSettings}><span aria-hidden="true">⚙</span></button>
   </div>
 </div>
-{#if refreshing}<span class="sr-only" role="status">Refreshing usage...</span>{/if}
+<!-- The live region stays mounted and only its text toggles. Injecting the
+     element and its text together loses the announcement: a screen reader has
+     to observe role="status" before the content changes to treat it as live. -->
+<span class="sr-only" role="status">{refreshing ? 'Refreshing usage...' : ''}</span>
 <style>
   .hd { display: flex; justify-content: space-between; align-items: flex-end; padding: 15px 16px 11px; }
   .brand { display: flex; align-items: center; gap: 7px; }
