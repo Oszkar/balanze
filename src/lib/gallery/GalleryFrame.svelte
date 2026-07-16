@@ -31,7 +31,7 @@
   // Every interactive callback is inert in the gallery: refresh, settings, and
   // dismiss do nothing (and Settings writes are neutralized by the route's
   // mockIPC), so clicking around can never touch real data.
-  const noop = () => {};
+  const noop = async () => {};
 </script>
 
 <figure class="frame">
@@ -43,19 +43,21 @@
     {:else if view === 'empty' && empty}
       <EmptyState title={empty.title} body={empty.body} detail={empty.detail} actions={empty.actions ?? []} />
     {:else if snapshot}
-      <Header bind:view={activeView} fetchedAt={snapshot.fetched_at} onRefresh={noop} onSettings={noop} />
+      <Header bind:view={activeView} onRefresh={noop} onSettings={noop} />
       <DegradedBanner {degraded} />
       {#if activeView === 'cards'}
         <CardsView {snapshot} {openaiEnabled} {degraded} onDismissOpenai={noop} onSettings={noop} />
       {:else}
         <GridView {snapshot} {degraded} {openaiEnabled} onDismissOpenai={noop} onSettings={noop} />
       {/if}
-      <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} />
-      <LeverageBox
-        totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
-        eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
-        error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
-      />
+      <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} withLeverage={activeView === 'cards'} />
+      {#if activeView === 'cards'}
+        <LeverageBox
+          totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
+          eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
+          error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
+        />
+      {/if}
     {/if}
   </div>
 </figure>
