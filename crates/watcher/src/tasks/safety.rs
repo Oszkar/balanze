@@ -1,6 +1,8 @@
-//! Safety poll task. Fires every 60 seconds (first tick skipped - startup reads
-//! already covered that window). On each tick it re-reads the statusline
-//! snapshot and the Codex quota and emits updates to the coordinator.
+//! Safety poll task. Fires every 60 seconds, starting immediately. On each tick
+//! it re-reads the statusline snapshot and the Codex quota and emits updates to
+//! the coordinator. The statusline leg alone sits out the first tick (the
+//! statusline notify task's startup read already covers it); Codex reads on the
+//! first tick because this task is its only feeder.
 //!
 //! Purpose: catch filesystem events the statusline notify task might miss, and
 //! poll Codex (which has no notify task of its own - its rollout dir isn't
@@ -25,10 +27,10 @@ use crate::errors::WatcherError;
 
 /// Spawn the 60-second safety poll task and return its `JoinHandle`.
 ///
-/// The first tick is intentionally skipped: `ticker.tick().await` is called
-/// once before the loop to consume the immediate fire so the statusline notify
-/// task's own startup read isn't duplicated within the first few milliseconds.
-/// Codex (which has no notify task) is first read on the next tick.
+/// The first tick fires immediately, so Codex - whose only feeder this is - is
+/// populated at launch rather than 60 seconds in. The statusline leg alone skips
+/// that first tick, so the statusline notify task's own startup read isn't
+/// duplicated within the first few milliseconds.
 ///
 /// `codex_enabled` gates the per-tick Codex scan: when `false`, Codex is not
 /// read or emitted (the Tauri host re-spawns the watcher on a settings change,
@@ -47,17 +49,24 @@ pub(crate) fn spawn(
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        // Skip the first immediate tick - the statusline notify task's startup
-        // read already covers that source; without the skip the safety poll
-        // would double-emit statusline within milliseconds of app launch.
-        ticker.tick().await;
+        // The first tick is NOT skipped. Skipping it used to suppress the
+        // statusline double-emit (the statusline notify task's own startup read
+        // already covers that source) - but this is Codex's ONLY feeder, so
+        // skipping the whole tick left the Codex cell blank for the first 60s of
+        // every launch as collateral damage. Codex is local file I/O with no
+        // provider endpoint behind it, so no politeness gate (AGENTS.md §3.1)
+        // argues for the delay. Scope the suppression to the source that
+        // actually needed it instead.
+        let mut first_tick = true;
 
         loop {
             ticker.tick().await;
             tracing::debug!("watcher/safety: tick");
 
-            // ── Statusline ────────────────────────────────────────────────────
-            if let Some(ref path) = statusline_path {
+            // ── Statusline (skipped on the first tick; see `first_tick`) ──────
+            if let Some(ref path) = statusline_path
+                && !first_tick
+            {
                 let path_owned = path.clone();
                 let read = tokio::task::spawn_blocking(move || read_snapshot(&path_owned)).await;
 
@@ -140,6 +149,8 @@ pub(crate) fn spawn(
                     }
                 }
             }
+
+            first_tick = false;
         }
     })
 }
