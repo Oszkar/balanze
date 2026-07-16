@@ -11,8 +11,11 @@ pub struct CrossProvider {
     /// Local Codex weekly window utilization (0..100). `None` if absent.
     pub codex_weekly: Option<f32>,
     pub openai_cost_micro_usd: Option<i64>,
-    /// True when the Codex figure is stale (e.g. an old snapshot). The
-    /// self-compose path reads Codex locally each turn, so it is false there.
+    /// True when the Codex figure is stale: an old snapshot envelope, a failed
+    /// last poll, or - on either path - a rollout whose window has already
+    /// reset. Reading Codex locally every turn does NOT make it false: the
+    /// walker returns the newest-mtime session file however old it is, so a
+    /// live read of a week-old rollout is still stale data.
     pub codex_stale: bool,
     /// True when the OpenAI figure is stale (old snapshot, or a cached value
     /// served because a fresh fetch failed / is in cooldown).
@@ -66,10 +69,10 @@ fn fill_line(template: &str, input: &RenderInput) -> String {
     let mut parts: Vec<String> = Vec::new();
     for tok in template.split_whitespace() {
         if let Some(key) = segment_key(tok) {
-            if let Some(v) = render_segment(key, input) {
-                if !v.is_empty() {
-                    parts.push(v);
-                }
+            if let Some(v) = render_segment(key, input)
+                && !v.is_empty()
+            {
+                parts.push(v);
             }
             // Unknown key or empty value -> drop the token.
         } else {

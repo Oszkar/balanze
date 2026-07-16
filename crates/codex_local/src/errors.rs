@@ -5,15 +5,16 @@ use thiserror::Error;
 /// Errors surfaced by `codex_local`.
 ///
 /// Codex CLI is a fast-moving upstream; treating schema variation as a
-/// typed error (rather than a panic or a silent skip) lets callers
-/// degrade gracefully via `state_coordinator`'s `DegradedState` machinery
-/// per AGENTS.md §3.2.
+/// typed error (rather than a panic or a silent skip) lets callers degrade
+/// gracefully via the coordinator's `Snapshot::codex_quota_error` slot and the
+/// `degraded_state` event, per AGENTS.md §3.2.
 #[derive(Debug, Error)]
 pub enum ParseError {
     /// The expected `~/.codex/sessions/` directory (or a path passed in
-    /// explicitly) doesn't exist. Caller maps this to
-    /// `DegradedState::CodexDirMissing` and shows the Codex row as
-    /// "not configured" rather than an error.
+    /// explicitly) doesn't exist. The caller treats this as QUIET: it must not
+    /// set `codex_quota_error` or raise a degraded banner, and the Codex row
+    /// reads "not configured" rather than an error. See
+    /// `watcher::tasks::safety::codex_update`.
     #[error("file or directory not found: {0}")]
     FileMissing(PathBuf),
 

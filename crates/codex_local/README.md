@@ -57,10 +57,11 @@ match read_codex_quota() {
   flexibility (testing, custom paths).
 - All fallible functions return `Result<_, ParseError>` with three
   error variants (`FileMissing`, `IoError`, `SchemaDrift`) plus the
-  `Ok(None)` "no data yet" case. The five-way outcome maps onto the
-  eventual `state_coordinator::DegradedState` enum (defined in v0.1
-  step 5 when state_coordinator consumes codex_local's output). See
-  the crate-level `lib.rs` docs for the full failure-mode mapping.
+  `Ok(None)` "no data yet" case. The outcomes map onto the coordinator's
+  degraded model - the `Snapshot::codex_quota_error` slot plus the
+  `degraded_state` event (there is no `DegradedState` enum) - via
+  `watcher::tasks::safety::codex_update`. See the crate-level `lib.rs`
+  docs for the full failure-mode mapping.
 
 ## What's NOT in this crate (per spike findings)
 

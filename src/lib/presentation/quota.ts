@@ -103,11 +103,33 @@ export function codexElapsedFraction(
   return Math.min(1, Math.max(0, elapsed));
 }
 
+// Display label for a Codex window, by duration. `window` is the honest label
+// for a duration Codex has not reported before (a taxonomy change) - such a
+// window is still selectable rather than dropped, mirroring the watch TUI's
+// "never silently drop a live cap" rule.
+export type CodexWindowLabel = '5h' | '7d' | 'window';
+
+export function codexWindowLabel(w: RateLimitWindow): CodexWindowLabel {
+  if (w.window_duration_minutes === 300) return '5h';
+  if (w.window_duration_minutes === 10080) return '7d';
+  return 'window';
+}
+
 export interface CodexQuota {
-  headline: { pct: number; resetsAt: string; window: RateLimitWindow; label: '5h' | 'weekly' | 'codex' };
-  secondaryPct: number | null;
+  headline: { pct: number; resetsAt: string; window: RateLimitWindow; label: CodexWindowLabel };
+  /// The other window, demoted to the cell's secondary text. `null` on
+  /// single-window plans (e.g. "go").
+  secondary: { pct: number; label: CodexWindowLabel } | null;
   plan: string;
   tone: Tone;
+  /// True when ANY window has reset - not just the headline. The cell carries
+  /// one stale marker for the whole rollout, so checking only the headline let
+  /// a live-but-worse window hide an expired one (a reset 5h window demoted to
+  /// secondary text under a live weekly headline). `any`, not `all`, mirrors
+  /// `codex_local::CodexQuotaSnapshot::any_window_expired`: once the shortest
+  /// window has reset the rollout predates it, so the still-live window's
+  /// figure is an undercount too.
+  expired: boolean;
 }
 
 // Codex reports windows of 300 min (5h) and 10080 min (weekly); which JSON slot
@@ -120,17 +142,33 @@ export function codexWindowsByKind(q: CodexQuotaSnapshot): { five: RateLimitWind
   };
 }
 
+// The grid tile shows ONE Codex window, so it must be the worst
+// (highest-utilization) one - "how close to a limit am I". This mirrors
+// `codex_local::worst_window` (whose doc names this very cell), the tray's
+// `codex_worst`, and the CLI's `codex_display_window`. Keying on the 5h slot
+// instead let a weekly window at 95% sit as grey secondary text under a green
+// 4% tile while the tray painted red - the two surfaces disagreed on the same
+// snapshot. Reduces over EVERY window rather than the known 300/10080 durations
+// so an unrecognized duration cannot hide a live cap.
 export function codexQuota(s: Snapshot): CodexQuota | null {
   const q = s.codex_quota;
   if (!q) return null;
-  const { five, weekly } = codexWindowsByKind(q);
-  const headlineWin = five ?? weekly ?? q.primary;
-  const label = headlineWin === five ? '5h' : headlineWin === weekly ? 'weekly' : 'codex';
+  const all: RateLimitWindow[] = [q.primary, ...(q.secondary ? [q.secondary] : [])];
+  const headlineWin = all.reduce((a, b) => (b.used_percent > a.used_percent ? b : a));
+  const secondaryWin = all.find((w) => w !== headlineWin) ?? null;
   return {
-    headline: { pct: headlineWin.used_percent, resetsAt: headlineWin.resets_at, window: headlineWin, label },
-    secondaryPct: five && weekly ? weekly.used_percent : null,
+    headline: {
+      pct: headlineWin.used_percent,
+      resetsAt: headlineWin.resets_at,
+      window: headlineWin,
+      label: codexWindowLabel(headlineWin),
+    },
+    secondary: secondaryWin
+      ? { pct: secondaryWin.used_percent, label: codexWindowLabel(secondaryWin) }
+      : null,
     plan: q.plan_type,
     tone: quotaTone(headlineWin.used_percent),
+    expired: all.some((w) => codexWindowExpired(w, s.fetched_at)),
   };
 }
 

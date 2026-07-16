@@ -12,10 +12,10 @@ use crate::types::ParseError;
 ///   3. `<home>/.config/claude/projects`     - newer Claude Code installs on Linux
 fn candidate_claude_projects_dirs_in(home: &Path, xdg: Option<&Path>) -> Vec<PathBuf> {
     let mut candidates = Vec::with_capacity(3);
-    if let Some(x) = xdg {
-        if !x.as_os_str().is_empty() {
-            candidates.push(x.join("claude").join("projects"));
-        }
+    if let Some(x) = xdg
+        && !x.as_os_str().is_empty()
+    {
+        candidates.push(x.join("claude").join("projects"));
     }
     candidates.push(home.join(".claude").join("projects"));
     candidates.push(home.join(".config").join("claude").join("projects"));

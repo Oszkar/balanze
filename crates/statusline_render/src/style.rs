@@ -27,10 +27,10 @@ pub(crate) fn ansi_codes(spec: &str) -> Vec<String> {
                     if let Some((r, g, b)) = parse_hex(hex) {
                         codes.push(format!("38;2;{r};{g};{b}"));
                     }
-                } else if let Some(hex) = tok.strip_prefix("bg:#") {
-                    if let Some((r, g, b)) = parse_hex(hex) {
-                        codes.push(format!("48;2;{r};{g};{b}"));
-                    }
+                } else if let Some(hex) = tok.strip_prefix("bg:#")
+                    && let Some((r, g, b)) = parse_hex(hex)
+                {
+                    codes.push(format!("48;2;{r};{g};{b}"));
                 }
                 // Unrecognized token: ignore (forward-compat).
             }

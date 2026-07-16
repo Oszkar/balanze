@@ -11,7 +11,7 @@
   <a href="https://github.com/Oszkar/balanze/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Oszkar/balanze/ci.yml?branch=main&label=ci&logo=github"></a>
   <a href="https://github.com/Oszkar/balanze/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/Oszkar/balanze?label=version&color=blue"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
-  <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust&logoColor=white"></a>
+  <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.89%2B-orange?logo=rust&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -55,7 +55,7 @@ Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and 
 
 ## Install
 
-Balanze currently ships **from source only** - no prebuilt binaries, installers, or crates.io release yet (signed binaries, Homebrew, and WinGet are on the [roadmap](docs/PRD.md)). Requires Rust 1.85+.
+Balanze currently ships **from source only** - no prebuilt binaries, installers, or crates.io release yet (signed binaries, Homebrew, and WinGet are on the [roadmap](docs/PRD.md)). Requires Rust 1.89+.
 
 ```bash
 # `--git` is required (not on crates.io). The repo root is a virtual workspace,
@@ -119,9 +119,11 @@ Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (levera
 | 0 | OK (a degraded source still exits 0 unless `--strict`) |
 | 1 | unexpected / other error |
 | 2 | usage error (bad flags / unknown subcommand; clap owns this) |
-| 3 | auth: credentials missing or expired (re-run `claude login`, or set the OpenAI key) |
+| 3 | auth: credentials expired or rejected (re-run `claude login`, or refresh the OpenAI key) |
 | 4 | network: a provider was unreachable |
 | 5 | degraded: a source was stale or errored (only with `--strict`) |
+
+A provider you simply have not configured is **not** an auth failure and does not exit 3. An absent credential is neutral - `status` exits 0 (or 5 under `--strict`), matching `doctor`, which warns rather than fails for one. Code 3 means a credential was found and the provider refused it (or it could not be read).
 
 **Claude Code statusLine.** `balanze-cli statusline` is a zero-auth status line for your Claude Code prompt - live 5h/7d Claude subscription quota and session cost, plus cross-provider signal (both Codex rate-limit windows). Real OpenAI API spend is an opt-in `{openai_cost}` segment, off by default because it is an uncapped dollar figure with no rolling window. `balanze-cli setup` offers to wire the canonical command; a replaced command is backed up first, so `balanze-cli statusline restore` can put it back.
 
@@ -135,7 +137,7 @@ balanze-cli completions fish > ~/.config/fish/completions/balanze-cli.fish
 
 ## Develop
 
-Prerequisites: Rust 1.85+ (all you need for the CLI); Bun 1.3+ (only for the Svelte popover frontend / `tauri dev`). Local builds use the Rust 1.94.0 toolchain pinned in `rust-toolchain.toml` (rustup picks it up automatically; CI uses the same version), and the repo pins Bun 1.3.13 via the `packageManager` field in `package.json`.
+Prerequisites: Rust 1.89+ (all you need for the CLI); Bun 1.3+ (only for the Svelte popover frontend / `tauri dev`). Local builds use the Rust 1.94.0 toolchain pinned in `rust-toolchain.toml` (rustup picks it up automatically; CI uses the same version), and the repo pins Bun 1.3.13 via the `packageManager` field in `package.json`.
 
 **TypeScript 7 is intentionally deferred.** Svelte's language tooling needs TypeScript's programmatic API to type-check `.svelte` files, which TypeScript 7.0 does not yet provide, so Balanze stays on TypeScript 6. See Microsoft's [TypeScript 7.0 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/).
 

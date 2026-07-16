@@ -1,6 +1,6 @@
 # Pins the local-dev toolchain so `cargo` here matches CI. Same pin across
-# the user's Rust repos (degner / oto / balanze). MSRV (1.85, the edition
-# 2024 floor) lives in the workspace Cargo.toml and is unchanged.
+# the user's Rust repos (degner / oto / balanze). MSRV (1.89 - let-chains need
+# 1.88, notify-rust 4.18 needs 1.89) lives in the workspace Cargo.toml.
 [toolchain]
 channel = "1.94.0"
 components = ["clippy", "rustfmt"]

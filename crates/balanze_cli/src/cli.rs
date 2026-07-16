@@ -22,7 +22,8 @@ Exit codes (for scripting):\n  \
 0  ok (a degraded source still exits 0 unless --strict)\n  \
 1  unexpected / other error\n  \
 2  usage error (bad flags / unknown subcommand)\n  \
-3  auth: credentials missing or expired (re-run `claude login`, or set the OpenAI key)\n  \
+3  auth: credentials expired or rejected (re-run `claude login`, or refresh the OpenAI key)\n     \
+   a provider that is simply not configured is neutral, not 3: it exits 0 (or 5 under --strict)\n  \
 4  network: a provider was unreachable\n  \
 5  degraded: a source was stale or errored (only with --strict)"
 )]

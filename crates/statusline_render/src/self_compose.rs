@@ -21,6 +21,27 @@ use crate::render::CrossProvider;
 const REFRESH_WAIT_TIMEOUT: StdDuration = StdDuration::from_millis(250);
 const REFRESH_WAIT_POLL: StdDuration = StdDuration::from_millis(20);
 
+/// A local Codex read: the two window utilizations plus whether they still
+/// describe a LIVE window.
+///
+/// `stale` is carried by the source rather than inferred here because reading
+/// Codex live does not make the DATA live: the rollout walker returns the
+/// newest-mtime session file however old it is, so a fresh read can hand back
+/// windows that reset days ago. The source owns the `resets_at` comparison
+/// (`codex_local::CodexQuotaSnapshot::any_window_expired`), which keeps this
+/// crate free of a `codex_local` dependency.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CodexWindows {
+    /// 5-hour window utilization (0..100). `None` if absent/unparsed or not
+    /// present on the plan.
+    pub five_hour: Option<f32>,
+    /// Weekly window utilization (0..100). `None` if absent/unparsed or not
+    /// present on the plan.
+    pub weekly: Option<f32>,
+    /// True when any present window has already reset as of the caller's `now`.
+    pub stale: bool,
+}
+
 /// The two cross-provider sources, abstracted so the orchestrator (and its
 /// once-per-300s gate) is testable without network. The real implementation
 /// lives in `balanze_cli` (`LiveCrossSources`).
@@ -32,9 +53,10 @@ pub trait CrossSources {
     /// configured (no cell, no cooldown); `Err(msg)` = the fetch attempt failed
     /// (triggers the negative cooldown and keeps any prior value).
     async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String>;
-    /// Local Codex window utilizations (0..100): `(five_hour, weekly)`. Each
-    /// `None` if that window is absent/unparsed or not present on the plan.
-    fn codex_windows(&self) -> (Option<f32>, Option<f32>);
+    /// Local Codex windows, classified live/stale against `now`. `now` is passed
+    /// in (rather than read from the clock inside) so the whole compose path
+    /// stays a pure function of its inputs and is testable at a fixed instant.
+    fn codex_windows(&self, now: DateTime<Utc>) -> CodexWindows;
 }
 
 /// Compose the cross-provider cells without the watcher.
@@ -50,8 +72,10 @@ pub async fn self_compose<S: CrossSources>(
     now: DateTime<Utc>,
     want_openai: bool,
 ) -> CrossProvider {
-    // Codex: local, cheap, never cached -> current whenever present.
-    let (codex_five_hour, codex_weekly) = sources.codex_windows();
+    // Codex: local, cheap, never cached -> the READ is always current. The
+    // DATA still may not be (an old rollout file), which is why the source
+    // reports its own staleness rather than this path assuming `false`.
+    let codex = sources.codex_windows(now);
 
     let (openai_cost_micro_usd, openai_stale) = if want_openai {
         openai_value(sources, cache_dir, fingerprint, now).await
@@ -60,10 +84,10 @@ pub async fn self_compose<S: CrossSources>(
     };
 
     CrossProvider {
-        codex_five_hour,
-        codex_weekly,
+        codex_five_hour: codex.five_hour,
+        codex_weekly: codex.weekly,
         openai_cost_micro_usd,
-        codex_stale: false,
+        codex_stale: codex.stale,
         openai_stale,
     }
 }
@@ -200,9 +224,38 @@ mod tests {
             self.calls.set(self.calls.get() + 1);
             self.openai.clone()
         }
-        fn codex_windows(&self) -> (Option<f32>, Option<f32>) {
-            (self.codex, None)
+        fn codex_windows(&self, _now: DateTime<Utc>) -> CodexWindows {
+            CodexWindows {
+                five_hour: self.codex,
+                weekly: None,
+                stale: false,
+            }
         }
+    }
+
+    /// `codex_stale` used to be hardcoded `false` here on the theory that a
+    /// local read is always current. The read is; the rollout behind it is not,
+    /// so the source's verdict must reach the renderer or a week-old figure
+    /// prints unmarked.
+    #[tokio::test]
+    async fn self_compose_propagates_the_sources_codex_staleness() {
+        struct StaleCodex;
+        impl CrossSources for StaleCodex {
+            async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String> {
+                Ok(None)
+            }
+            fn codex_windows(&self, _now: DateTime<Utc>) -> CodexWindows {
+                CodexWindows {
+                    five_hour: Some(85.0),
+                    weekly: Some(40.0),
+                    stale: true,
+                }
+            }
+        }
+        let dir = tempdir().unwrap();
+        let cp = self_compose(&StaleCodex, dir.path(), "fp", t0(), false).await;
+        assert_eq!(cp.codex_five_hour, Some(85.0));
+        assert!(cp.codex_stale, "an expired rollout must reach the renderer");
     }
 
     #[tokio::test]
@@ -331,8 +384,8 @@ mod tests {
             Ok(Some(42))
         }
 
-        fn codex_windows(&self) -> (Option<f32>, Option<f32>) {
-            (None, None)
+        fn codex_windows(&self, _now: DateTime<Utc>) -> CodexWindows {
+            CodexWindows::default()
         }
     }
 

@@ -20,7 +20,9 @@ use tracing::{info, warn};
 /// math) live in `compose` so the orchestration policy is testable without
 /// network/filesystem and is identical across entry-points.
 ///
-/// `async fn` in a trait is stable since Rust 1.75 (MSRV here is 1.77). We
+/// `async fn` in a trait is stable since Rust 1.75, comfortably under the
+/// workspace MSRV (see AGENTS.md §2.1 - the row, not this comment, is the
+/// source of truth; this one drifted to a long-dead 1.77 for a while). We
 /// only ever use STATIC dispatch (`compose<S: SnapshotSources>`), never
 /// `dyn SnapshotSources`. With static dispatch the future's `Send`-ness is
 /// inferred at the concrete call site - e.g. the watcher's `tokio::spawn` on

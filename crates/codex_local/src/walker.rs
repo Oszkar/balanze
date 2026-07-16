@@ -36,14 +36,14 @@ pub const CODEX_CONFIG_DIR_ENV: &str = "CODEX_CONFIG_DIR";
 /// with the other matrix cells populated.
 pub fn find_codex_sessions_dir() -> Result<PathBuf, ParseError> {
     // 1. Env-var override (var_os for non-UTF-8 path safety on Unix).
-    if let Some(raw) = std::env::var_os(CODEX_CONFIG_DIR_ENV) {
-        if !raw.is_empty() {
-            let candidate = PathBuf::from(&raw).join("sessions");
-            if candidate.is_dir() {
-                return Ok(candidate);
-            }
-            return Err(ParseError::FileMissing(candidate));
+    if let Some(raw) = std::env::var_os(CODEX_CONFIG_DIR_ENV)
+        && !raw.is_empty()
+    {
+        let candidate = PathBuf::from(&raw).join("sessions");
+        if candidate.is_dir() {
+            return Ok(candidate);
         }
+        return Err(ParseError::FileMissing(candidate));
     }
 
     // 2. Default: ~/.codex/sessions/ via UserDirs (NOT ProjectDirs -

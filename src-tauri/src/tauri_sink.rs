@@ -138,23 +138,30 @@ impl TrayView {
                 }
             }
         }
-        if statusline_fresh(s) {
-            if let Some(rl) = s
+        if statusline_fresh(s)
+            && let Some(rl) = s
                 .claude_statusline
                 .as_ref()
                 .and_then(|sl| sl.payload.rate_limits.as_ref())
-            {
-                for w in &rl.windows {
-                    if w.key == "five_hour" {
-                        fold_max(&mut v.claude_5h, w.used_percent);
-                    } else {
-                        fold_max(&mut v.claude_7d, w.used_percent);
-                    }
+        {
+            for w in &rl.windows {
+                if w.key == "five_hour" {
+                    fold_max(&mut v.claude_5h, w.used_percent);
+                } else {
+                    fold_max(&mut v.claude_7d, w.used_percent);
                 }
             }
         }
         if let Some(q) = &s.codex_quota {
-            for w in q.windows() {
+            // An expired window is excluded for the same reason a stale
+            // statusline is (see `statusline_fresh`): it is not a live cap. Its
+            // used_percent describes an elapsed window, and unlike a poll-driven
+            // source this never self-corrects - the rollout walker keeps
+            // returning the same old file, so an expired window would otherwise
+            // hold the ring orange forever while the real quota sits at zero.
+            // The tray folds only live signals, so a hot ring always means a cap
+            // the user is actually near.
+            for w in q.windows().filter(|w| !w.expired(s.fetched_at)) {
                 if w.window_duration_minutes == 300 {
                     fold_max(&mut v.codex_5h, w.used_percent as f32);
                 } else {
@@ -613,15 +620,18 @@ mod tests {
         }
     }
 
+    /// Codex windows are LIVE by default: `resets_at` is explicitly in the
+    /// future rather than `Utc::now()`, so a fixture cannot land on the wrong
+    /// side of `RateLimitWindow::expired` by evaluation-order luck.
     fn codex_with_util(util: f64) -> codex_local::CodexQuotaSnapshot {
-        use chrono::Utc;
+        use chrono::{Duration, Utc};
         codex_local::CodexQuotaSnapshot {
             observed_at: Utc::now(),
             session_id: "test".into(),
             primary: codex_local::RateLimitWindow {
                 used_percent: util,
                 window_duration_minutes: 10080,
-                resets_at: Utc::now(),
+                resets_at: Utc::now() + Duration::hours(1),
             },
             secondary: None,
             plan_type: "go".into(),
@@ -632,25 +642,68 @@ mod tests {
     }
 
     fn codex_5h_weekly(five: f64, weekly: f64) -> codex_local::CodexQuotaSnapshot {
-        use chrono::Utc;
+        use chrono::{Duration, Utc};
         codex_local::CodexQuotaSnapshot {
             observed_at: Utc::now(),
             session_id: "test".into(),
             primary: codex_local::RateLimitWindow {
                 used_percent: five,
                 window_duration_minutes: 300,
-                resets_at: Utc::now(),
+                resets_at: Utc::now() + Duration::hours(1),
             },
             secondary: Some(codex_local::RateLimitWindow {
                 used_percent: weekly,
                 window_duration_minutes: 10080,
-                resets_at: Utc::now(),
+                resets_at: Utc::now() + Duration::days(3),
             }),
             plan_type: "pro".into(),
             rate_limit_reached: false,
             tokens: None,
             credits: None,
         }
+    }
+
+    /// An expired Codex window must not heat the tray. The rollout walker
+    /// returns the newest-mtime session file regardless of age, so a user who
+    /// last ran Codex days ago parses a well-formed snapshot whose 5h window
+    /// reset long ago - and polling never corrects it. Before this check the
+    /// ring sat orange at 85% forever while the real quota was zero.
+    #[test]
+    fn expired_codex_window_does_not_heat_the_tray() {
+        use chrono::{Duration, Utc};
+        let now = Utc::now();
+        let mut s = Snapshot::empty(now);
+        let mut q = codex_5h_weekly(85.0, 4.0);
+        q.primary.resets_at = now - Duration::hours(2); // 5h window long since reset
+        s.codex_quota = Some(q);
+
+        let view = TrayView::from_snapshot(&s);
+        assert_eq!(view.codex_5h, None, "an elapsed window is not a live cap");
+        assert_eq!(
+            view.codex_weekly,
+            Some(4.0),
+            "the live weekly window survives"
+        );
+        assert_eq!(tray_title(&view), "Codex 4%");
+        assert_eq!(bucket_for_view(&view, false), ColorBucket::Green);
+    }
+
+    /// With every window expired the Codex signal is gone entirely rather than
+    /// frozen at its last value - and with no other provider present that means
+    /// Neutral, not a stale-but-green paint.
+    #[test]
+    fn fully_expired_codex_leaves_the_tray_neutral() {
+        use chrono::{Duration, Utc};
+        let now = Utc::now();
+        let mut s = Snapshot::empty(now);
+        let mut q = codex_5h_weekly(85.0, 92.0);
+        q.primary.resets_at = now - Duration::hours(2);
+        q.secondary.as_mut().unwrap().resets_at = now - Duration::hours(1);
+        s.codex_quota = Some(q);
+
+        let view = TrayView::from_snapshot(&s);
+        assert!(!view.has_data(), "no live window remains");
+        assert_eq!(bucket_for_view(&view, false), ColorBucket::Neutral);
     }
 
     #[test]

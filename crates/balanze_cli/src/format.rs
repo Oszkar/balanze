@@ -15,9 +15,9 @@ pub(crate) fn micro_usd_to_display_dollars(micro: i64) -> String {
 /// 300 minutes (5h) or 10080 minutes (7d); dividing by 1440 and flooring
 /// collapsed the 5h case to "0d". Pick the coarsest exact unit instead.
 pub(crate) fn format_codex_window(minutes: u64) -> String {
-    if minutes >= 1440 && minutes % 1440 == 0 {
+    if minutes >= 1440 && minutes.is_multiple_of(1440) {
         format!("{}d", minutes / 1440)
-    } else if minutes >= 60 && minutes % 60 == 0 {
+    } else if minutes >= 60 && minutes.is_multiple_of(60) {
         format!("{}h", minutes / 60)
     } else {
         format!("{minutes}m")
@@ -94,7 +94,7 @@ pub(crate) fn fmt_int(n: u64) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*b as char);

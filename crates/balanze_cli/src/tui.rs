@@ -343,7 +343,7 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
         .split(inner);
 
     match &s.codex_quota {
-        Some(q) => draw_codex_windows(frame, rows[0], rows[1], q),
+        Some(q) => draw_codex_windows(frame, rows[0], rows[1], q, s.fetched_at),
         None => {
             let msg = if s.codex_quota_error.is_some() {
                 "codex read error"
@@ -383,14 +383,51 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
 /// reports at most two windows (primary + optional secondary) into these two
 /// rows, so nothing is ever dropped - regardless of whether the `Other` window
 /// is the highest-utilization one or sits behind a known window.
-fn draw_codex_windows(frame: &mut Frame, five_row: Rect, weekly_row: Rect, q: &CodexQuotaSnapshot) {
+/// Gauge label for one Codex window, tagged `(stale)` once that window has
+/// reset. The rollout walker returns the newest-mtime session file however old
+/// it is, and re-polling never corrects it, so an untagged gauge would show a
+/// week-old figure as a live cap forever. The TUI has no separate marker
+/// column, so the tag rides the label - the same honesty rule the compact CLI
+/// applies with its `⚠` glyph. Anchored on `fetched_at` (not wall-clock now) to
+/// match the rest of the snapshot's time-relative math.
+fn codex_gauge_label(
+    name: &str,
+    w: &codex_local::RateLimitWindow,
+    fetched_at: chrono::DateTime<Utc>,
+) -> String {
+    if w.expired(fetched_at) {
+        format!("Codex {name} (stale)")
+    } else {
+        format!("Codex {name}")
+    }
+}
+
+fn draw_codex_windows(
+    frame: &mut Frame,
+    five_row: Rect,
+    weekly_row: Rect,
+    q: &CodexQuotaSnapshot,
+    fetched_at: chrono::DateTime<Utc>,
+) {
     let five = q.five_hour();
     let weekly = q.weekly();
     if let Some(w) = five {
-        frame.render_widget(quota_gauge("Codex 5h", w.used_percent as f32), five_row);
+        frame.render_widget(
+            quota_gauge(
+                &codex_gauge_label("5h", w, fetched_at),
+                w.used_percent as f32,
+            ),
+            five_row,
+        );
     }
     if let Some(w) = weekly {
-        frame.render_widget(quota_gauge("Codex 7d", w.used_percent as f32), weekly_row);
+        frame.render_widget(
+            quota_gauge(
+                &codex_gauge_label("7d", w, fetched_at),
+                w.used_percent as f32,
+            ),
+            weekly_row,
+        );
     }
 
     // Rows the known-window branches did not claim, in fixed order (5h first) so
@@ -416,7 +453,11 @@ fn draw_codex_windows(frame: &mut Frame, five_row: Rect, weekly_row: Rect, q: &C
     others.sort_by(|a, b| b.used_percent.total_cmp(&a.used_percent));
 
     for (row, w) in free_rows.into_iter().zip(others) {
-        let label = format!("Codex {}", format_codex_window(w.window_duration_minutes));
+        let label = codex_gauge_label(
+            &format_codex_window(w.window_duration_minutes),
+            w,
+            fetched_at,
+        );
         frame.render_widget(quota_gauge(&label, w.used_percent as f32), row);
     }
 }
@@ -615,6 +656,32 @@ mod tests {
 
     fn ts(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    // -- Codex gauge labels ------------------------------------------------
+
+    /// The watch TUI used to gauge `used_percent` with no `resets_at` check, so
+    /// a week-old rollout rendered as a confident live cap - and re-polling
+    /// never corrected it. The tag is the TUI's counterpart to the compact
+    /// CLI's `⚠`.
+    #[test]
+    fn codex_gauge_label_tags_an_expired_window_as_stale() {
+        let fetched_at = ts("2026-07-08T12:00:00Z");
+        let live = RateLimitWindow {
+            used_percent: 85.0,
+            window_duration_minutes: 300,
+            resets_at: ts("2026-07-08T13:00:00Z"),
+        };
+        let expired = RateLimitWindow {
+            used_percent: 85.0,
+            window_duration_minutes: 300,
+            resets_at: ts("2026-07-08T11:00:00Z"),
+        };
+        assert_eq!(codex_gauge_label("5h", &live, fetched_at), "Codex 5h");
+        assert_eq!(
+            codex_gauge_label("5h", &expired, fetched_at),
+            "Codex 5h (stale)"
+        );
     }
 
     // -- ChannelSink -------------------------------------------------------

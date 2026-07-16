@@ -141,10 +141,10 @@ impl Sink for StdoutSink {
             return;
         }
         let now = Instant::now();
-        if let Some(prev) = self.last_render {
-            if now.duration_since(prev) < DEBOUNCE {
-                return;
-            }
+        if let Some(prev) = self.last_render
+            && now.duration_since(prev) < DEBOUNCE
+        {
+            return;
         }
         // NB: `last_render` is set AFTER a successful write below, not
         // here. If the write fails with a non-broken-pipe I/O error

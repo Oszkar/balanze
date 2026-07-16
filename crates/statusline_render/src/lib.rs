@@ -11,4 +11,4 @@ mod render;
 mod self_compose;
 pub mod style;
 pub use render::{CrossProvider, RenderInput, render, template_uses_segment};
-pub use self_compose::{CrossSources, self_compose};
+pub use self_compose::{CodexWindows, CrossSources, self_compose};

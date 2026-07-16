@@ -7,7 +7,8 @@
 //!
 //! Single-file parse contract: malformed JSON or unexpected shape at a position
 //! we care about is reported as `ParseError::SchemaDrift { line, message }` so
-//! the caller can map the failure into a `DegradedState` rather than aborting.
+//! the caller can map the failure into the source's degraded state (its
+//! `Snapshot::*_error` slot + the `degraded_state` event) rather than aborting.
 
 mod dedup;
 mod incremental;
