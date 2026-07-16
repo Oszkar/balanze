@@ -119,7 +119,7 @@ Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (levera
 | 0 | OK (a degraded source still exits 0 unless `--strict`) |
 | 1 | unexpected / other error |
 | 2 | usage error (bad flags / unknown subcommand; clap owns this) |
-| 3 | auth: credentials expired, rejected, or unreadable (re-run `claude login`, or refresh the OpenAI key) |
+| 3 | auth: credentials expired or rejected (re-run `claude login`, or refresh the OpenAI key) |
 | 4 | network: a provider was unreachable |
 | 5 | degraded: a source was stale or errored (only with `--strict`) |
 

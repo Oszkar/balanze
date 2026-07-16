@@ -13,12 +13,22 @@
 //! | 0    | OK (degraded sources still exit 0 unless `--strict`) |
 //! | 1    | unexpected / other |
 //! | 2    | usage error (clap default) |
-//! | 3    | auth / credentials expired, rejected, or unreadable |
+//! | 3    | auth / credentials expired or rejected |
 //! | 4    | network / provider unreachable |
 //! | 5    | partial / degraded (only under `--strict`) |
 //!
-//! Code 3 means a credential was found and refused (or could not be read). An
-//! ABSENT credential is not an auth failure - see [`looks_like_auth`].
+//! Code 3 means a credential was found and refused. An ABSENT credential is not
+//! an auth failure - see [`looks_like_auth`].
+//!
+//! The two surfaces are not perfectly symmetric on one case, which is why the
+//! public contract states only what BOTH honor. `doctor` also returns 3 for a
+//! credential that is present but unreadable (`probes::probe_claude_oauth`
+//! types that Fail + Auth). `status` cannot: it classifies by substring, and an
+//! unreadable credential surfaces as e.g. "io error reading ..." with no auth
+//! marker, so it lands on degraded (0, or 5 under `--strict`) instead. Closing
+//! that gap is the typed-category TODO on [`looks_like_auth`], which needs a
+//! Snapshot schema change; until then `--help` and the README deliberately do
+//! not advertise "unreadable" as code 3.
 //!
 //! This module owns the single numeric contract. The `status` path classifies
 //! a built `Snapshot` via [`classify_snapshot`]; the `doctor` path folds its
@@ -42,10 +52,12 @@ pub enum ExitClass {
     /// makes the `code()` taxonomy and the `--help` table complete (codes 0..=5).
     #[allow(dead_code)]
     Usage,
-    /// A credential was found and the provider refused it - expired, rejected,
-    /// or unreadable (re-run `claude login`, or refresh the key). NOT an absent
-    /// credential: an unconfigured provider is neutral and exits `Ok` (see
-    /// [`looks_like_auth`]). The variant name predates that distinction.
+    /// A credential was found and the provider refused it - expired or rejected
+    /// (re-run `claude login`, or refresh the key). NOT an absent credential: an
+    /// unconfigured provider is neutral and exits `Ok` (see [`looks_like_auth`]).
+    /// The variant name predates that distinction. `doctor` additionally types a
+    /// present-but-unreadable credential into this class; `status` cannot (see
+    /// the module doc).
     AuthMissing,
     /// A provider was unreachable (transport / timeout).
     Network,
