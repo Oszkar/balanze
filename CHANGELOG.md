@@ -6,6 +6,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Added
+- **Launch at login** - a Settings toggle registers Balanze with the OS (the Windows `Run` key, a macOS LaunchAgent) so the tray app comes back after a reboot instead of waiting for a manual launch. The OS login item is the source of truth, so the toggle still reads correctly if you clear the item outside Balanze.
+
+### Changed
+- **The popover opens in Details** - Details is now the default view and leads the display selector, and Compact becomes a true glance view (no provider-plan subtitles, no Subscription Leverage box). The two modes are now named **Compact** and **Details**.
+- **macOS release builds are signed and notarized** - the release workflow imports an Apple Developer ID certificate and notarizes the app, so Gatekeeper does not warn on a downloaded build. Builds you compile yourself are still unsigned.
+
+### Fixed
+- **Popover legibility** - stronger metadata contrast, a minimum text size, 24px hit targets on the key controls, shared warning-surface tokens, and a semantic `main` landmark.
+
 ## [0.4.4] - Hardening - 2026-07-15
 
 A reliability and correctness pass across the surfaces before v0.5 Distribution: a Codex quota under-report fix, strictly read-only Claude credentials on every platform, supervised race-free settings transitions, a consistent weekly window everywhere, and a cleaner default statusline.

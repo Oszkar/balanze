@@ -8,7 +8,7 @@ New here? Start with the [README](../README.md) for what Balanze is and how to i
 
 ## First run
 
-1. Install the CLI (`cargo install --git https://github.com/Oszkar/balanze balanze_cli`) or launch the desktop app.
+1. Install per the [README](../README.md#install), or launch the desktop app.
 2. Run `balanze-cli setup`. The wizard walks through the OpenAI Admin key and offers to wire the Claude Code statusline.
 3. The Claude side needs no setup if Claude Code is already configured - Balanze reads its OAuth credential directly.
 
@@ -20,7 +20,7 @@ On the desktop app, first launch auto-opens the popover and fires a notification
 
 The popover is one normalized snapshot of your AI usage. Everything in the grid is **measured reality only** - a server-reported quota % or a real billed dollar amount - so a column never mixes kinds of numbers.
 
-> 📷 [capture: Grid - two providers] the default grid, Anthropic and OpenAI side by side.
+> 📷 [capture: Cards - two providers] the default Details view, Anthropic and OpenAI side by side.
 
 ### The matrix
 
@@ -49,11 +49,11 @@ Below the grid, the **Subscription leverage** box shows what your Claude Code us
 
 Cells carry a badge for real billed money so you can tell it apart from an estimate at a glance. Hover any cell for its source and confidence.
 
-### Grid vs Cards
+### Details vs Compact
 
-A density toggle switches between the compact grid and a Cards view with the same data and more room per provider.
+A density toggle switches between the default **Details** view and a **Compact** grid - same data, less room per provider.
 
-> 📷 [capture: Cards - two providers] the Cards density view.
+> 📷 [capture: Grid - two providers] the Compact grid.
 
 ## The tray icon
 
@@ -77,7 +77,7 @@ Until a key is present, the OpenAI column shows a connect prompt rather than a b
 
 ## The Claude Code statusline
 
-`balanze-cli statusline` is a zero-auth status line for your Claude Code prompt: live 5h/7d subscription quota, session cost, and - uniquely - cross-provider signal (both Codex rate-limit windows, 5h and 7d) in one line. Real OpenAI API spend is available as an opt-in `{openai_cost}` segment, off by default.
+Balanze can put live quota straight in your Claude Code prompt (the [README](../README.md#using-the-cli) has the full reference).
 
 - **Wire it** during `balanze-cli setup`, or from the popover's settings panel.
 - **Replace, don't wrap.** If another tool already owns the `statusLine.command`, Balanze offers to replace it *with your consent*, backing the previous command up first. Nothing in the other tool's own config is touched.
