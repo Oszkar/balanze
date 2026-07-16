@@ -101,8 +101,9 @@ describe('quota', () => {
     expect(codexWindowExpired({ resets_at: 'not-a-date' }, fetchedAt)).toBe(false);
   });
 
-  const codexSnap = (primary: { used_percent: number; window_duration_minutes: number; resets_at: string }, secondary: typeof primary | null, plan = 'pro'): Snapshot => ({
+  const codexSnap = (primary: { used_percent: number; window_duration_minutes: number; resets_at: string }, secondary: typeof primary | null, plan = 'pro', fetchedAt?: string): Snapshot => ({
     ...base,
+    ...(fetchedAt ? { fetched_at: fetchedAt } : {}),
     codex_quota: { observed_at: '2026-07-08T10:00:00Z', session_id: 's', primary, secondary, plan_type: plan, rate_limit_reached: false },
   });
 
@@ -133,6 +134,35 @@ describe('quota', () => {
     expect(q.headline.pct).toBe(60);
     expect(q.secondary).toEqual({ pct: 2, label: '7d' });
     expect(q.plan).toBe('pro');
+  });
+
+  // Worst-window selection introduced a hole the 5h-first selection did not
+  // have: with the 5h window reset but the weekly window carrying the higher
+  // percentage, the headline is a LIVE weekly and the expired 5h is demoted to
+  // secondary text - so a per-headline expiry check marks nothing. The rollout
+  // is still old (its weekly figure is an undercount too), so the cell is stale.
+  // Same `any`-not-`all` rule as `codex_local::any_window_expired`.
+  it('codexQuota: expired is any-window, so a live headline cannot hide a reset window', () => {
+    const s = codexSnap(
+      { used_percent: 30, window_duration_minutes: 300, resets_at: '2026-07-08T09:00:00Z' },
+      { used_percent: 95, window_duration_minutes: 10080, resets_at: '2026-07-14T04:25:36Z' },
+      'pro',
+      '2026-07-08T10:00:00Z',
+    );
+    const q = codexQuota(s)!;
+    expect(q.headline.label).toBe('7d');
+    expect(codexWindowExpired(q.headline.window, s.fetched_at)).toBe(false);
+    expect(q.expired).toBe(true);
+  });
+
+  it('codexQuota: expired is false while every window is live', () => {
+    const s = codexSnap(
+      { used_percent: 30, window_duration_minutes: 300, resets_at: '2026-07-08T11:00:00Z' },
+      { used_percent: 95, window_duration_minutes: 10080, resets_at: '2026-07-14T04:25:36Z' },
+      'pro',
+      '2026-07-08T10:00:00Z',
+    );
+    expect(codexQuota(s)!.expired).toBe(false);
   });
 
   it('codexQuota: single weekly window becomes the headline (go plan)', () => {

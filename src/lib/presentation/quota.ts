@@ -122,6 +122,14 @@ export interface CodexQuota {
   secondary: { pct: number; label: CodexWindowLabel } | null;
   plan: string;
   tone: Tone;
+  /// True when ANY window has reset - not just the headline. The cell carries
+  /// one stale marker for the whole rollout, so checking only the headline let
+  /// a live-but-worse window hide an expired one (a reset 5h window demoted to
+  /// secondary text under a live weekly headline). `any`, not `all`, mirrors
+  /// `codex_local::CodexQuotaSnapshot::any_window_expired`: once the shortest
+  /// window has reset the rollout predates it, so the still-live window's
+  /// figure is an undercount too.
+  expired: boolean;
 }
 
 // Codex reports windows of 300 min (5h) and 10080 min (weekly); which JSON slot
@@ -160,6 +168,7 @@ export function codexQuota(s: Snapshot): CodexQuota | null {
       : null,
     plan: q.plan_type,
     tone: quotaTone(headlineWin.used_percent),
+    expired: all.some((w) => codexWindowExpired(w, s.fetched_at)),
   };
 }
 
