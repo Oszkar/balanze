@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "anthropic_oauth"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "backoff",
@@ -351,7 +351,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atomic_file"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "tempfile",
 ]
@@ -375,14 +375,14 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "backoff"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "balanze"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anthropic_oauth",
  "chrono",
@@ -407,7 +407,7 @@ dependencies = [
 
 [[package]]
 name = "balanze_cli"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anstream",
  "anthropic_oauth",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "claude_cost"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "claude_parser"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "claude_statusline"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "atomic_file",
@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "codex_local"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2750,7 +2750,7 @@ dependencies = [
 
 [[package]]
 name = "keychain"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "apple-native-keyring-store",
  "keyring-core",
@@ -2914,7 +2914,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "logging"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "settings",
  "tempfile",
@@ -3455,7 +3455,7 @@ dependencies = [
 
 [[package]]
 name = "openai_client"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "backoff",
  "chrono",
@@ -4809,7 +4809,7 @@ dependencies = [
 
 [[package]]
 name = "settings"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "atomic_file",
  "directories",
@@ -4903,7 +4903,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "snapshot_composer"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anthropic_oauth",
  "anyhow",
@@ -4984,7 +4984,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "state_coordinator"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anthropic_oauth",
  "atomic_file",
@@ -5013,7 +5013,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "statusline_render"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "atomic_file",
  "chrono",
@@ -6435,7 +6435,7 @@ dependencies = [
 
 [[package]]
 name = "watcher"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anthropic_oauth",
  "anyhow",
@@ -6683,7 +6683,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "window"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "claude_parser",

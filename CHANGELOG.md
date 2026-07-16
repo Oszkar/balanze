@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+## [0.5.0] - Distribution & Legibility - 2026-07-16
+
+The first binary release: a signed and notarized macOS DMG/app plus an unsigned Windows MSI/NSIS on GitHub Releases, so someone can download and run Balanze without a Rust toolchain. Alongside it: launch-at-login, a README refresh with a popover screenshot and the download install path, and the Balanze mark replacing the last scaffold placeholders.
+
 ### Added
 - **Launch at login** - a Settings toggle registers Balanze with the OS (the Windows `Run` key, a macOS LaunchAgent) so the tray app comes back after a reboot instead of waiting for a manual launch. The OS login item is the source of truth, so the toggle still reads correctly if you clear the item outside Balanze.
 
@@ -16,6 +20,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Fixed
 - **Popover legibility** - stronger metadata contrast, a minimum text size, 24px hit targets on the key controls, shared warning-surface tokens, and a semantic `main` landmark.
+- **Codex quota keys off the worst window, not always the 5-hour one** - the tray, popover, and CLI could disagree on the same snapshot (a weekly window at 95% sitting as grey secondary text under a green 4% headline). Every surface now selects the highest-utilization window as the headline.
+- **Codex cell goes stale when any window has reset, not just the headline** - a live-but-lower window could hide an already-expired one, undercounting usage.
+- **Balanze no longer waits forever for Claude Code's first session** - if `~/.claude/projects` doesn't exist yet at launch (a fresh Claude Code install, or Balanze autostarting before Claude Code), the watcher now polls until it appears instead of exiting and leaving the Anthropic cells blank until the next restart.
+- **Codex populates immediately at launch instead of after 60 seconds** - the safety poll's first-tick skip, meant to avoid double-reading the statusline, was also delaying Codex's only feeder.
+- **OpenAI billed totals reject non-finite amounts** - a malformed `NaN` / `Infinity` amount string from the API could silently publish as `$0` or approximately `$9.2 trillion`; it's now a shape error instead.
 
 ## [0.4.4] - Hardening - 2026-07-15
 
@@ -211,7 +220,8 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Oszkar/balanze/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/Oszkar/balanze/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/Oszkar/balanze/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Oszkar/balanze/compare/v0.4.1...v0.4.2
