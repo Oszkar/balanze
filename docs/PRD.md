@@ -238,7 +238,7 @@ Engineering bar (what "finished-feeling" means here):
 
 The MVP lands across five release phases - Data -> Liveness -> UI -> Surfaces -> Distribution - followed by two committed enhancement phases (Alerts, then Settings & configurability) and a post-1.0 deferred tier (Dashboard, then the uncommitted Vision ideas). Each phase has **one dominant theme** so "done" is hard to fudge and risk is sequenced correctly (read-only data primitives first, asymmetric/UI work later). Shipped phases are summarized to a line here; the blow-by-blow lives in the [CHANGELOG](../CHANGELOG.md), and this section stays forward-looking.
 
-**Current status: shipped through v0.4.4 (Hardening).** The data layer, the live spine, the Tauri popover + settings, the UI polish pass, the first-class CLI surface, the productized cross-provider statusline, first-class Codex treatment (both rolling windows, everywhere), and a cross-cutting hardening pass are done, and the product is useful day to day. The remaining work (v0.5) distributes it to other people; v0.6 adds alerts; v0.7 deepens settings and theming.
+**Current status: shipped through v0.5.0 (Distribution & Legibility).** The data layer, the live spine, the Tauri popover + settings, the UI polish pass, the first-class CLI surface, the productized cross-provider statusline, first-class Codex treatment (both rolling windows, everywhere), a cross-cutting hardening pass, and the first signed/notarized binary release with launch-at-login are done, and the product is useful day to day and downloadable without a Rust toolchain. The remaining work (v0.5.1+) covers CLI distribution and the docs site; v0.6 adds alerts; v0.7 deepens settings and theming.
 
 ### Phase 1 - v0.1: Data (shipped)
 
