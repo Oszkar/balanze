@@ -12,6 +12,8 @@
     replaceStatusline,
     restoreStatusline,
     openExternal,
+    getLaunchAtLogin,
+    setLaunchAtLogin,
   } from '$lib/ipc';
   import type { Settings, StatuslineWire } from '$lib/types/settings';
 
@@ -26,6 +28,7 @@
   let busy = $state(false);
   let canSaveAnyway = $state(false);
   let confirmingReplace = $state(false);
+  let launchAtLogin = $state(false);
 
   async function load() {
     try {
@@ -44,6 +47,13 @@
       wire = await getStatuslineStatus();
     } catch {
       wire = null;
+    }
+    // Launch-at-login is read live from the OS (source of truth). A read failure
+    // shouldn't block the panel - default the toggle to off.
+    try {
+      launchAtLogin = await getLaunchAtLogin();
+    } catch {
+      launchAtLogin = false;
     }
   }
 
@@ -203,6 +213,24 @@
       busy = false;
     }
   }
+
+  // Launch-at-login toggle. Optimistically set the (primitive) flag so the
+  // checkbox tracks the click, then revert on failure - reverting to a
+  // different value is what forces the checkbox to snap back.
+  async function toggleLaunchAtLogin(value: boolean) {
+    const previous = launchAtLogin;
+    launchAtLogin = value;
+    busy = true;
+    status = null;
+    try {
+      await setLaunchAtLogin(value);
+    } catch (e) {
+      status = `Couldn't update launch at login: ${e}`;
+      launchAtLogin = previous;
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
 <div class="settings">
@@ -349,6 +377,22 @@
         />
         <span>Codex quota scanning</span>
       </label>
+    </div>
+
+    <div class="connector">
+      <div class="chd">
+        <span class="title">General</span>
+      </div>
+      <label class="toggle">
+        <input
+          type="checkbox"
+          checked={launchAtLogin}
+          disabled={busy}
+          onchange={(e) => toggleLaunchAtLogin(e.currentTarget.checked)}
+        />
+        <span>Launch at login</span>
+      </label>
+      <div class="hint">Start Balanze in the tray automatically when you sign in.</div>
     </div>
   {:else}
     <div class="loading">Loading settings...</div>

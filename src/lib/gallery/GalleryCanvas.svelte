@@ -29,6 +29,8 @@
           return true;
         case 'get_statusline_status':
           return DEMO_STATUSLINE;
+        case 'get_launch_at_login':
+          return false;
         // Writes -> swallowed. mockIPC replaces the whole invoke transport, so a
         // mutating command (Remove key, Save, toggle a provider, Wire) never
         // reaches the real keychain or settings file - even if this route is
@@ -38,6 +40,7 @@
         case 'set_api_key':
         case 'clear_api_key':
         case 'set_statusline_wired':
+        case 'set_launch_at_login':
         case 'refresh_now':
         case 'hide_window':
         case 'resize_popover':

@@ -29,6 +29,7 @@ use claude_statusline::{
 use settings::Settings;
 use state_coordinator::{Snapshot, StateCoordinatorHandle, StateMsg};
 use tauri::State;
+use tauri_plugin_autostart::ManagerExt;
 
 async fn run_blocking<T, F>(operation: F) -> Result<T, String>
 where
@@ -107,6 +108,33 @@ pub fn resize_popover(window: tauri::WebviewWindow, height: u32) -> Result<(), S
     crate::reanchor_after_resize(&window, old_outer.height, new_outer)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Whether Balanze is registered to launch at login. Reads the OS login-item
+/// state directly via the autostart plugin, so the settings toggle stays
+/// correct even if the user cleared the item through the OS - Balanze keeps no
+/// duplicate flag (approach A: the OS is the source of truth, no `Settings`
+/// field). The registry (Windows) / LaunchAgent (macOS) read runs on the
+/// blocking pool like the other I/O commands (AGENTS.md §2.1).
+#[tauri::command]
+pub async fn get_launch_at_login(app: tauri::AppHandle) -> Result<bool, String> {
+    run_blocking(move || app.autolaunch().is_enabled().map_err(|e| e.to_string())).await
+}
+
+/// Enable or disable launch-at-login. `enable` / `disable` write the Windows
+/// `Run` key or the macOS LaunchAgent, so the work goes through `spawn_blocking`.
+#[tauri::command]
+pub async fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    run_blocking(move || {
+        let manager = app.autolaunch();
+        if enabled {
+            manager.enable()
+        } else {
+            manager.disable()
+        }
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Return the non-secret settings (`settings.json` shape). Never includes any

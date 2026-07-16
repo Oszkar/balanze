@@ -610,6 +610,12 @@ pub fn run() {
     }
 
     builder
+        // Registered after single_instance (above) so the single-instance guard
+        // stays first - important since autostart means the app relaunches on
+        // every login. `Builder::new().build()` defaults the macOS launcher to a
+        // LaunchAgent; the app already starts hidden in the tray, so no extra
+        // launch args are needed.
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .manage(rt)
@@ -619,6 +625,8 @@ pub fn run() {
             commands::refresh_now,
             commands::hide_window,
             commands::resize_popover,
+            commands::get_launch_at_login,
+            commands::set_launch_at_login,
             commands::get_settings,
             commands::set_settings,
             commands::set_api_key,
