@@ -16,7 +16,7 @@ If requirements are ambiguous, incomplete, or conflicting: stop, ask targeted qu
 
 ## 1. System Context
 
-Balanze = a local-first desktop tray utility that consolidates personal AI usage tracking into one normalized view. Tauri 2 + Rust + Svelte 5. Currently targeting Windows 11 and macOS 15+; later phases might add Ubuntu GNOME, Android, and a hosted wallboard.
+Balanze = a local-first desktop tray utility that consolidates personal AI usage tracking into one normalized view. Tauri 2 + Rust + Svelte 5. Currently targeting Windows 11 (x64) and macOS 15+ (Apple Silicon only - Intel macOS is excluded); later phases might add Ubuntu GNOME, Android, and a hosted wallboard. The canonical support matrix, including why Windows ships unsigned, is [`docs/PRD.md`](docs/PRD.md) "Supported platforms" - the shipped architectures are stated in exactly three places that must agree: that matrix, `release.yml`'s build matrix, and `deny.toml`'s `[graph].targets`.
 
 Out of scope: full enterprise cost allocation, multi-seat observability, browser automation, monetization, cloud sync.
 

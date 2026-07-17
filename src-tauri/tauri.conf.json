@@ -49,6 +49,9 @@
     ],
     "category": "Utility",
     "shortDescription": "Local-first AI usage tracker",
-    "longDescription": "Tray-first desktop utility that monitors Claude (subscription + API) and OpenAI usage in one normalized view. Win + Mac."
+    "longDescription": "Tray-first desktop utility that monitors Claude (subscription + API) and OpenAI usage in one normalized view. Win + Mac.",
+    "macOS": {
+      "minimumSystemVersion": "15.0"
+    }
   }
 }

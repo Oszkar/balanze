@@ -1,10 +1,16 @@
 name: release
 
 on:
-  # Manual-only while release artifacts are unsigned drafts. A maintainer
-  # supplies an existing release tag explicitly, reviews both platform builds,
-  # and publishes the draft. Automatic tag-triggered publication stays disabled
-  # until the signing and notarization policy is committed.
+  # Manual-only: a maintainer supplies an existing release tag explicitly,
+  # reviews both platform builds, and publishes the draft. Automatic
+  # tag-triggered publication stays disabled because the mac leg needs its
+  # notarization to be eyeballed and the per-OS validation matrix
+  # (AGENTS.md §6) is not fully covered by the per-PR gate.
+  #
+  # Build matrix note: aarch64-apple-darwin is the only Apple triple built
+  # (Intel macOS is excluded - see docs/PRD.md "Supported platforms"), and
+  # Windows builds host-default x86_64-pc-windows-msvc. This matrix must
+  # track deny.toml's [graph].targets exactly.
   workflow_dispatch:
     inputs:
       tag:
@@ -140,8 +146,9 @@ jobs:
           releaseName: 'Balanze ${{ inputs.tag }}'
           releaseBody: |
             Auto-generated release.
-            - Windows users: unsigned - SmartScreen will warn on first run; click "More info" → "Run anyway".
-            - macOS users: signed and notarized - Gatekeeper should not warn.
+            - **Windows (x64):** `Balanze_*_x64_en-US.msi`, or `Balanze_*_x64-setup.exe` for the NSIS installer. Unsigned - SmartScreen will warn on first run; click "More info" → "Run anyway". [Why we don't sign](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing).
+            - **macOS 15+ (Apple Silicon):** `Balanze_*_aarch64.dmg`. Signed and notarized - Gatekeeper should not warn. Intel Macs are not supported.
+            - **Verify a download** against `windows-x64-checksums.txt` / `macos-aarch64-checksums.txt`.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -156,11 +163,64 @@ jobs:
           releaseName: 'Balanze ${{ inputs.tag }}'
           releaseBody: |
             Auto-generated release.
-            - Windows users: unsigned - SmartScreen will warn on first run; click "More info" → "Run anyway".
-            - macOS users: signed and notarized - Gatekeeper should not warn.
+            - **Windows (x64):** `Balanze_*_x64_en-US.msi`, or `Balanze_*_x64-setup.exe` for the NSIS installer. Unsigned - SmartScreen will warn on first run; click "More info" → "Run anyway". [Why we don't sign](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing).
+            - **macOS 15+ (Apple Silicon):** `Balanze_*_aarch64.dmg`. Signed and notarized - Gatekeeper should not warn. Intel Macs are not supported.
+            - **Verify a download** against `windows-x64-checksums.txt` / `macos-aarch64-checksums.txt`.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Publish SHA-256 checksums
+        # Trust substitute for the unsigned Windows installers, and a plain
+        # integrity check on macOS: a user can confirm a download is
+        # byte-for-byte what CI built. This is the thing the README offers in
+        # place of a code-signing certificate (docs/PRD.md "Code signing"), so
+        # a failure here is a release blocker, not a nicety.
+        #
+        # One file per leg (not one shared file) - the two legs race, and
+        # `gh release upload --clobber` on a shared name would drop whichever
+        # finished first.
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          # Workspace-root target/, not src-tauri/target/: src-tauri is a
+          # member of the root workspace (Cargo.toml `members`), so cargo puts
+          # its artifacts in the shared target dir.
+          BUNDLE_DIR: ${{ matrix.platform == 'macos-latest' && 'target/aarch64-apple-darwin/release/bundle' || 'target/release/bundle' }}
+          LEG: ${{ matrix.platform == 'macos-latest' && 'macos-aarch64' || 'windows-x64' }}
+        run: |
+          set -euo pipefail
+          # macOS runners ship BSD shasum, not coreutils' sha256sum; Git Bash
+          # on the Windows runner ships sha256sum.
+          if command -v sha256sum >/dev/null 2>&1; then
+            HASH=(sha256sum)
+          else
+            HASH=(shasum -a 256)
+          fi
+          # Workspace-relative on purpose: $RUNNER_TEMP is a backslash path on
+          # the Windows leg, which Git Bash mangles (docs/TROUBLESHOOTING.md).
+          OUT="${LEG}-checksums.txt"
+          : > "$OUT"
+          # Hash from each file's own directory so the recorded name is the
+          # bare asset name a user downloads, not a CI-internal path. The
+          # redirect sits outside the subshell deliberately: the parent shell
+          # resolves the relative $OUT against the workspace root, before the
+          # `cd` takes effect.
+          # No `sort -z` on the find pipeline - BSD sort lacks it; sort the
+          # finished file by filename instead.
+          while IFS= read -r -d '' f; do
+            ( cd "$(dirname "$f")" && "${HASH[@]}" "$(basename "$f")" ) >> "$OUT"
+          done < <(find "$BUNDLE_DIR" -type f \
+            \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.msi' -o -name '*-setup.exe' \) \
+            -print0)
+          if [ ! -s "$OUT" ]; then
+            echo "::error::no release artifacts found under $BUNDLE_DIR - checksums would ship empty"
+            exit 1
+          fi
+          sort -k2 -o "$OUT" "$OUT"
+          cat "$OUT"
+          gh release upload "$TAG" "$OUT" --clobber
 
       - name: Clean up macOS signing material
         if: always() && matrix.platform == 'macos-latest'

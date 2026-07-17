@@ -16,7 +16,7 @@
 
 <p align="center">
   A local-first tray utility that consolidates personal AI usage into one normalized view - Claude subscription quota, an estimate of Claude Code's API-rate value, OpenAI Codex quota, and real OpenAI API spend, all at a glance.<br>
-  Rust + Tauri 2 + Svelte 5. Windows 11 and macOS 15+ (the CLI also runs on Linux).
+  Rust + Tauri 2 + Svelte 5. Windows 11 (x64) and macOS 15+ (Apple Silicon); the CLI also runs on Linux.
 </p>
 
 > Not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. Reads only endpoints and files you already have access to with your own credentials.
@@ -55,7 +55,39 @@ Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and 
 
 ## Install
 
-**Desktop app (tray popover):** download the latest signed & notarized macOS DMG or the Windows MSI/NSIS installer from [GitHub Releases](https://github.com/Oszkar/balanze/releases/latest) - no Rust toolchain required. Windows builds are unsigned, so SmartScreen warns on first run; click "More info" -> "Run anyway".
+**Desktop app (tray popover):** download from [GitHub Releases](https://github.com/Oszkar/balanze/releases/latest) - no Rust toolchain required.
+
+| Your machine | Download | First run |
+|---|---|---|
+| macOS 15+, Apple Silicon | `Balanze_<version>_aarch64.dmg` | Signed and notarized - Gatekeeper should not warn. |
+| Windows 11, x64 | `Balanze_<version>_x64_en-US.msi` | Unsigned - SmartScreen warns once, see below. |
+
+The `_x64-setup.exe` asset is the same Windows app as an NSIS installer instead of an MSI; pick either. `_aarch64.app.tar.gz` is the raw macOS app bundle for scripted installs - if you are not sure, take the DMG.
+
+**Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only. macOS 15 already drops most Intel hardware, so a universal binary would double the build time and bundle size to serve machines that largely cannot run the required OS anyway. Building from source on an Intel Mac is untested but nothing blocks it. Windows on arm64 is likewise not built.
+
+<details>
+<summary><strong>Windows: what SmartScreen shows, and why</strong></summary>
+
+You will see **"Windows protected your PC - Microsoft Defender SmartScreen prevented an unrecognized app from starting."** Click **"More info"**, then **"Run anyway"**.
+
+This means Windows does not recognize the publisher. It does not mean the installer is malware. Balanze is unsigned because a code-signing certificate would not fix it: Microsoft [no longer grants SmartScreen reputation for EV certificates](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation), so a signed build from a project this size warns on first run too. The reasoning is recorded in [the PRD](docs/PRD.md#code-signing).
+
+Rather than ask you to trust a certificate, the offer is: the source is public and builds from scratch (see [Develop](#develop)), and every release ships SHA-256 checksums so you can verify the download is byte-for-byte what CI produced.
+
+</details>
+
+**Verifying a download (optional).** Each release attaches `windows-x64-checksums.txt` and `macos-aarch64-checksums.txt`. Compare your file against it:
+
+```powershell
+# Windows (PowerShell)
+Get-FileHash .\Balanze_0.5.0_x64_en-US.msi -Algorithm SHA256
+```
+
+```bash
+# macOS
+shasum -a 256 Balanze_0.5.0_aarch64.dmg
+```
 
 **CLI (`balanze-cli`):** still source-only for now (prebuilt CLI binaries are on the [roadmap](docs/PRD.md)). Requires Rust 1.89+.
 
@@ -73,7 +105,7 @@ balanze-cli            # 4-quadrant status
 
 The Claude side needs no setup if Claude Code is already configured: Balanze reads its OAuth credential (from `~/.claude/.credentials.json`, `~/.config/claude/.credentials.json`, or Claude Code's login Keychain entry on recent macOS) strictly **read-only** - it never refreshes, modifies, or copies it. If it expires, re-run `claude login`. An opt-in file-refresh mode is tracked in [#186](https://github.com/Oszkar/balanze/issues/186). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, the popover's settings panel, or the `BALANZE_OPENAI_KEY` env var.
 
-> **macOS note:** the downloadable release DMG is signed and notarized (from v0.5.0 onward), so Gatekeeper should not warn. Builds you compile yourself are still unsigned, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key.
+> **macOS note:** builds you compile yourself are unsigned, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key. The downloadable release DMG is signed and notarized (from v0.5.0 onward) and does not have this problem.
 
 For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](docs/GUIDE.md).
 

@@ -53,7 +53,7 @@ A small team or technically inclined individual who wants a local dashboard and 
 - Broad Linux desktop support beyond Ubuntu GNOME.
 - Browser automation or brittle scraping as a headline feature.
 - Monetization, subscriptions, cloud sync, or team billing in the first version.
-- Heavyweight distribution (app-store/package-manager presence, auto-update) as a committed goal - distribution stays lightweight (a runnable release). macOS code-signing/notarization is done (issue #160, Keychain "Always Allow" grants need a stable signature to persist); Windows code-signing remains optional, not a phase the roadmap depends on.
+- Heavyweight distribution (app-store/package-manager presence, auto-update) as a committed goal - distribution stays lightweight (a runnable release). macOS code-signing/notarization is done (issue #160, Keychain "Always Allow" grants need a stable signature to persist); Windows code-signing is declined on the merits - see "Code signing" under [Supported platforms](#code-signing).
 - Broad provider coverage - the product stays narrow-but-deep; additional connectors are Vision-tier.
 
 ## Product principles
@@ -87,12 +87,29 @@ A small team or technically inclined individual who wants a local dashboard and 
 
 ## Supported platforms
 
-| Platform | Support level | Notes |
-|---|---|---|
-| Windows 11 | CLI v0.1; tray UI v0.3 | CLI works from v0.1 (`cargo install`); tray-first desktop experience lands across the v0.3 sub-milestones (popover in v0.3.0). Windows 10 excluded. |
-| macOS 15+ | CLI v0.1; tray UI v0.3 | CLI works from v0.1; menu-bar-first experience with hidden main window across v0.3. |
-| Linux (generic) | CLI v0.1 | `cargo install` works trivially; no separate test matrix. CLI only - tray UI not targeted here. |
-| Ubuntu 24.04 LTS+ GNOME | Future | GNOME tray UI with AppIndicator support. Deferred until the Win + Mac tray story is mature; Linux tray fragility makes it the wrong place to start. |
+| Platform | Architecture | Support level | Notes |
+|---|---|---|---|
+| Windows 11 | x64 | CLI v0.1; tray UI v0.3 | CLI works from v0.1 (`cargo install`); tray-first desktop experience lands across the v0.3 sub-milestones (popover in v0.3.0). Windows 10 excluded. Installers are unsigned by decision - see "Code signing" below. arm64 Windows not built. |
+| macOS 15+ | Apple Silicon (arm64) | CLI v0.1; tray UI v0.3 | CLI works from v0.1; menu-bar-first experience with hidden main window across v0.3. Release DMG/app signed and notarized from v0.5.0. |
+| macOS, Intel | x86_64 | **Excluded** | No release artifact is built. macOS 15 already drops most Intel hardware, so a universal binary would double mac build time and bundle size to serve a shrinking set of machines that largely cannot run the documented OS floor. `cargo install` from source is untested but unobstructed. |
+| Linux (generic) | x64 | CLI v0.1 | `cargo install` works trivially; no separate test matrix. CLI only - tray UI not targeted here. |
+| Ubuntu 24.04 LTS+ GNOME | x64 | Future | GNOME tray UI with AppIndicator support. Deferred until the Win + Mac tray story is mature; Linux tray fragility makes it the wrong place to start. |
+
+The architecture column is load-bearing: it must track `release.yml`'s build matrix and `deny.toml`'s `[graph].targets` exactly. Adding an architecture means touching all three.
+
+### Code signing
+
+**macOS: signed and notarized** (v0.5.0 onward, issue #160). Gatekeeper does not warn on the release DMG.
+
+**Windows: unsigned, by decision - not a backlog item.** This is deliberate, and the usual "buy a certificate" answer no longer buys what it used to:
+
+- **No certificate at any price gives a clean first run.** Microsoft [documents](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) that EV certificates no longer bypass SmartScreen ("Paying a premium for EV solely to avoid SmartScreen warnings is no longer justified"); DigiCert's KB confirms it. Reputation still accrues by download volume regardless of signing.
+- **OV has no cost advantage left.** CA/B Forum ballot CSC-13 (effective June 2023) removed software-key storage for OV, so it needs the same hardware token or cloud HSM as EV.
+- **Azure Artifact Signing (~$10/mo, the one option Tauri documents a CI recipe for) is geographically closed to us.** Individual developers are eligible in the USA and Canada only; the maintainer is a Japan-based sole proprietorship, which is neither an eligible individual nor an eligible registered organization for this program.
+
+What signing would actually buy: a displayed publisher name, and reputation that carries across releases instead of resetting per version. Neither justifies the cost at this project's cadence and funding. The trust substitutes we ship instead: public source, reproducible build-from-source, and per-release SHA-256 checksums.
+
+Revisit if the project ever incorporates in an eligible jurisdiction, or if [SignPath Foundation](https://signpath.org/) (free for OSS) becomes viable - its unquantified "verifiable reputation" gate is the current blocker there.
 
 ## Key use cases
 
@@ -289,7 +306,7 @@ Get it into people's hands and make the engineering legible. Deliberately **ligh
 
 The v0.4.0 screenshots already exist, so the README refresh lands in v0.5.0 ahead of the rest.
 
-**Optional (not committed):** Windows code-signing, Homebrew/WinGet, Tauri auto-update - done only if the cert/admin cost feels worth it; unsigned-runnable already clears the "an evaluator can try it" bar for Windows.
+**Optional (not committed):** Homebrew/WinGet, Tauri auto-update - done only if the admin cost feels worth it. Windows code-signing is no longer on this list; it is declined on the merits (see [Code signing](#code-signing)), and unsigned-runnable already clears the "an evaluator can try it" bar for Windows.
 
 ### Phase 6 - v0.6: Alerts
 
