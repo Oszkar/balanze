@@ -55,7 +55,9 @@ Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and 
 
 ## Install
 
-Balanze currently ships **from source only** - no prebuilt binaries, installers, or crates.io release yet (signed binaries, Homebrew, and WinGet are on the [roadmap](docs/PRD.md)). Requires Rust 1.89+.
+**Desktop app (tray popover):** download the latest signed & notarized macOS DMG or the Windows MSI/NSIS installer from [GitHub Releases](https://github.com/Oszkar/balanze/releases/latest) - no Rust toolchain required. Windows builds are unsigned, so SmartScreen warns on first run; click "More info" -> "Run anyway".
+
+**CLI (`balanze-cli`):** still source-only for now (prebuilt CLI binaries are on the [roadmap](docs/PRD.md)). Requires Rust 1.89+.
 
 ```bash
 # `--git` is required (not on crates.io). The repo root is a virtual workspace,
@@ -71,7 +73,7 @@ balanze-cli            # 4-quadrant status
 
 The Claude side needs no setup if Claude Code is already configured: Balanze reads its OAuth credential (from `~/.claude/.credentials.json`, `~/.config/claude/.credentials.json`, or Claude Code's login Keychain entry on recent macOS) strictly **read-only** - it never refreshes, modifies, or copies it. If it expires, re-run `claude login`. An opt-in file-refresh mode is tracked in [#186](https://github.com/Oszkar/balanze/issues/186). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, the popover's settings panel, or the `BALANZE_OPENAI_KEY` env var.
 
-> **macOS note:** builds you compile yourself are not code-signed, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key. Signed and notarized release binaries land with v0.5.0.
+> **macOS note:** the downloadable release DMG is signed and notarized (from v0.5.0 onward), so Gatekeeper should not warn. Builds you compile yourself are still unsigned, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key.
 
 For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](docs/GUIDE.md).
 
