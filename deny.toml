@@ -16,9 +16,14 @@
 # the dep graph honest - e.g., Tauri pulls GTK3 transitively on
 # Linux, which is RustSec-unmaintained, but we don't ship that path
 # so we shouldn't fail CI on it.
+#
+# This list must track release.yml's build matrix exactly. Intel macOS
+# (x86_64-apple-darwin) is deliberately absent: the release workflow
+# builds aarch64-apple-darwin only, so vetting an Intel dep graph would
+# fail CI on advisories that cannot reach a user. See docs/PRD.md
+# "Supported platforms".
 targets = [
     { triple = "x86_64-pc-windows-msvc" },
-    { triple = "x86_64-apple-darwin" },
     { triple = "aarch64-apple-darwin" },
 ]
 
