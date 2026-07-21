@@ -5,8 +5,9 @@
 //! this API. The service name is fixed at `"me.oszkar.Balanze"`; entry names
 //! are namespaced constants in `keys`.
 //!
-//! On macOS: macOS Keychain. On Windows: Credential Manager. (Linux: no native
-//! store is wired - out of scope; keychain ops fail there until one is added.)
+//! On macOS: macOS Keychain. On Windows: Credential Manager. On every other
+//! platform (Linux) no native store is wired, and every operation returns
+//! [`KeychainError::NoStore`] - callers route the user to [`NO_STORE_HINT`].
 //!
 //! keyring-core has no default credential store until one is registered, so
 //! each binary MUST call [`init_default_store`] once at startup before any
@@ -27,7 +28,7 @@ const SERVICE: &str = "me.oszkar.Balanze";
 /// Idempotent: subsequent calls are no-ops (guarded by [`std::sync::Once`]), so
 /// it is safe to call defensively. On platforms without a native store wired
 /// (e.g. Linux), this logs a warning and leaves keyring-core storeless, so
-/// keychain ops there return [`KeychainError::PlatformError`].
+/// keychain ops there return [`KeychainError::NoStore`].
 pub fn init_default_store() {
     use std::sync::Once;
     static INIT: Once = Once::new();
@@ -63,10 +64,33 @@ pub enum KeychainError {
 
     #[error("OS keychain access failed for `{name}`: {reason}")]
     PlatformError { name: String, reason: String },
+
+    /// This platform has no native credential store wired (see
+    /// [`init_default_store`]). Distinct from [`KeychainError::PlatformError`]
+    /// because it is an expected, documented platform condition rather than a
+    /// fault: callers should route the user to [`NO_STORE_HINT`] instead of
+    /// reporting a broken keychain.
+    #[error("no OS credential store is available on this platform")]
+    NoStore,
+}
+
+/// Guidance for the [`KeychainError::NoStore`] case. Kept here so every surface
+/// that hits a storeless platform tells the user the same thing.
+pub const NO_STORE_HINT: &str = "Set the BALANZE_OPENAI_KEY environment variable instead; it takes precedence over the keychain.";
+
+/// Whether this platform has a native credential store wired.
+///
+/// Mirrors the `cfg` on the store registration in [`init_default_store`]. Adding
+/// a backend for a new platform means updating both.
+pub const fn has_native_store() -> bool {
+    cfg!(any(windows, target_os = "macos"))
 }
 
 /// Store a value under the given entry name. Overwrites any existing value.
 pub fn set(name: &str, value: &str) -> Result<(), KeychainError> {
+    if !has_native_store() {
+        return Err(KeychainError::NoStore);
+    }
     debug!(name, "keychain: set");
     let entry =
         keyring_core::Entry::new(SERVICE, name).map_err(|e| KeychainError::PlatformError {
@@ -86,6 +110,9 @@ pub fn set(name: &str, value: &str) -> Result<(), KeychainError> {
 /// Returns `NotFound` if there's no entry; `PlatformError` for any other
 /// failure (locked keychain, permission denied, etc.).
 pub fn get(name: &str) -> Result<String, KeychainError> {
+    if !has_native_store() {
+        return Err(KeychainError::NoStore);
+    }
     debug!(name, "keychain: get");
     let entry =
         keyring_core::Entry::new(SERVICE, name).map_err(|e| KeychainError::PlatformError {
@@ -106,8 +133,9 @@ pub fn get(name: &str) -> Result<String, KeychainError> {
 /// `BALANZE_OPENAI_KEY` env override (trimmed; empty = unset), which takes
 /// precedence over the stored keychain entry (AGENTS.md §3.4).
 ///
-/// `Ok(None)` means "not configured". `Err` is a real keychain failure (locked,
-/// denied), not mere absence. Single source of truth for the CLI snapshot fetch,
+/// `Ok(None)` means "not configured", including on a platform with no credential
+/// store at all. `Err` is a real keychain failure (locked, denied), not mere
+/// absence. Single source of truth for the CLI snapshot fetch,
 /// the statusline self-compose fingerprint, and the watcher poll task.
 ///
 /// The env var, **when present, is authoritative even if blank**: a blank or
@@ -132,6 +160,10 @@ fn resolve_openai_key_with(env_var: Option<String>) -> Result<Option<String>, Ke
     match get(keys::OPENAI_API_KEY) {
         Ok(k) => Ok(Some(k)),
         Err(KeychainError::NotFound(_)) => Ok(None),
+        // No store means nothing can ever have been stored, so "not configured"
+        // is literally true. The typed error stays on get/set/delete, where the
+        // CLI needs it to tell the user where to put the key instead.
+        Err(KeychainError::NoStore) => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -145,6 +177,9 @@ fn non_blank(raw: &str) -> Option<String> {
 /// Delete the entry under the given name. Returns `Ok(())` if it didn't
 /// exist (delete is idempotent).
 pub fn delete(name: &str) -> Result<(), KeychainError> {
+    if !has_native_store() {
+        return Err(KeychainError::NoStore);
+    }
     debug!(name, "keychain: delete");
     let entry =
         keyring_core::Entry::new(SERVICE, name).map_err(|e| KeychainError::PlatformError {
@@ -240,5 +275,56 @@ mod tests {
                 "blank env {blank:?} must be Ok(None)"
             );
         }
+    }
+
+    #[test]
+    fn has_native_store_matches_the_compiled_target() {
+        // Windows and macOS wire a store in `init_default_store`; nothing else
+        // does. This mirrors the cfg on the store registration, so a future
+        // Linux backend must update both together.
+        let expected = cfg!(any(windows, target_os = "macos"));
+        assert_eq!(has_native_store(), expected);
+    }
+
+    #[test]
+    fn no_store_error_names_the_platform_gap_without_keyring_jargon() {
+        let msg = KeychainError::NoStore.to_string();
+        assert_eq!(msg, "no OS credential store is available on this platform");
+        // The whole point of the variant is that the user never sees raw
+        // keyring-core text for an expected platform condition.
+        assert!(!msg.contains("keyring"));
+    }
+
+    #[test]
+    fn no_store_hint_points_at_the_documented_env_override() {
+        assert!(NO_STORE_HINT.contains("BALANZE_OPENAI_KEY"));
+    }
+
+    /// On a platform with no store, every operation reports `NoStore` rather
+    /// than a `PlatformError` wrapping keyring-core's "no default store" text.
+    /// Only compiled where that is the real behavior.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    #[test]
+    fn storeless_platform_returns_no_store_from_every_operation() {
+        init_default_store();
+        assert!(matches!(get("any_name"), Err(KeychainError::NoStore)));
+        assert!(matches!(set("any_name", "v"), Err(KeychainError::NoStore)));
+        assert!(matches!(delete("any_name"), Err(KeychainError::NoStore)));
+    }
+
+    /// `resolve_openai_key`'s contract is a configured/not question, so a
+    /// storeless platform means "not configured" - literally true, since
+    /// nothing can ever have been stored. Returning Err here would make
+    /// `sources.rs`'s `live_fetch_openai` report an error for an unconfigured
+    /// Linux user (its doc promises Err only for real fetch failures) and would
+    /// make the watcher's openai_poll log a warning on every launch for a
+    /// permanent platform condition (AGENTS.md §3.2 reserves warn for things
+    /// worth noticing).
+    #[cfg(not(any(windows, target_os = "macos")))]
+    #[test]
+    fn storeless_platform_resolves_the_key_as_not_configured() {
+        init_default_store();
+        // Env var absent, so this falls through to the keychain.
+        assert!(matches!(resolve_openai_key_with(None), Ok(None)));
     }
 }
