@@ -16,6 +16,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 - **Releases now ship SHA-256 checksums** (`windows-x64-checksums.txt`, `macos-aarch64-checksums.txt`) so a download can be verified against what CI built.
 - Windows code signing is recorded as declined on the merits rather than "optional". Microsoft no longer grants SmartScreen reputation for EV certificates, so no certificate at any price buys a clean first run; the README now explains the SmartScreen prompt and points at the checksums and public source instead.
 
+## [0.5.0] - Distribution & Legibility - 2026-07-16
+
 The first binary release: a signed and notarized macOS DMG/app plus an unsigned Windows MSI/NSIS on GitHub Releases, so someone can download and run Balanze without a Rust toolchain. Alongside it: launch-at-login, a README refresh with a popover screenshot and the download install path, and the Balanze mark replacing the last scaffold placeholders.
 
 ### Added

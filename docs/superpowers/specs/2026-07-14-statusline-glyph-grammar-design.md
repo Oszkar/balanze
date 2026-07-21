@@ -1,7 +1,7 @@
 # Statusline glyph grammar
 
 Date: 2026-07-14
-Status: approved, not yet implemented
+Status: implemented, shipped in v0.4.4
 
 ## Problem
 
