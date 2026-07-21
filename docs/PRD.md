@@ -305,7 +305,7 @@ Get it into people's hands and make the engineering legible. Deliberately **ligh
 
 The v0.4.0 screenshots already exist, so the README refresh lands in v0.5.0 ahead of the rest.
 
-**Optional (not committed):** Homebrew/WinGet, Tauri auto-update - done only if the admin cost feels worth it. Windows code-signing is no longer on this list; it is declined on the merits (see [Code signing](#code-signing)), and unsigned-runnable already clears the "an evaluator can try it" bar for Windows.
+**Optional (not committed):** WinGet, Tauri auto-update - done only if the admin cost feels worth it. Homebrew is no longer on this list either; the tap, the CLI formula, and the desktop cask are committed scope in v0.5.1 above. Windows code-signing is no longer on this list; it is declined on the merits (see [Code signing](#code-signing)), and unsigned-runnable already clears the "an evaluator can try it" bar for Windows.
 
 ### Phase 6 - v0.6: Alerts
 
