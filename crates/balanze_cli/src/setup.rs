@@ -50,6 +50,7 @@ enum OpenAiKeyStatus {
     EnvVarOverride,
     ValidationFailed,
     KeychainBroken,
+    NoKeychainOnPlatform,
 }
 
 impl OpenAiKeyStatus {
@@ -64,6 +65,9 @@ impl OpenAiKeyStatus {
             OpenAiKeyStatus::EnvVarOverride => "✓ ready (via BALANZE_OPENAI_KEY env var)",
             OpenAiKeyStatus::ValidationFailed => "✗ key validation failed - re-run setup",
             OpenAiKeyStatus::KeychainBroken => "✗ keychain broken - use BALANZE_OPENAI_KEY env var",
+            OpenAiKeyStatus::NoKeychainOnPlatform => {
+                "✗ no OS credential store - use BALANZE_OPENAI_KEY env var"
+            }
         }
     }
 }
@@ -189,6 +193,14 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
     let existing_key = match keychain::get(keychain::keys::OPENAI_API_KEY) {
         Ok(k) => Some(k),
         Err(keychain::KeychainError::NotFound(_)) => None,
+        // Bail before prompting: there is nowhere to put a key on this platform,
+        // so asking for one would waste the user's time.
+        Err(keychain::KeychainError::NoStore) => {
+            eprintln!("  This platform has no OS credential store.");
+            eprintln!("  {}", keychain::NO_STORE_HINT);
+            eprintln!("      export BALANZE_OPENAI_KEY=sk-admin-...   (Unix shells)");
+            return Ok(OpenAiKeyStatus::NoKeychainOnPlatform);
+        }
         Err(e) => return Err(e.into()),
     };
     let key = if let Some(existing_key) = existing_key {
@@ -460,6 +472,7 @@ mod tests {
             (OpenAiKeyStatus::EnvVarOverride, "✓", true),
             (OpenAiKeyStatus::ValidationFailed, "✗", false),
             (OpenAiKeyStatus::KeychainBroken, "✗", false),
+            (OpenAiKeyStatus::NoKeychainOnPlatform, "✗", false),
         ];
         for (status, glyph, is_ok) in cases {
             let line = status.summary_line();

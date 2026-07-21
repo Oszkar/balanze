@@ -48,7 +48,16 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
         eprintln!("and replace this one if the next `balanze-cli` run shows an error.");
     }
 
-    keychain::set(keychain::keys::OPENAI_API_KEY, &key)?;
+    match keychain::set(keychain::keys::OPENAI_API_KEY, &key) {
+        Ok(()) => {}
+        Err(keychain::KeychainError::NoStore) => {
+            return Err(anyhow!(
+                "this platform has no OS credential store, so the key cannot be saved.\n{}",
+                keychain::NO_STORE_HINT
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    }
 
     let mut s =
         settings::load_for_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
@@ -66,7 +75,17 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
 }
 
 pub(crate) fn cmd_clear_openai_key() -> Result<()> {
-    keychain::delete(keychain::keys::OPENAI_API_KEY)?;
+    match keychain::delete(keychain::keys::OPENAI_API_KEY) {
+        Ok(()) => {}
+        // Nothing was ever stored on a platform with no store, so a clear is
+        // vacuously successful. Still tell the user where the key actually
+        // lives, since the provider toggle below does flip.
+        Err(keychain::KeychainError::NoStore) => {
+            eprintln!("No OS credential store on this platform; nothing to remove.");
+            eprintln!("{}", keychain::NO_STORE_HINT);
+        }
+        Err(e) => return Err(e.into()),
+    }
     let mut s =
         settings::load_for_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     s.providers.openai_enabled = false;
