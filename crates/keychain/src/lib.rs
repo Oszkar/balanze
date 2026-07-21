@@ -6,8 +6,11 @@
 //! are namespaced constants in `keys`.
 //!
 //! On macOS: macOS Keychain. On Windows: Credential Manager. On every other
-//! platform (Linux) no native store is wired, and every operation returns
-//! [`KeychainError::NoStore`] - callers route the user to [`NO_STORE_HINT`].
+//! platform (Linux) no native store is wired: [`get`], [`set`], and [`delete`]
+//! return [`KeychainError::NoStore`], and callers route the user to
+//! [`NO_STORE_HINT`]. [`resolve_openai_key`] is the deliberate exception - its
+//! contract is a configured-or-not question, so a storeless platform resolves
+//! to `Ok(None)` rather than an error.
 //!
 //! keyring-core has no default credential store until one is registered, so
 //! each binary MUST call [`init_default_store`] once at startup before any
