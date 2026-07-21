@@ -5,6 +5,16 @@ use anyhow::{Result, anyhow};
 use std::io;
 
 pub(crate) fn cmd_set_openai_key() -> Result<()> {
+    // Bail before reading the secret. There is nowhere to put a key on this
+    // platform, so prompting would have the user paste a live credential for an
+    // operation that cannot succeed. `cmd_setup` preflights the same way.
+    if !keychain::has_native_store() {
+        return Err(anyhow!(
+            "this platform has no OS credential store, so the key cannot be saved.\n{}",
+            keychain::NO_STORE_HINT
+        ));
+    }
+
     // Two input paths, by TTY status - never argv. A positional `sk-...` would
     // land in shell history / `ps`, which is the exact thing this command
     // exists to avoid:
@@ -50,6 +60,8 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
 
     match keychain::set(keychain::keys::OPENAI_API_KEY, &key) {
         Ok(()) => {}
+        // Unreachable given the preflight above, kept as a backstop so the
+        // guidance survives if that check is ever removed.
         Err(keychain::KeychainError::NoStore) => {
             return Err(anyhow!(
                 "this platform has no OS credential store, so the key cannot be saved.\n{}",
@@ -75,21 +87,23 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
 }
 
 pub(crate) fn cmd_clear_openai_key() -> Result<()> {
-    match keychain::delete(keychain::keys::OPENAI_API_KEY) {
-        Ok(()) => {}
-        // Nothing was ever stored on a platform with no store, so a clear is
-        // vacuously successful. Still tell the user where the key actually
-        // lives, since the provider toggle below does flip.
-        Err(keychain::KeychainError::NoStore) => {
-            eprintln!("No OS credential store on this platform; nothing to remove.");
-            eprintln!("{}", keychain::NO_STORE_HINT);
-        }
+    let had_store = match keychain::delete(keychain::keys::OPENAI_API_KEY) {
+        Ok(()) => true,
+        // Nothing can ever have been stored on a platform with no store, so a
+        // clear is vacuously successful. The provider toggle below still flips.
+        Err(keychain::KeychainError::NoStore) => false,
         Err(e) => return Err(e.into()),
-    }
+    };
     let mut s =
         settings::load_for_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     s.providers.openai_enabled = false;
     settings::save(&s)?;
-    eprintln!("Removed OpenAI key from the keychain.");
+    if had_store {
+        eprintln!("Removed OpenAI key from the keychain.");
+    } else {
+        eprintln!("No OS credential store on this platform; nothing to remove.");
+        eprintln!("Disabled the OpenAI provider.");
+        eprintln!("{}", keychain::NO_STORE_HINT);
+    }
     Ok(())
 }
