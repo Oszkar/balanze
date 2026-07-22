@@ -11,4 +11,4 @@ Auto-generated release.
 - **Direct download:** `balanze-cli-*-x86_64-pc-windows-msvc.zip`, `balanze-cli-*-aarch64-pc-windows-msvc.zip`, `balanze-cli-*-aarch64-apple-darwin.tar.gz`, or `balanze-cli-*-x86_64-unknown-linux-musl.tar.gz` (static, runs on any Linux). Extract and put `balanze-cli` on your PATH.
 - The macOS CLI archive is unsigned. A browser download is quarantined by Gatekeeper; either install via Homebrew, which is not, or run `xattr -d com.apple.quarantine balanze-cli` once.
 
-**Verify a download** against the `*-checksums.txt` files or an archive's sibling `.sha256`.
+**Verify a download** against the `*-checksums.txt` files (installers) or an archive's sibling `.sha256` (CLI). The raw `*.app.tar.gz` bundle is not checksummed - take the DMG if you want a verifiable macOS download.

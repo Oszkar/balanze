@@ -227,12 +227,22 @@ jobs:
           # redirect sits outside the subshell deliberately: the parent shell
           # resolves the relative $OUT against the workspace root, before the
           # `cd` takes effect.
+          #
+          # `*.app.tar.gz` is deliberately NOT hashed. tauri-action renames that
+          # bundle on upload (on disk it is `Balanze.app.tar.gz`; the asset is
+          # `Balanze_<version>_aarch64.app.tar.gz`), so the recorded name would
+          # never match what a user downloads and `shasum -c` would fail on it.
+          # The DMG has its versioned name on disk already, so it is unaffected.
+          # A checksum line nobody can verify is worse than no line; the raw app
+          # bundle is the niche scripted-install path and the README points
+          # people at the DMG. Reinstating it means resolving the uploaded name
+          # rather than the on-disk one.
           # No `sort -z` on the find pipeline - BSD sort lacks it; sort the
           # finished file by filename instead.
           while IFS= read -r -d '' f; do
             ( cd "$(dirname "$f")" && "${HASH[@]}" "$(basename "$f")" ) >> "$OUT"
           done < <(find "$BUNDLE_DIR" -type f \
-            \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.msi' -o -name '*-setup.exe' \) \
+            \( -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' \) \
             -print0)
           if [ ! -s "$OUT" ]; then
             echo "::error::no release artifacts found under $BUNDLE_DIR - checksums would ship empty"
