@@ -345,6 +345,10 @@ pub enum KeychainHealth {
     /// A PlatformError on the get: the backend itself is not functional. Carries
     /// the reason (never any secret value).
     Broken(String),
+    /// This platform wires no credential store at all (Linux). Not a fault: the
+    /// documented path there is the BALANZE_OPENAI_KEY env var, so doctor
+    /// reports it as a warning with guidance rather than a failed check.
+    NotAvailable,
     /// The presence probe short-circuited on `BALANZE_OPENAI_KEY` and never
     /// touched the keychain, so its health is still unknown. The settings probe
     /// performs the (single) read in this case.
@@ -404,6 +408,15 @@ pub fn probe_openai_key_presence() -> (Option<String>, CheckResult, KeychainHeal
             ),
             KeychainHealth::Broken(reason),
         ),
+        Err(keychain::KeychainError::NoStore) => (
+            None,
+            CheckResult::warn(
+                CheckCategory::Auth,
+                "No OpenAI key configured (this platform has no credential store)",
+                Some(keychain::NO_STORE_HINT.to_string()),
+            ),
+            KeychainHealth::NotAvailable,
+        ),
     }
 }
 
@@ -459,12 +472,13 @@ pub fn probe_statusline() -> CheckResult {
 /// at most one `keychain::get(OPENAI_API_KEY)` (one macOS ACL prompt).
 fn resolve_keychain_health(prior: KeychainHealth) -> KeychainHealth {
     match prior {
-        KeychainHealth::Healthy | KeychainHealth::Broken(_) => prior,
+        KeychainHealth::Healthy | KeychainHealth::Broken(_) | KeychainHealth::NotAvailable => prior,
         KeychainHealth::NotProbed => match keychain::get(keychain::keys::OPENAI_API_KEY) {
             Ok(_) | Err(keychain::KeychainError::NotFound(_)) => KeychainHealth::Healthy,
             Err(keychain::KeychainError::PlatformError { reason, .. }) => {
                 KeychainHealth::Broken(reason)
             }
+            Err(keychain::KeychainError::NoStore) => KeychainHealth::NotAvailable,
         },
     }
 }
@@ -494,9 +508,14 @@ pub fn probe_settings_and_keychain(keychain_health: KeychainHealth) -> CheckResu
         KeychainHealth::Broken(reason) => CheckResult::fail(
             CheckCategory::Other,
             format!("Keychain backend not functional: {reason}"),
-            Some(
-                "On Linux no native keychain is wired; use BALANZE_OPENAI_KEY instead.".to_string(),
+            Some(keychain::NO_STORE_HINT.to_string()),
+        ),
+        KeychainHealth::NotAvailable => CheckResult::warn(
+            CheckCategory::Other,
+            format!(
+                "settings.json readable ({settings_label}); no OS credential store on this platform"
             ),
+            Some(keychain::NO_STORE_HINT.to_string()),
         ),
         // resolve_keychain_health never returns NotProbed; exhaustive for safety.
         KeychainHealth::NotProbed => CheckResult::ok(
@@ -720,6 +739,35 @@ mod tests {
         assert_eq!(
             worst_exit_code(&other_plus_auth, false),
             ExitClass::AuthMissing
+        );
+    }
+
+    #[test]
+    fn no_store_health_is_a_warning_not_a_failure() {
+        // A storeless platform is a documented condition, not a broken backend.
+        // doctor must not tell a Linux user something is wrong with their machine.
+        let result = probe_settings_and_keychain(KeychainHealth::NotAvailable);
+        assert_eq!(
+            result.level,
+            CheckLevel::Warn,
+            "a storeless platform must warn, not fail"
+        );
+        assert!(
+            result
+                .hint
+                .as_deref()
+                .is_some_and(|h| h.contains("BALANZE_OPENAI_KEY")),
+            "the hint must name the documented env override"
+        );
+    }
+
+    #[test]
+    fn not_available_health_survives_resolution_without_a_second_read() {
+        // NotAvailable is already settled; resolving it must not trigger the
+        // extra keychain::get that NotProbed does.
+        assert_eq!(
+            resolve_keychain_health(KeychainHealth::NotAvailable),
+            KeychainHealth::NotAvailable
         );
     }
 }
