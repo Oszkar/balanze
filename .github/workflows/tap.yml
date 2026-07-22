@@ -1,0 +1,164 @@
+name: tap
+
+# Fires when a release is PUBLISHED, never during the build. release.yml drafts
+# the release, and a draft's asset URLs do not resolve for anonymous users - a
+# formula written during the build would point at a URL that 404s until the
+# maintainer clicks Publish, and Homebrew users are anonymous. Publication is
+# also the correct semantic trigger: it is exactly when the URLs go live.
+#
+# workflow_dispatch is NOT redundant. A `release` event runs this file as it
+# exists at the release's tag ref, so re-running a failed run replays the same
+# broken file, and a fix merged to main is never picked up - there is no second
+# `published` event for an already-published release. The dispatch path gives
+# replay-after-fix, a validation route against an older tag, and recovery from
+# an unrelated failure (expired token, tap-repo conflict). The update is
+# idempotent, so re-running against an already-current tag is a no-op.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release tag to sync the tap to (e.g. v0.5.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      # `github.event.release.tag_name` exists only on the release trigger.
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Validate the tag and confirm the release is published
+        # On the dispatch path the tag is user-supplied and the release may
+        # still be a draft, whose asset URLs 404 for anonymous users - exactly
+        # the state this workflow exists to avoid writing into the tap.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$TAG' must match v*.*.* (e.g. v0.5.1)"
+            exit 1
+          fi
+          is_draft=$(gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)
+          if [ "$is_draft" != "false" ]; then
+            echo "::error::release $TAG is still a draft; its asset URLs do not resolve for anonymous users"
+            exit 1
+          fi
+
+      - name: Check out the tap
+        # GITHUB_TOKEN cannot push to another repository, so this uses a
+        # fine-grained PAT scoped to `contents: write` on the tap repo alone.
+        uses: actions/checkout@v7
+        with:
+          repository: Oszkar/homebrew-balanze
+          token: ${{ secrets.TAP_PUSH_TOKEN }}
+          path: tap
+
+      - name: Rewrite the formula and cask
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+
+          # Read the checksums the release itself advertises rather than
+          # re-hashing, so the formula can only ever agree with the release.
+          mkdir -p sums
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+            --pattern '*.sha256' --dir sums
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+            --pattern 'macos-aarch64-checksums.txt' --dir sums
+
+          mac_sha=$(cut -d' ' -f1 "sums/balanze-cli-${TAG}-aarch64-apple-darwin.tar.gz.sha256")
+          linux_sha=$(cut -d' ' -f1 "sums/balanze-cli-${TAG}-x86_64-unknown-linux-musl.tar.gz.sha256")
+          dmg_name="Balanze_${VERSION}_aarch64.dmg"
+          dmg_sha=$(awk -v n="$dmg_name" '$2 == n { print $1 }' sums/macos-aarch64-checksums.txt)
+
+          for v in mac_sha linux_sha dmg_sha; do
+            if [ -z "${!v}" ]; then
+              echo "::error::could not resolve $v from the release checksums"
+              exit 1
+            fi
+          done
+
+          base="https://github.com/${{ github.repository }}/releases/download/${TAG}"
+
+          cat > tap/Formula/balanze-cli.rb <<EOF
+          class BalanzeCli < Formula
+            desc "Consolidated personal AI usage tracking for Claude and Codex"
+            homepage "https://github.com/${{ github.repository }}"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "${base}/balanze-cli-${TAG}-aarch64-apple-darwin.tar.gz"
+                sha256 "${mac_sha}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "${base}/balanze-cli-${TAG}-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "${linux_sha}"
+              end
+            end
+
+            def install
+              bin.install "balanze-cli"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/balanze-cli --version")
+            end
+          end
+          EOF
+
+          cat > tap/Casks/balanze.rb <<EOF
+          cask "balanze" do
+            version "${VERSION}"
+            sha256 "${dmg_sha}"
+
+            url "https://github.com/${{ github.repository }}/releases/download/v#{version}/Balanze_#{version}_aarch64.dmg"
+            name "Balanze"
+            desc "Tray app for consolidated personal AI usage tracking"
+            homepage "https://github.com/${{ github.repository }}"
+
+            depends_on macos: ">= :sequoia"
+            depends_on arch: :arm64
+
+            app "Balanze.app"
+
+            zap trash: [
+              "~/Library/Application Support/me.oszkar.balanze",
+              "~/Library/Caches/me.oszkar.balanze",
+              "~/Library/Preferences/me.oszkar.balanze.plist",
+              "~/Library/Saved Application State/me.oszkar.balanze.savedState",
+            ]
+          end
+          EOF
+
+      - name: Commit and push the tap
+        working-directory: tap
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Idempotency: a dispatch replay against an already-current tag is a
+          # no-op, not a failure. This is what makes the dispatch path safe to
+          # re-run after fixing an unrelated step.
+          if git diff --quiet; then
+            echo "tap already up to date for $TAG"
+            exit 0
+          fi
+          git add Formula/balanze-cli.rb Casks/balanze.rb
+          git commit -m "chore: update balanze to ${TAG}"
+          git push

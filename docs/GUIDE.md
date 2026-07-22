@@ -115,6 +115,20 @@ The popover's gear opens settings:
 - **Provider toggles** - enable or disable each provider live; a disabled provider's cell clears instead of going stale.
 - **Statusline** - wire, unwire, or restore the Claude Code statusline.
 
+## Linux
+
+Balanze on Linux is the CLI only - there is no tray app. Install it with Homebrew (`brew install oszkar/balanze/balanze-cli`) or download `balanze-cli-*-x86_64-unknown-linux-musl.tar.gz` from a release and put the binary on your PATH. The binary is statically linked, so it runs on any distribution regardless of glibc version.
+
+There is no OS credential store wired on Linux, so `balanze-cli set-openai-key` cannot save a key and will tell you so. Supply the key through the environment instead:
+
+```bash
+export BALANZE_OPENAI_KEY=sk-admin-...
+```
+
+This variable takes precedence over the keychain on every platform, so it is also the escape hatch if a macOS or Windows keychain is locked. `balanze-cli doctor` reports the missing store as a warning rather than a failure, because on Linux it is the expected state.
+
+The Anthropic and Codex quota readings need no secret at all - they come from local files Claude Code and Codex already write - so most of Balanze works on Linux with no configuration.
+
 ## Troubleshooting
 
 If something looks wrong, `balanze-cli doctor` diagnoses each integration with a hint per source. The non-obvious traps (double tray icons, JSONL CPU spikes, a stale statusline, macOS Keychain prompts) are collected in [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
