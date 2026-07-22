@@ -125,7 +125,7 @@ There is no OS credential store wired on Linux, so `balanze-cli set-openai-key` 
 export BALANZE_OPENAI_KEY=sk-admin-...
 ```
 
-This variable takes precedence over the keychain on every platform, so it is also the escape hatch if a macOS or Windows keychain is locked. `balanze-cli doctor` reports the missing store as a warning rather than a failure, because on Linux it is the expected state.
+This variable takes precedence over the keychain on every platform, so it is also the escape hatch if a macOS or Windows keychain is locked. Once it is set, `balanze-cli doctor` reports that line as OK and names the env var as the source. With no key configured at all it is a warning rather than a failure, because on Linux a missing store is the expected state, not a fault.
 
 The Anthropic and Codex quota readings need no secret at all - they come from local files Claude Code and Codex already write - so most of Balanze works on Linux with no configuration.
 

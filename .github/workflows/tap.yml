@@ -26,6 +26,15 @@ on:
 permissions:
   contents: read
 
+# Serialize tap writes. Two releases published in quick succession, or a
+# dispatch replay overlapping a release run, would both check out the tap at the
+# same base and the loser's push would be rejected non-fast-forward. Queue
+# instead of cancelling: every run here is a wanted write, so dropping one would
+# silently leave the tap on the wrong version.
+concurrency:
+  group: tap
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -33,10 +42,16 @@ jobs:
       # `github.event.release.tag_name` exists only on the release trigger.
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
-      - name: Validate the tag and confirm the release is published
+      - name: Validate the tag and confirm the release is a published stable
         # On the dispatch path the tag is user-supplied and the release may
         # still be a draft, whose asset URLs 404 for anonymous users - exactly
         # the state this workflow exists to avoid writing into the tap.
+        #
+        # Prereleases are rejected too. `release: published` fires for them, and
+        # the tap has no channel concept - a prerelease would silently become
+        # THE version every `brew install` resolves to. release.yml hardcodes
+        # `prerelease: false`, so this is unreachable through the pipeline and is
+        # purely a guard against a hand-created release.
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -46,9 +61,16 @@ jobs:
             echo "::error::tag '$TAG' must match v*.*.* (e.g. v0.5.1)"
             exit 1
           fi
-          is_draft=$(gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)
+          read -r is_draft is_prerelease < <(
+            gh release view "$TAG" --repo "${{ github.repository }}" \
+              --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"'
+          )
           if [ "$is_draft" != "false" ]; then
             echo "::error::release $TAG is still a draft; its asset URLs do not resolve for anonymous users"
+            exit 1
+          fi
+          if [ "$is_prerelease" != "false" ]; then
+            echo "::error::release $TAG is a prerelease; the tap has no channel concept, so publishing it would make it the default install"
             exit 1
           fi
 
@@ -148,6 +170,7 @@ jobs:
 
       - name: Commit and push the tap
         working-directory: tap
+        shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
