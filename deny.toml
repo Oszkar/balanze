@@ -22,8 +22,17 @@
 #
 # The Linux triple is here for the CLI, which is pure Rust plus rustls. It also
 # drags src-tauri's Linux dependency path (GTK3 via Tauri) into the graph even
-# though no Linux desktop build is ever produced. Advisories reachable only
-# through that path are ignored below, individually and with a stated reason.
+# though no Linux desktop build is ever produced. No ignore entries were needed
+# for that: `unmaintained = "workspace"` below already scopes unmaintained
+# advisories to workspace members, and the gtk-rs family is transitive through
+# tauri -> tray-icon -> webkit2gtk/wry.
+#
+# That scoping covers the unmaintained category ONLY. The Linux triple did widen
+# the graph for vulnerability, unsound, yanked, licenses, and bans, which all
+# pass today. If a real vulnerability ever lands in the GTK3 chain it will block
+# cargo-deny for a path that is never shipped - ignore that advisory here with a
+# note saying src-tauri is not built for Linux, rather than dropping the triple
+# (the CLI genuinely ships there).
 targets = [
     { triple = "x86_64-pc-windows-msvc" },
     { triple = "aarch64-pc-windows-msvc" },

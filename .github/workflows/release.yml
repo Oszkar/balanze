@@ -7,10 +7,12 @@ on:
   # notarization to be eyeballed and the per-OS validation matrix
   # (AGENTS.md §6) is not fully covered by the per-PR gate.
   #
-  # Build matrix note: aarch64-apple-darwin is the only Apple triple built
-  # (Intel macOS is excluded - see docs/PRD.md "Supported platforms"), and
-  # Windows builds host-default x86_64-pc-windows-msvc. This matrix must
-  # track deny.toml's [graph].targets exactly.
+  # Build matrix note: there are TWO matrices here and they ship different
+  # architecture sets. The desktop `build` job builds aarch64-apple-darwin
+  # (Intel macOS is excluded - see docs/PRD.md "Supported platforms") and
+  # host-default x86_64-pc-windows-msvc. The `cli` job builds those two plus
+  # aarch64-pc-windows-msvc and x86_64-unknown-linux-musl. deny.toml's
+  # [graph].targets carries the UNION of the two, not either one alone.
   workflow_dispatch:
     inputs:
       tag:
@@ -252,6 +254,10 @@ jobs:
     # This matrix plus `build`'s matrix together define the shipped
     # architectures, which deny.toml's [graph].targets must match as a union
     # (AGENTS.md §1).
+    # Note: `build` reports failure if EITHER matrix leg fails, so a single
+    # flaky notarization skips this job entirely even though the surviving leg
+    # already created the draft. Re-run the failed jobs; every upload uses
+    # --clobber, so re-running is safe and idempotent.
     needs: build
     name: cli (${{ matrix.target }})
     strategy:
@@ -296,9 +302,15 @@ jobs:
           rustflags: ""
 
       - name: Cache Rust workspace
+        # save-if: false because this workflow only runs on tag refs. Actions
+        # cache scopes are per-ref with fallback to the default branch only,
+        # which release.yml never populates - so a restore here always misses
+        # and a save would cost four legs' worth of upload for a scope nothing
+        # ever reads. The restore attempt is kept in case that changes.
         uses: swatinem/rust-cache@v2
         with:
           key: cli-${{ matrix.target }}
+          save-if: false
 
       - name: Build balanze-cli
         run: cargo build --release --locked --package balanze_cli --target ${{ matrix.target }}
