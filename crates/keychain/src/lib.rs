@@ -46,9 +46,16 @@ pub fn init_default_store() {
             Ok(store) => keyring_core::set_default_store(store),
             Err(e) => tracing::error!("keychain: failed to init macOS keychain store: {e}"),
         }
+        // `debug`, not `warn`: a platform with no credential store is a
+        // documented condition rather than a fault (AGENTS.md §3.2 reserves
+        // `warn` for what an operator should look at), and this fires on every
+        // process start - `balanze-cli statusline` runs once per agent turn.
+        // The message says what actually happens now: the operations report a
+        // typed `NoStore`, they do not "fail" in any sense the user must act on.
+        // No `keychain:` prefix - tracing already emits the target.
         #[cfg(not(any(windows, target_os = "macos")))]
-        tracing::warn!(
-            "keychain: no native credential store for this platform; keychain operations will fail"
+        tracing::debug!(
+            "no native credential store for this platform; get/set/delete report NoStore"
         );
     });
 }
@@ -56,7 +63,7 @@ pub fn init_default_store() {
 /// Stable entry names for keychain items. Adding a new secret means adding
 /// a constant here so the call sites are all greppable.
 pub mod keys {
-    /// User-supplied OpenAI Platform API key (`sk-…`). One per Balanze install.
+    /// User-supplied OpenAI Platform API key (`sk-...`). One per Balanze install.
     pub const OPENAI_API_KEY: &str = "openai_api_key";
 }
 

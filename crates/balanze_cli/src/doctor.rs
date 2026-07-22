@@ -75,13 +75,21 @@ fn no_data_source_configured(data_results: &[&CheckResult]) -> bool {
 /// providing a credential / source). Factored out so the render path and the
 /// tests share one definition.
 fn no_provider_aggregate_fail() -> CheckResult {
+    // The OpenAI clause tracks the platform. `set-openai-key` refuses outright
+    // where no credential store exists, so recommending it there would point
+    // the user at the one command that cannot work - and this hint is the only
+    // actionable line a freshly-installed Linux user gets.
+    let openai_clause = if keychain::has_native_store() {
+        "set the OpenAI key (`balanze-cli set-openai-key`)"
+    } else {
+        "set BALANZE_OPENAI_KEY"
+    };
     CheckResult::fail(
         CheckCategory::Auth,
         "No usable provider configured - balanze has nothing to show",
-        Some(
-            "set up at least one: run `claude login`, use Claude Code so JSONL exists, set the OpenAI key (`balanze-cli set-openai-key`), or run Codex"
-                .into(),
-        ),
+        Some(format!(
+            "set up at least one: run `claude login`, use Claude Code so JSONL exists, {openai_clause}, or run Codex"
+        )),
     )
 }
 
@@ -277,6 +285,33 @@ mod tests {
         let agg = no_provider_aggregate_fail();
         assert_eq!(agg.level, CheckLevel::Fail);
         assert_eq!(agg.category, CheckCategory::Auth);
+    }
+
+    #[test]
+    fn aggregate_hint_never_recommends_a_command_this_platform_refuses() {
+        // This hint is the only actionable line a freshly-installed user gets,
+        // and `set-openai-key` refuses outright where there is no credential
+        // store. Recommending it there sends the user at the one command that
+        // cannot work. Assert the clause tracks the platform instead of being
+        // hardcoded; the storeless branch is the one that runs on Linux CI.
+        let hint = no_provider_aggregate_fail()
+            .hint
+            .expect("the aggregate always carries a hint");
+        if keychain::has_native_store() {
+            assert!(
+                hint.contains("balanze-cli set-openai-key"),
+                "a platform with a store should still point at the command: {hint}"
+            );
+        } else {
+            assert!(
+                !hint.contains("set-openai-key"),
+                "recommended a command that refuses on this platform: {hint}"
+            );
+            assert!(
+                hint.contains("BALANZE_OPENAI_KEY"),
+                "storeless platforms must name the env override: {hint}"
+            );
+        }
     }
 
     #[test]
