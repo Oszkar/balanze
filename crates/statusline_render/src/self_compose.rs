@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(second_value.openai_cost_micro_usd, Some(42));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn stale_data_returns_immediately_while_another_process_refreshes() {
         let dir = tempdir().unwrap();
         cache::write_success(dir.path(), "fp", 55, t0());
@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(f.calls.get(), 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn waiting_for_another_process_is_bounded() {
         let dir = tempdir().unwrap();
         let _lease = match cache::try_acquire_refresh_lease(dir.path()).unwrap() {

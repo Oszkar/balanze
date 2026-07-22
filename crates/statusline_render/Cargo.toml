@@ -22,3 +22,8 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# `test-util` only, and only for tests: it enables tokio's pausable clock so the
+# refresh-lease timing tests assert the logic's timing instead of the runner's
+# load. Dev-only, so it is never compiled into a shipped binary, and it changes
+# nothing unless a test explicitly starts its runtime paused.
+tokio = { workspace = true, features = ["test-util"] }
