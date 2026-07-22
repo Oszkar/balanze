@@ -10,21 +10,25 @@
 # Run locally:   cargo install --locked cargo-deny && cargo deny check
 
 [graph]
-# By default cargo-deny only checks the host platform. We ship for
-# Windows + macOS today; Linux comes in a later phase per PRD
-# Phasing. Targeting only the platforms we actually build for keeps
-# the dep graph honest - e.g., Tauri pulls GTK3 transitively on
-# Linux, which is RustSec-unmaintained, but we don't ship that path
-# so we shouldn't fail CI on it.
+# By default cargo-deny only checks the host platform. This list is the UNION of
+# the two build matrices in release.yml: the desktop legs (Windows x64, macOS
+# arm64) and the CLI legs (those two plus Windows arm64 and Linux musl).
+# Targeting only what we actually build keeps the dep graph honest.
 #
-# This list must track release.yml's build matrix exactly. Intel macOS
-# (x86_64-apple-darwin) is deliberately absent: the release workflow
-# builds aarch64-apple-darwin only, so vetting an Intel dep graph would
-# fail CI on advisories that cannot reach a user. See docs/PRD.md
-# "Supported platforms".
+# This list must track release.yml's build matrices exactly. Intel macOS
+# (x86_64-apple-darwin) is deliberately absent: the release workflow builds
+# aarch64-apple-darwin only, so vetting an Intel dep graph would fail CI on
+# advisories that cannot reach a user. See docs/PRD.md "Supported platforms".
+#
+# The Linux triple is here for the CLI, which is pure Rust plus rustls. It also
+# drags src-tauri's Linux dependency path (GTK3 via Tauri) into the graph even
+# though no Linux desktop build is ever produced. Advisories reachable only
+# through that path are ignored below, individually and with a stated reason.
 targets = [
     { triple = "x86_64-pc-windows-msvc" },
+    { triple = "aarch64-pc-windows-msvc" },
     { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-unknown-linux-musl" },
 ]
 
 # --- Security advisories (RustSec) ----------------------------------------

@@ -22,18 +22,14 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
-          - platform: windows-latest
-            args: ''
-
-    runs-on: ${{ matrix.platform }}
-
+  notes:
+    # Single source of the release-notes prose. A step's `with:` block cannot be
+    # shared conditionally, so before this job the same paragraphs were pasted
+    # into both desktop legs and kept in sync by hand (DRY, AGENTS.md §2).
+    # Runs first so an ill-formed tag fails before any build starts.
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.read.outputs.body }}
     steps:
       - name: Validate tag input
         # Reject anything that isn't v*.*.* - a manual dispatch from a feature
@@ -49,6 +45,36 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Read the release body
+        id: read
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'body<<RELEASE_BODY_EOF'
+            cat .github/release-body.md
+            echo 'RELEASE_BODY_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: notes
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -144,11 +170,7 @@ jobs:
         with:
           tagName: ${{ inputs.tag }}
           releaseName: 'Balanze ${{ inputs.tag }}'
-          releaseBody: |
-            Auto-generated release.
-            - **Windows (x64):** `Balanze_*_x64_en-US.msi`, or `Balanze_*_x64-setup.exe` for the NSIS installer. Unsigned - SmartScreen will warn on first run; click "More info" → "Run anyway". [Why we don't sign](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing).
-            - **macOS 15+ (Apple Silicon):** `Balanze_*_aarch64.dmg`. Signed and notarized - Gatekeeper should not warn. Intel Macs are not supported.
-            - **Verify a download** against `windows-x64-checksums.txt` / `macos-aarch64-checksums.txt`.
+          releaseBody: ${{ needs.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -161,11 +183,7 @@ jobs:
         with:
           tagName: ${{ inputs.tag }}
           releaseName: 'Balanze ${{ inputs.tag }}'
-          releaseBody: |
-            Auto-generated release.
-            - **Windows (x64):** `Balanze_*_x64_en-US.msi`, or `Balanze_*_x64-setup.exe` for the NSIS installer. Unsigned - SmartScreen will warn on first run; click "More info" → "Run anyway". [Why we don't sign](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing).
-            - **macOS 15+ (Apple Silicon):** `Balanze_*_aarch64.dmg`. Signed and notarized - Gatekeeper should not warn. Intel Macs are not supported.
-            - **Verify a download** against `windows-x64-checksums.txt` / `macos-aarch64-checksums.txt`.
+          releaseBody: ${{ needs.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -227,3 +245,104 @@ jobs:
         run: |
           security delete-keychain build.keychain || true
           rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+  cli:
+    # Prebuilt `balanze-cli` binaries. `needs: build` because the desktop legs
+    # are what create the draft release; `gh release upload` needs it to exist.
+    # This matrix plus `build`'s matrix together define the shipped
+    # architectures, which deny.toml's [graph].targets must match as a union
+    # (AGENTS.md §1).
+    needs: build
+    name: cli (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - platform: windows-latest
+            target: aarch64-pc-windows-msvc
+            archive: zip
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install musl toolchain
+        # ring is the CLI's only non-Rust dependency (reqwest runs on rustls, no
+        # OpenSSL), and it needs a C compiler targeting musl. Static musl is
+        # deliberate: a glibc binary built here would link this runner's glibc
+        # and refuse to run on older distros.
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install Rust toolchain
+        # Pin (channel + components) comes from rust-toolchain.toml - see ci.yml.
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+          rustflags: ""
+
+      - name: Cache Rust workspace
+        uses: swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.target }}
+
+      - name: Build balanze-cli
+        run: cargo build --release --locked --package balanze_cli --target ${{ matrix.target }}
+
+      - name: Package, checksum, and upload
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          TARGET: ${{ matrix.target }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          NAME="balanze-cli-${TAG}-${TARGET}"
+          mkdir -p "dist/${NAME}"
+          if [ "$ARCHIVE" = "zip" ]; then
+            cp "target/${TARGET}/release/balanze-cli.exe" "dist/${NAME}/"
+          else
+            cp "target/${TARGET}/release/balanze-cli" "dist/${NAME}/"
+          fi
+          cp LICENSE "dist/${NAME}/"
+
+          cd dist
+          if [ "$ARCHIVE" = "zip" ]; then
+            ASSET="${NAME}.zip"
+            7z a -tzip "$ASSET" "$NAME" > /dev/null
+          else
+            ASSET="${NAME}.tar.gz"
+            tar -czf "$ASSET" "$NAME"
+          fi
+
+          # macOS runners ship BSD shasum, not coreutils' sha256sum; Git Bash on
+          # the Windows runner ships sha256sum. Same idiom as the desktop legs'
+          # checksum step.
+          if command -v sha256sum > /dev/null 2>&1; then
+            HASH=(sha256sum)
+          else
+            HASH=(shasum -a 256)
+          fi
+          "${HASH[@]}" "$ASSET" > "${ASSET}.sha256"
+          cat "${ASSET}.sha256"
+
+          # One sibling .sha256 per archive rather than a shared checksum file:
+          # the four legs race, and `--clobber` on a shared name would drop
+          # whichever finished first. Homebrew also wants exactly one hash per
+          # URL, which this gives it directly.
+          gh release upload "$TAG" "$ASSET" "${ASSET}.sha256" --clobber
