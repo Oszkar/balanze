@@ -87,15 +87,16 @@ A small team or technically inclined individual who wants a local dashboard and 
 
 ## Supported platforms
 
-| Platform | Architecture | Support level | Notes |
-|---|---|---|---|
-| Windows 11 | x64 | CLI v0.1; tray UI v0.3 | CLI works from v0.1 (`cargo install`); tray-first desktop experience lands across the v0.3 sub-milestones (popover in v0.3.0). Windows 10 excluded. Installers are unsigned by decision - see "Code signing" below. arm64 Windows not built. |
-| macOS 15+ | Apple Silicon (arm64) | CLI v0.1; tray UI v0.3 | CLI works from v0.1; menu-bar-first experience with hidden main window across v0.3. Release DMG/app signed and notarized from v0.5.0. |
-| macOS, Intel | x86_64 | **Excluded** | No release artifact is built. macOS 15 already drops most Intel hardware, so a universal binary would double mac build time and bundle size to serve a shrinking set of machines that largely cannot run the documented OS floor. `cargo install` from source is untested but unobstructed. |
-| Linux (generic) | x64 | CLI v0.1 | `cargo install` works trivially; no separate test matrix. CLI only - tray UI not targeted here. |
-| Ubuntu 24.04 LTS+ GNOME | x64 | Future | GNOME tray UI with AppIndicator support. Deferred until the Win + Mac tray story is mature; Linux tray fragility makes it the wrong place to start. |
+| Platform | Architecture | Support level | Artifacts | Notes |
+|---|---|---|---|---|
+| Windows 11 | x64 | CLI v0.1; tray UI v0.3 | Desktop + CLI | Tray-first desktop experience lands across the v0.3 sub-milestones (popover in v0.3.0). Windows 10 excluded. Installers are unsigned by decision - see "Code signing" below. |
+| Windows 11 | arm64 | CLI v0.5.1 | CLI only | The CLI cross-compiles cleanly (pure Rust plus rustls). The desktop app is not built for arm64: it needs a verified WebView2 runtime story and a runner decision, tracked separately. x64 desktop builds run under emulation meanwhile. |
+| macOS 15+ | Apple Silicon (arm64) | CLI v0.1; tray UI v0.3 | Desktop + CLI | Menu-bar-first experience with hidden main window across v0.3. Release DMG/app signed and notarized from v0.5.0. The CLI archive is unsigned; Homebrew is the recommended path. |
+| macOS, Intel | x86_64 | **Excluded** | None | No release artifact is built. macOS 15 already drops most Intel hardware, so a universal binary would double mac build time and bundle size to serve a shrinking set of machines that largely cannot run the documented OS floor. `cargo install` from source is untested but unobstructed. |
+| Linux (generic) | x64 | CLI v0.1; binaries v0.5.1 | CLI only | A statically linked musl binary from v0.5.1, so it runs on any distro regardless of glibc age. No OS credential store is wired on Linux - the OpenAI key comes from `BALANZE_OPENAI_KEY`. Tray UI not targeted here. |
+| Ubuntu 24.04 LTS+ GNOME | x64 | Future | - | GNOME tray UI with AppIndicator support. Deferred until the Win + Mac tray story is mature; Linux tray fragility makes it the wrong place to start. |
 
-The architecture column is load-bearing: it must track `release.yml`'s build matrix and `deny.toml`'s `[graph].targets` exactly. Adding an architecture means touching all three.
+The architecture column is load-bearing: it must track `release.yml`'s build matrices and `deny.toml`'s `[graph].targets` exactly. `deny.toml` carries the **union** of the desktop and CLI matrices. Adding an architecture means touching all three.
 
 ### Code signing
 

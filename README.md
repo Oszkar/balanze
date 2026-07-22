@@ -9,7 +9,7 @@
 
 <p align="center">
   <a href="https://github.com/Oszkar/balanze/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Oszkar/balanze/ci.yml?branch=main&label=ci&logo=github"></a>
-  <a href="https://github.com/Oszkar/balanze/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/Oszkar/balanze?label=version&color=blue"></a>
+  <a href="https://github.com/Oszkar/balanze/releases"><img alt="Version" src="https://img.shields.io/github/v/release/Oszkar/balanze?display_name=tag&label=version&color=blue"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.89%2B-orange?logo=rust&logoColor=white"></a>
 </p>
@@ -64,7 +64,7 @@ Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and 
 
 The `_x64-setup.exe` asset is the same Windows app as an NSIS installer instead of an MSI; pick either. `_aarch64.app.tar.gz` is the raw macOS app bundle for scripted installs - if you are not sure, take the DMG.
 
-**Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only. macOS 15 already drops most Intel hardware, so a universal binary would double the build time and bundle size to serve machines that largely cannot run the required OS anyway. Building from source on an Intel Mac is untested but nothing blocks it. Windows on arm64 is likewise not built.
+**Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only. macOS 15 already drops most Intel hardware, so a universal binary would double the build time and bundle size to serve machines that largely cannot run the required OS anyway. Building from source on an Intel Mac is untested but nothing blocks it. The desktop app is not built for Windows on arm64 either, though the CLI is - see the command-line tool section below.
 
 <details>
 <summary><strong>Windows: what SmartScreen shows, and why</strong></summary>
@@ -89,7 +89,24 @@ Get-FileHash .\Balanze_0.5.0_x64_en-US.msi -Algorithm SHA256
 shasum -a 256 Balanze_0.5.0_aarch64.dmg
 ```
 
-**CLI (`balanze-cli`):** still source-only for now (prebuilt CLI binaries are on the [roadmap](docs/PRD.md)). Requires Rust 1.89+.
+### Command-line tool
+
+`balanze-cli` is the full four-quadrant view in your terminal, the Claude Code statusline backend, and the entire Linux story.
+
+| Platform | Install |
+|---|---|
+| macOS (Apple Silicon) | `brew install oszkar/balanze/balanze-cli` |
+| Linux (x64) | `brew install oszkar/balanze/balanze-cli`, or download `balanze-cli-*-x86_64-unknown-linux-musl.tar.gz` |
+| Windows (x64) | Download `balanze-cli-*-x86_64-pc-windows-msvc.zip` |
+| Windows (arm64) | Download `balanze-cli-*-aarch64-pc-windows-msvc.zip` |
+
+Direct downloads: extract the archive and put `balanze-cli` somewhere on your PATH. Every archive ships a sibling `.sha256` so you can verify it against what CI built.
+
+The Linux binary is statically linked against musl, so it runs on any distribution regardless of glibc version. Linux has no OS credential store wired, so supply your OpenAI key through the `BALANZE_OPENAI_KEY` environment variable rather than `balanze-cli set-openai-key`.
+
+On macOS, a browser-downloaded archive is quarantined by Gatekeeper because the CLI binary is not notarized. Homebrew installs are not quarantined, which is why it is the recommended path; for a direct download, run `xattr -d com.apple.quarantine balanze-cli` once.
+
+**Building from source:** the CLI also compiles cleanly from source if you would rather not use a prebuilt binary. Requires Rust 1.89+.
 
 ```bash
 # `--git` is required (not on crates.io). The repo root is a virtual workspace,
