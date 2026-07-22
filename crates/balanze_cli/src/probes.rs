@@ -349,6 +349,12 @@ pub enum KeychainHealth {
     /// documented path there is the BALANZE_OPENAI_KEY env var, so doctor
     /// reports it as a warning with guidance rather than a failed check.
     NotAvailable,
+    /// No credential store, AND the env var is already supplying the key - so
+    /// there is nothing for the user to do. Distinct from [`Self::NotAvailable`]
+    /// because that one's guidance ("set BALANZE_OPENAI_KEY") would be telling
+    /// the user to do what they have already done, and a warning here would
+    /// make doctor claim degradation on a box that is fully working.
+    NotAvailableKeyFromEnv,
     /// The presence probe short-circuited on `BALANZE_OPENAI_KEY` and never
     /// touched the keychain, so its health is still unknown. The settings probe
     /// performs the (single) read in this case.
@@ -472,7 +478,19 @@ pub fn probe_statusline() -> CheckResult {
 /// at most one `keychain::get(OPENAI_API_KEY)` (one macOS ACL prompt).
 fn resolve_keychain_health(prior: KeychainHealth) -> KeychainHealth {
     match prior {
-        KeychainHealth::Healthy | KeychainHealth::Broken(_) | KeychainHealth::NotAvailable => prior,
+        KeychainHealth::Healthy
+        | KeychainHealth::Broken(_)
+        | KeychainHealth::NotAvailable
+        | KeychainHealth::NotAvailableKeyFromEnv => prior,
+        // `NotProbed` is returned only when the presence probe short-circuited
+        // on a NON-EMPTY BALANZE_OPENAI_KEY, so a key is already configured.
+        // Where there is no store, the read below can only tell us what
+        // `has_native_store()` already knows - so skip it. That also avoids a
+        // guaranteed-pointless macOS ACL prompt if a store is ever wired on a
+        // platform that currently has none.
+        KeychainHealth::NotProbed if !keychain::has_native_store() => {
+            KeychainHealth::NotAvailableKeyFromEnv
+        }
         KeychainHealth::NotProbed => match keychain::get(keychain::keys::OPENAI_API_KEY) {
             Ok(_) | Err(keychain::KeychainError::NotFound(_)) => KeychainHealth::Healthy,
             Err(keychain::KeychainError::PlatformError { reason, .. }) => {
@@ -509,6 +527,15 @@ pub fn probe_settings_and_keychain(keychain_health: KeychainHealth) -> CheckResu
             CheckCategory::Other,
             format!("Keychain backend not functional: {reason}"),
             Some(keychain::NO_STORE_HINT.to_string()),
+        ),
+        // Ok, not Warn: the platform limitation is real but fully mitigated, so
+        // there is nothing to act on and no hint to give. A Warn here would make
+        // doctor report degradation on a box where everything works.
+        KeychainHealth::NotAvailableKeyFromEnv => CheckResult::ok(
+            CheckCategory::Other,
+            format!(
+                "settings.json readable ({settings_label}); no OS credential store, OpenAI key supplied via BALANZE_OPENAI_KEY"
+            ),
         ),
         KeychainHealth::NotAvailable => CheckResult::warn(
             CheckCategory::Other,
@@ -758,6 +785,36 @@ mod tests {
                 .as_deref()
                 .is_some_and(|h| h.contains("BALANZE_OPENAI_KEY")),
             "the hint must name the documented env override"
+        );
+    }
+
+    #[test]
+    fn env_supplied_key_needs_no_hint_about_setting_the_env_var() {
+        // The user has already set BALANZE_OPENAI_KEY - that is the only way to
+        // reach this state. Telling them to set it is noise, and a Warn would
+        // make doctor claim degradation on a box that is fully working.
+        let result = probe_settings_and_keychain(KeychainHealth::NotAvailableKeyFromEnv);
+        assert_eq!(result.level, CheckLevel::Ok);
+        assert!(
+            result.hint.is_none(),
+            "nothing to act on, so no hint: {:?}",
+            result.hint
+        );
+        assert!(
+            result.message.contains("BALANZE_OPENAI_KEY"),
+            "say where the key came from: {}",
+            result.message
+        );
+    }
+
+    /// Only compiled where there is genuinely no store, which is the platform
+    /// the short-circuit exists for.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    #[test]
+    fn storeless_platform_with_env_key_resolves_without_reading_the_keychain() {
+        assert_eq!(
+            resolve_keychain_health(KeychainHealth::NotProbed),
+            KeychainHealth::NotAvailableKeyFromEnv
         );
     }
 
