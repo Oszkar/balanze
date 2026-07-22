@@ -6,15 +6,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
-### Fixed
+## [0.5.1] - Reach - 2026-07-22
 
-- The macOS installer now enforces the documented macOS 15+ floor. `tauri.conf.json` carried no `minimumSystemVersion`, so the DMG fell back to Tauri's 10.13 default and would install on macOS versions Balanze does not support, failing later instead of at install time.
+You can install the CLI without a Rust toolchain now, on all three operating systems. Linux gets its first install path that is not `cargo install`.
+
+### Added
+
+- **Prebuilt `balanze-cli` binaries on every release** for Windows (x64 and arm64), macOS (Apple Silicon), and Linux. The Linux build is statically linked against musl, so it runs on any distribution regardless of how old its glibc is. Each archive ships a sibling `.sha256`.
+- **A Homebrew tap.** `brew install oszkar/balanze/balanze-cli` for the CLI on macOS and Linux, and `brew install --cask oszkar/balanze/balanze` for the desktop app. The tap updates itself whenever a release is published.
 
 ### Changed
 
+- **A platform with no credential store is no longer treated as a broken one.** Linux wires no OS keychain, and that used to surface as a raw keyring error. Now `set-openai-key` explains there is nowhere to store the key and names `BALANZE_OPENAI_KEY` **before** asking you to paste one, `setup` skips the key step rather than prompting for something it cannot save, and `doctor` reports the missing store as a warning - or as OK when the environment variable is already supplying the key.
 - **Intel Macs are documented as unsupported.** The release workflow has only ever built `aarch64-apple-darwin`, but the README offered "the macOS DMG" with no architecture, so an Intel user could download a build that cannot run. The README, the PRD support matrix, and the release notes now say Apple Silicon; `deny.toml` no longer vets the Intel dependency graph it never shipped.
-- **Releases now ship SHA-256 checksums** (`windows-x64-checksums.txt`, `macos-aarch64-checksums.txt`) so a download can be verified against what CI built.
+- **Releases ship SHA-256 checksums** (`windows-x64-checksums.txt`, `macos-aarch64-checksums.txt`, plus a `.sha256` beside each CLI archive) so a download can be verified against what CI built. The raw `.app.tar.gz` bundle is deliberately not checksummed: its filename changes on upload, so the recorded hash could never be matched against the file you download. Take the DMG if you want a verifiable macOS download.
 - Windows code signing is recorded as declined on the merits rather than "optional". Microsoft no longer grants SmartScreen reputation for EV certificates, so no certificate at any price buys a clean first run; the README now explains the SmartScreen prompt and points at the checksums and public source instead.
+
+### Fixed
+
+- **The macOS installer now enforces the documented macOS 15+ floor.** `tauri.conf.json` carried no `minimumSystemVersion`, so the DMG fell back to Tauri's 10.13 default and would install on macOS versions Balanze does not support, failing later instead of at install time.
 
 ## [0.5.0] - Distribution & Legibility - 2026-07-16
 
