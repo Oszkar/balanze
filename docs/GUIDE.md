@@ -115,6 +115,20 @@ The popover's gear opens settings:
 - **Provider toggles** - enable or disable each provider live; a disabled provider's cell clears instead of going stale.
 - **Statusline** - wire, unwire, or restore the Claude Code statusline.
 
+## Linux
+
+Balanze on Linux is the CLI only - there is no tray app. Install it with Homebrew (`brew install oszkar/balanze/balanze-cli`) or download `balanze-cli-*-x86_64-unknown-linux-musl.tar.gz` from a release and put the binary on your PATH. The binary is statically linked, so it runs on any distribution regardless of glibc version.
+
+There is no OS credential store wired on Linux, so `balanze-cli set-openai-key` cannot save a key and will tell you so. Supply the key through the environment instead:
+
+```bash
+export BALANZE_OPENAI_KEY=sk-admin-...
+```
+
+This variable takes precedence over the keychain on every platform, so it is also the escape hatch if a macOS or Windows keychain is locked. Once it is set, `balanze-cli doctor` reports the keychain line as OK and names the env var as the source. With no key configured, that line is a warning rather than a failure, because a missing store on Linux is the expected state and not a fault. The overall run can still fail: `doctor` reports a failure when *no* provider source is usable, which is what a freshly installed box with no Claude, no Codex, and no key looks like.
+
+Neither provider needs a secret that Balanze manages. Codex quota and the Claude JSONL figures come from local files those tools already write. Anthropic quota uses Claude Code's own OAuth credential, which Balanze reads in place and never modifies - so it works once you have run `claude login`, with nothing extra to set up here.
+
 ## Troubleshooting
 
 If something looks wrong, `balanze-cli doctor` diagnoses each integration with a hint per source. The non-obvious traps (double tray icons, JSONL CPU spikes, a stale statusline, macOS Keychain prompts) are collected in [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
