@@ -1,0 +1,129 @@
+name: docs
+
+# Pre-merge gate for the docs site. pages.yml cannot do this job: it runs only
+# on push to main (post-merge), and the artifact it builds contains no README,
+# so it can never check README-to-site navigation - which is exactly what the
+# v0.5.2 deduplication creates.
+#
+# This is a separate workflow rather than a job in ci.yml because GitHub applies
+# `paths` to the workflow event, not to a job. ci.yml runs unfiltered on every PR
+# and owns the required `linux` and `cargo-deny` checks; adding a path filter
+# there would leave those pending on code-only PRs and block merges.
+#
+# Not currently a required status check. Promoting it means dropping this path
+# filter (a filtered workflow reports nothing on non-matching PRs, so a required
+# check would hang) or adding a companion always-reporting job.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "docs/src/**"
+      - "theme/**"
+      - "book.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Prebuilt binaries verified by SHA-256, matching pages.yml's approach:
+      # fast, and it keeps the workspace's vetted Cargo graph untouched.
+      - name: Install mdBook
+        env:
+          MDBOOK_VERSION: v0.5.4
+          MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
+        run: |
+          curl -sSL --fail -o mdbook.tar.gz "https://github.com/rust-lang/mdBook/releases/download/${MDBOOK_VERSION}/mdbook-${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${MDBOOK_SHA256}  mdbook.tar.gz" | sha256sum -c -
+          tar -xzf mdbook.tar.gz -C /usr/local/bin
+          rm mdbook.tar.gz
+
+      # NOTE: unlike mdBook's, this archive extracts into a subdirectory, so it
+      # needs --strip-components and an explicit member path.
+      - name: Install lychee
+        env:
+          LYCHEE_VERSION: lychee-v0.24.2
+          LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+        run: |
+          curl -sSL --fail -o lychee.tar.gz "https://github.com/lycheeverse/lychee/releases/download/${LYCHEE_VERSION}/lychee-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${LYCHEE_SHA256}  lychee.tar.gz" | sha256sum -c -
+          tar -xzf lychee.tar.gz --strip-components=1 -C /usr/local/bin lychee-x86_64-unknown-linux-gnu/lychee
+          rm lychee.tar.gz
+
+      - name: Build book
+        run: mdbook build
+
+      # create-missing = false turns a SUMMARY entry with no file into a build
+      # failure, but it says nothing about a chapter that exists and is empty.
+      # Assert the pages are there and carry their content heading. mdBook also
+      # emits an <h1 class="menu-title"> in the nav bar on every page, so match
+      # the content heading's closing markup specifically.
+      - name: Assert expected pages
+        run: |
+          set -euo pipefail
+          check() {
+            local file="$1" heading="$2"
+            if [ ! -f "book/$file" ]; then
+              echo "::error::missing book/$file"
+              return 1
+            fi
+            if ! grep -q ">${heading}</a></h1>" "book/$file"; then
+              echo "::error::book/$file has no content <h1> reading '${heading}'"
+              return 1
+            fi
+            echo "ok: book/$file (<h1> ${heading})"
+          }
+          check index.html "Balanze"
+          check GUIDE.html "Balanze user guide"
+
+      # AGENTS.md section 3.5 bans em dashes, en dashes, and the Unicode ellipsis.
+      # Matched as UTF-8 byte sequences rather than with grep -P, whose Unicode
+      # escapes depend on the runner's locale.
+      #
+      # Full-tree, not diff-scoped: a CI checkout has no staging area, so a
+      # `git diff --cached` scan would inspect nothing, and the prohibition is
+      # repository-wide anyway.
+      - name: Punctuation scan
+        run: |
+          set -uo pipefail
+          # Sources we author, plus the RENDERED pages - the renderer can introduce
+          # these characters even when every source file is clean.
+          #
+          # book/ is scoped to *.html deliberately: mdBook's bundled vendor assets
+          # (mark-*.min.js, and its default favicon.svg) contain these byte sequences,
+          # so an unscoped scan of book/ could never pass. Our content pages are what
+          # this rule governs.
+          if grep -rn -e $'\xe2\x80\x94' -e $'\xe2\x80\x93' -e $'\xe2\x80\xa6' \
+              README.md book.toml docs/src theme; then
+            echo "::error::Found an em dash, en dash, or Unicode ellipsis in a source file. Use - and ... (AGENTS.md section 3.5)."
+            exit 1
+          fi
+          if grep -rn --include='*.html' -e $'\xe2\x80\x94' -e $'\xe2\x80\x93' -e $'\xe2\x80\xa6' book; then
+            echo "::error::Found an em dash, en dash, or Unicode ellipsis in rendered output. Check book.toml's smart-punctuation setting (AGENTS.md section 3.5)."
+            exit 1
+          fi
+          echo "ok: no prohibited punctuation"
+
+      # The remap is what makes this worth running: the README's absolute links
+      # into the site resolve against the book built from THIS pull request, not
+      # against whatever is currently deployed. It is the only check that can
+      # catch a README rewrite breaking site navigation.
+      #
+      # Quoting is load-bearing: double quotes so $(pwd) expands here, and \$1
+      # escaped so the capture reference reaches lychee instead of being eaten
+      # as a shell positional parameter.
+      - name: Link check
+        run: |
+          lychee --no-progress --include-fragments \
+            --remap "^https://oszkar\.github\.io/balanze([/?#]|$) file://$(pwd)/book\$1" \
+            --exclude '^https://(?!oszkar\.github\.io/balanze)' \
+            book README.md
