@@ -42,7 +42,7 @@ Below the grid, the **Subscription leverage** box shows what your Claude Code us
 
 ### Pace and burn
 
-- **Pace** rides on the usage bar: how much of a window you have used versus how far through the window you are. Over 1.0x means you are ahead of pace. Balanze shows measured pace, not a forecast.
+- **Pace** rides on the usage bar: how much of a window you have used versus how far through the window you are. Over 1.0x means you are ahead of pace. Balanze shows measured pace, not a forecast - an earlier version tried an EWMA-based predictor, but a plausible-looking forecast that's occasionally wrong is worse than a fact that's always right, so it was retired in favor of this.
 - **Burn** is the recent token rate for the active Claude session.
 
 ### Source and confidence
