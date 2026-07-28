@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Added
+
+- **A docs site** (mdBook, deployed to GitHub Pages) hosting the rendered user guide, which now also explains why pace is a measured figure rather than a forecast (an earlier EWMA-based predictor was retired in favor of it).
+
 ## [0.5.1] - Reach - 2026-07-22
 
 You can install the CLI without a Rust toolchain now, on all three operating systems. Linux gets its first install path that is not `cargo install`.

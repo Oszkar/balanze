@@ -12,6 +12,7 @@
   <a href="https://github.com/Oszkar/balanze/releases"><img alt="Version" src="https://img.shields.io/github/v/release/Oszkar/balanze?display_name=tag&label=version&color=blue"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.89%2B-orange?logo=rust&logoColor=white"></a>
+  <a href="https://oszkar.github.io/balanze/"><img alt="Docs" src="https://img.shields.io/badge/docs-mdbook-blue"></a>
 </p>
 
 <p align="center">
@@ -124,7 +125,7 @@ The Claude side needs no setup if Claude Code is already configured: Balanze rea
 
 > **macOS note:** builds you compile yourself are unsigned, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key. The downloadable release DMG is signed and notarized (from v0.5.0 onward) and does not have this problem.
 
-For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](docs/GUIDE.md).
+For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](https://oszkar.github.io/balanze/GUIDE.html).
 
 ## Using the CLI
 

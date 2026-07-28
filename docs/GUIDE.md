@@ -2,13 +2,13 @@
 
 A walkthrough of the desktop app and the CLI: first run, reading the popover, connecting OpenAI, the Claude Code statusline, and the states you might run into.
 
-New here? Start with the [README](../README.md) for what Balanze is and how to install it. This guide picks up after install.
+New here? Start with the [README](https://github.com/Oszkar/balanze#readme) for what Balanze is and how to install it. This guide picks up after install.
 
 > **Screenshots.** Lines marked `📷 [capture: <state>]` are placeholders. Every `<state>` is a real entry in the dev-only states gallery - run `bun run gallery` (or `bun run gallery:snap` for Playwright captures), screenshot the named state in light **and** dark, save to `docs/assets/guide/`, and replace the placeholder line with `![alt](assets/guide/<file>.png)`.
 
 ## First run
 
-1. Install per the [README](../README.md#install), or launch the desktop app.
+1. Install per the [README](https://github.com/Oszkar/balanze#install), or launch the desktop app.
 2. Run `balanze-cli setup`. The wizard walks through the OpenAI Admin key and offers to wire the Claude Code statusline.
 3. The Claude side needs no setup if Claude Code is already configured - Balanze reads its OAuth credential directly.
 
@@ -42,7 +42,7 @@ Below the grid, the **Subscription leverage** box shows what your Claude Code us
 
 ### Pace and burn
 
-- **Pace** rides on the usage bar: how much of a window you have used versus how far through the window you are. Over 1.0x means you are ahead of pace. Balanze shows measured pace, not a forecast.
+- **Pace** rides on the usage bar: how much of a window you have used versus how far through the window you are. Over 1.0x means you are ahead of pace. Balanze shows measured pace, not a forecast - an earlier version tried an EWMA-based predictor, but a plausible-looking forecast that's occasionally wrong is worse than a fact that's always right, so it was retired in favor of this.
 - **Burn** is the recent token rate for the active Claude session.
 
 ### Source and confidence
@@ -77,7 +77,7 @@ Until a key is present, the OpenAI column shows a connect prompt rather than a b
 
 ## The Claude Code statusline
 
-Balanze can put live quota straight in your Claude Code prompt (the [README](../README.md#using-the-cli) has the full reference).
+Balanze can put live quota straight in your Claude Code prompt (the [README](https://github.com/Oszkar/balanze#using-the-cli) has the full reference).
 
 - **Wire it** during `balanze-cli setup`, or from the popover's settings panel.
 - **Replace, don't wrap.** If another tool already owns the `statusLine.command`, Balanze offers to replace it *with your consent*, backing the previous command up first. Nothing in the other tool's own config is touched.
@@ -105,7 +105,7 @@ The CLI renders the same snapshot headlessly:
 - `balanze-cli doctor` - per-integration diagnostics with actionable hints.
 - `balanze-cli export -o usage.csv` - a stateless CSV re-derived from JSONL.
 
-Run `balanze-cli help` (or `--help` on any subcommand) for the full reference, and see the [README](../README.md#using-the-cli) for the exit-code taxonomy and JSON schema.
+Run `balanze-cli help` (or `--help` on any subcommand) for the full reference, and see the [README](https://github.com/Oszkar/balanze#using-the-cli) for the exit-code taxonomy and JSON schema.
 
 ## Settings
 
@@ -131,4 +131,4 @@ Neither provider needs a secret that Balanze manages. Codex quota and the Claude
 
 ## Troubleshooting
 
-If something looks wrong, `balanze-cli doctor` diagnoses each integration with a hint per source. The non-obvious traps (double tray icons, JSONL CPU spikes, a stale statusline, macOS Keychain prompts) are collected in [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
+If something looks wrong, `balanze-cli doctor` diagnoses each integration with a hint per source. The non-obvious traps (double tray icons, JSONL CPU spikes, a stale statusline, macOS Keychain prompts) are collected in [`TROUBLESHOOTING.md`](https://github.com/Oszkar/balanze/blob/main/docs/TROUBLESHOOTING.md).
