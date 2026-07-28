@@ -59,8 +59,6 @@ A density toggle switches between the default **Details** view and a **Compact**
 
 The tray gauge is a color-shifting ring on one shared scale - **green / yellow / orange / red at 50 / 75 / 90** - used identically across the tray, popover, CLI, and statusline. The ring colors on your **worst** window, and the title and tooltip name which window that is, so the color is always explained by a number you can see. Before there is any data the gauge is neutral, and the tooltip reads "connecting..." while a source warms up or "... unavailable" when one is not configured.
 
-The design record behind this color language is in [`reviews/surface-consistency.html`](reviews/surface-consistency.html).
-
 ## Connecting OpenAI
 
 OpenAI spend and Codex quota need an OpenAI **Admin** key (`sk-admin-...`), created in your OpenAI org's API-key settings. A regular `sk-...` key will not reach the Admin Costs API.

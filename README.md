@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-white.svg">
-    <img src="docs/assets/logo.svg" alt="Balanze" width="140">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/src/assets/logo-white.svg">
+    <img src="docs/src/assets/logo.svg" alt="Balanze" width="140">
   </picture>
 </p>
 
@@ -24,14 +24,14 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/popover-dark.png">
-    <img src="docs/assets/popover-light.png" alt="The Balanze tray popover - Anthropic and OpenAI quota bars, real billed spend, and the subscription-leverage insight" width="360">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/src/assets/popover-dark.png">
+    <img src="docs/src/assets/popover-light.png" alt="The Balanze tray popover - Anthropic and OpenAI quota bars, real billed spend, and the subscription-leverage insight" width="360">
   </picture>
 </p>
 <p align="center"><sub>The tray popover - quota per cadence with a pace tick, real billed spend badged as such, and the subscription-leverage estimate kept deliberately outside the grid.</sub></p>
 
 <p align="center">
-  <img src="docs/assets/watch-tui.png" alt="balanze-cli watch - live cross-provider TUI" width="680">
+  <img src="docs/src/assets/watch-tui.png" alt="balanze-cli watch - live cross-provider TUI" width="680">
 </p>
 <p align="center"><sub><code>balanze-cli watch</code> - a live, bounded TUI showing Anthropic and OpenAI usage side by side.</sub></p>
 
