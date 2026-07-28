@@ -15,8 +15,9 @@ Everything in the headline view is **measured reality only** - a server-reported
 
 The Claude list-price figure is deliberately **not** in that grid. It sits outside as a separate *Subscription leverage* insight, so a counterfactual estimate can never be mistaken for billed spend.
 
-<!-- Install, CLI Reference, and FAQ links are parked on the repository until
-     those chapters land; they become site-relative links then. -->
+<!-- The two Install links are parked on the repository until that chapter
+     lands, where they become site-relative links. The CLI Reference and FAQ
+     bullets are omitted entirely until those chapters land. -->
 
 ## Get Balanze
 
