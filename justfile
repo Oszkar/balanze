@@ -32,3 +32,10 @@ dev:
 # Release build (MSI/NSIS on Windows, DMG/app on macOS).
 build:
     bun run tauri build
+
+# Serve the docs site locally with live-reload (http://localhost:3000).
+# Requires the mdbook CLI (`cargo install mdbook --locked`, or a prebuilt
+# binary from https://github.com/rust-lang/mdBook/releases) - not a project
+# dependency, so it's not installed by `bun install` / `cargo build`.
+docs-serve:
+    mdbook serve --open
