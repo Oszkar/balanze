@@ -1,0 +1,15 @@
+[book]
+title = "Balanze"
+description = "One normalized view of your AI usage - docs site"
+authors = ["Oszkar"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/Oszkar/balanze"
+edit-url-template = "https://github.com/Oszkar/balanze/edit/main/{path}"
+default-theme = "light"
+preferred-dark-theme = "navy"

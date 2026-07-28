@@ -49,6 +49,9 @@ Thumbs.db
 .idea/
 *.iml
 
+# mdBook build output (docs site)
+/book/
+
 # Local logs / runtime
 *.log
 balanze.log*

@@ -12,6 +12,7 @@
   <a href="https://github.com/Oszkar/balanze/releases"><img alt="Version" src="https://img.shields.io/github/v/release/Oszkar/balanze?display_name=tag&label=version&color=blue"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.89%2B-orange?logo=rust&logoColor=white"></a>
+  <a href="https://oszkar.github.io/balanze/"><img alt="Docs" src="https://img.shields.io/badge/docs-mdbook-blue"></a>
 </p>
 
 <p align="center">
@@ -51,7 +52,7 @@ The Claude list-price figure is deliberately **not** a matrix cell - it sits out
 - **OpenAI API $** - this-month spend plus a per-line-item breakdown from `/v1/organization/costs`, using an `sk-admin-...` key. Real billing data.
 - **Subscription leverage (a separate estimate)** - `claude_cost` multiplies your local Claude Code JSONL by a vendored LiteLLM price table to show what that usage *would* cost at API list prices. For Pro/Max users that is leverage from the subscription, **never billed**.
 
-Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); common gotchas in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md).
+Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); common gotchas in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md). The rendered guide, a short "how it works" writeup, and the surface-consistency design record live on the [**docs site**](https://oszkar.github.io/balanze/).
 
 ## Install
 
