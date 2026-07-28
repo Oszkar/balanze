@@ -8,7 +8,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Added
 
-- **A docs site** (mdBook, deployed to GitHub Pages) hosting the rendered user guide, a new "how it works" writeup on the data-provenance model and the actor-model architecture, and the surface-consistency design record that GitHub does not render inline.
+- **A docs site** (mdBook, deployed to GitHub Pages) hosting the rendered user guide and a new "how it works" writeup on the data-provenance model and the actor-model architecture.
 
 ## [0.5.1] - Reach - 2026-07-22
 
