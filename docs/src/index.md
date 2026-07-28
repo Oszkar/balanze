@@ -1,7 +1,31 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="" width="120">
+</p>
+
 # Balanze
 
-Balanze is a local-first tray utility that consolidates personal AI usage into one normalized view - Anthropic subscription quota, OpenAI Codex quota, real OpenAI API spend, and an estimate of what your Claude Code usage would cost at API prices.
+Balanze is a local-first tray utility that consolidates personal AI usage into one normalized view: Anthropic subscription quota, OpenAI Codex quota, real OpenAI API spend, and an estimate of what your Claude Code usage would cost at API prices.
 
-The **[User Guide](GUIDE.md)** walks through first run, reading the popover, connecting OpenAI, and the Claude Code statusline.
+Everything in the headline view is **measured reality only** - a server-reported quota percentage or a real billed dollar amount - so a column never mixes kinds of numbers.
 
-For install instructions, the full README, and the source, see the [GitHub repository](https://github.com/Oszkar/balanze).
+|               | Quota %                              | API $ (real billed)                                 |
+|---------------|--------------------------------------|-----------------------------------------------------|
+| **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
+| **OpenAI**    | Codex CLI rate-limit % (5h / weekly) | real billed spend (Admin Costs API)                 |
+
+The Claude list-price figure is deliberately **not** in that grid. It sits outside as a separate *Subscription leverage* insight, so a counterfactual estimate can never be mistaken for billed spend.
+
+<!-- Install, CLI Reference, and FAQ links are parked on the repository until
+     those chapters land; they become site-relative links then. -->
+
+## Get Balanze
+
+**Desktop tray app** - Windows 11 (x64) and macOS 15+ (Apple Silicon). Download and run it; no Rust toolchain needed. See [Install](https://github.com/Oszkar/balanze#install).
+
+**Command line** - Windows, macOS, and Linux. `balanze-cli` is the full view in your terminal, the Claude Code statusline backend, and the entire Linux story. See [Install](https://github.com/Oszkar/balanze#command-line-tool).
+
+## Read next
+
+- **[User Guide](GUIDE.md)** - first run, reading the popover, connecting OpenAI, the statusline.
+
+Source, releases, and issues live in the [GitHub repository](https://github.com/Oszkar/balanze).

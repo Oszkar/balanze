@@ -20,3 +20,4 @@ preferred-dark-theme = "navy"
 # typographic dashes - both prohibited by AGENTS.md section 3.5. The staged-source
 # sweep cannot catch renderer-introduced punctuation, so turn it off at the source.
 smart-punctuation = false
+additional-css = ["theme/css/balanze.css"]
