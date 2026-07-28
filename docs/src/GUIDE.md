@@ -4,7 +4,7 @@ A walkthrough of the desktop app and the CLI: first run, reading the popover, co
 
 New here? Start with the [README](https://github.com/Oszkar/balanze#readme) for what Balanze is and how to install it. This guide picks up after install.
 
-> **Screenshots.** Lines marked `📷 [capture: <state>]` are placeholders. Every `<state>` is a real entry in the dev-only states gallery - run `bun run gallery` (or `bun run gallery:snap` for Playwright captures), screenshot the named state in light **and** dark, save to `docs/assets/guide/`, and replace the placeholder line with `![alt](assets/guide/<file>.png)`.
+> **Screenshots.** Lines marked `📷 [capture: <state>]` are placeholders. Every `<state>` is a real entry in the dev-only states gallery - run `bun run gallery` (or `bun run gallery:snap` for Playwright captures), screenshot the named state in light **and** dark, save to `docs/src/assets/guide/`, and replace the placeholder line with `![alt](assets/guide/<file>.png)`.
 
 ## First run
 
