@@ -52,7 +52,7 @@ The Claude list-price figure is deliberately **not** a matrix cell - it sits out
 - **OpenAI API $** - this-month spend plus a per-line-item breakdown from `/v1/organization/costs`, using an `sk-admin-...` key. Real billing data.
 - **Subscription leverage (a separate estimate)** - `claude_cost` multiplies your local Claude Code JSONL by a vendored LiteLLM price table to show what that usage *would* cost at API list prices. For Pro/Max users that is leverage from the subscription, **never billed**.
 
-Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); common gotchas in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md). The rendered guide and a short "how it works" writeup live on the [**docs site**](https://oszkar.github.io/balanze/).
+Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); common gotchas in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md). The user guide and a short "how it works" writeup live on the [**docs site**](https://oszkar.github.io/balanze/).
 
 ## Install
 
@@ -125,7 +125,7 @@ The Claude side needs no setup if Claude Code is already configured: Balanze rea
 
 > **macOS note:** builds you compile yourself are unsigned, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key. The downloadable release DMG is signed and notarized (from v0.5.0 onward) and does not have this problem.
 
-For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](docs/GUIDE.md).
+For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](https://oszkar.github.io/balanze/GUIDE.html).
 
 ## Using the CLI
 
