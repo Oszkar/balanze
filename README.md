@@ -52,7 +52,7 @@ The Claude list-price figure is deliberately **not** a matrix cell - it sits out
 - **OpenAI API $** - this-month spend plus a per-line-item breakdown from `/v1/organization/costs`, using an `sk-admin-...` key. Real billing data.
 - **Subscription leverage (a separate estimate)** - `claude_cost` multiplies your local Claude Code JSONL by a vendored LiteLLM price table to show what that usage *would* cost at API list prices. For Pro/Max users that is leverage from the subscription, **never billed**.
 
-Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); common gotchas in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md).
+Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); user-facing answers in the [FAQ](https://oszkar.github.io/balanze/faq.html) and developer traps in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## Install
 
@@ -65,7 +65,9 @@ Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and 
 
 The `_x64-setup.exe` asset is the same Windows app as an NSIS installer instead of an MSI; pick either. `_aarch64.app.tar.gz` is the raw macOS app bundle for scripted installs - if you are not sure, take the DMG.
 
-**Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only. macOS 15 already drops most Intel hardware, so a universal binary would double the build time and bundle size to serve machines that largely cannot run the required OS anyway. Building from source on an Intel Mac is untested but nothing blocks it. The desktop app is not built for Windows on arm64 either, though the CLI is - see the command-line tool section below.
+Architecture caveats, checksum verification, and the from-source route are on the docs site: [Install](https://oszkar.github.io/balanze/install.html#verifying-a-download).
+
+**Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only.
 
 <details>
 <summary><strong>Windows: what SmartScreen shows, and why</strong></summary>
@@ -78,18 +80,6 @@ Rather than ask you to trust a certificate, the offer is: the source is public a
 
 </details>
 
-**Verifying a download (optional).** Each release attaches `windows-x64-checksums.txt` and `macos-aarch64-checksums.txt`. Compare your file against it:
-
-```powershell
-# Windows (PowerShell)
-Get-FileHash .\Balanze_0.5.0_x64_en-US.msi -Algorithm SHA256
-```
-
-```bash
-# macOS
-shasum -a 256 Balanze_0.5.0_aarch64.dmg
-```
-
 ### Command-line tool
 
 `balanze-cli` is the full four-quadrant view in your terminal, the Claude Code statusline backend, and the entire Linux story.
@@ -101,31 +91,13 @@ shasum -a 256 Balanze_0.5.0_aarch64.dmg
 | Windows (x64) | Download `balanze-cli-*-x86_64-pc-windows-msvc.zip` |
 | Windows (arm64) | Download `balanze-cli-*-aarch64-pc-windows-msvc.zip` |
 
-Direct downloads: extract the archive and put `balanze-cli` somewhere on your PATH. Every archive ships a sibling `.sha256` so you can verify it against what CI built.
-
-The Linux binary is statically linked against musl, so it runs on any distribution regardless of glibc version. Linux has no OS credential store wired, so supply your OpenAI key through the `BALANZE_OPENAI_KEY` environment variable rather than `balanze-cli set-openai-key`.
-
-On macOS, a browser-downloaded archive is quarantined by Gatekeeper because the CLI binary is not notarized. Homebrew installs are not quarantined, which is why it is the recommended path; for a direct download, run `xattr -d com.apple.quarantine balanze-cli` once.
-
-**Building from source:** the CLI also compiles cleanly from source if you would rather not use a prebuilt binary. Requires Rust 1.89+.
-
-```bash
-# `--git` is required (not on crates.io). The repo root is a virtual workspace,
-# so name the package explicitly - it builds the `balanze-cli` binary.
-# Plain `cargo install balanze_cli` will NOT work.
-cargo install --git https://github.com/Oszkar/balanze balanze_cli
-
-balanze-cli setup      # run this first - wizard for the OpenAI admin key
-balanze-cli            # 4-quadrant status
-```
-
-**The CLI has zero system-library dependencies.** Windows 11, macOS 15+, and Linux build with just the Rust toolchain (Linux also needs a C compiler for the `ring` TLS dependency). No GTK/GLib/Cairo/WebKit - that native stack belongs to the desktop app, not the CLI.
-
-The Claude side needs no setup if Claude Code is already configured: Balanze reads its OAuth credential (from `~/.claude/.credentials.json`, `~/.config/claude/.credentials.json`, or Claude Code's login Keychain entry on recent macOS) strictly **read-only** - it never refreshes, modifies, or copies it. If it expires, re-run `claude login`. An opt-in file-refresh mode is tracked in [#186](https://github.com/Oszkar/balanze/issues/186). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, the popover's settings panel, or the `BALANZE_OPENAI_KEY` env var.
+Extract the archive and put `balanze-cli` on your PATH. Every archive ships a sibling `.sha256`. Full detail - Linux and musl, the macOS quarantine flag, building from source, and what the Claude side needs - is in [Install](https://oszkar.github.io/balanze/install.html#command-line-tool).
 
 > **macOS note:** builds you compile yourself are unsigned, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key. The downloadable release DMG is signed and notarized (from v0.5.0 onward) and does not have this problem.
 
 For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](https://oszkar.github.io/balanze/GUIDE.html).
+
+**Full documentation:** [oszkar.github.io/balanze](https://oszkar.github.io/balanze/) - install detail, the user guide, the CLI reference, and the FAQ.
 
 ## Using the CLI
 
@@ -144,48 +116,10 @@ balanze-cli doctor [--offline]  per-integration diagnostics (OK/WARN/FAIL + hint
 balanze-cli export [-o file]    stateless CSV of usage history, re-derived from JSONL
                                 each run (nothing persisted)
 balanze-cli setup               interactive wizard - run this first
-balanze-cli statusline          Claude Code statusLine command (see below)
+balanze-cli statusline          Claude Code statusLine command
 ```
 
-Run `balanze-cli help` (or `--help` / `-h` on any subcommand) for the full reference - including `set-openai-key` / `clear-openai-key` / `settings` / `completions <shell>` and the global flags `-v` / `--quiet` / `--no-color` / `--strict`. `BALANZE_OPENAI_KEY=sk-admin-...` overrides the keychain for CI or headless use. `BALANZE_LOG` (e.g. `BALANZE_LOG=debug`) controls log verbosity for both the CLI and the desktop app, in the same syntax as `RUST_LOG`; logs go to stderr and to a daily-rotating file (kept 3 days) under the OS-conventional data directory's `logs/` folder.
-
-`status --json` (and `watch --json`) emit a document keyed by a top-level `schema_version`, where every money cell is tagged `{ value_micro_usd, source, confidence, details }` (i64 micro-USD throughout) - so a consumer tells an `estimate` from `real` billed spend straight from the wire shape, no label parsing. The full schema is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-```text
-=== Balanze status (2026-05-20 04:27:42 UTC) ===
-
-                    Quota %                                 API $ (real billed)
-Anthropic           ✓ 82.0% 5h, 88.0% 7d (oauth)            $20.92/$25.00 overage (real)
-OpenAI              ✓ 6.0% 7d (codex go)                    $4.20 (admin costs)
-
-Pace: 5h 82% used / 60% elapsed (1.4×);  7d 88% used / 95% elapsed (0.9×)
-Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (leverage - NOT billed)
-```
-
-(Without "Extra usage" enabled, the Anthropic API-$ cell reads `- not available` and only the leverage line carries a Claude dollar figure.)
-
-**Exit codes** (for scripting). `main` classifies the outcome once, and `doctor` shares the same taxonomy:
-
-| Code | Meaning |
-|------|---------|
-| 0 | OK (a degraded source still exits 0 unless `--strict`) |
-| 1 | unexpected / other error |
-| 2 | usage error (bad flags / unknown subcommand; clap owns this) |
-| 3 | auth: credentials expired or rejected (re-run `claude login`, or refresh the OpenAI key) |
-| 4 | network: a provider was unreachable |
-| 5 | degraded: a source was stale or errored (only with `--strict`) |
-
-A provider you simply have not configured is **not** an auth failure and does not exit 3. An absent credential is neutral - `status` exits 0 (or 5 under `--strict`), matching `doctor`, which warns rather than fails for one. Code 3 means a credential was found and the provider refused it (or it could not be read).
-
-**Claude Code statusLine.** `balanze-cli statusline` is a zero-auth status line for your Claude Code prompt - live 5h/7d Claude subscription quota and session cost, plus cross-provider signal (both Codex rate-limit windows). Real OpenAI API spend is an opt-in `{openai_cost}` segment, off by default because it is an uncapped dollar figure with no rolling window. `balanze-cli setup` offers to wire the canonical command; a replaced command is backed up first, so `balanze-cli statusline restore` can put it back.
-
-**Shell completions.** `balanze-cli completions <shell>` prints a script to stdout (bash, zsh, fish, powershell, elvish):
-
-```bash
-balanze-cli completions bash > ~/.local/share/bash-completion/completions/balanze-cli
-balanze-cli completions zsh  > "${fpath[1]}/_balanze-cli"
-balanze-cli completions fish > ~/.config/fish/completions/balanze-cli.fish
-```
+Every command, flag, exit code, and environment variable is documented in the [CLI Reference](https://oszkar.github.io/balanze/cli.html). Scripting against it? See [Exit codes](https://oszkar.github.io/balanze/cli.html#exit-codes).
 
 ## Develop
 
