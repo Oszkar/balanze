@@ -4,8 +4,6 @@ A walkthrough of the desktop app and the CLI: first run, reading the popover, co
 
 New here? Start with the [README](https://github.com/Oszkar/balanze#readme) for what Balanze is and how to install it. This guide picks up after install.
 
-> **Screenshots.** Lines marked `📷 [capture: <state>]` are placeholders. Every `<state>` is a real entry in the dev-only states gallery - run `bun run gallery` (or `bun run gallery:snap` for Playwright captures), screenshot the named state in light **and** dark, save to `docs/src/assets/guide/`, and replace the placeholder line with `![alt](assets/guide/<file>.png)`.
-
 ## First run
 
 1. Install per the [README](https://github.com/Oszkar/balanze#install), or launch the desktop app.
@@ -14,13 +12,17 @@ New here? Start with the [README](https://github.com/Oszkar/balanze#readme) for 
 
 On the desktop app, first launch auto-opens the popover and fires a notification so the tray icon is easy to find.
 
-> 📷 [capture: Settings - configured] the settings panel after setup, keys in place.
+![Settings panel with the OpenAI key field filled and both provider toggles on](assets/guide/settings-configured.png)
+
+*The settings panel after setup, keys in place.*
 
 ## Reading the popover
 
 The popover is one normalized snapshot of your AI usage. Everything in the grid is **measured reality only** - a server-reported quota % or a real billed dollar amount - so a column never mixes kinds of numbers.
 
-> 📷 [capture: Cards - two providers] the default Details view, Anthropic and OpenAI side by side.
+![Details view with stacked Anthropic and OpenAI cards showing quota bars and billed spend](assets/guide/details-two-providers.png)
+
+*The default Details view, Anthropic and OpenAI side by side.*
 
 ### The matrix
 
@@ -34,7 +36,9 @@ The popover is one normalized snapshot of your AI usage. Everything in the grid 
 - **OpenAI API $** - this-month billed spend from the Admin Costs API.
 - **Anthropic API $** - real or nothing. If you enabled pay-as-you-go "Extra usage" on claude.ai, this cell shows that real overage; otherwise it reads **not available** (Anthropic exposes no per-user API spend). It is never backfilled with an estimate.
 
-> 📷 [capture: Grid - overage billed] the Anthropic billed cell showing a real overage amount.
+![Anthropic billed cell showing a real dollar overage amount badged as real](assets/guide/overage-billed.png)
+
+*The Anthropic billed cell showing a real overage amount.*
 
 ### Subscription leverage (a separate estimate)
 
@@ -53,7 +57,9 @@ Cells carry a badge for real billed money so you can tell it apart from an estim
 
 A density toggle switches between the default **Details** view and a **Compact** grid - same data, less room per provider.
 
-> 📷 [capture: Grid - two providers] the Compact grid.
+![Compact grid with one row per provider and one column per metric](assets/guide/compact-grid.png)
+
+*The Compact grid.*
 
 ## The tray icon
 
@@ -71,7 +77,9 @@ Provide it any of these ways:
 
 Until a key is present, the OpenAI column shows a connect prompt rather than a blank cell.
 
-> 📷 [capture: Grid - OpenAI connect CTA] the "add OpenAI" affordance before a key is set.
+![OpenAI cells replaced by an add-OpenAI call to action](assets/guide/openai-connect-cta.png)
+
+*The "add OpenAI" affordance before a key is set.*
 
 ## The Claude Code statusline
 
@@ -86,13 +94,13 @@ Balanze can put live quota straight in your Claude Code prompt (the [README](htt
 Balanze names each situation instead of blanking a cell:
 
 - **Cold start** - a source is still connecting.
-  > 📷 [capture: Grid - cold start (quota loading)]
+  ![Quota cells showing loading skeletons](assets/guide/state-cold-start.png)
 - **Claude Code not detected** - a neutral "not configured" state, not an error (the tray stays neutral, no warning).
-  > 📷 [capture: Grid - Claude Code not detected]
+  ![Anthropic cells reading not detected in neutral styling, with no warning color](assets/guide/state-not-detected.png)
 - **Stale window** - e.g. a Codex window that already reset degrades to a `stale` marker rather than showing a confidently-wrong number.
-  > 📷 [capture: Grid - Codex stale window]
+  ![Codex cell marked stale instead of showing a number](assets/guide/state-stale-window.png)
 - **Fetch error** - a failed source shows an error placeholder and raises the degraded-state banner naming the affected source.
-  > 📷 [capture: Grid - OpenAI error]
+  ![OpenAI cell showing an error placeholder above the degraded-state banner](assets/guide/state-fetch-error.png)
 
 ## The CLI in brief
 

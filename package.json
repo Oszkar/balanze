@@ -11,6 +11,7 @@
     "gallery": "vite --config vite.gallery.config.ts --open /gallery.html",
     "gallery:serve": "vite --config vite.gallery.config.ts",
     "gallery:snap": "playwright test --config playwright.config.ts",
+    "guide:shots": "playwright test tests/visual/guide-shots.spec.ts --config playwright.config.ts",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "test": "vitest run",
