@@ -6,9 +6,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+## [0.5.2] - Legibility - 2026-07-29
+
+The docs site becomes the place to send someone. It hosts the user guide with real screenshots, plus install, CLI, and FAQ chapters, and the README stops being a second manual.
+
 ### Added
 
 - **A docs site** (mdBook, deployed to GitHub Pages) hosting the rendered user guide, which now also explains why pace is a measured figure rather than a forecast (an earlier EWMA-based predictor was retired in favor of it).
+- **Install, CLI Reference, and FAQ chapters.** The CLI reference documents every command, flag, exit code, and environment variable in one place. The FAQ answers questions in terms of what a user of a released build can actually do, rather than the code-level fixes the developer troubleshooting document carries.
+- **Real screenshots in the documentation.** The published guide was showing nine `[capture: <state>]` placeholder lines; they are now images captured from the states gallery, with alt text and captions. Five sit in the guide and the four cell-state ones moved to the FAQ alongside the states they illustrate.
+
+### Changed
+
+- **The README is short-form and links to the site.** It keeps what is read on GitHub at the moment of download - the pitch, the install tables, the SmartScreen explainer, and the command list - and the site owns the long-form detail. About 70 lines lighter, and nothing it dropped is now homeless.
+- **Developer troubleshooting is labeled as such.** `docs/TROUBLESHOOTING.md` reads like user documentation but prescribes code changes; it now says who it is for and points users at the FAQ.
+
+### Fixed
+
+- **An internal design record was being published.** mdBook copies every non-Markdown file under its source root verbatim, so a dated engineering review was live on the docs site. The book's source root is now scoped to `docs/src/`, which makes the rule one line: what is under `docs/src/` is public.
+- **The published site carried characters the project prohibits.** mdBook's smart-punctuation default rewrote `...` into a Unicode ellipsis in the rendered HTML, which a source-level check cannot see. It is off, and CI now scans the generated output too.
+- **A mistyped chapter would have published as an empty page.** mdBook's `create-missing` default silently creates a file for any `SUMMARY.md` entry that lacks one, so the build stayed green. It is off, and CI asserts every expected page exists and carries its heading.
 
 ## [0.5.1] - Reach - 2026-07-22
 
@@ -244,7 +261,9 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/Oszkar/balanze/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/Oszkar/balanze/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Oszkar/balanze/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/Oszkar/balanze/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/Oszkar/balanze/compare/v0.4.2...v0.4.3
