@@ -76,6 +76,13 @@ test('capture guide screenshots', async ({ page }) => {
     const top = popBox.y - 8;
     await page.screenshot({
       path: `${OUT}/${slug}.png`,
+      // Raw page.screenshot leaves CSS animations running - unlike
+      // toHaveScreenshot, which disables them by default (gallery.spec.ts relies
+      // on that). Freezing Date does not freeze an animation timeline, so the
+      // cold-start skeleton's infinite opacity pulse (GridView.svelte) and the
+      // finite `rise` entrance animations would land at whatever phase they
+      // happened to be in, making regenerated PNGs differ for no real reason.
+      animations: 'disabled',
       clip: {
         x: popBox.x,
         y: top,
