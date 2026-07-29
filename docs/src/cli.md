@@ -13,6 +13,10 @@ The 4-quadrant compact status: Anthropic quota, OpenAI quota, and each provider'
 | `--json` | Machine-readable JSON instead of the formatted view. Wins over `--sections` if both are given. |
 | `--sections` | A per-source detailed view: cadence bars, model breakdown, the Codex rolling window. |
 
+### The `--json` schema
+
+`status --json` (and `watch --json`) emit a document keyed by a top-level `schema_version`, and every money cell is tagged `{ value_micro_usd, source, confidence, details }` in i64 micro-USD - so a consumer can tell an estimate from real billed spend straight from the wire shape, without parsing labels. The full schema is documented in [`docs/ARCHITECTURE.md`](https://github.com/Oszkar/balanze/blob/main/docs/ARCHITECTURE.md).
+
 ## `watch`
 
 A live view that keeps refreshing in place instead of printing once and exiting: a `ratatui` TUI when stdout is a TTY, or a streaming line-per-update format otherwise (for example when piped to a file or another process).
@@ -31,7 +35,7 @@ Diagnoses each integration one at a time - Claude OAuth credential, Codex rollou
 
 ## `export`
 
-Exports usage history as CSV, re-derived statelessly from the local Claude JSONL and Codex rollout files each time it runs - there is no database to fall out of sync with.
+Exports usage history as CSV, re-derived statelessly on every run - nothing is persisted. The output carries two provenance-segregated sections: Claude usage from the local JSONL (one row per day and model, with token counts plus a list-price *leverage* figure that is never money billed) and OpenAI current-month real billed spend per line item from the Admin Costs API. The OpenAI section needs network access and a configured OpenAI key; the Claude section does not.
 
 | Flag | Effect |
 |---|---|
@@ -87,7 +91,7 @@ These apply to every subcommand, including the bare default (`balanze-cli` with 
 | `--quiet` | Suppress non-essential output. |
 | `--no-color` | Disable ANSI color. `NO_COLOR` is also honored - see [Environment variables](#environment-variables). |
 | `--strict` | Treat a degraded source as failure: a stale or errored source that would otherwise exit 0 exits 5 instead. See [Exit codes](#exit-codes). |
-| `-h`, `--help` | Print help for the command. Add `-h` for a short summary or `--help` for the long form. |
+| `-h`, `--help` | Print help for the command. At the top level, `-h` gives a short summary and `--help` the long form; on every subcommand, both just print help. |
 
 `-V` / `--version` prints the CLI version, but it is **top-level only**: `balanze-cli --version` works, `balanze-cli status --version` does not.
 
@@ -125,3 +129,5 @@ balanze-cli completions bash > ~/.local/share/bash-completion/completions/balanz
 balanze-cli completions zsh  > "${fpath[1]}/_balanze-cli"
 balanze-cli completions fish > ~/.config/fish/completions/balanze-cli.fish
 ```
+
+For a walkthrough of what these commands look like in practice, see the [User Guide](GUIDE.md). If something still looks wrong, the [FAQ](faq.md) covers the questions that come up most.

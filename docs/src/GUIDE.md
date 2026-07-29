@@ -114,7 +114,7 @@ The popover's gear opens settings:
 
 ## Linux
 
-Balanze on Linux is the CLI only - there is no tray app. Install it with Homebrew (`brew install oszkar/balanze/balanze-cli`) or download `balanze-cli-*-x86_64-unknown-linux-musl.tar.gz` from a release and put the binary on your PATH. The binary is statically linked, so it runs on any distribution regardless of glibc version.
+Balanze on Linux is the CLI only - there is no tray app. See [Install](install.md#command-line-tool) for how to get the binary on your PATH.
 
 There is no OS credential store wired on Linux, so `balanze-cli set-openai-key` cannot save a key and will tell you so. Supply the key through the environment instead:
 

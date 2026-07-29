@@ -4,27 +4,29 @@
 
 | Your machine | Download | First run |
 |---|---|---|
-| macOS 15+, Apple Silicon | `Balanze_<version>_aarch64.dmg` | Signed and notarized - Gatekeeper should not warn. |
+| macOS 15+, Apple Silicon | `Balanze_<version>_aarch64.dmg`, or `brew install --cask oszkar/balanze/balanze` | Signed and notarized - Gatekeeper should not warn. |
 | Windows 11, x64 | `Balanze_<version>_x64_en-US.msi` | Unsigned - SmartScreen warns once, see below. |
 
-The `_x64-setup.exe` asset is the same Windows app as an NSIS installer instead of an MSI; pick either. `_aarch64.app.tar.gz` is the raw macOS app bundle for scripted installs - if you are not sure, take the DMG.
+The `_x64-setup.exe` asset is the same Windows app as an NSIS installer instead of an MSI; pick either. `_aarch64.app.tar.gz` is the raw macOS app bundle for scripted installs - if you are not sure, take the DMG. The Homebrew cask is an alternative to the DMG for macOS users who would rather manage updates through `brew upgrade`; it installs the same signed, notarized app.
 
 **Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only. macOS 15 already drops most Intel hardware, so a universal binary would double the build time and bundle size to serve machines that largely cannot run the required OS anyway. Building from source on an Intel Mac is untested but nothing blocks it. The desktop app is not built for Windows on arm64 either, though the CLI is - see [Command-line tool](#command-line-tool) below.
 
-Windows installers are unsigned, so SmartScreen warns on first run. Click **More info**, then **Run anyway**. This is a deliberate decision rather than an oversight - no certificate at any price buys a clean first run any more. The [README](https://github.com/Oszkar/balanze#install) explains what you see and why, and [the PRD](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing) records the full reasoning.
+Windows installers are unsigned, so SmartScreen warns on first run: **"Windows protected your PC - Microsoft Defender SmartScreen prevented an unrecognized app from starting."** Click **More info**, then **Run anyway**.
+
+This means Windows does not recognize the publisher. It does not mean the installer is malware. Balanze is unsigned because a code-signing certificate would not fix it: Microsoft no longer grants SmartScreen reputation for EV certificates, so a signed build from a project this size warns on first run too. Rather than ask you to trust a certificate, the offer is: the source is public and builds from scratch (see [Command-line tool](#command-line-tool) below for building from source; the desktop app builds the same way via `bun run tauri build`), and every release ships SHA-256 checksums so you can verify the download is byte-for-byte what CI produced (see [Verifying a download](#verifying-a-download) below). [The PRD](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing) records the full reasoning.
 
 ## Verifying a download
 
-Optional. Each release attaches `windows-x64-checksums.txt` and `macos-aarch64-checksums.txt`. Compare your file against it:
+Optional. Each release attaches `windows-x64-checksums.txt` and `macos-aarch64-checksums.txt`. Compare your file against it - substitute whatever filename you actually downloaded for `<version>`:
 
 ```powershell
 # Windows (PowerShell)
-Get-FileHash .\Balanze_0.5.0_x64_en-US.msi -Algorithm SHA256
+Get-FileHash .\Balanze_<version>_x64_en-US.msi -Algorithm SHA256
 ```
 
 ```bash
 # macOS
-shasum -a 256 Balanze_0.5.0_aarch64.dmg
+shasum -a 256 Balanze_<version>_aarch64.dmg
 ```
 
 ## Command-line tool

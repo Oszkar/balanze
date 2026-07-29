@@ -31,15 +31,15 @@ Use forward slashes, which are valid in Windows file APIs, JSON, and Git Bash si
 "command": "C:/Users/you/path/to/balanze-cli.exe statusline"
 ```
 
-If `balanze-cli` is on your `PATH` (which it is after any of the [Install](install.md) routes), the bare form avoids the problem entirely:
+If `balanze-cli` is on your `PATH` (true after a Homebrew or `cargo install` install; the MSI, DMG, and direct-download routes install no CLI at all and, for the direct download, ask you to place the binary on `PATH` yourself - see [Install](install.md)), the bare form avoids the problem entirely:
 
 ```json
 "command": "balanze-cli statusline"
 ```
 
-## Codex and OpenAI segments appear in my statusline even though the app is not running
+## Codex segments appear in my statusline even though the app is not running
 
-That is expected, not a bug. When no fresh snapshot exists, `balanze-cli statusline` composes those segments itself: Codex comes from local files, and OpenAI cost is fetched and cached for five minutes - and only when your configured line actually contains `{openai_cost}`, which the default template does not. At most one upstream OpenAI request fires per five minutes across every concurrent prompt.
+That is expected, not a bug. When no fresh snapshot exists, `balanze-cli statusline` composes those segments itself: Codex comes from local files, and (only when your configured line actually contains `{openai_cost}`, which the default template does not) OpenAI cost is fetched and cached for five minutes. At most one upstream OpenAI request fires per five minutes across every concurrent prompt.
 
 Starting the desktop app or `balanze-cli watch` produces a fresh snapshot, which takes precedence.
 
@@ -66,3 +66,5 @@ Balanze picks the refreshed credential up on its next poll. It never writes, mir
 ## macOS keeps asking for Keychain permission
 
 Builds you compile yourself are unsigned, so macOS cannot reliably remember an "Always Allow" grant across rebuilds. The release DMG is signed and notarized and does not have this problem. See [Install](install.md).
+
+Still stuck, or found something that looks like a bug rather than an answer here? [File an issue](https://github.com/Oszkar/balanze/issues/new).
