@@ -74,6 +74,10 @@ Prints the current contents of `settings.json` - useful for confirming what the 
 
 The Claude Code statusLine command. With no subcommand, this is the FROZEN stdin render contract that Claude Code itself invokes on every prompt render - its output format is a stable interface, not something to parse ad hoc. Wiring it into Claude Code's configuration happens through `setup` or the popover's settings panel, not by running `statusline` directly.
 
+It needs no credentials of its own. The default line carries live 5-hour and 7-day Claude subscription quota, an estimate of the current session's cost, and cross-provider signal in the form of both Codex rate-limit windows.
+
+Real OpenAI API spend is available as a `{openai_cost}` segment but is **off by default**, because it is an uncapped dollar figure with no rolling window - it reads oddly next to a line that is otherwise percent-of-window, and it is the only segment that costs an API call. Adding it to your configured line is what switches the OpenAI leg on at all.
+
 ### `statusline restore`
 
 Restores the foreign statusLine command that Balanze replaced when it was wired in - or unwires Balanze's own statusline if there was nothing to restore. Safe to run even if you are unsure whether Balanze ever replaced anything.

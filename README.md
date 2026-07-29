@@ -65,7 +65,7 @@ Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and 
 
 The `_x64-setup.exe` asset is the same Windows app as an NSIS installer instead of an MSI; pick either. `_aarch64.app.tar.gz` is the raw macOS app bundle for scripted installs - if you are not sure, take the DMG.
 
-Architecture caveats, checksum verification, and the from-source route are on the docs site: [Install](https://oszkar.github.io/balanze/install.html#verifying-a-download).
+Architecture caveats, checksum verification, and the from-source route are on the docs site: [Install](https://oszkar.github.io/balanze/install.html).
 
 **Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only.
 
@@ -92,8 +92,6 @@ Rather than ask you to trust a certificate, the offer is: the source is public a
 | Windows (arm64) | Download `balanze-cli-*-aarch64-pc-windows-msvc.zip` |
 
 Extract the archive and put `balanze-cli` on your PATH. Every archive ships a sibling `.sha256`. Full detail - Linux and musl, the macOS quarantine flag, building from source, and what the Claude side needs - is in [Install](https://oszkar.github.io/balanze/install.html#command-line-tool).
-
-> **macOS note:** builds you compile yourself are unsigned, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key. The downloadable release DMG is signed and notarized (from v0.5.0 onward) and does not have this problem.
 
 For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](https://oszkar.github.io/balanze/GUIDE.html).
 
