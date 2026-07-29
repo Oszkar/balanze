@@ -11,13 +11,19 @@ The `_x64-setup.exe` asset is the same Windows app as an NSIS installer instead 
 
 **Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only. macOS 15 already drops most Intel hardware, so a universal binary would double the build time and bundle size to serve machines that largely cannot run the required OS anyway. Building from source on an Intel Mac is untested but nothing blocks it. The desktop app is not built for Windows on arm64 either, though the CLI is - see [Command-line tool](#command-line-tool) below.
 
-Windows installers are unsigned, so SmartScreen warns on first run: **"Windows protected your PC - Microsoft Defender SmartScreen prevented an unrecognized app from starting."** Click **More info**, then **Run anyway**.
+Windows installers are unsigned, so SmartScreen warns on first run: **"Windows protected your PC - Microsoft Defender SmartScreen prevented an unrecognized app from starting."**
 
-This means Windows does not recognize the publisher. It does not mean the installer is malware. Balanze is unsigned because a code-signing certificate would not fix it: Microsoft no longer grants SmartScreen reputation for EV certificates, so a signed build from a project this size warns on first run too. Rather than ask you to trust a certificate, the offer is: the source is public and builds from scratch (see [Command-line tool](#command-line-tool) below for building from source; the desktop app builds the same way via `bun run tauri build`), and every release ships SHA-256 checksums so you can verify the download is byte-for-byte what CI produced (see [Verifying a download](#verifying-a-download) below). [The PRD](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing) records the full reasoning.
+This means Windows does not recognize the publisher. It does not mean the installer is malware. Balanze is unsigned because a code-signing certificate would not fix it: Microsoft no longer grants SmartScreen reputation for EV certificates, so a signed build from a project this size warns on first run too. [The PRD](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing) records the full reasoning.
+
+Rather than ask you to trust a certificate, the offer is that you can check the download yourself. **Verify the checksum before clicking through the warning** - it is the step that actually tells you the file is what CI built, and it takes a few seconds. Then click **More info**, then **Run anyway**.
+
+The other half of the offer is that the source is public and builds from scratch: see [Command-line tool](#command-line-tool) below for building the CLI, and `bun run tauri build` for the desktop app.
 
 ## Verifying a download
 
-Optional. Each release attaches `windows-x64-checksums.txt` and `macos-aarch64-checksums.txt`. Compare your file against it - substitute whatever filename you actually downloaded for `<version>`:
+Every release attaches `windows-x64-checksums.txt` and `macos-aarch64-checksums.txt`. Worth doing on any download, and worth doing on the **unsigned Windows installers in particular**, since SmartScreen's warning is the only other signal you get.
+
+Replace `<version>` with the release you downloaded (for example `0.5.1`), and compare the output against the matching line in the checksums file:
 
 ```powershell
 # Windows (PowerShell)

@@ -31,7 +31,7 @@ Diagnoses each integration one at a time - Claude OAuth credential, Codex rollou
 
 | Flag | Effect |
 |---|---|
-| `--offline` | Skip network validation of the OpenAI key (checks it is present and well-formed, but does not call the API to confirm it is accepted). |
+| `--offline` | Skip the network check on the OpenAI key. This is a **presence** check only: any non-empty value passes, so a truncated or malformed key still reports OK. Drop `--offline` to have the key actually tried against the API. |
 
 ## `export`
 
@@ -59,7 +59,12 @@ Prompts for an OpenAI Admin key (masked input) and stores it in the OS keychain.
 
 ## `clear-openai-key`
 
-Removes the OpenAI key from the keychain. Use this to rotate a key (clear, then `set-openai-key` with the replacement) or to stop Balanze from calling the OpenAI API entirely.
+Removes the OpenAI key from the keychain. To rotate a key on Windows or macOS, clear it and then `set-openai-key` with the replacement.
+
+Two things this does **not** do:
+
+- **It does not override `BALANZE_OPENAI_KEY`.** That variable takes precedence over the keychain, so if it is set, Balanze keeps calling the OpenAI API with it after the keychain entry is gone. Unset it as well to actually stop the calls or to change which key is used.
+- **It is not the rotation path on Linux**, where no OS credential store is wired and `set-openai-key` has nothing to save to. Change the environment variable instead.
 
 ## `settings`
 
@@ -108,7 +113,14 @@ These apply to every subcommand, including the bare default (`balanze-cli` with 
 | 4 | network: a provider was unreachable |
 | 5 | degraded: a source was stale or errored (only with `--strict`) |
 
-A provider you simply have not configured is **not** an auth failure and does not exit 3. An absent credential is neutral - `status` exits 0 (or 5 under `--strict`), matching `doctor`, which warns rather than fails for one. Code 3 means a credential was found and the provider refused it (or it could not be read).
+A provider you simply have not configured is **not** an auth failure and does not exit 3. Code 3 means a credential was found and the provider refused it, or it could not be read.
+
+`status` and `doctor` treat an absent credential differently under `--strict`, which matters if you script against them:
+
+- **`status`** classifies only populated error slots, and an unconfigured provider populates none. It exits **0**, with or without `--strict`. Nothing about a provider you never set up can produce exit 5.
+- **`doctor`** reports the same situation as a warning, and `--strict` folds warnings into exit **5**.
+
+So `doctor --strict` is the one to use if you want a missing credential to fail a script; `status --strict` will not do it.
 
 ## Environment variables
 

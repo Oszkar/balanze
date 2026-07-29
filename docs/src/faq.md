@@ -31,11 +31,13 @@ Use forward slashes, which are valid in Windows file APIs, JSON, and Git Bash si
 "command": "C:/Users/you/path/to/balanze-cli.exe statusline"
 ```
 
-If `balanze-cli` is on your `PATH` (true after a Homebrew or `cargo install` install; the MSI, DMG, and direct-download routes install no CLI at all and, for the direct download, ask you to place the binary on `PATH` yourself - see [Install](install.md)), the bare form avoids the problem entirely:
+If `balanze-cli` is on your `PATH`, the bare form avoids the problem entirely:
 
 ```json
 "command": "balanze-cli statusline"
 ```
+
+Whether it is on your `PATH` depends on how you installed it. Homebrew puts it there. `cargo install` writes to Cargo's bin directory (`$CARGO_HOME/bin`, usually `~/.cargo/bin`), which is on `PATH` only if your shell was set up for Rust. The MSI and DMG install no CLI at all, and a direct download leaves placing the binary to you. See [Install](install.md#command-line-tool).
 
 ## Codex segments appear in my statusline even though the app is not running
 
