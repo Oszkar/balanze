@@ -29,7 +29,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # persist-credentials: false - the build only reads the checked-out files,
+      # and publishing uses the Pages OIDC token, not the git credential helper.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install mdBook
         env:
