@@ -89,6 +89,7 @@ jobs:
             echo "ok: book/$file (<h1> ${heading})"
           }
           check index.html "Balanze"
+          check install.html "Install"
           check GUIDE.html "Balanze user guide"
 
       # AGENTS.md section 3.5 bans em dashes, en dashes, and the Unicode ellipsis.
