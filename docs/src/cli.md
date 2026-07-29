@@ -35,7 +35,7 @@ Exports usage history as CSV, re-derived statelessly from the local Claude JSONL
 
 | Flag | Effect |
 |---|---|
-| `-o`, `--output <PATH>` | Write to a file instead of stdout. |
+| `-o`, `--output <OUTPUT>` | Write to a file instead of stdout. |
 
 ## `completions`
 
@@ -88,7 +88,8 @@ These apply to every subcommand, including the bare default (`balanze-cli` with 
 | `--no-color` | Disable ANSI color. `NO_COLOR` is also honored - see [Environment variables](#environment-variables). |
 | `--strict` | Treat a degraded source as failure: a stale or errored source that would otherwise exit 0 exits 5 instead. See [Exit codes](#exit-codes). |
 | `-h`, `--help` | Print help for the command. Add `-h` for a short summary or `--help` for the long form. |
-| `-V`, `--version` | Print the CLI version. Top-level only; not repeated on each subcommand. |
+
+`-V` / `--version` prints the CLI version, but it is **top-level only**: `balanze-cli --version` works, `balanze-cli status --version` does not.
 
 ## Exit codes
 
