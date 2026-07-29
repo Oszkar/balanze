@@ -18,7 +18,7 @@ The docs site becomes the place to send someone. It hosts the user guide with re
 
 ### Changed
 
-- **The README is short-form and links to the site.** It keeps what is read on GitHub at the moment of download - the pitch, the install tables, the SmartScreen explainer, and the command list - and the site owns the long-form detail. Roughly 90 lines lighter.
+- **The README is short-form and links to the site.** It keeps what is read on GitHub at the moment of download - the pitch, the install tables, the SmartScreen explainer, and the command list - and the site owns the long-form detail. About 70 lines lighter, and nothing it dropped is now homeless.
 - **Developer troubleshooting is labeled as such.** `docs/TROUBLESHOOTING.md` reads like user documentation but prescribes code changes; it now says who it is for and points users at the FAQ.
 
 ### Fixed
