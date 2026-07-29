@@ -23,7 +23,7 @@ The other half of the offer is that the source is public and builds from scratch
 
 Every release attaches `windows-x64-checksums.txt` and `macos-aarch64-checksums.txt`. Worth doing on any download, and worth doing on the **unsigned Windows installers in particular**, since SmartScreen's warning is the only other signal you get.
 
-Replace `<version>` with the release you downloaded (for example `0.5.1`), and compare the output against the matching line in the checksums file:
+Replace `<version>` with the release you downloaded, matching the filename exactly, and compare the output against the corresponding line in the checksums file:
 
 ```powershell
 # Windows (PowerShell)
