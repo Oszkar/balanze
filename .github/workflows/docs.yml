@@ -92,6 +92,7 @@ jobs:
           check install.html "Install"
           check GUIDE.html "Balanze user guide"
           check cli.html "CLI Reference"
+          check faq.html "FAQ &amp; Troubleshooting"
 
       # AGENTS.md section 3.5 bans em dashes, en dashes, and the Unicode ellipsis.
       # Matched as UTF-8 byte sequences rather than with grep -P, whose Unicode

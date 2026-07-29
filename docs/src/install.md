@@ -9,7 +9,7 @@
 
 The `_x64-setup.exe` asset is the same Windows app as an NSIS installer instead of an MSI; pick either. `_aarch64.app.tar.gz` is the raw macOS app bundle for scripted installs - if you are not sure, take the DMG.
 
-**Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only. macOS 15 already drops most Intel hardware, so a universal binary would double the build time and bundle size to serve machines that largely cannot run the required OS anyway. Building from source on an Intel Mac is untested but nothing blocks it. The desktop app is not built for Windows on arm64 either, though the CLI is - see the command-line tool section below.
+**Intel Macs are not supported.** The macOS build is Apple Silicon (arm64) only. macOS 15 already drops most Intel hardware, so a universal binary would double the build time and bundle size to serve machines that largely cannot run the required OS anyway. Building from source on an Intel Mac is untested but nothing blocks it. The desktop app is not built for Windows on arm64 either, though the CLI is - see [Command-line tool](#command-line-tool) below.
 
 Windows installers are unsigned, so SmartScreen warns on first run. Click **More info**, then **Run anyway**. This is a deliberate decision rather than an oversight - no certificate at any price buys a clean first run any more. The [README](https://github.com/Oszkar/balanze#install) explains what you see and why, and [the PRD](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing) records the full reasoning.
 

@@ -1,3 +1,9 @@
+# Developer troubleshooting
+
+Non-obvious traps when working *on* Balanze. Entries here prescribe code and configuration changes, so they assume a checkout and a toolchain.
+
+**Using Balanze rather than building it?** The user-facing answers are in the [FAQ](https://oszkar.github.io/balanze/faq.html).
+
 ## "Tray icon doesn't appear" or "two tray icons in the menu bar"
 
 The double-tray-icon trap: `tauri.conf.json` declares a default tray with id `"main"`, and code in `lib.rs` creates a second tray via `TrayIconBuilder::new()`. The handler attaches to the invisible second icon; the visible one receives clicks that go nowhere.

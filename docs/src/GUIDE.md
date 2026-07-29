@@ -2,11 +2,11 @@
 
 A walkthrough of the desktop app and the CLI: first run, reading the popover, connecting OpenAI, the Claude Code statusline, and the states you might run into.
 
-New here? Start with the [README](https://github.com/Oszkar/balanze#readme) for what Balanze is and how to install it. This guide picks up after install.
+New here? Start with the [Introduction](index.md) for what Balanze is and how to install it. This guide picks up after install.
 
 ## First run
 
-1. Install per the [README](https://github.com/Oszkar/balanze#install), or launch the desktop app.
+1. Install per [Install](install.md), or launch the desktop app.
 2. Run `balanze-cli setup`. The wizard walks through the OpenAI Admin key and offers to wire the Claude Code statusline.
 3. The Claude side needs no setup if Claude Code is already configured - Balanze reads its OAuth credential directly.
 
@@ -83,7 +83,7 @@ Until a key is present, the OpenAI column shows a connect prompt rather than a b
 
 ## The Claude Code statusline
 
-Balanze can put live quota straight in your Claude Code prompt (the [README](https://github.com/Oszkar/balanze#using-the-cli) has the full reference).
+Balanze can put live quota straight in your Claude Code prompt (the [CLI Reference](cli.md) has the full reference).
 
 - **Wire it** during `balanze-cli setup`, or from the popover's settings panel.
 - **Replace, don't wrap.** If another tool already owns the `statusLine.command`, Balanze offers to replace it *with your consent*, backing the previous command up first. Nothing in the other tool's own config is touched.
@@ -91,16 +91,7 @@ Balanze can put live quota straight in your Claude Code prompt (the [README](htt
 
 ## States you might see
 
-Balanze names each situation instead of blanking a cell:
-
-- **Cold start** - a source is still connecting.
-  ![Quota cells showing loading skeletons](assets/guide/state-cold-start.png)
-- **Claude Code not detected** - a neutral "not configured" state, not an error (the tray stays neutral, no warning).
-  ![Anthropic cells reading not detected in neutral styling, with no warning color](assets/guide/state-not-detected.png)
-- **Stale window** - e.g. a Codex window that already reset degrades to a `stale` marker rather than showing a confidently-wrong number.
-  ![Codex cell marked stale instead of showing a number](assets/guide/state-stale-window.png)
-- **Fetch error** - a failed source shows an error placeholder and raises the degraded-state banner naming the affected source.
-  ![OpenAI cell showing an error placeholder above the degraded-state banner](assets/guide/state-fetch-error.png)
+Balanze names each situation instead of blanking a cell - cold start, "not detected", a stale window, a fetch error. Each one is described with a screenshot in the [FAQ](faq.md#states-you-might-see).
 
 ## The CLI in brief
 
@@ -111,7 +102,7 @@ The CLI renders the same snapshot headlessly:
 - `balanze-cli doctor` - per-integration diagnostics with actionable hints.
 - `balanze-cli export -o usage.csv` - a stateless CSV re-derived from JSONL.
 
-Run `balanze-cli help` (or `--help` on any subcommand) for the full reference, and see the [README](https://github.com/Oszkar/balanze#using-the-cli) for the exit-code taxonomy and JSON schema.
+Run `balanze-cli help` (or `--help` on any subcommand) for the full reference, and see the [CLI Reference](cli.md) for the exit-code taxonomy and JSON schema.
 
 ## Settings
 
@@ -137,4 +128,4 @@ Neither provider needs a secret that Balanze manages. Codex quota and the Claude
 
 ## Troubleshooting
 
-If something looks wrong, `balanze-cli doctor` diagnoses each integration with a hint per source. The non-obvious traps (double tray icons, JSONL CPU spikes, a stale statusline, macOS Keychain prompts) are collected in [`TROUBLESHOOTING.md`](https://github.com/Oszkar/balanze/blob/main/docs/TROUBLESHOOTING.md).
+If something looks wrong, `balanze-cli doctor` diagnoses each integration with a hint per source. Common questions and their answers are in the [FAQ](faq.md).
