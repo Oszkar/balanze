@@ -1,6 +1,6 @@
 name: pages
 
-# Builds the mdBook docs site (book.toml, src = docs/) and deploys it to
+# Builds the mdBook docs site (book.toml, src = docs/src) and deploys it to
 # GitHub Pages via the native Actions flow - no gh-pages branch, no
 # third-party deploy action. mdbook itself is fetched as a prebuilt binary
 # from its own GitHub release rather than `cargo install`d, so this stays
@@ -11,7 +11,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "docs/**"
+      - "docs/src/**"
+      - "theme/**"
       - "book.toml"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -28,7 +29,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # persist-credentials: false - the build only reads the checked-out files,
+      # and publishing uses the Pages OIDC token, not the git credential helper.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install mdBook
         env:

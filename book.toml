@@ -3,13 +3,21 @@ title = "Balanze"
 description = "One normalized view of your AI usage - docs site"
 authors = ["Oszkar"]
 language = "en"
-src = "docs"
+src = "docs/src"
 
 [build]
 build-dir = "book"
+# A SUMMARY.md entry with no file is a mistake, not a request to scaffold one.
+# The default (true) silently creates the file and publishes an empty page.
+create-missing = false
 
 [output.html]
 git-repository-url = "https://github.com/Oszkar/balanze"
 edit-url-template = "https://github.com/Oszkar/balanze/edit/main/{path}"
 default-theme = "light"
 preferred-dark-theme = "navy"
+# Defaults to true, which rewrites "..." into a Unicode ellipsis and "--" into
+# typographic dashes - both prohibited by AGENTS.md section 3.5. The staged-source
+# sweep cannot catch renderer-introduced punctuation, so turn it off at the source.
+smart-punctuation = false
+additional-css = ["theme/css/balanze.css"]

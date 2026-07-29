@@ -4,7 +4,7 @@ A walkthrough of the desktop app and the CLI: first run, reading the popover, co
 
 New here? Start with the [README](https://github.com/Oszkar/balanze#readme) for what Balanze is and how to install it. This guide picks up after install.
 
-> **Screenshots.** Lines marked `📷 [capture: <state>]` are placeholders. Every `<state>` is a real entry in the dev-only states gallery - run `bun run gallery` (or `bun run gallery:snap` for Playwright captures), screenshot the named state in light **and** dark, save to `docs/assets/guide/`, and replace the placeholder line with `![alt](assets/guide/<file>.png)`.
+> **Screenshots.** Lines marked `📷 [capture: <state>]` are placeholders. Every `<state>` is a real entry in the dev-only states gallery - run `bun run gallery` (or `bun run gallery:snap` for Playwright captures), screenshot the named state in light **and** dark, save to `docs/src/assets/guide/`, and replace the placeholder line with `![alt](assets/guide/<file>.png)`.
 
 ## First run
 
@@ -58,8 +58,6 @@ A density toggle switches between the default **Details** view and a **Compact**
 ## The tray icon
 
 The tray gauge is a color-shifting ring on one shared scale - **green / yellow / orange / red at 50 / 75 / 90** - used identically across the tray, popover, CLI, and statusline. The ring colors on your **worst** window, and the title and tooltip name which window that is, so the color is always explained by a number you can see. Before there is any data the gauge is neutral, and the tooltip reads "connecting..." while a source warms up or "... unavailable" when one is not configured.
-
-The design record behind this color language is in [`reviews/surface-consistency.html`](reviews/surface-consistency.html).
 
 ## Connecting OpenAI
 

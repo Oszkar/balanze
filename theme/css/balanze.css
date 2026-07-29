@@ -1,0 +1,30 @@
+/* Balanze docs-site theme.
+ *
+ * Deliberately minimal. mdBook ships a working responsive theme, so this
+ * overrides only what carries the Balanze identity: the link/active accent
+ * (the --real blue from src/lib/theme.css, the token that marks officially
+ * sourced data) and the framing that makes a light screenshot read as
+ * intentional on the dark theme.
+ *
+ * Only .light and .navy are themed - the three other bundled themes keep
+ * mdBook's values, because this project has no opinion about them.
+ */
+
+.light {
+  --links: #3667a6;
+  --sidebar-active: #3667a6;
+}
+
+.navy {
+  --links: #6ea3e6;
+  --sidebar-active: #6ea3e6;
+}
+
+/* Screenshots: contain on narrow viewports, and sit in a hairline frame so a
+   light capture does not float on the navy background. */
+.content img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--quote-border);
+  border-radius: 10px;
+}
