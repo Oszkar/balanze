@@ -61,6 +61,8 @@ claude login
 
 Balanze picks the refreshed credential up on its next poll. It never writes, mirrors, or backs up that credential.
 
+**On macOS this can take up to 30 minutes.** Recent Claude Code stores its credential in the login Keychain rather than a file, and once Balanze has seen an expired or rejected one it waits half an hour before reading the Keychain again, so it is not prompting you for access every poll. Restart Balanze after `claude login` if you would rather not wait.
+
 ## macOS keeps asking for Keychain permission
 
 Builds you compile yourself are unsigned, so macOS cannot reliably remember an "Always Allow" grant across rebuilds. The release DMG is signed and notarized and does not have this problem. See [Install](install.md).
