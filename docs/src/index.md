@@ -15,18 +15,16 @@ Everything in the headline view is **measured reality only** - a server-reported
 
 The Claude list-price figure is deliberately **not** in that grid. It sits outside as a separate *Subscription leverage* insight, so a counterfactual estimate can never be mistaken for billed spend.
 
-<!-- The two Install links are parked on the repository until that chapter
-     lands, where they become site-relative links. The CLI Reference and FAQ
-     bullets are omitted entirely until those chapters land. -->
-
 ## Get Balanze
 
-**Desktop tray app** - Windows 11 (x64) and macOS 15+ (Apple Silicon). Download and run it; no Rust toolchain needed. See [Install](https://github.com/Oszkar/balanze#install).
+**Desktop tray app** - Windows 11 (x64) and macOS 15+ (Apple Silicon). Download and run it; no Rust toolchain needed. See [Install](install.md).
 
-**Command line** - Windows, macOS, and Linux. `balanze-cli` is the full view in your terminal, the Claude Code statusline backend, and the entire Linux story. See [Install](https://github.com/Oszkar/balanze#command-line-tool).
+**Command line** - Windows, macOS, and Linux. `balanze-cli` is the full view in your terminal, the Claude Code statusline backend, and the entire Linux story. See [Install](install.md#command-line-tool).
 
 ## Read next
 
 - **[User Guide](GUIDE.md)** - first run, reading the popover, connecting OpenAI, the statusline.
+- **[CLI Reference](cli.md)** - every `balanze-cli` command and flag, exit codes, and environment variables.
+- **[FAQ & Troubleshooting](faq.md)** - common questions, answered.
 
 Source, releases, and issues live in the [GitHub repository](https://github.com/Oszkar/balanze).
