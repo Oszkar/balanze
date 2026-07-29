@@ -24,5 +24,6 @@ The Claude list-price figure is deliberately **not** in that grid. It sits outsi
 ## Read next
 
 - **[User Guide](GUIDE.md)** - first run, reading the popover, connecting OpenAI, the statusline.
+- **[CLI Reference](cli.md)** - every `balanze-cli` command and flag, exit codes, and environment variables.
 
 Source, releases, and issues live in the [GitHub repository](https://github.com/Oszkar/balanze).
