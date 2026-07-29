@@ -54,6 +54,8 @@ The Claude list-price figure is deliberately **not** a matrix cell - it sits out
 
 Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); user-facing answers in the [FAQ](https://oszkar.github.io/balanze/faq.html) and developer traps in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md).
 
+**Full documentation:** [oszkar.github.io/balanze](https://oszkar.github.io/balanze/) - install detail, the user guide, the CLI reference, and the FAQ.
+
 ## Install
 
 **Desktop app (tray popover):** download from [GitHub Releases](https://github.com/Oszkar/balanze/releases/latest) - no Rust toolchain required.
@@ -72,7 +74,7 @@ Architecture caveats, checksum verification, and the from-source route are on th
 <details>
 <summary><strong>Windows: what SmartScreen shows, and why</strong></summary>
 
-You will see **"Windows protected your PC - Microsoft Defender SmartScreen prevented an unrecognized app from starting."** Click **"More info"**, then **"Run anyway"**.
+You will see **"Windows protected your PC - Microsoft Defender SmartScreen prevented an unrecognized app from starting."** Verify the checksum first (see [Install](https://oszkar.github.io/balanze/install.html#verifying-a-download)), then click **"More info"** and **"Run anyway"**.
 
 This means Windows does not recognize the publisher. It does not mean the installer is malware. Balanze is unsigned because a code-signing certificate would not fix it: Microsoft [no longer grants SmartScreen reputation for EV certificates](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation), so a signed build from a project this size warns on first run too. The reasoning is recorded in [the PRD](docs/PRD.md#code-signing).
 
@@ -94,8 +96,6 @@ Rather than ask you to trust a certificate, the offer is: the source is public a
 Extract the archive and put `balanze-cli` on your PATH. Every archive ships a sibling `.sha256`. Full detail - Linux and musl, the macOS quarantine flag, building from source, and what the Claude side needs - is in [Install](https://oszkar.github.io/balanze/install.html#command-line-tool).
 
 For a full walkthrough - first run, reading the popover, connecting OpenAI, wiring the statusline - see the [**user guide**](https://oszkar.github.io/balanze/GUIDE.html).
-
-**Full documentation:** [oszkar.github.io/balanze](https://oszkar.github.io/balanze/) - install detail, the user guide, the CLI reference, and the FAQ.
 
 ## Using the CLI
 

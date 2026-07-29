@@ -13,6 +13,21 @@ The 4-quadrant compact status: Anthropic quota, OpenAI quota, and each provider'
 | `--json` | Machine-readable JSON instead of the formatted view. Wins over `--sections` if both are given. |
 | `--sections` | A per-source detailed view: cadence bars, model breakdown, the Codex rolling window. |
 
+On a terminal it renders like this:
+
+```text
+=== Balanze status (2026-05-20 04:27:42 UTC) ===
+
+                    Quota %                                 API $ (real billed)
+Anthropic           ok 82.0% 5h, 88.0% 7d (oauth)           $20.92/$25.00 overage (real)
+OpenAI              ok 6.0% 7d (codex go)                   $4.20 (admin costs)
+
+Pace: 5h 82% used / 60% elapsed (1.4x);  7d 88% used / 95% elapsed (0.9x)
+Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (leverage - NOT billed)
+```
+
+Without pay-as-you-go "Extra usage" enabled on claude.ai, the Anthropic API-$ cell reads `- not available` instead, and only the leverage line carries a Claude dollar figure. That is deliberate: Anthropic exposes no per-user API spend, and the cell is never backfilled with a substitute number.
+
 ### The `--json` schema
 
 `status --json` (and `watch --json`) emit a document keyed by a top-level `schema_version`, and every money cell is tagged `{ value_micro_usd, source, confidence, details }` in i64 micro-USD - so a consumer can tell an estimate from real billed spend straight from the wire shape, without parsing labels. The full schema is documented in [`docs/ARCHITECTURE.md`](https://github.com/Oszkar/balanze/blob/main/docs/ARCHITECTURE.md).

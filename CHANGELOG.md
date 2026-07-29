@@ -14,7 +14,7 @@ The docs site becomes the place to send someone. It hosts the user guide with re
 
 - **A docs site** (mdBook, deployed to GitHub Pages) hosting the rendered user guide, which now also explains why pace is a measured figure rather than a forecast (an earlier EWMA-based predictor was retired in favor of it).
 - **Install, CLI Reference, and FAQ chapters.** The CLI reference documents every command, flag, exit code, and environment variable in one place. The FAQ answers questions in terms of what a user of a released build can actually do, rather than the code-level fixes the developer troubleshooting document carries.
-- **Real screenshots in the user guide.** The published guide was showing nine `[capture: <state>]` placeholder lines; they are now images captured from the states gallery, with alt text and captions.
+- **Real screenshots in the documentation.** The published guide was showing nine `[capture: <state>]` placeholder lines; they are now images captured from the states gallery, with alt text and captions. Five sit in the guide and the four cell-state ones moved to the FAQ alongside the states they illustrate.
 
 ### Changed
 
@@ -261,7 +261,9 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/Oszkar/balanze/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/Oszkar/balanze/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Oszkar/balanze/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/Oszkar/balanze/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/Oszkar/balanze/compare/v0.4.2...v0.4.3
