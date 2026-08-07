@@ -16,12 +16,28 @@ function git(cwd: string, ...args: string[]) {
 function stagedScan(
   path: string,
   contents: string | Uint8Array = `credential=${fakeKey}\n`,
+  baselineContents?: string | Uint8Array,
 ) {
   const cwd = mkdtempSync(join(tmpdir(), 'balanze-secret-scan-'));
   workspaces.push(cwd);
   git(cwd, 'init', '--quiet');
   const target = join(cwd, path);
   mkdirSync(dirname(target), { recursive: true });
+  if (baselineContents !== undefined) {
+    writeFileSync(target, baselineContents);
+    git(cwd, 'add', '--', path);
+    git(
+      cwd,
+      '-c',
+      'user.name=Balanze Tests',
+      '-c',
+      'user.email=tests@example.invalid',
+      'commit',
+      '--quiet',
+      '-m',
+      'baseline',
+    );
+  }
   writeFileSync(target, contents);
   git(cwd, 'add', '--', path);
   return spawnSync(process.execPath, [scanner], { cwd, encoding: 'utf8' });
@@ -57,17 +73,25 @@ describe('check-secrets staged path exclusions', () => {
     },
   );
 
-  it('blocks a staged envrc file by name', () => {
-    const result = stagedScan('.envrc', 'export BALANZE_LOG=debug\n');
+  it.each(['.envrc', '.envrc.local'])('blocks staged %s files by name', (path) => {
+    const result = stagedScan(path, 'export BALANZE_LOG=debug\n');
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Attempted to commit .env file(s)');
-    expect(result.stderr).toContain('.envrc');
+    expect(result.stderr).toContain(path);
   });
 
-  it('fails closed for staged binary files', () => {
-    const result = stagedScan('fixtures/blob.bin', new Uint8Array([0, 1, 2, 3]));
+  it('allows a tracked binary update whose bytes pass the secret patterns', () => {
+    const baseline = new Uint8Array([0, 1, 2, 3]);
+    const update = new Uint8Array([0, 1, 2, 4]);
+    expect(stagedScan('fixtures/blob.bin', update, baseline).status).toBe(0);
+  });
+
+  it('blocks and redacts a secret-shaped value in a staged binary file', () => {
+    const body = new Uint8Array([0, ...Buffer.from(fakeKey)]);
+    const result = stagedScan('fixtures/blob.bin', body);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Cannot scan staged binary file(s)');
+    expect(result.stderr).toContain('Potential secrets detected in staged binary file(s)');
     expect(result.stderr).toContain('fixtures/blob.bin');
+    expect(result.stderr).not.toContain(fakeKey);
   });
 });
