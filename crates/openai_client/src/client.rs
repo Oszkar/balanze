@@ -227,35 +227,64 @@ pub async fn fetch_costs(
 /// Two protections, both defensive (OpenAI's current 4xx/5xx bodies don't
 /// echo headers, but the contract isn't a guarantee):
 ///   1. Anything matching `sk-` followed by 15+ key-shaped characters is
-///      replaced with `sk-…REDACTED`.
+///      replaced with `sk-...REDACTED`.
 ///   2. Bodies longer than 500 chars are truncated with a length-suffix.
 fn redact_for_display(body: &str) -> String {
     const MAX_LEN: usize = 500;
-    // Scan the complete body before truncating. Otherwise a key that crosses
-    // the display boundary can be shortened below the matcher threshold and
-    // leave a credential prefix visible.
-    let mut redacted = String::with_capacity(body.len());
+
+    fn push_bounded(
+        output: &mut String,
+        output_chars: &mut usize,
+        segment: &str,
+        max_chars: usize,
+    ) -> bool {
+        for ch in segment.chars() {
+            if *output_chars == max_chars {
+                return true;
+            }
+            output.push(ch);
+            *output_chars += 1;
+        }
+        false
+    }
+
+    // Scan the borrowed body to classify complete key-shaped runs, but retain
+    // only the displayed prefix. This prevents a second body-sized allocation
+    // without exposing a key that crosses the display boundary.
+    let mut redacted = String::with_capacity(MAX_LEN);
+    let mut redacted_chars = 0;
     let mut rest = body;
-    while let Some(idx) = rest.find("sk-") {
-        redacted.push_str(&rest[..idx]);
+    let truncated = loop {
+        if redacted_chars == MAX_LEN {
+            break !rest.is_empty();
+        }
+
+        let Some(idx) = rest.find("sk-") else {
+            break push_bounded(&mut redacted, &mut redacted_chars, rest, MAX_LEN);
+        };
+        if push_bounded(&mut redacted, &mut redacted_chars, &rest[..idx], MAX_LEN) {
+            break true;
+        }
+
         let after = &rest[idx + 3..];
         let key_len = after
             .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
             .unwrap_or(after.len());
-        if key_len >= 15 {
-            redacted.push_str("sk-…REDACTED");
+        let marker = if key_len >= 15 {
             rest = &after[key_len..];
+            "sk-...REDACTED"
         } else {
             // Not key-shaped; emit verbatim and continue.
-            redacted.push_str("sk-");
             rest = after;
+            "sk-"
+        };
+        if push_bounded(&mut redacted, &mut redacted_chars, marker, MAX_LEN) {
+            break true;
         }
-    }
-    redacted.push_str(rest);
+    };
 
-    if redacted.chars().count() > MAX_LEN {
-        let head: String = redacted.chars().take(MAX_LEN).collect();
-        format!("{head}…[truncated, {} bytes]", body.len())
+    if truncated {
+        format!("{redacted}...[truncated, {} bytes]", body.len())
     } else {
         redacted
     }
@@ -270,7 +299,7 @@ fn parse_response(
     let page: RawPage = serde_json::from_str(body).map_err(|e| {
         // Redact: a type-confused 200 (e.g. `data` arriving as a string) makes
         // serde quote the offending value in its Display, which could carry an
-        // `sk-…`-shaped token. This error string reaches WARN logs + the
+        // `sk-...`-shaped token. This error string reaches WARN logs + the
         // user-facing `degraded_state` (AGENTS.md §3.4).
         OpenAiError::ResponseShape(format!(
             "invalid JSON: {}",
@@ -405,10 +434,10 @@ mod tests {
     #[test]
     fn response_shape_error_redacts_sk_keys_from_serde_message() {
         // A type-confused 200 (`data` arriving as a string) makes serde quote the
-        // offending value in its Display. An sk-…-shaped value must NOT survive
+        // offending value in its Display. An sk-...-shaped value must NOT survive
         // into the error string, which reaches WARN logs + the UI (AGENTS.md §3.4).
         // Built at runtime so the source carries no key-shaped literal (the
-        // pre-commit secret scanner flags those, rightly). Still sk-…-shaped at
+        // pre-commit secret scanner flags those, rightly). Still sk-...-shaped at
         // runtime, so `redact_for_display` treats it as a key.
         let leak = format!("sk-admin-{}", "A".repeat(36));
         let body = format!(r#"{{"object":"page","data":"{leak}","has_more":false}}"#);
@@ -647,7 +676,7 @@ mod tests {
         let body = "auth failed for sk-admin-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890";
         let out = redact_for_display(body);
         assert!(
-            out.contains("sk-…REDACTED"),
+            out.contains("sk-...REDACTED"),
             "expected redaction marker; got: {out}"
         );
         assert!(
@@ -660,7 +689,7 @@ mod tests {
     fn redact_replaces_multiple_keys_in_one_body() {
         let body = "key1 sk-admin-AAAAAAAAAAAAAAAA mid sk-proj-BBBBBBBBBBBBBBBB tail";
         let out = redact_for_display(body);
-        assert_eq!(out.matches("sk-…REDACTED").count(), 2);
+        assert_eq!(out.matches("sk-...REDACTED").count(), 2);
         assert!(!out.contains("AAAAAAAAAAAAAAAA"));
         assert!(!out.contains("BBBBBBBBBBBBBBBB"));
     }
@@ -684,6 +713,12 @@ mod tests {
             "key prefix survived truncation: {out}"
         );
         assert!(out.contains("REDACTED"), "expected redaction marker: {out}");
+    }
+
+    #[test]
+    fn redact_skips_long_key_without_losing_displayable_tail() {
+        let body = format!("sk-{} tail", "A".repeat(1_000_000));
+        assert_eq!(redact_for_display(&body), "sk-...REDACTED tail");
     }
 
     fn retry_after_fixed_now() -> DateTime<Utc> {
