@@ -107,6 +107,13 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn credentials_malformed(path: PathBuf, error: serde_json::Error) -> OAuthError {
+    OAuthError::CredentialsMalformed {
+        path,
+        reason: crate::client::redact_for_display(&error.to_string()),
+    }
+}
+
 /// Load credentials from a specific path. Useful for tests and for explicit
 /// override paths.
 pub fn load_from(path: &Path) -> Result<Credentials, OAuthError> {
@@ -119,11 +126,8 @@ pub fn load_from(path: &Path) -> Result<Credentials, OAuthError> {
             source: e,
         },
     })?;
-    let creds: Credentials =
-        serde_json::from_slice(&bytes).map_err(|e| OAuthError::CredentialsMalformed {
-            path: path.to_path_buf(),
-            reason: e.to_string(),
-        })?;
+    let creds: Credentials = serde_json::from_slice(&bytes)
+        .map_err(|error| credentials_malformed(path.to_path_buf(), error))?;
     Ok(creds)
 }
 
@@ -186,10 +190,7 @@ fn load_from_macos_keychain() -> Result<Credentials, OAuthError> {
         path: marker.clone(),
         reason: format!("keychain value is not valid UTF-8: {e}"),
     })?;
-    serde_json::from_str(raw.trim()).map_err(|e| OAuthError::CredentialsMalformed {
-        path: marker,
-        reason: e.to_string(),
-    })
+    serde_json::from_str(raw.trim()).map_err(|error| credentials_malformed(marker, error))
 }
 
 /// Locate the credential source and load it.
@@ -299,6 +300,26 @@ mod tests {
             }
             other => panic!("expected CredentialsMalformed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn credential_type_error_does_not_expose_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".credentials.json");
+        let leaked = format!("sk-ant-oat01-{}", "A".repeat(40));
+        let payload = format!(r#"{{"claudeAiOauth":"{leaked}"}}"#);
+        std::fs::write(&path, payload).unwrap();
+
+        let error = load_from(&path).expect_err("type-confused credential must fail");
+        let message = error.to_string();
+        assert!(
+            !message.contains(&leaked),
+            "credential parse error exposed the raw token"
+        );
+        assert!(
+            message.contains("REDACTED"),
+            "credential parse error omitted the redaction marker: {message}"
+        );
     }
 
     #[test]

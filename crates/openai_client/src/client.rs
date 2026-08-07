@@ -231,32 +231,34 @@ pub async fn fetch_costs(
 ///   2. Bodies longer than 500 chars are truncated with a length-suffix.
 fn redact_for_display(body: &str) -> String {
     const MAX_LEN: usize = 500;
-    let truncated: String = if body.chars().count() > MAX_LEN {
-        let head: String = body.chars().take(MAX_LEN).collect();
-        format!("{head}…[truncated, {} bytes]", body.len())
-    } else {
-        body.to_string()
-    };
-
-    let mut out = String::with_capacity(truncated.len());
-    let mut rest = truncated.as_str();
+    // Scan the complete body before truncating. Otherwise a key that crosses
+    // the display boundary can be shortened below the matcher threshold and
+    // leave a credential prefix visible.
+    let mut redacted = String::with_capacity(body.len());
+    let mut rest = body;
     while let Some(idx) = rest.find("sk-") {
-        out.push_str(&rest[..idx]);
+        redacted.push_str(&rest[..idx]);
         let after = &rest[idx + 3..];
         let key_len = after
             .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
             .unwrap_or(after.len());
         if key_len >= 15 {
-            out.push_str("sk-…REDACTED");
+            redacted.push_str("sk-…REDACTED");
             rest = &after[key_len..];
         } else {
             // Not key-shaped; emit verbatim and continue.
-            out.push_str("sk-");
+            redacted.push_str("sk-");
             rest = after;
         }
     }
-    out.push_str(rest);
-    out
+    redacted.push_str(rest);
+
+    if redacted.chars().count() > MAX_LEN {
+        let head: String = redacted.chars().take(MAX_LEN).collect();
+        format!("{head}…[truncated, {} bytes]", body.len())
+    } else {
+        redacted
+    }
 }
 
 fn parse_response(
@@ -670,6 +672,18 @@ mod tests {
         let body = "see sk-foo bar";
         let out = redact_for_display(body);
         assert_eq!(out, "see sk-foo bar");
+    }
+
+    #[test]
+    fn redact_masks_key_straddling_truncation_boundary() {
+        let body = format!("{}sk-{}", "x".repeat(483), "A".repeat(40));
+        let leaked_prefix = format!("sk-{}", "A".repeat(14));
+        let out = redact_for_display(&body);
+        assert!(
+            !out.contains(&leaked_prefix),
+            "key prefix survived truncation: {out}"
+        );
+        assert!(out.contains("REDACTED"), "expected redaction marker: {out}");
     }
 
     fn retry_after_fixed_now() -> DateTime<Utc> {
