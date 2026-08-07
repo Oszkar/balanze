@@ -35,6 +35,7 @@ vite.config.ts.timestamp-*
 .env
 .env.*
 !.env.example
+.envrc
 
 # OS cruft
 .DS_Store

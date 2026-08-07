@@ -30,7 +30,7 @@ function run(cmd) {
 const stagedFiles = run('git diff --cached --name-only --diff-filter=ACMR');
 const envFiles = stagedFiles
   .split('\n')
-  .filter((f) => f && /(?:^|\/)\.env(?:$|\..*)/.test(f) && !f.endsWith('.example'));
+  .filter((f) => f && /(?:^|\/)\.env(?:rc)?(?:$|\..*)/.test(f) && !f.endsWith('.example'));
 
 if (envFiles.length > 0) {
   console.error(`${RED}ERROR: Attempted to commit .env file(s):${NC}`);
@@ -40,7 +40,24 @@ if (envFiles.length > 0) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Scan staged diffs for common secret patterns
+// 2. Fail closed for staged binary files
+// ---------------------------------------------------------------------------
+// Unified diffs expose only "Binary files differ", so there is no staged text
+// for the pattern matcher to inspect.
+const binaryFiles = run('git diff --cached --numstat --diff-filter=ACMR')
+  .split('\n')
+  .filter((line) => line.startsWith('-\t-\t'))
+  .map((line) => line.slice(4));
+
+if (binaryFiles.length > 0) {
+  console.error(`${RED}ERROR: Cannot scan staged binary file(s):${NC}`);
+  binaryFiles.forEach((f) => console.error(`  - ${f}`));
+  console.error(`${YELLOW}Hint: remove binary files from the commit and verify their contents separately.${NC}`);
+  errors++;
+}
+
+// ---------------------------------------------------------------------------
+// 3. Scan staged diffs for common secret patterns
 // ---------------------------------------------------------------------------
 // Patterns are intentionally broad enough to catch real leaks but narrow
 // enough to avoid false positives on example/placeholder values.
@@ -74,10 +91,10 @@ function redact(line) {
   return out;
 }
 
-// Only scan staged diff, skip .example files and this script. Markdown is
-// deliberately NOT excluded: a real key pasted into docs is still a leak.
+// Only scan staged diff, skipping this script itself. Example and Markdown
+// content stays in scope because a pasted real key is still a leak.
 const diff = run(
-  'git diff --cached -U0 --diff-filter=ACMR -- . ":!*.example" ":!*.example.*" ":!scripts/check-secrets.mjs"',
+  'git diff --cached -U0 --diff-filter=ACMR -- . ":!scripts/check-secrets.mjs"',
 );
 
 if (diff) {
@@ -95,7 +112,7 @@ if (diff) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Exit
+// 4. Exit
 // ---------------------------------------------------------------------------
 if (errors > 0) {
   console.error(`${RED}Commit blocked. Fix the issues above before committing.${NC}`);
