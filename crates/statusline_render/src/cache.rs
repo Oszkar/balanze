@@ -420,7 +420,21 @@ mod tests {
         }
 
         while running.load(Ordering::Acquire) != 0 {
-            let bytes = std::fs::read(dir.path().join(FILE_NAME)).unwrap();
+            let bytes = match std::fs::read(dir.path().join(FILE_NAME)) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    // Windows can transiently deny an open while another thread
+                    // replaces the path. Production `read` treats that as a
+                    // cache miss. This test asserts that every document which
+                    // is observable is complete, not that every open succeeds.
+                    #[cfg(windows)]
+                    if error.kind() == std::io::ErrorKind::PermissionDenied {
+                        std::thread::yield_now();
+                        continue;
+                    }
+                    panic!("cache read failed during publication: {error}");
+                }
+            };
             let entry: OpenAiCostEntry = serde_json::from_slice(&bytes)
                 .expect("atomic publication must expose a complete JSON document");
             assert_eq!(entry.fingerprint, "fp");
