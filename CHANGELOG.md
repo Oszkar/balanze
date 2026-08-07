@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
-## [0.5.2] - Legibility - 2026-07-29
+## [0.5.2] - Legibility - 2026-08-07
 
 The docs site becomes the place to send someone. It hosts the user guide with real screenshots, plus install, CLI, and FAQ chapters, and the README stops being a second manual.
 
@@ -23,6 +23,8 @@ The docs site becomes the place to send someone. It hosts the user guide with re
 
 ### Fixed
 
+- **Provider errors cannot expose reflected credentials.** Anthropic and OpenAI error bodies, malformed credential payloads, and JSON shape errors now redact complete secret-shaped values before applying the display-length bound, including a credential that crosses the truncation boundary.
+- **The staged secret scan closes its binary and example-file gaps.** The pre-commit gate now inspects exact staged bytes for binary files, scans secret-bearing example content, blocks `.envrc` variants, and fails closed when staged content cannot be inspected.
 - **An internal design record was being published.** mdBook copies every non-Markdown file under its source root verbatim, so a dated engineering review was live on the docs site. The book's source root is now scoped to `docs/src/`, which makes the rule one line: what is under `docs/src/` is public.
 - **The published site carried characters the project prohibits.** mdBook's smart-punctuation default rewrote `...` into a Unicode ellipsis in the rendered HTML, which a source-level check cannot see. It is off, and CI now scans the generated output too.
 - **A mistyped chapter would have published as an empty page.** mdBook's `create-missing` default silently creates a file for any `SUMMARY.md` entry that lacks one, so the build stayed green. It is off, and CI asserts every expected page exists and carries its heading.
