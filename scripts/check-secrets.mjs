@@ -4,11 +4,12 @@
 // Plain dependency-free JS - invoked via `bun scripts/check-secrets.mjs` from
 // lefthook.yml (runs under node too; only uses node:child_process).
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 
 const RED = '\x1b[0;31m';
 const YELLOW = '\x1b[1;33m';
 const NC = '\x1b[0m';
+const MAX_STAGED_BINARY_BYTES = 64 * 1024 * 1024;
 
 let errors = 0;
 
@@ -24,13 +25,27 @@ function run(cmd) {
   }
 }
 
+function readStagedBlob(path) {
+  try {
+    return execFileSync('git', ['show', `:${path}`], {
+      maxBuffer: MAX_STAGED_BINARY_BYTES,
+    });
+  } catch (err) {
+    // Fail closed if the exact staged bytes cannot be inspected. In
+    // particular, do not fall back to the potentially different working copy.
+    console.error(`${RED}ERROR: secret scan could not inspect staged binary:${NC} ${path}`);
+    console.error(String(err?.message ?? err));
+    process.exit(1);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 1. Block .env files (someone might `git add -f .env`)
 // ---------------------------------------------------------------------------
 const stagedFiles = run('git diff --cached --name-only --diff-filter=ACMR');
 const envFiles = stagedFiles
   .split('\n')
-  .filter((f) => f && /(?:^|\/)\.env(?:$|\..*)/.test(f) && !f.endsWith('.example'));
+  .filter((f) => f && /(?:^|\/)\.env(?:rc)?(?:$|\..*)/.test(f) && !f.endsWith('.example'));
 
 if (envFiles.length > 0) {
   console.error(`${RED}ERROR: Attempted to commit .env file(s):${NC}`);
@@ -40,7 +55,7 @@ if (envFiles.length > 0) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Scan staged diffs for common secret patterns
+// 2. Define common secret patterns
 // ---------------------------------------------------------------------------
 // Patterns are intentionally broad enough to catch real leaks but narrow
 // enough to avoid false positives on example/placeholder values.
@@ -74,10 +89,34 @@ function redact(line) {
   return out;
 }
 
-// Only scan staged diff, skip .example files and this script. Markdown is
-// deliberately NOT excluded: a real key pasted into docs is still a leak.
+// ---------------------------------------------------------------------------
+// 3. Scan the exact staged bytes of binary files
+// ---------------------------------------------------------------------------
+// Unified diffs expose only "Binary files differ". Read each staged Git blob
+// directly and decode it byte-for-byte so ASCII secret signatures still reach
+// the same matcher. --no-renames makes the numstat path the staged destination.
+const binaryFiles = run('git diff --cached --numstat --no-renames --diff-filter=ACMR')
+  .split('\n')
+  .filter((line) => line.startsWith('-\t-\t'))
+  .map((line) => line.slice(4));
+const binaryMatches = binaryFiles.filter((path) =>
+  matchesSecret(readStagedBlob(path).toString('latin1')),
+);
+
+if (binaryMatches.length > 0) {
+  console.error(`${RED}ERROR: Potential secrets detected in staged binary file(s):${NC}`);
+  binaryMatches.forEach((f) => console.error(`  - ${f}`));
+  console.error(`${YELLOW}Hint: remove or rotate the secret before committing the binary.${NC}`);
+  errors++;
+}
+
+// ---------------------------------------------------------------------------
+// 4. Scan staged text diffs
+// ---------------------------------------------------------------------------
+// Only scan staged diff, skipping this script itself. Example and Markdown
+// content stays in scope because a pasted real key is still a leak.
 const diff = run(
-  'git diff --cached -U0 --diff-filter=ACMR -- . ":!*.example" ":!*.example.*" ":!scripts/check-secrets.mjs"',
+  'git diff --cached -U0 --diff-filter=ACMR -- . ":!scripts/check-secrets.mjs"',
 );
 
 if (diff) {
@@ -95,7 +134,7 @@ if (diff) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Exit
+// 5. Exit
 // ---------------------------------------------------------------------------
 if (errors > 0) {
   console.error(`${RED}Commit blocked. Fix the issues above before committing.${NC}`);

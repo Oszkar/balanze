@@ -8,7 +8,7 @@ export default defineConfig(async () => ({
   plugins: [sveltekit()],
 
   test: {
-    include: ['src/**/*.{test,spec}.ts'],
+    include: ['src/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'],
     environment: 'node',
   },
 
