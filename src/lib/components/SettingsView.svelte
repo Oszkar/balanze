@@ -197,10 +197,15 @@
     else if (provider === 'anthropic') providers.anthropic_enabled = value;
     else providers.codex_enabled = value;
     const next: Settings = { ...current, providers };
+    const providerPatch = provider === 'openai'
+      ? { openai_enabled: value }
+      : provider === 'anthropic'
+        ? { anthropic_enabled: value }
+        : { codex_enabled: value };
     busy = true;
     status = null;
     try {
-      await setSettings(next);
+      await setSettings({ providers: providerPatch });
       settings = next;
     } catch (e) {
       status = `Save failed: ${e}`;

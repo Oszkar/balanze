@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import type { Snapshot, DegradedPayload } from './types/snapshot';
-import type { Settings, StatuslineWire } from './types/settings';
+import type { Settings, SettingsPatch, StatuslineWire } from './types/settings';
 
 export const getSnapshot = (): Promise<Snapshot> => invoke<Snapshot>('get_snapshot');
 export const refreshNow = (): Promise<void> => invoke<void>('refresh_now');
@@ -32,8 +32,8 @@ export const setLaunchAtLogin = (enabled: boolean): Promise<void> =>
 // API key; `set_api_key` writes the key to the OS keychain and flips the
 // provider's enable flag backend-side (AGENTS.md §3.4).
 export const getSettings = (): Promise<Settings> => invoke<Settings>('get_settings');
-export const setSettings = (settings: Settings): Promise<void> =>
-  invoke<void>('set_settings', { settings });
+export const setSettings = (patch: SettingsPatch): Promise<void> =>
+  invoke<void>('set_settings', { patch });
 export const setApiKey = (provider: string, key: string): Promise<void> =>
   invoke<void>('set_api_key', { provider, key });
 export const hasApiKey = (provider: string): Promise<boolean> =>

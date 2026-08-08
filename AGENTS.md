@@ -47,6 +47,7 @@ Correctness > Cleverness · Security > Convenience · Simplicity > Flexibility �
 | Cap unit | Tokens for the Claude subscription rolling-window cap; micro-USD for the OpenAI API cap. No synthetic-dollar pricing on the cap math path |
 | Frontend | Svelte **5 runes** (`$state`, `$derived`, `$props`). SvelteKit with `adapter-static` in SPA mode. Vite 8. TypeScript strict. Env via `import.meta.env.VITE_*` |
 | IPC contract | Frontend ↔ backend: only via the commands + events in `docs/ARCHITECTURE.md`. Adding to this surface needs a doc update first |
+| Settings writes | Every production mutation acquires the persistent sibling `settings.json.lock` with a bounded timeout, reloads under that lock, applies field-level intent, atomically publishes, and releases. Never lock `settings.json` itself because atomic rename replaces its file identity. Read-only loads stay lock-free |
 | CLI `--json` schema | Presentation DTO (`crates/balanze_cli/src/json_output.rs`) - see `docs/ARCHITECTURE.md` "IPC contract". Schema changes require updating that module's tests + `README.md` + `docs/ARCHITECTURE.md` |
 | Watcher cadence | `Settings::oauth_poll_interval_secs` (default 300; serde-default 300 on absent key). Each poller clamps to `max(300, value)` to honor §3.1 regardless of `settings.json` |
 | Code style | `cargo fmt` defaults own Rust. Markdown has **no** column cap - never reflow a doc to hit a width. `prettier` not configured |

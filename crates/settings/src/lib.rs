@@ -13,8 +13,11 @@
 //! `#[serde(default)]` so old files still parse. Removing/renaming a field
 //! requires bumping the version and adding a migration step in `load_from`.
 
-use std::fs;
+use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -24,6 +27,8 @@ pub mod statusline;
 pub use statusline::StatuslineConfig;
 
 const SCHEMA_VERSION: u32 = 2;
+const SETTINGS_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const SETTINGS_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
@@ -70,6 +75,40 @@ pub struct ProviderSettings {
     /// who doesn't use Codex stop the scan (and its cell) without uninstalling.
     #[serde(default = "default_true")]
     pub codex_enabled: bool,
+}
+
+/// Field-level settings mutation intent received over IPC. Optional fields are
+/// applied to the latest on-disk value under the settings lock, so an older UI
+/// snapshot cannot overwrite an unrelated change made by another process.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct SettingsPatch {
+    #[serde(default)]
+    pub providers: ProviderSettingsPatch,
+    pub oauth_poll_interval_secs: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct ProviderSettingsPatch {
+    pub openai_enabled: Option<bool>,
+    pub anthropic_enabled: Option<bool>,
+    pub codex_enabled: Option<bool>,
+}
+
+impl SettingsPatch {
+    pub fn apply(self, settings: &mut Settings) {
+        if let Some(enabled) = self.providers.openai_enabled {
+            settings.providers.openai_enabled = enabled;
+        }
+        if let Some(enabled) = self.providers.anthropic_enabled {
+            settings.providers.anthropic_enabled = enabled;
+        }
+        if let Some(enabled) = self.providers.codex_enabled {
+            settings.providers.codex_enabled = enabled;
+        }
+        if let Some(interval) = self.oauth_poll_interval_secs {
+            settings.oauth_poll_interval_secs = interval;
+        }
+    }
 }
 
 impl Default for ProviderSettings {
@@ -120,6 +159,9 @@ pub enum SettingsError {
 
     #[error("settings file at {path:?} is malformed: {reason}")]
     Malformed { path: PathBuf, reason: String },
+
+    #[error("timed out after {timeout_ms} ms waiting for settings lock at {path:?}")]
+    LockTimeout { path: PathBuf, timeout_ms: u128 },
 }
 
 /// Conventional settings.json path for this user. Lazy: doesn't create the
@@ -177,7 +219,7 @@ pub fn load() -> Result<Settings, SettingsError> {
 /// malformed, or unreadable) with a `warn`. For read-only consumers - the Tauri
 /// watcher supervisor and `balanze-cli watch` - where proceeding on defaults is
 /// correct. **Save-path callers must use [`load_for_update`] instead**: silently
-/// defaulting a corrupt file here and then [`save`]-ing would overwrite the
+/// defaulting a corrupt file here and then publishing an update would overwrite the
 /// user's real settings (including the `statusline.replaced_command` backup).
 pub fn load_or_default() -> Settings {
     load().unwrap_or_else(|e| {
@@ -307,15 +349,14 @@ fn migrate_statusline_lines_value(obj: &mut serde_json::Map<String, serde_json::
     }
 }
 
-/// Load settings for a read-modify-**save** path. Identical to [`load`] on the
-/// happy path, but the distinct name is a guard rail: a save-path caller must
-/// never `.unwrap_or_default()` the result. A missing file still yields
-/// `Settings::default()` (a first-ever save is not data loss), but a `Malformed`
-/// or `Io` error is propagated so the caller bails instead of resetting. If a
-/// caller collapsed a corrupt file to defaults here, the following [`save`]
-/// would overwrite the user's real settings - including the
-/// `statusline.replaced_command` backup - with a blank default, silently and
-/// unrecoverably. See [`UPDATE_LOAD_HINT`] for the caller-facing message.
+/// Load settings for an update path. Identical to [`load`] on the happy path,
+/// but the distinct name is a guard rail: a mutation caller must never
+/// `.unwrap_or_default()` the result. Production mutations use [`begin_update`]
+/// or [`update`], which call this only after acquiring the stable cross-process
+/// lock. A missing file still yields `Settings::default()` (a first-ever save is
+/// not data loss), but a `Malformed` or `Io` error is propagated so the caller
+/// bails instead of resetting. See [`UPDATE_LOAD_HINT`] for the caller-facing
+/// message.
 pub fn load_for_update() -> Result<Settings, SettingsError> {
     let path = default_path()?;
     load_for_update_from(&path)
@@ -327,18 +368,144 @@ pub fn load_for_update_from(path: &Path) -> Result<Settings, SettingsError> {
     load_from(path)
 }
 
-/// Shared caller-facing hint when [`load_for_update`] errors: a save-path
-/// caller refuses to overwrite a malformed/unreadable `settings.json` with
-/// defaults. Kept here so the CLI and the Tauri commands surface one consistent
-/// message; callers append the propagated error for the path + reason.
-pub const UPDATE_LOAD_HINT: &str =
-    "refusing to overwrite settings.json with defaults; fix or remove it and retry";
+/// Shared caller-facing hint when [`load_for_update`] errors. Kept here so the
+/// CLI mutation paths consistently distinguish malformed or unreadable settings
+/// from temporary lock contention; callers append the propagated error for the
+/// path + reason.
+pub const UPDATE_LOAD_HINT: &str = "refusing to update settings.json; fix a malformed or unreadable file, or retry after the current settings operation finishes";
 
-/// Save settings atomically via the shared `atomic_file` helper (fsync'd temp +
-/// rename, plus a parent-dir fsync on unix). Creates parent directories as needed.
-pub fn save(settings: &Settings) -> Result<(), SettingsError> {
+/// An exclusive, cross-process settings transaction. The lock is held from the
+/// latest on-disk load until this value is dropped. Coupled workflows such as
+/// keychain changes and statusline backup/restore may publish more than once
+/// while retaining the same lock so another Balanze process cannot interleave.
+pub struct SettingsTransaction {
+    path: PathBuf,
+    settings: Settings,
+    _lock_file: File,
+}
+
+impl SettingsTransaction {
+    pub fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
+    pub fn settings_mut(&mut self) -> &mut Settings {
+        &mut self.settings
+    }
+
+    /// Publish the transaction's current value while retaining the lock.
+    pub fn publish(&self) -> Result<(), SettingsError> {
+        save_to_unlocked(&self.settings, &self.path)
+    }
+
+    /// Publish and return the exact committed value. The lock is released before
+    /// the caller receives the value because the transaction is consumed.
+    pub fn commit(self) -> Result<Settings, SettingsError> {
+        self.publish()?;
+        Ok(self.settings)
+    }
+}
+
+/// Acquire the conventional settings lock and reload the latest settings.
+pub fn begin_update() -> Result<SettingsTransaction, SettingsError> {
     let path = default_path()?;
-    save_to(settings, &path)
+    begin_update_at(&path)
+}
+
+/// Explicit-path variant of [`begin_update`], used by deterministic tests.
+pub fn begin_update_at(path: &Path) -> Result<SettingsTransaction, SettingsError> {
+    begin_update_at_with_timeout(path, SETTINGS_LOCK_TIMEOUT)
+}
+
+fn begin_update_at_with_timeout(
+    path: &Path,
+    timeout: Duration,
+) -> Result<SettingsTransaction, SettingsError> {
+    let lock_file = acquire_settings_lock(path, timeout)?;
+    let settings = load_for_update_from(path)?;
+    Ok(SettingsTransaction {
+        path: path.to_path_buf(),
+        settings,
+        _lock_file: lock_file,
+    })
+}
+
+/// Reload, apply fallible field-level intent, and atomically publish under one
+/// lock. If the mutation returns an error, the transaction is dropped without
+/// publishing. `E: From<SettingsError>` lets callers use their own glue-layer
+/// error type while preserving settings acquisition and publication failures.
+pub fn update<E>(mutation: impl FnOnce(&mut Settings) -> Result<(), E>) -> Result<Settings, E>
+where
+    E: From<SettingsError>,
+{
+    let mut transaction = begin_update()?;
+    mutation(transaction.settings_mut())?;
+    Ok(transaction.commit()?)
+}
+
+/// Explicit-path variant of [`update`], used by deterministic tests.
+pub fn update_at<E>(
+    path: &Path,
+    mutation: impl FnOnce(&mut Settings) -> Result<(), E>,
+) -> Result<Settings, E>
+where
+    E: From<SettingsError>,
+{
+    let mut transaction = begin_update_at(path)?;
+    mutation(transaction.settings_mut())?;
+    Ok(transaction.commit()?)
+}
+
+fn acquire_settings_lock(path: &Path, timeout: Duration) -> Result<File, SettingsError> {
+    let parent = atomic_file::resolve_parent(path);
+    fs::create_dir_all(parent).map_err(|source| SettingsError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+
+    let lock_path = settings_lock_path(path);
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|source| SettingsError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+
+    let started = Instant::now();
+    loop {
+        match lock_file.try_lock() {
+            Ok(()) => return Ok(lock_file),
+            Err(TryLockError::WouldBlock) => {
+                let elapsed = started.elapsed();
+                if elapsed >= timeout {
+                    return Err(SettingsError::LockTimeout {
+                        path: lock_path,
+                        timeout_ms: timeout.as_millis(),
+                    });
+                }
+                thread::sleep(SETTINGS_LOCK_RETRY_DELAY.min(timeout - elapsed));
+            }
+            Err(TryLockError::Error(source)) => {
+                return Err(SettingsError::Io {
+                    path: lock_path,
+                    source,
+                });
+            }
+        }
+    }
+}
+
+fn settings_lock_path(path: &Path) -> PathBuf {
+    let mut file_name = path
+        .file_name()
+        .map(OsString::from)
+        .unwrap_or_else(|| OsString::from("settings.json"));
+    file_name.push(".lock");
+    path.with_file_name(file_name)
 }
 
 /// Persist a settings file written under an older schema version, so the
@@ -375,6 +542,7 @@ pub fn normalize_on_disk() -> Result<bool, SettingsError> {
 /// A file that fails to parse as JSON is malformed and returns `Err(Malformed)`
 /// without writing anything, so a corrupt file is never overwritten.
 pub fn normalize_on_disk_at(path: &Path) -> Result<bool, SettingsError> {
+    let _lock_file = acquire_settings_lock(path, SETTINGS_LOCK_TIMEOUT)?;
     let bytes = match fs::read(path) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -432,7 +600,7 @@ pub fn normalize_on_disk_at(path: &Path) -> Result<bool, SettingsError> {
     Ok(true)
 }
 
-pub fn save_to(settings: &Settings, path: &Path) -> Result<(), SettingsError> {
+fn save_to_unlocked(settings: &Settings, path: &Path) -> Result<(), SettingsError> {
     debug!(path = %path.display(), "settings: save");
     let bytes = serde_json::to_vec_pretty(settings).map_err(|e| SettingsError::Malformed {
         path: path.to_path_buf(),
@@ -443,8 +611,9 @@ pub fn save_to(settings: &Settings, path: &Path) -> Result<(), SettingsError> {
 
 /// Atomically write already-serialized JSON to `path` (fsync'd temp + rename,
 /// plus a parent-dir fsync on unix), creating parent directories as needed.
-/// Shared by [`save_to`] (a full `Settings`) and [`normalize_on_disk_at`] (a
-/// targeted patch that preserves unknown fields).
+/// Shared by locked full-settings publication and [`normalize_on_disk_at`] (a
+/// targeted patch that preserves unknown fields). Callers must hold the stable
+/// settings lock before invoking a full-settings publication.
 fn write_json_atomic(path: &Path, bytes: &[u8]) -> Result<(), SettingsError> {
     // Normalize the parent (a bare relative target's `parent()` is `Some("")`)
     // to exactly the directory `atomic_write` will write into, so a relative
@@ -466,6 +635,10 @@ fn write_json_atomic(path: &Path, bytes: &[u8]) -> Result<(), SettingsError> {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    fn save_to(settings: &Settings, path: &Path) -> Result<(), SettingsError> {
+        save_to_unlocked(settings, path)
+    }
 
     /// Serializes env-mutating tests in this module. `cargo nextest` runs each
     /// test in its own process, but plain `cargo test` shares one, so the lock
@@ -1136,5 +1309,190 @@ mod tests {
             load_from(&path).unwrap().seen_welcome,
             "true must roundtrip"
         );
+    }
+
+    #[test]
+    fn settings_patch_changes_only_present_fields() {
+        let mut current = Settings::default();
+        current.providers.openai_enabled = true;
+        current.providers.anthropic_enabled = false;
+        let patch = SettingsPatch {
+            providers: ProviderSettingsPatch {
+                codex_enabled: Some(false),
+                ..Default::default()
+            },
+            oauth_poll_interval_secs: Some(900),
+        };
+
+        patch.apply(&mut current);
+
+        assert!(current.providers.openai_enabled);
+        assert!(!current.providers.anthropic_enabled);
+        assert!(!current.providers.codex_enabled);
+        assert_eq!(current.oauth_poll_interval_secs, 900);
+    }
+
+    #[test]
+    fn settings_patch_deserializes_multi_field_intent() {
+        let patch: SettingsPatch =
+            serde_json::from_str(r#"{"providers":{"openai_enabled":false,"codex_enabled":false}}"#)
+                .unwrap();
+
+        assert_eq!(patch.providers.openai_enabled, Some(false));
+        assert_eq!(patch.providers.anthropic_enabled, None);
+        assert_eq!(patch.providers.codex_enabled, Some(false));
+        assert_eq!(patch.oauth_poll_interval_secs, None);
+    }
+
+    #[test]
+    fn failed_mutation_publishes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save_to(&Settings::default(), &path).unwrap();
+
+        let result = update_at(&path, |settings| {
+            settings.providers.codex_enabled = false;
+            Err(SettingsError::Malformed {
+                path: path.clone(),
+                reason: "injected mutation failure".to_string(),
+            })
+        });
+
+        assert!(matches!(result, Err(SettingsError::Malformed { .. })));
+        assert!(load_from(&path).unwrap().providers.codex_enabled);
+    }
+
+    #[test]
+    fn separate_process_updates_preserve_independent_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save_to(&Settings::default(), &path).unwrap();
+
+        let mut first = spawn_process_helper(dir.path(), "hold-first");
+        wait_for_test_file(&dir.path().join("first-entered"));
+        let mut second = spawn_process_helper(dir.path(), "write-second");
+        wait_for_test_file(&dir.path().join("second-started"));
+        thread::sleep(Duration::from_millis(50));
+        assert!(
+            !dir.path().join("second-done").exists(),
+            "the second process must still be waiting for the first process's lock"
+        );
+
+        fs::write(dir.path().join("release-first"), b"go").unwrap();
+        assert!(first.wait().unwrap().success());
+        assert!(second.wait().unwrap().success());
+
+        let committed = load_from(&path).unwrap();
+        assert!(!committed.providers.anthropic_enabled);
+        assert!(!committed.providers.codex_enabled);
+    }
+
+    #[test]
+    fn separate_process_contender_times_out_explicitly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save_to(&Settings::default(), &path).unwrap();
+
+        let mut holder = spawn_process_helper(dir.path(), "hold-first");
+        wait_for_test_file(&dir.path().join("first-entered"));
+        let mut contender = spawn_process_helper(dir.path(), "timeout");
+        assert!(contender.wait().unwrap().success());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("timeout-result")).unwrap(),
+            "timeout"
+        );
+
+        fs::write(dir.path().join("release-first"), b"go").unwrap();
+        assert!(holder.wait().unwrap().success());
+    }
+
+    #[test]
+    fn normalization_waits_for_a_separate_process_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"providers":{"anthropic_enabled":true,"codex_enabled":true}}"#,
+        )
+        .unwrap();
+
+        let mut writer = spawn_process_helper(dir.path(), "hold-first");
+        wait_for_test_file(&dir.path().join("first-entered"));
+        let mut normalizer = spawn_process_helper(dir.path(), "normalize");
+        wait_for_test_file(&dir.path().join("normalize-started"));
+        thread::sleep(Duration::from_millis(50));
+        assert!(!dir.path().join("normalize-done").exists());
+
+        fs::write(dir.path().join("release-first"), b"go").unwrap();
+        assert!(writer.wait().unwrap().success());
+        assert!(normalizer.wait().unwrap().success());
+
+        let committed = load_from(&path).unwrap();
+        assert_eq!(committed.version, SCHEMA_VERSION);
+        assert!(!committed.providers.anthropic_enabled);
+    }
+
+    #[test]
+    fn settings_process_helper() {
+        let Some(dir) = std::env::var_os("BALANZE_SETTINGS_PROCESS_TEST_DIR").map(PathBuf::from)
+        else {
+            return;
+        };
+        let role = std::env::var("BALANZE_SETTINGS_PROCESS_TEST_ROLE").unwrap();
+        let path = dir.join("settings.json");
+        match role.as_str() {
+            "hold-first" => {
+                let mut transaction = begin_update_at(&path).unwrap();
+                fs::write(dir.join("first-entered"), b"ready").unwrap();
+                wait_for_test_file(&dir.join("release-first"));
+                transaction.settings_mut().providers.anthropic_enabled = false;
+                transaction.commit().unwrap();
+            }
+            "write-second" => {
+                fs::write(dir.join("second-started"), b"ready").unwrap();
+                update_at(&path, |settings| {
+                    settings.providers.codex_enabled = false;
+                    Ok::<(), SettingsError>(())
+                })
+                .unwrap();
+                fs::write(dir.join("second-done"), b"done").unwrap();
+            }
+            "timeout" => {
+                let result = begin_update_at_with_timeout(&path, Duration::from_millis(50));
+                let outcome = match result {
+                    Err(SettingsError::LockTimeout { .. }) => "timeout",
+                    Ok(_) => "acquired",
+                    Err(error) => panic!("unexpected lock result: {error}"),
+                };
+                fs::write(dir.join("timeout-result"), outcome).unwrap();
+            }
+            "normalize" => {
+                fs::write(dir.join("normalize-started"), b"ready").unwrap();
+                normalize_on_disk_at(&path).unwrap();
+                fs::write(dir.join("normalize-done"), b"done").unwrap();
+            }
+            other => panic!("unknown process-test role: {other}"),
+        }
+    }
+
+    fn spawn_process_helper(dir: &Path, role: &str) -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::settings_process_helper", "--nocapture"])
+            .env("BALANZE_SETTINGS_PROCESS_TEST_DIR", dir)
+            .env("BALANZE_SETTINGS_PROCESS_TEST_ROLE", role)
+            .spawn()
+            .unwrap()
+    }
+
+    fn wait_for_test_file(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }

@@ -36,7 +36,7 @@ The command needs three things wired: (1) function declared `#[tauri::command]`,
 
 ## "Settings file got corrupted after a crash"
 
-The `settings` crate must use the atomic-write pattern: write to `settings.json.tmp`, then `rename` over `settings.json`. Direct writes truncate the existing file before writing new content; a crash mid-write leaves it empty. If you see this, the atomic-write pattern was bypassed.
+The `settings` crate must use both layers of its write contract: acquire the persistent sibling `settings.json.lock`, reload and apply field-level intent while holding it, then publish through the shared atomic-file helper. Direct writes can leave a truncated file after a crash; atomic rename without the surrounding transaction can still silently lose another process's independent change. Never lock `settings.json` itself because the atomic rename replaces that file identity.
 
 ## "If the Anthropic Console scrape ever lands and breaks overnight"
 

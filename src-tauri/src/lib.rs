@@ -226,26 +226,24 @@ const FIRST_RUN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 /// the Windows hidden-overflow tray. Best-effort: every failure is logged, never
 /// fatal, and the flag is persisted so the welcome shows exactly once.
 fn maybe_first_run_welcome(app: &App, rt: &tokio::runtime::Handle) {
-    let mut settings = match settings::load() {
-        Ok(s) => s,
+    let mut transaction = match settings::begin_update() {
+        Ok(transaction) => transaction,
         Err(e) => {
-            tracing::warn!("first-run: settings load failed ({e}); skipping welcome");
+            tracing::warn!("first-run: settings transaction failed ({e}); skipping welcome");
             return;
         }
     };
-    if settings.seen_welcome {
+    if transaction.settings().seen_welcome {
         return;
     }
-    tracing::info!("first-run: showing welcome (popover + notification)");
 
-    // Persist the flag FIRST, before showing. Saving the loaded struct after the
-    // popover is up could clobber a settings write the just-opened popover makes
-    // in between; nothing here mutates settings further, so writing it up front
-    // is both safe and race-free.
-    settings.seen_welcome = true;
-    if let Err(e) = settings::save(&settings) {
+    // Persist the flag before showing, using the latest value loaded under the
+    // cross-process lock so a concurrent CLI mutation cannot be overwritten.
+    transaction.settings_mut().seen_welcome = true;
+    if let Err(e) = transaction.commit() {
         tracing::warn!("first-run: settings save failed ({e}); welcome may repeat next launch");
     }
+    tracing::info!("first-run: showing welcome (popover + notification)");
 
     // Arm the blur-hide grace BEFORE showing: the startup focus race that
     // immediately follows show() must not hide the popover before it is seen.

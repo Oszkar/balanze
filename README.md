@@ -161,6 +161,7 @@ The workspace is a set of small, single-responsibility crates under `crates/`: o
 - **Provider connectors** - `anthropic_oauth`, `openai_client`, `codex_local`, and `claude_parser` (the Claude JSONL wire format) each own one source. Adding a provider means a new connector crate wired into the `SnapshotSources` fetches that `snapshot_composer::compose` orchestrates (plus the watcher/coordinator for live updates) - the normalized `Snapshot` and the actor stay put. That connector abstraction is the design's central bet.
 - **Domain math** - `window` (rolling-window + pace) and `claude_cost` (the pure list-price estimate). Pure functions, no I/O, tested first.
 - **Composition + glue** - `snapshot_composer` (one-shot) and `state_coordinator` (the live actor) both assemble the same `Snapshot`; `balanze_cli` and `src-tauri` are thin glue over them, never logic.
+- **Local mutation ownership** - `settings` serializes every Balanze settings mutation across processes with a stable sibling lock, reloads before applying field-level intent, and publishes atomically. `claude_statusline` owns the safely ordered backup/replace/restore workflow for Claude Code's separate settings file; the two files are recoverable on retry rather than falsely treated as one atomic transaction.
 
 Hitting a wall? [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) collects the non-obvious traps (double tray icons, JSONL CPU spikes, Tauri dep-version mismatches). Test discipline and the per-crate validation matrix live in `AGENTS.md` §6-§7.
 

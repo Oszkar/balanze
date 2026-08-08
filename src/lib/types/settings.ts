@@ -17,6 +17,19 @@ export interface Settings {
   seen_welcome: boolean;
 }
 
+// Write-side IPC shape. Only present fields are applied to the latest on-disk
+// value under the backend's cross-process settings lock.
+export interface ProviderSettingsPatch {
+  openai_enabled?: boolean;
+  anthropic_enabled?: boolean;
+  codex_enabled?: boolean;
+}
+
+export interface SettingsPatch {
+  providers?: ProviderSettingsPatch;
+  oauth_poll_interval_secs?: number;
+}
+
 // Mirrors `commands::StatuslineWire` - whether Claude Code's statusLine is
 // wired to Balanze, free, or taken by another command.
 export interface StatuslineWire {

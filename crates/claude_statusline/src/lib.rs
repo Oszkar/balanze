@@ -19,6 +19,7 @@ pub mod parse;
 pub mod payload;
 pub mod types;
 pub mod wiring;
+pub mod workflow;
 
 pub use errors::StatuslineError;
 pub use file_io::{FileIoError, atomic_write_snapshot, read_snapshot};
@@ -28,4 +29,8 @@ pub use types::{RateLimits, RateWindow, StatuslineSnapshot};
 pub use wiring::{
     NON_STRING_STATUSLINE_COMMAND, STATUSLINE_INVOCATION, WireStatus, default_settings_path,
     locate_settings_path, read_wire_status, restore_statusline, unwire_statusline, wire_statusline,
+};
+pub use workflow::{
+    ReplaceOutcome, RestoreOutcome, StatuslineWorkflowError, replace_statusline_with_backup,
+    restore_statusline_from_backup,
 };

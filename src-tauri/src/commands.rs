@@ -23,10 +23,11 @@
 //! `to_string()`.
 
 use claude_statusline::{
-    STATUSLINE_INVOCATION, WireStatus, default_settings_path, locate_settings_path,
-    read_wire_status, unwire_statusline, wire_statusline,
+    RestoreOutcome, STATUSLINE_INVOCATION, WireStatus, default_settings_path, locate_settings_path,
+    read_wire_status, replace_statusline_with_backup, restore_statusline_from_backup,
+    unwire_statusline, wire_statusline,
 };
-use settings::Settings;
+use settings::{Settings, SettingsPatch};
 use state_coordinator::{Snapshot, StateCoordinatorHandle, StateMsg};
 use tauri::State;
 use tauri_plugin_autostart::ManagerExt;
@@ -144,33 +145,21 @@ pub async fn get_settings() -> Result<Settings, String> {
     run_blocking(|| settings::load().map_err(|e| e.to_string())).await
 }
 
-/// Persist the non-secret settings atomically and live-apply them: provider
-/// toggles and the poll cadence take effect without an app restart (see
+/// Apply field-level non-secret settings intent and live-apply the exact
+/// committed value: provider toggles and the poll cadence take effect without an app restart (see
 /// [`apply_settings_live`]). The watcher's pollers clamp the cadence to the
 /// §3.1 floor regardless of what lands here, so a too-small value is safe.
 #[tauri::command]
 pub async fn set_settings(
-    mut settings: Settings,
+    patch: SettingsPatch,
     reload: State<'_, WatcherReload>,
 ) -> Result<(), String> {
-    // `seen_welcome` and `statusline` are backend-owned, not user settings the
-    // frontend edits: `seen_welcome` is first-run state, and `statusline` (incl.
-    // the `replaced_command` backup) is mutated out of band by the replace /
-    // restore commands and has no frontend editor. A frontend settings write
-    // (provider toggles) round-trips a stale copy, so preserve the on-disk
-    // values over the inbound ones - otherwise a toggle after a Replace would
-    // silently wipe the backup.
-    // Load the on-disk copy to preserve the backend-owned fields. On a corrupt
-    // settings.json, bail instead of proceeding: the inbound copy carries a
-    // stale/default `statusline`, so saving it would wipe the replaced_command
-    // backup - the same clobber the read-only save paths guard against.
     let settings = run_blocking(move || {
-        let current = settings::load_for_update()
-            .map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
-        settings.seen_welcome = current.seen_welcome;
-        settings.statusline = current.statusline;
-        settings::save(&settings).map_err(|e| e.to_string())?;
-        Ok(settings)
+        settings::update(|current| {
+            patch.apply(current);
+            Ok::<(), settings::SettingsError>(())
+        })
+        .map_err(|e| e.to_string())
     })
     .await?;
     apply_settings_live(&reload, settings).await
@@ -190,13 +179,14 @@ pub async fn set_api_key(
 ) -> Result<(), String> {
     let key = prepare_api_key(&provider, &key)?.to_string();
     // Saving a key implies the user wants this provider polled. Flip the
-    // enable flag so the watcher picks it up, then live-apply.
+    // enable flag so the watcher picks it up, then live-apply. The settings lock
+    // spans the keychain write and publication so another Balanze key operation
+    // cannot interleave their ordering.
     let s = run_blocking(move || {
+        let mut transaction = settings::begin_update().map_err(|e| e.to_string())?;
         keychain::set(keychain::keys::OPENAI_API_KEY, &key).map_err(|e| e.to_string())?;
-        let mut s = settings::load().map_err(|e| e.to_string())?;
-        s.providers.openai_enabled = true;
-        settings::save(&s).map_err(|e| e.to_string())?;
-        Ok(s)
+        transaction.settings_mut().providers.openai_enabled = true;
+        transaction.commit().map_err(|e| e.to_string())
     })
     .await?;
     apply_settings_live(&reload, s).await
@@ -266,11 +256,10 @@ pub async fn clear_api_key(
         return Err(format!("unsupported provider: {provider}"));
     }
     let s = run_blocking(|| {
+        let mut transaction = settings::begin_update().map_err(|e| e.to_string())?;
         keychain::delete(keychain::keys::OPENAI_API_KEY).map_err(|e| e.to_string())?;
-        let mut s = settings::load().map_err(|e| e.to_string())?;
-        s.providers.openai_enabled = false;
-        settings::save(&s).map_err(|e| e.to_string())?;
-        Ok(s)
+        transaction.settings_mut().providers.openai_enabled = false;
+        transaction.commit().map_err(|e| e.to_string())
     })
     .await?;
     apply_settings_live(&reload, s).await
@@ -368,24 +357,8 @@ pub async fn get_statusline_status() -> Result<StatuslineWire, String> {
 pub async fn replace_statusline() -> Result<(), String> {
     run_blocking(|| {
         let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-        let mut s = settings::load_for_update()
-            .map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
-        let prior = s.statusline.replaced_command.clone();
-        if let WireStatus::OccupiedBy(cmd) = read_wire_status(&path).map_err(|e| e.to_string())? {
-            // Don't back up the "statusLine present but no usable command" sentinel;
-            // it is not restorable.
-            if cmd != claude_statusline::NON_STRING_STATUSLINE_COMMAND {
-                s.statusline.replaced_command = Some(cmd);
-                settings::save(&s).map_err(|e| e.to_string())?;
-            }
-        }
-        if let Err(e) = wire_statusline(&path, STATUSLINE_INVOCATION) {
-            // Roll back to the PRIOR backup (not None) so a failed replace never wipes
-            // an existing one, and the UI shows no phantom Restore for this attempt.
-            s.statusline.replaced_command = prior;
-            let _ = settings::save(&s);
-            return Err(e.to_string());
-        }
+        replace_statusline_with_backup(&path, STATUSLINE_INVOCATION)
+            .map_err(|error| error.to_string())?;
         Ok(())
     })
     .await
@@ -400,21 +373,15 @@ pub async fn replace_statusline() -> Result<(), String> {
 pub async fn restore_statusline() -> Result<(), String> {
     run_blocking(|| {
         let path = locate_settings_path().unwrap_or_else(|_| default_settings_path());
-        let mut s = settings::load_for_update()
-            .map_err(|e| format!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
-        let previous = s.statusline.replaced_command.take();
-        // Fully-qualified to disambiguate from this Tauri command of the same name.
-        let wrote = claude_statusline::restore_statusline(&path, previous.as_deref())
-            .map_err(|e| e.to_string())?;
-        if wrote {
-            // Backup consumed - persist the cleared value.
-            settings::save(&s).map_err(|e| e.to_string())
-        } else if previous.is_some() {
-            // A foreign command owns the stanza; keep the backup (do not save the
-            // cleared value) and tell the caller.
-            Err("Claude Code's statusLine is set to another command; not overwriting it. Your backup is kept.".to_string())
-        } else {
-            Ok(())
+        match restore_statusline_from_backup(&path).map_err(|error| error.to_string())? {
+            RestoreOutcome::Refused { .. } => Err(
+                "Claude Code's statusLine is set to another command; not overwriting it. Your backup is kept."
+                    .to_string(),
+            ),
+            RestoreOutcome::Restored(_)
+            | RestoreOutcome::AlreadyRestored(_)
+            | RestoreOutcome::Unwired
+            | RestoreOutcome::NothingToDo => Ok(()),
         }
     })
     .await
