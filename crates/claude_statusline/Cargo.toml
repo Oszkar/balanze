@@ -10,6 +10,7 @@ description = "Parses the Claude Code statusLine stdin payload and owns the stat
 
 [dependencies]
 atomic_file = { path = "../atomic_file" }
+settings = { path = "../settings" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

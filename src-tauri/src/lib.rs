@@ -226,59 +226,76 @@ const FIRST_RUN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 /// the Windows hidden-overflow tray. Best-effort: every failure is logged, never
 /// fatal, and the flag is persisted so the welcome shows exactly once.
 fn maybe_first_run_welcome(app: &App, rt: &tokio::runtime::Handle) {
-    let mut settings = match settings::load() {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("first-run: settings load failed ({e}); skipping welcome");
+    let app = app.handle().clone();
+    // Both startup settings operations may wait on the bounded cross-process
+    // lock. Run them on a blocking worker so a concurrent CLI cannot delay tray
+    // and window setup. Load-path migration keeps boot_backend correct if it
+    // reads the old on-disk schema before normalization publishes the new one.
+    let settings_work = rt.spawn_blocking(|| {
+        normalize_settings_on_disk();
+        let mut transaction = match settings::begin_update() {
+            Ok(transaction) => transaction,
+            Err(e) => {
+                tracing::warn!("first-run: settings transaction failed ({e}); skipping welcome");
+                return false;
+            }
+        };
+        if transaction.settings().seen_welcome {
+            return false;
+        }
+
+        // Persist the flag before showing, using the latest value loaded under
+        // the lock so a concurrent CLI mutation cannot be overwritten.
+        transaction.settings_mut().seen_welcome = true;
+        if let Err(e) = transaction.commit() {
+            tracing::warn!("first-run: settings save failed ({e}); welcome may repeat next launch");
+        }
+        true
+    });
+
+    rt.spawn(async move {
+        let should_show = match settings_work.await {
+            Ok(should_show) => should_show,
+            Err(e) => {
+                tracing::warn!("first-run: settings worker failed ({e}); skipping welcome");
+                false
+            }
+        };
+        if !should_show {
             return;
         }
-    };
-    if settings.seen_welcome {
-        return;
-    }
-    tracing::info!("first-run: showing welcome (popover + notification)");
+        tracing::info!("first-run: showing welcome (popover + notification)");
 
-    // Persist the flag FIRST, before showing. Saving the loaded struct after the
-    // popover is up could clobber a settings write the just-opened popover makes
-    // in between; nothing here mutates settings further, so writing it up front
-    // is both safe and race-free.
-    settings.seen_welcome = true;
-    if let Err(e) = settings::save(&settings) {
-        tracing::warn!("first-run: settings save failed ({e}); welcome may repeat next launch");
-    }
+        // Arm the blur-hide grace BEFORE showing: the startup focus race that
+        // immediately follows show() must not hide the popover before it is seen.
+        if let Some(grace) = app.try_state::<WelcomeGrace>()
+            && let Ok(mut shown) = grace.0.lock()
+        {
+            *shown = Some(std::time::Instant::now());
+        }
+        // Open the popover unanchored - there is no tray click to anchor to at
+        // startup. It shows the loading/empty state until the first poll lands.
+        position_and_show(&app);
+        notify_first_run(&app);
 
-    // Arm the blur-hide grace BEFORE showing: the startup focus race that
-    // immediately follows show() must not hide the popover before it is seen.
-    if let Some(grace) = app.try_state::<WelcomeGrace>()
-        && let Ok(mut shown) = grace.0.lock()
-    {
-        *shown = Some(std::time::Instant::now());
-    }
-    // Open the popover unanchored - there is no tray click to anchor to at
-    // startup. It shows the loading/empty state until the first poll lands.
-    position_and_show(app.handle());
-    notify_first_run(app);
-
-    // After the grace window, auto-hide IF the popover never gained focus (the
-    // race left it visible-but-unfocused, or the user never engaged). If it has
-    // focus the user is looking at it - leave it, and the now-expired grace lets
-    // normal click-away dismiss take over. Without this the popover could linger
-    // until an explicit ESC/tray interaction. One-shot, not a supervised task.
-    if let Some(window) = app.get_webview_window("main") {
-        rt.spawn(async move {
+        // After the grace window, auto-hide IF the popover never gained focus
+        // (the race left it visible-but-unfocused, or the user never engaged).
+        // If it has focus the user is looking at it - leave it, and the expired
+        // grace lets normal click-away dismiss take over.
+        if let Some(window) = app.get_webview_window("main") {
             tokio::time::sleep(FIRST_RUN_GRACE).await;
             if !window.is_focused().unwrap_or(false) {
                 let _ = window.hide();
             }
-        });
-    }
+        }
+    });
 }
 
 /// Fire the one-time "Balanze is running" OS notification, requesting the OS
 /// notification permission first (macOS prompts; Windows is typically granted).
 /// Fired from Rust, so it needs no webview capability (PoLP). Windows toasts
 /// only surface for the installed app, not `tauri dev`.
-fn notify_first_run(app: &App) {
+fn notify_first_run(app: &tauri::AppHandle) {
     use tauri_plugin_notification::{NotificationExt, PermissionState};
 
     let notifier = app.notification();
@@ -656,17 +673,12 @@ pub fn run() {
             }
         })
         .setup(move |app| {
-            // Runs first, before anything else can read or write settings.json:
-            // the tray/popover isn't shown yet and the watcher supervisor hasn't
-            // spawned, so this write cannot race a settings command triggered by
-            // the popover or a watcher-originated save. Independent of
-            // `maybe_first_run_welcome` on purpose - gating this on
-            // `seen_welcome` was the bug (an existing user's plain launch never
-            // persists the schema-version bump, so the statusline-lines
-            // migration in `settings::load_from` keeps re-firing forever).
-            normalize_settings_on_disk();
             setup_tray(app)?;
             boot_backend(app, &rt_handle);
+            // Schedules normalization and first-run persistence after tray setup;
+            // both use spawn_blocking so lock contention never stalls this setup
+            // closure. Normalization remains independent of seen_welcome inside
+            // the worker so existing users still persist schema-version bumps.
             maybe_first_run_welcome(app, &rt_handle);
             Ok(())
         })

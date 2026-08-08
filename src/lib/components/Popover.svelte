@@ -66,10 +66,8 @@
   // toggle in Settings brings the column back. No schema change.
   async function onDismissOpenai() {
     try {
-      const s = await getSettings();
       await setSettings({
-        ...s,
-        providers: { ...s.providers, openai_enabled: false, codex_enabled: false },
+        providers: { openai_enabled: false, codex_enabled: false },
       });
       openaiEnabled = false;
     } catch {

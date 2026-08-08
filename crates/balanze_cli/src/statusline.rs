@@ -13,32 +13,24 @@ pub(crate) fn cmd_statusline_restore() -> Result<()> {
         Ok(p) => p,
         Err(_) => claude_statusline::default_settings_path(),
     };
-    // A malformed settings.json here holds the very backup we are trying to
-    // restore; defaulting would discard it. Bail so the file stays intact and
-    // the user can fix it (or hand-copy the command back).
-    let mut settings = settings::load_for_update()
-        .map_err(|e| anyhow::anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
-    let previous = settings.statusline.replaced_command.take();
-    let wrote = claude_statusline::restore_statusline(&path, previous.as_deref())
-        .map_err(|e| anyhow::anyhow!("failed to restore statusLine at {}: {e}", path.display()))?;
-    if wrote {
-        // The backup was consumed - persist the now-cleared value.
-        settings::save(&settings).map_err(|e| {
-            anyhow::anyhow!("statusLine restored, but clearing the backup failed: {e}")
-        })?;
-        match previous {
-            Some(cmd) => println!("Restored the previous statusLine command: {cmd}"),
-            None => println!("Unwired Balanze's statusLine."),
+    match claude_statusline::restore_statusline_from_backup(&path)? {
+        claude_statusline::RestoreOutcome::Restored(command) => {
+            println!("Restored the previous statusLine command: {command}")
         }
-    } else if previous.is_some() {
-        // A foreign command occupies the stanza; leave it and KEEP the backup
-        // (do not save the cleared value) so it can be restored later.
-        println!(
-            "Claude Code's statusLine is set to another command; not overwriting it. \
-             Your backup is kept - restore once Balanze owns the statusLine again."
-        );
-    } else {
-        println!("No replaced command was stored; nothing to restore.");
+        claude_statusline::RestoreOutcome::AlreadyRestored(command) => {
+            println!("Previous statusLine command was already restored: {command}")
+        }
+        claude_statusline::RestoreOutcome::Unwired => {
+            println!("Unwired Balanze's statusLine.")
+        }
+        claude_statusline::RestoreOutcome::NothingToDo => {
+            println!("No replaced command was stored; nothing to restore.")
+        }
+        claude_statusline::RestoreOutcome::Refused { occupying_command } => println!(
+            "Claude Code's statusLine is set to another command ({occupying_command}); \
+             not overwriting it. Your backup is kept - restore once Balanze owns the \
+             statusLine again."
+        ),
     }
     Ok(())
 }

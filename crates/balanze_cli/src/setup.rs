@@ -238,9 +238,14 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
         return Ok(OpenAiKeyStatus::ValidationFailed);
     }
 
-    // Write to keychain, then read back to confirm the credential actually
+    // Acquire the settings transaction before touching the keychain so another
+    // Balanze key operation cannot interleave its keychain/flag ordering. A
+    // macOS ACL prompt can hold the bounded settings lock, but releasing it
+    // would permit exactly that reordering. Write to keychain, then read back to confirm the credential actually
     // persisted. set→get→compare surfaces any silent write failure (a locked
     // keychain, a permission issue) as an Err(NotFound) or value mismatch.
+    let mut transaction =
+        settings::begin_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     keychain::set(keychain::keys::OPENAI_API_KEY, &key)?;
     let read_back = match keychain::get(keychain::keys::OPENAI_API_KEY) {
         Ok(r) => r,
@@ -259,17 +264,15 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
         return Ok(OpenAiKeyStatus::KeychainBroken);
     }
 
-    // Mirror `cmd_set_openai_key`'s pattern: on a corrupt settings.json, bail
-    // rather than reset it to defaults - a reset would silently wipe the user's
-    // real settings (incl. the statusline backup). Both the load and the save
-    // errors propagate loudly here. Yes, that leaves the key in the keychain
-    // while `openai_enabled` stays unset; that transient desync is the same one
-    // a save failure already produced, and it clears when the user fixes
-    // settings.json and re-runs. Losing their settings would not clear.
-    let mut s =
-        settings::load_for_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
-    s.providers.openai_enabled = true;
-    settings::save(&s)?;
+    // A publication failure after the keychain write is explicit and
+    // recoverable by retry. We deliberately do not read or retain the previous
+    // secret for rollback.
+    transaction.settings_mut().providers.openai_enabled = true;
+    transaction.commit().map_err(|e| {
+        anyhow!(
+            "key saved to the keychain, but enabling the OpenAI provider failed ({e}); re-run `balanze-cli setup` after fixing settings.json"
+        )
+    })?;
     eprintln!("  ✓ Key validated and saved to the OS keychain.");
     Ok(OpenAiKeyStatus::SavedAndValidated)
 }
@@ -298,7 +301,7 @@ fn prompt_for_openai_key() -> Result<String> {
 fn setup_statusline() {
     use claude_statusline::{
         STATUSLINE_INVOCATION, WireStatus, default_settings_path, locate_settings_path,
-        read_wire_status, wire_statusline,
+        read_wire_status, replace_statusline_with_backup, wire_statusline,
     };
     // Shared const so the CLI and the desktop Settings UI can't drift.
     let invocation = STATUSLINE_INVOCATION;
@@ -318,48 +321,36 @@ fn setup_statusline() {
         Ok(WireStatus::OccupiedBy(cmd)) => {
             eprintln!("  ○ Claude Code statusLine is set to a different command:");
             eprintln!("      {cmd}");
-            eprint!(
-                "  Replace it with Balanze's? Your command is backed up and restorable \
-                 anytime with `balanze-cli statusline restore`. [y/N]: "
-            );
+            if cmd == claude_statusline::NON_STRING_STATUSLINE_COMMAND {
+                eprint!(
+                    "  Replace it with Balanze's? This stanza has no string command to back up \
+                     and cannot be restored automatically. [y/N]: "
+                );
+            } else {
+                eprint!(
+                    "  Replace it with Balanze's? Your command is backed up and restorable \
+                     anytime with `balanze-cli statusline restore`. [y/N]: "
+                );
+            }
             let _ = std::io::Write::flush(&mut std::io::stderr());
             let mut answer = String::new();
             let _ = std::io::stdin().read_line(&mut answer);
             if answer.trim().eq_ignore_ascii_case("y") {
-                // Bail rather than clobber: a corrupt settings.json would
-                // otherwise be reset to defaults and the save below would wipe
-                // any existing replaced_command backup.
-                let mut settings = match settings::load_for_update() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("  ✗ {}: {e}", settings::UPDATE_LOAD_HINT);
-                        eprintln!("    Leaving statusLine untouched.");
-                        return;
-                    }
-                };
-                let prior = settings.statusline.replaced_command.clone();
-                // Only back up a real command, not the "statusLine present but no
-                // usable command" sentinel (which is not restorable).
-                if cmd != claude_statusline::NON_STRING_STATUSLINE_COMMAND {
-                    settings.statusline.replaced_command = Some(cmd);
-                }
-                if let Err(e) = settings::save(&settings) {
-                    eprintln!(
-                        "  ✗ Could not back up your command ({e}); leaving statusLine untouched."
-                    );
-                    return;
-                }
-                match wire_statusline(&path, invocation) {
-                    Ok(()) => eprintln!(
+                match replace_statusline_with_backup(&path, invocation) {
+                    Ok(claude_statusline::ReplaceOutcome::Replaced { .. }) => eprintln!(
                         "  ✓ Replaced. Restore anytime with `balanze-cli statusline restore`. \
                          Restart Claude Code to apply."
                     ),
+                    Ok(claude_statusline::ReplaceOutcome::ReplacedWithoutBackup) => eprintln!(
+                        "  ✓ Replaced the non-command statusLine without a restorable backup. \
+                         Restart Claude Code to apply."
+                    ),
+                    Ok(claude_statusline::ReplaceOutcome::Wired) => eprintln!(
+                        "  ✓ statusLine became free while waiting; wired Balanze without replacing anything. \
+                         Restart Claude Code to apply."
+                    ),
                     Err(e) => {
-                        // Wiring failed - roll back to the PRIOR backup (not None)
-                        // so a failed replace never wipes an existing one.
-                        settings.statusline.replaced_command = prior;
-                        let _ = settings::save(&settings);
-                        eprintln!("  ✗ Failed to write {} ({e}); not wired.", path.display());
+                        eprintln!("  ✗ Failed to replace the statusLine ({e}); not wired.");
                     }
                 }
             } else {
