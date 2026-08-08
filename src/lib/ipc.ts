@@ -32,8 +32,8 @@ export const setLaunchAtLogin = (enabled: boolean): Promise<void> =>
 // API key; `set_api_key` writes the key to the OS keychain and flips the
 // provider's enable flag backend-side (AGENTS.md §3.4).
 export const getSettings = (): Promise<Settings> => invoke<Settings>('get_settings');
-export const setSettings = (patch: SettingsPatch): Promise<void> =>
-  invoke<void>('set_settings', { patch });
+export const setSettings = (patch: SettingsPatch): Promise<Settings> =>
+  invoke<Settings>('set_settings', { patch });
 export const setApiKey = (provider: string, key: string): Promise<void> =>
   invoke<void>('set_api_key', { provider, key });
 export const hasApiKey = (provider: string): Promise<boolean> =>

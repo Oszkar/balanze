@@ -18,7 +18,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplaceOutcome {
     Wired,
-    Replaced { displaced: Option<String> },
+    Replaced { displaced: String },
+    ReplacedWithoutBackup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,7 @@ pub fn replace_statusline_with_backup(
         claude_settings_path,
         invocation,
         wire_statusline,
+        |transaction| transaction.publish(),
     )
 }
 
@@ -65,6 +67,7 @@ fn replace_statusline_with_backup_at(
     claude_settings_path: &Path,
     invocation: &str,
     write_claude: impl FnOnce(&Path, &str) -> Result<(), StatuslineError>,
+    rollback_balanze: impl FnOnce(&settings::SettingsTransaction) -> Result<(), settings::SettingsError>,
 ) -> Result<ReplaceOutcome, StatuslineWorkflowError> {
     let mut transaction = settings::begin_update_at(balanze_settings_path)?;
     let prior_backup = transaction.settings().statusline.replaced_command.clone();
@@ -82,16 +85,17 @@ fn replace_statusline_with_backup_at(
     if let Err(write) = write_claude(claude_settings_path, invocation) {
         if displaced.is_some() {
             transaction.settings_mut().statusline.replaced_command = prior_backup;
-            if let Err(rollback) = transaction.publish() {
+            if let Err(rollback) = rollback_balanze(&transaction) {
                 return Err(StatuslineWorkflowError::Rollback { write, rollback });
             }
         }
         return Err(StatuslineWorkflowError::Statusline(write));
     }
 
-    Ok(match status {
-        WireStatus::OccupiedBy(_) => ReplaceOutcome::Replaced { displaced },
-        WireStatus::Unwired | WireStatus::WiredToBalanze => ReplaceOutcome::Wired,
+    Ok(match (status, displaced) {
+        (WireStatus::OccupiedBy(_), Some(displaced)) => ReplaceOutcome::Replaced { displaced },
+        (WireStatus::OccupiedBy(_), None) => ReplaceOutcome::ReplacedWithoutBackup,
+        (WireStatus::Unwired | WireStatus::WiredToBalanze, _) => ReplaceOutcome::Wired,
     })
 }
 
@@ -191,6 +195,7 @@ mod tests {
                     source: std::io::Error::other("injected write failure"),
                 })
             },
+            |transaction| transaction.publish(),
         )
         .unwrap_err();
 
@@ -206,6 +211,86 @@ mod tests {
         assert_eq!(
             read_wire_status(&claude).unwrap(),
             WireStatus::OccupiedBy("foreign-command".to_string())
+        );
+    }
+
+    #[test]
+    fn replace_reports_both_write_and_backup_rollback_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let balanze = dir.path().join("balanze.json");
+        let claude = dir.path().join("claude.json");
+        save_balanze_settings(&balanze, Some("older-command"));
+        write_claude_settings(&claude, "foreign-command");
+
+        let error = replace_statusline_with_backup_at(
+            &balanze,
+            &claude,
+            "balanze-cli statusline",
+            |_, _| {
+                Err(StatuslineError::SettingsIo {
+                    path: claude.clone(),
+                    source: std::io::Error::other("injected Claude write failure"),
+                })
+            },
+            |_| {
+                Err(settings::SettingsError::Malformed {
+                    path: balanze.clone(),
+                    reason: "injected backup rollback failure".to_string(),
+                })
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, StatuslineWorkflowError::Rollback { .. }));
+        let message = error.to_string();
+        assert!(
+            message.contains("injected Claude write failure"),
+            "{message}"
+        );
+        assert!(
+            message.contains("injected backup rollback failure"),
+            "{message}"
+        );
+        assert_eq!(
+            settings::load_from(&balanze)
+                .unwrap()
+                .statusline
+                .replaced_command
+                .as_deref(),
+            Some("foreign-command"),
+            "the successfully persisted displaced command remains the safest backup"
+        );
+    }
+
+    #[test]
+    fn replace_reports_when_a_non_string_stanza_has_no_restorable_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let balanze = dir.path().join("balanze.json");
+        let claude = dir.path().join("claude.json");
+        save_balanze_settings(&balanze, None);
+        std::fs::write(&claude, r#"{"statusLine":{"type":"command","command":42}}"#).unwrap();
+
+        assert_eq!(
+            replace_statusline_with_backup_at(
+                &balanze,
+                &claude,
+                "balanze-cli statusline",
+                wire_statusline,
+                |transaction| transaction.publish(),
+            )
+            .unwrap(),
+            ReplaceOutcome::ReplacedWithoutBackup
+        );
+        assert!(
+            settings::load_from(&balanze)
+                .unwrap()
+                .statusline
+                .replaced_command
+                .is_none()
+        );
+        assert_eq!(
+            read_wire_status(&claude).unwrap(),
+            WireStatus::WiredToBalanze
         );
     }
 

@@ -26,9 +26,10 @@ pub(crate) fn cmd_statusline_restore() -> Result<()> {
         claude_statusline::RestoreOutcome::NothingToDo => {
             println!("No replaced command was stored; nothing to restore.")
         }
-        claude_statusline::RestoreOutcome::Refused { .. } => println!(
-            "Claude Code's statusLine is set to another command; not overwriting it. \
-             Your backup is kept - restore once Balanze owns the statusLine again."
+        claude_statusline::RestoreOutcome::Refused { occupying_command } => println!(
+            "Claude Code's statusLine is set to another command ({occupying_command}); \
+             not overwriting it. Your backup is kept - restore once Balanze owns the \
+             statusLine again."
         ),
     }
     Ok(())

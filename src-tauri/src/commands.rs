@@ -153,7 +153,7 @@ pub async fn get_settings() -> Result<Settings, String> {
 pub async fn set_settings(
     patch: SettingsPatch,
     reload: State<'_, WatcherReload>,
-) -> Result<(), String> {
+) -> Result<Settings, String> {
     let settings = run_blocking(move || {
         settings::update(|current| {
             patch.apply(current);
@@ -162,7 +162,8 @@ pub async fn set_settings(
         .map_err(|e| e.to_string())
     })
     .await?;
-    apply_settings_live(&reload, settings).await
+    apply_settings_live(&reload, settings.clone()).await?;
+    Ok(settings)
 }
 
 /// Store a user-supplied API key in the OS keychain and mark its provider
@@ -181,12 +182,19 @@ pub async fn set_api_key(
     // Saving a key implies the user wants this provider polled. Flip the
     // enable flag so the watcher picks it up, then live-apply. The settings lock
     // spans the keychain write and publication so another Balanze key operation
-    // cannot interleave their ordering.
+    // cannot interleave their ordering. On macOS the keychain call can display a
+    // blocking ACL prompt while the lock is held. That tradeoff is intentional:
+    // contenders time out explicitly instead of reordering the keychain and
+    // provider-flag effects.
     let s = run_blocking(move || {
         let mut transaction = settings::begin_update().map_err(|e| e.to_string())?;
         keychain::set(keychain::keys::OPENAI_API_KEY, &key).map_err(|e| e.to_string())?;
         transaction.settings_mut().providers.openai_enabled = true;
-        transaction.commit().map_err(|e| e.to_string())
+        transaction.commit().map_err(|e| {
+            format!(
+                "OpenAI key was saved to the keychain, but enabling the provider failed ({e}); retry after fixing settings.json"
+            )
+        })
     })
     .await?;
     apply_settings_live(&reload, s).await
@@ -256,10 +264,16 @@ pub async fn clear_api_key(
         return Err(format!("unsupported provider: {provider}"));
     }
     let s = run_blocking(|| {
+        // See set_api_key: a macOS prompt may hold the settings lock, but
+        // releasing it here would let keychain and provider-flag order diverge.
         let mut transaction = settings::begin_update().map_err(|e| e.to_string())?;
         keychain::delete(keychain::keys::OPENAI_API_KEY).map_err(|e| e.to_string())?;
         transaction.settings_mut().providers.openai_enabled = false;
-        transaction.commit().map_err(|e| e.to_string())
+        transaction.commit().map_err(|e| {
+            format!(
+                "OpenAI key was removed from the keychain, but disabling the provider failed ({e}); retry after fixing settings.json"
+            )
+        })
     })
     .await?;
     apply_settings_live(&reload, s).await

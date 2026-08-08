@@ -58,6 +58,9 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
         eprintln!("and replace this one if the next `balanze-cli` run shows an error.");
     }
 
+    // The keychain may prompt on macOS while this lock is held. Keeping the
+    // critical section intact is intentional: contenders time out explicitly,
+    // while releasing it could reorder the keychain and provider-flag effects.
     let mut transaction =
         settings::begin_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     match keychain::set(keychain::keys::OPENAI_API_KEY, &key) {
@@ -74,7 +77,11 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
     }
 
     transaction.settings_mut().providers.openai_enabled = true;
-    transaction.commit()?;
+    transaction.commit().map_err(|e| {
+        anyhow!(
+            "OpenAI key was saved to the keychain, but enabling the provider failed ({e}); retry after fixing settings.json"
+        )
+    })?;
 
     eprintln!(
         "Stored OpenAI key in the OS keychain ({} bytes).",
@@ -87,6 +94,8 @@ pub(crate) fn cmd_set_openai_key() -> Result<()> {
 }
 
 pub(crate) fn cmd_clear_openai_key() -> Result<()> {
+    // See cmd_set_openai_key: preserving keychain/flag ordering outweighs a
+    // possibly prompting macOS keychain call holding the bounded settings lock.
     let mut transaction =
         settings::begin_update().map_err(|e| anyhow!("{}: {e}", settings::UPDATE_LOAD_HINT))?;
     let had_store = match keychain::delete(keychain::keys::OPENAI_API_KEY) {
@@ -97,7 +106,11 @@ pub(crate) fn cmd_clear_openai_key() -> Result<()> {
         Err(e) => return Err(e.into()),
     };
     transaction.settings_mut().providers.openai_enabled = false;
-    transaction.commit()?;
+    transaction.commit().map_err(|e| {
+        anyhow!(
+            "OpenAI key was removed from the keychain, but disabling the provider failed ({e}); retry after fixing settings.json"
+        )
+    })?;
     if had_store {
         eprintln!("Removed OpenAI key from the keychain.");
     } else {

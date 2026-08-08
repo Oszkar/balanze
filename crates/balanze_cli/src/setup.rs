@@ -239,8 +239,9 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
     }
 
     // Acquire the settings transaction before touching the keychain so another
-    // Balanze key operation cannot interleave its keychain/flag ordering. Write
-    // to keychain, then read back to confirm the credential actually
+    // Balanze key operation cannot interleave its keychain/flag ordering. A
+    // macOS ACL prompt can hold the bounded settings lock, but releasing it
+    // would permit exactly that reordering. Write to keychain, then read back to confirm the credential actually
     // persisted. set→get→compare surfaces any silent write failure (a locked
     // keychain, a permission issue) as an Err(NotFound) or value mismatch.
     let mut transaction =
@@ -267,7 +268,11 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
     // recoverable by retry. We deliberately do not read or retain the previous
     // secret for rollback.
     transaction.settings_mut().providers.openai_enabled = true;
-    transaction.commit()?;
+    transaction.commit().map_err(|e| {
+        anyhow!(
+            "key saved to the keychain, but enabling the OpenAI provider failed ({e}); re-run `balanze-cli setup` after fixing settings.json"
+        )
+    })?;
     eprintln!("  ✓ Key validated and saved to the OS keychain.");
     Ok(OpenAiKeyStatus::SavedAndValidated)
 }
@@ -316,10 +321,17 @@ fn setup_statusline() {
         Ok(WireStatus::OccupiedBy(cmd)) => {
             eprintln!("  ○ Claude Code statusLine is set to a different command:");
             eprintln!("      {cmd}");
-            eprint!(
-                "  Replace it with Balanze's? Your command is backed up and restorable \
-                 anytime with `balanze-cli statusline restore`. [y/N]: "
-            );
+            if cmd == claude_statusline::NON_STRING_STATUSLINE_COMMAND {
+                eprint!(
+                    "  Replace it with Balanze's? This stanza has no string command to back up \
+                     and cannot be restored automatically. [y/N]: "
+                );
+            } else {
+                eprint!(
+                    "  Replace it with Balanze's? Your command is backed up and restorable \
+                     anytime with `balanze-cli statusline restore`. [y/N]: "
+                );
+            }
             let _ = std::io::Write::flush(&mut std::io::stderr());
             let mut answer = String::new();
             let _ = std::io::stdin().read_line(&mut answer);
@@ -329,12 +341,16 @@ fn setup_statusline() {
                         "  ✓ Replaced. Restore anytime with `balanze-cli statusline restore`. \
                          Restart Claude Code to apply."
                     ),
+                    Ok(claude_statusline::ReplaceOutcome::ReplacedWithoutBackup) => eprintln!(
+                        "  ✓ Replaced the non-command statusLine without a restorable backup. \
+                         Restart Claude Code to apply."
+                    ),
                     Ok(claude_statusline::ReplaceOutcome::Wired) => eprintln!(
                         "  ✓ statusLine became free while waiting; wired Balanze without replacing anything. \
                          Restart Claude Code to apply."
                     ),
                     Err(e) => {
-                        eprintln!("  ✗ Failed to write {} ({e}); not wired.", path.display());
+                        eprintln!("  ✗ Failed to replace the statusLine ({e}); not wired.");
                     }
                 }
             } else {

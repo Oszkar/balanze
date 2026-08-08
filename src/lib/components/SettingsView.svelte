@@ -192,11 +192,6 @@
   async function toggle(provider: 'openai' | 'anthropic' | 'codex', value: boolean) {
     const current = settings;
     if (!current) return;
-    const providers = { ...current.providers };
-    if (provider === 'openai') providers.openai_enabled = value;
-    else if (provider === 'anthropic') providers.anthropic_enabled = value;
-    else providers.codex_enabled = value;
-    const next: Settings = { ...current, providers };
     const providerPatch = provider === 'openai'
       ? { openai_enabled: value }
       : provider === 'anthropic'
@@ -205,8 +200,7 @@
     busy = true;
     status = null;
     try {
-      await setSettings({ providers: providerPatch });
-      settings = next;
+      settings = await setSettings({ providers: providerPatch });
     } catch (e) {
       status = `Save failed: ${e}`;
       // We never optimistically mutated `settings`, so there's nothing to
