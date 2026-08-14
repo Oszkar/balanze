@@ -21,6 +21,9 @@ pub struct OpenAiCell {
     pub stale: bool,
 }
 
+// This crate-local static-dispatch trait has one production implementation and
+// test fakes. A boxed future would add allocation and type noise without making
+// dynamic dispatch available or serving another caller.
 #[allow(async_fn_in_trait)]
 pub trait CrossSources {
     async fn openai_cell(&self) -> OpenAiCell;
@@ -30,7 +33,7 @@ pub trait CrossSources {
 /// Compose cross-provider cells without the watcher.
 ///
 /// `want_openai = false` must leave the entire OpenAI path untouched. The
-/// caller uses the same exact template-token rule as the renderer.
+/// caller uses the same template-token rule as the renderer.
 pub async fn self_compose<S: CrossSources>(
     sources: &S,
     now: DateTime<Utc>,

@@ -231,20 +231,12 @@ pub enum OpenAiError {
 
 impl OpenAiError {
     /// A user-facing remediation hint for the two admin-key auth failures
-    /// (401 invalid/revoked key, 403 wrong scope). Shared by the CLI `status`
-    /// path and the watcher poller so their guidance cannot drift. Returns
+    /// (401 invalid/revoked key, 403 wrong scope). The persisted failure kind
+    /// owns the text so live and deferred error paths cannot drift. Returns
     /// `None` for every other variant, which callers format with the `Display`
     /// impl instead.
     pub fn admin_key_hint(&self) -> Option<&'static str> {
-        match self {
-            OpenAiError::AuthInvalid { .. } => Some(
-                "OpenAI admin key rejected (HTTP 401). Run `balanze-cli set-openai-key` with a fresh `sk-admin-...` key.",
-            ),
-            OpenAiError::InsufficientScope { .. } => Some(
-                "OpenAI returned 403. organization/costs requires an admin API key (`sk-admin-...`), not a project or service-account key. Generate one at https://platform.openai.com/settings/organization/admin-keys.",
-            ),
-            _ => None,
-        }
+        StoredFailureKind::from(self).admin_key_hint()
     }
 }
 

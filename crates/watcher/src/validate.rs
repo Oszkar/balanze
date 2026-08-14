@@ -66,15 +66,21 @@ fn classify(err: &CostsGateError) -> KeyProbe {
             "OpenAI's response was not in the expected shape while checking the key. You can save it and Balanze will retry."
                 .to_string(),
         ),
-        None => {
-            let retry = err
-                .retry_after_secs()
-                .map(|seconds| format!(" Retry in about {seconds} seconds."))
-                .unwrap_or_default();
-            KeyProbe::Unreachable(format!(
-                "OpenAI validation is temporarily deferred by Balanze's shared 5-minute Costs gate.{retry} You can save the key and Balanze will retry."
-            ))
-        }
+        None => match err {
+            CostsGateError::Deferred {
+                retry_after_secs, ..
+            } => KeyProbe::Unreachable(format!(
+                "OpenAI validation is temporarily deferred by Balanze's shared 5-minute Costs gate. Retry in about {retry_after_secs} seconds. You can save the key and Balanze will retry."
+            )),
+            CostsGateError::Unavailable { .. } => KeyProbe::Unreachable(
+                "Balanze's OpenAI Costs gate is unavailable, so the key could not be checked. You can save it and Balanze will retry."
+                    .to_string(),
+            ),
+            CostsGateError::Provider { .. } => KeyProbe::Unreachable(
+                "OpenAI validation failed before the response could be classified. You can save the key and Balanze will retry."
+                    .to_string(),
+            ),
+        },
     }
 }
 
@@ -174,5 +180,20 @@ mod tests {
             cached: None,
         };
         assert!(matches!(classify(&error), KeyProbe::Rejected(_)));
+    }
+
+    #[test]
+    fn unavailable_gate_is_not_mislabeled_as_a_deferral() {
+        let error = CostsGateError::Unavailable {
+            message: "store unreadable".to_string(),
+            cached: None,
+        };
+        match classify(&error) {
+            KeyProbe::Unreachable(message) => {
+                assert!(message.contains("gate is unavailable"));
+                assert!(!message.contains("temporarily deferred"));
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
     }
 }
