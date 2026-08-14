@@ -41,7 +41,7 @@ Whether it is on your `PATH` depends on how you installed it. Homebrew puts it t
 
 ## Codex segments appear in my statusline even though the app is not running
 
-That is expected, not a bug. When no fresh snapshot exists, `balanze-cli statusline` composes those segments itself: Codex comes from local files, and (only when your configured line actually contains `{openai_cost}`, which the default template does not) OpenAI cost is fetched and cached for five minutes. At most one upstream OpenAI request fires per five minutes across every concurrent prompt.
+That is expected, not a bug. When no fresh snapshot exists, `balanze-cli statusline` composes those segments itself: Codex comes from local files, and (only when your configured line actually contains `{openai_cost}`, which the default template does not) OpenAI cost uses the same 300-second gate as the desktop app and every CLI command. A recent result can be reused, and a failed or in-flight attempt prevents another request until its reservation expires. Statusline may show the last headline with a stale marker during that window.
 
 Starting the desktop app or `balanze-cli watch` produces a fresh snapshot, which takes precedence.
 
@@ -51,7 +51,9 @@ It should not: the JSONL reader is incremental and re-reads only what was append
 
 ## My OpenAI key is rejected
 
-The OpenAI cells need an **Admin** key (`sk-admin-...`), created in your organization's API-key settings. A regular `sk-...` key cannot reach the Admin Costs API and will be refused. `balanze-cli doctor` distinguishes the two.
+The OpenAI cells need an **Admin** key (`sk-admin-...`), created in your organization's API-key settings. A regular `sk-...` key cannot reach the Admin Costs API and will be refused. `balanze-cli doctor` distinguishes the two. Validation shares the same 300-second gate as normal fetching, so it can report a deferred result after any recent attempt instead of bypassing the cooldown. OpenAI organization selection is not supported; Balanze uses the organization associated with the key.
+
+At UTC month rollover, an attempt started just before the new month can keep validation and full OpenAI data for the same API key and normalized API base deferred for up to 5 minutes. This is the deliberate machine-wide request guarantee, not evidence that the current key is invalid. Retry after the reservation expires.
 
 ## Claude data stopped updating
 

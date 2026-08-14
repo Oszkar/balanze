@@ -7,8 +7,6 @@ use std::env;
 use std::io::{self, Write};
 
 use anthropic_oauth::{load_from_source, locate_credentials};
-use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiError, costs_this_month};
-
 // ────────────────────────────────────────────────────────────────────
 // `balanze-cli setup` - interactive auth wizard.
 //
@@ -23,8 +21,8 @@ use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiError, costs_this
 //         `balanze-cli` output layout.
 //
 // Design decisions (recorded for future maintainers):
-//   - Live-validate before storing: catches typos at setup time
-//     rather than at first `balanze-cli` run. One network call to OpenAI.
+//   - Live-validate before storing: catches definitive 401/403 failures at setup
+//     time. Transient failures do not discard a potentially valid key.
 //   - No "setup complete" marker in settings.json: the CLI infers
 //     readiness from the keychain + file presence. Idempotent setup.
 //   - Keychain write-back verification: we write then read back to
@@ -46,8 +44,10 @@ use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiError, costs_this
 #[derive(Debug)]
 enum OpenAiKeyStatus {
     SavedAndValidated,
+    SavedUnverified,
     KeptExistingKey,
     EnvVarOverride,
+    EnvVarUnverified,
     ValidationFailed,
     KeychainBroken,
     NoKeychainOnPlatform,
@@ -62,12 +62,33 @@ impl OpenAiKeyStatus {
             OpenAiKeyStatus::SavedAndValidated | OpenAiKeyStatus::KeptExistingKey => {
                 "✓ ready (validated against OpenAI Admin Costs API)"
             }
+            OpenAiKeyStatus::SavedUnverified => "○ key saved; validation deferred",
             OpenAiKeyStatus::EnvVarOverride => "✓ ready (via BALANZE_OPENAI_KEY env var)",
+            OpenAiKeyStatus::EnvVarUnverified => {
+                "○ configured via BALANZE_OPENAI_KEY; validation deferred"
+            }
             OpenAiKeyStatus::ValidationFailed => "✗ key validation failed - re-run setup",
             OpenAiKeyStatus::KeychainBroken => "✗ keychain broken - use BALANZE_OPENAI_KEY env var",
             OpenAiKeyStatus::NoKeychainOnPlatform => {
                 "✗ no OS credential store - use BALANZE_OPENAI_KEY env var"
             }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum OpenAiKeyValidation {
+    Valid,
+    Unverified(String),
+    Rejected(String),
+}
+
+impl From<watcher::KeyProbe> for OpenAiKeyValidation {
+    fn from(probe: watcher::KeyProbe) -> Self {
+        match probe {
+            watcher::KeyProbe::Valid => Self::Valid,
+            watcher::KeyProbe::Unreachable(message) => Self::Unverified(message),
+            watcher::KeyProbe::Rejected(message) => Self::Rejected(message),
         }
     }
 }
@@ -173,13 +194,17 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
         let trimmed = env_key.trim();
         if !trimmed.is_empty() {
             eprintln!("  BALANZE_OPENAI_KEY env var is set; validating without keychain write.");
-            return Ok(match validate_openai_key_blocking(trimmed) {
-                Ok(()) => {
+            return Ok(match validate_openai_key_blocking(trimmed)? {
+                OpenAiKeyValidation::Valid => {
                     eprintln!("  ✓ Env-var key validated against OpenAI Admin Costs API.");
                     OpenAiKeyStatus::EnvVarOverride
                 }
-                Err(e) => {
-                    eprintln!("  ✗ Env-var key rejected by OpenAI: {e}");
+                OpenAiKeyValidation::Unverified(message) => {
+                    eprintln!("  ⚠ Env-var key could not be verified: {message}");
+                    OpenAiKeyStatus::EnvVarUnverified
+                }
+                OpenAiKeyValidation::Rejected(message) => {
+                    eprintln!("  ✗ Env-var key rejected by OpenAI: {message}");
                     OpenAiKeyStatus::ValidationFailed
                 }
             });
@@ -215,13 +240,17 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
             // Keep + validate the already-loaded value. No second
             // keychain hit; no second ACL prompt on macOS.
             eprintln!("  Keeping existing key; validating against OpenAI Admin Costs API...");
-            return Ok(match validate_openai_key_blocking(&existing_key) {
-                Ok(()) => {
+            return Ok(match validate_openai_key_blocking(&existing_key)? {
+                OpenAiKeyValidation::Valid => {
                     eprintln!("  ✓ Existing key still works.");
                     OpenAiKeyStatus::KeptExistingKey
                 }
-                Err(e) => {
-                    eprintln!("  ✗ Existing key rejected: {e}");
+                OpenAiKeyValidation::Unverified(message) => {
+                    eprintln!("  ⚠ Existing key could not be verified: {message}");
+                    OpenAiKeyStatus::SavedUnverified
+                }
+                OpenAiKeyValidation::Rejected(message) => {
+                    eprintln!("  ✗ Existing key rejected: {message}");
                     eprintln!("    Re-run `balanze-cli setup` and choose to replace.");
                     OpenAiKeyStatus::ValidationFailed
                 }
@@ -232,11 +261,18 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
     };
 
     eprintln!("  Validating against OpenAI Admin Costs API...");
-    if let Err(e) = validate_openai_key_blocking(&key) {
-        eprintln!("  ✗ {e}");
-        eprintln!("    Key NOT saved. Re-run `balanze-cli setup` with a working key.");
-        return Ok(OpenAiKeyStatus::ValidationFailed);
-    }
+    let validated = match validate_openai_key_blocking(&key)? {
+        OpenAiKeyValidation::Valid => true,
+        OpenAiKeyValidation::Unverified(message) => {
+            eprintln!("  ⚠ Key could not be verified: {message}");
+            false
+        }
+        OpenAiKeyValidation::Rejected(message) => {
+            eprintln!("  ✗ {message}");
+            eprintln!("    Key NOT saved. Re-run `balanze-cli setup` with a working key.");
+            return Ok(OpenAiKeyStatus::ValidationFailed);
+        }
+    };
 
     // Acquire the settings transaction before touching the keychain so another
     // Balanze key operation cannot interleave its keychain/flag ordering. A
@@ -273,8 +309,13 @@ fn setup_openai_key() -> Result<OpenAiKeyStatus> {
             "key saved to the keychain, but enabling the OpenAI provider failed ({e}); re-run `balanze-cli setup` after fixing settings.json"
         )
     })?;
-    eprintln!("  ✓ Key validated and saved to the OS keychain.");
-    Ok(OpenAiKeyStatus::SavedAndValidated)
+    if validated {
+        eprintln!("  ✓ Key validated and saved to the OS keychain.");
+        Ok(OpenAiKeyStatus::SavedAndValidated)
+    } else {
+        eprintln!("  ✓ Key saved to the OS keychain; Balanze will validate it later.");
+        Ok(OpenAiKeyStatus::SavedUnverified)
+    }
 }
 
 fn prompt_for_openai_key() -> Result<String> {
@@ -391,34 +432,9 @@ fn setup_statusline() {
     }
 }
 
-fn validate_openai_key_blocking(key: &str) -> Result<()> {
+fn validate_openai_key_blocking(key: &str) -> Result<OpenAiKeyValidation> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let client = reqwest::Client::builder()
-            .user_agent("balanze-cli/0.1.0")
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?;
-        // One-shot CLI must not block on provider backoff; watcher passes standard().
-        match costs_this_month(
-            &client,
-            OPENAI_API_BASE,
-            key,
-            &backoff::BackoffPolicy::fail_fast(),
-        )
-        .await
-        {
-            Ok(_) => Ok(()),
-            Err(OpenAiError::AuthInvalid { body }) => {
-                Err(anyhow!("OpenAI rejected the key (HTTP 401). Body: {body}"))
-            }
-            Err(OpenAiError::InsufficientScope { .. }) => Err(anyhow!(
-                "OpenAI returned 403 - this key lacks admin scope. \
-                 Generate an admin key at \
-                 https://platform.openai.com/settings/organization/admin-keys"
-            )),
-            Err(e) => Err(anyhow!("OpenAI request failed: {e}")),
-        }
-    })
+    Ok(rt.block_on(watcher::validate_openai_key(key)).into())
 }
 
 /// Render the 4-row readiness summary. The Anthropic-subscription and OpenAI-API
@@ -455,12 +471,14 @@ mod tests {
     // FIX E(5): summary_line() mapping - pure function, no env/keychain needed.
     #[test]
     fn openai_key_status_summary_line_mapping() {
-        // Each variant maps to a distinct, non-empty summary string. The
-        // ready variants carry "✓"; the failure variants carry "✗".
+        // Each variant maps to a non-empty summary string. Verified states use
+        // "✓", deferred states use "○", and failures use "✗".
         let cases: &[(OpenAiKeyStatus, &str, bool)] = &[
             (OpenAiKeyStatus::SavedAndValidated, "✓", true),
+            (OpenAiKeyStatus::SavedUnverified, "○", true),
             (OpenAiKeyStatus::KeptExistingKey, "✓", true),
             (OpenAiKeyStatus::EnvVarOverride, "✓", true),
+            (OpenAiKeyStatus::EnvVarUnverified, "○", true),
             (OpenAiKeyStatus::ValidationFailed, "✗", false),
             (OpenAiKeyStatus::KeychainBroken, "✗", false),
             (OpenAiKeyStatus::NoKeychainOnPlatform, "✗", false),
@@ -484,5 +502,17 @@ mod tests {
             OpenAiKeyStatus::KeptExistingKey.summary_line(),
             "SavedAndValidated and KeptExistingKey must produce the same summary line"
         );
+    }
+
+    #[test]
+    fn transient_openai_probe_remains_storable() {
+        assert!(matches!(
+            OpenAiKeyValidation::from(watcher::KeyProbe::Unreachable("deferred".to_string())),
+            OpenAiKeyValidation::Unverified(message) if message == "deferred"
+        ));
+        assert!(matches!(
+            OpenAiKeyValidation::from(watcher::KeyProbe::Rejected("bad key".to_string())),
+            OpenAiKeyValidation::Rejected(message) if message == "bad key"
+        ));
     }
 }

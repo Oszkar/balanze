@@ -3458,11 +3458,13 @@ dependencies = [
 name = "openai_client"
 version = "0.5.2"
 dependencies = [
- "backoff",
+ "atomic_file",
  "chrono",
+ "directories",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
@@ -5016,16 +5018,10 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 name = "statusline_render"
 version = "0.5.2"
 dependencies = [
- "atomic_file",
  "chrono",
  "claude_statusline",
- "directories",
- "serde",
- "serde_json",
  "settings",
- "tempfile",
  "tokio",
- "tracing",
  "window",
 ]
 

@@ -1,109 +1,94 @@
-//! HTTP-layer tests via wiremock. Validates that fetch_costs:
-//! - sends Authorization Bearer header
-//! - sends start_time / end_time / bucket_width / group_by query params
-//! - maps 401 → AuthInvalid
-//! - maps 403 → InsufficientScope (with hint message intact)
-//! - maps other non-200 → UnexpectedStatus
+//! Public API tests for the provider-owned OpenAI Costs gate.
 
 use std::time::Duration;
 
-use chrono::{TimeZone, Utc};
-use openai_client::{OpenAiError, costs_this_month, costs_this_month_with, fetch_costs};
-use reqwest::Client;
-use wiremock::matchers::{header, method, path, query_param};
+use openai_client::{CostsGateError, StoredFailureKind, gated_costs_this_month_with_cache};
+use tempfile::tempdir;
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn body_typical() -> &'static str {
     r#"{
         "object": "page",
-        "data": [
-            {
-                "object": "bucket",
-                "start_time": 1746057600,
-                "end_time": 1746144000,
-                "results": [
-                    {"object":"organization.costs.result","amount":{"value":1.50,"currency":"usd"},"line_item":"gpt-5"},
-                    {"object":"organization.costs.result","amount":{"value":0.23,"currency":"usd"},"line_item":"o1-mini"}
-                ]
-            }
-        ],
+        "data": [{
+            "object": "bucket",
+            "results": [
+                {"amount":{"value":1.50,"currency":"usd"},"line_item":"gpt-5"},
+                {"amount":{"value":0.23,"currency":"usd"},"line_item":"o1-mini"}
+            ]
+        }],
         "has_more": false
     }"#
 }
 
-fn window() -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
-    let start = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).single().unwrap();
-    let end = Utc
-        .with_ymd_and_hms(2026, 5, 13, 10, 0, 0)
-        .single()
-        .unwrap();
-    (start, end)
-}
-
 #[tokio::test]
-async fn happy_path_parses_response_and_sends_expected_query() {
+async fn sequential_successes_share_one_full_result_and_one_get() {
     let server = MockServer::start().await;
-    let (start, end) = window();
     Mock::given(method("GET"))
         .and(path("/v1/organization/costs"))
-        .and(header("Authorization", "Bearer sk-admin-test"))
-        .and(query_param("start_time", start.timestamp().to_string()))
-        .and(query_param("end_time", end.timestamp().to_string()))
-        .and(query_param("bucket_width", "1d"))
-        .and(query_param("group_by[]", "line_item"))
+        .and(header("Authorization", "Bearer test-admin-key"))
         .respond_with(ResponseTemplate::new(200).set_body_string(body_typical()))
         .expect(1)
         .mount(&server)
         .await;
+    let dir = tempdir().unwrap();
 
-    let client = Client::new();
-    let costs = fetch_costs(
-        &client,
+    let first = gated_costs_this_month_with_cache(
         &server.uri(),
-        "sk-admin-test",
-        start,
-        Some(end),
-        &backoff::BackoffPolicy::fail_fast(),
-    )
-    .await
-    .expect("should succeed");
-
-    assert_eq!(costs.total_micro_usd, 1_730_000);
-    assert_eq!(costs.by_line_item.len(), 2);
-    assert!(!costs.truncated);
-    // gpt-5 has the higher amount, comes first.
-    assert_eq!(costs.by_line_item[0].line_item, "gpt-5");
-}
-
-#[tokio::test]
-async fn costs_this_month_with_builds_its_own_client_and_fetches() {
-    // The shared helper assembles the reqwest client from the injected timeout
-    // (no caller-supplied Client) and queries this-month costs. Only assert the
-    // method/path/auth + parsed total; the start_time/end_time are "this month"
-    // (dynamic), so they're not pinned here.
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/v1/organization/costs"))
-        .and(header("Authorization", "Bearer sk-admin-test"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(body_typical()))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let costs = costs_this_month_with(
-        &server.uri(),
-        "sk-admin-test",
+        "test-admin-key",
         Duration::from_secs(30),
-        &backoff::BackoffPolicy::fail_fast(),
+        dir.path().to_path_buf(),
     )
     .await
-    .expect("should succeed");
-    assert_eq!(costs.total_micro_usd, 1_730_000);
-    assert_eq!(costs.by_line_item.len(), 2);
+    .expect("first fetch");
+    let second = gated_costs_this_month_with_cache(
+        &server.uri(),
+        "test-admin-key",
+        Duration::from_secs(30),
+        dir.path().to_path_buf(),
+    )
+    .await
+    .expect("cached fetch");
+
+    assert_eq!(first, second);
+    assert_eq!(first.total_micro_usd, 1_730_000);
+    assert_eq!(first.by_line_item.len(), 2);
 }
 
 #[tokio::test]
-async fn costs_this_month_with_maps_401_to_the_shared_admin_key_hint() {
+async fn concurrent_same_identity_calls_send_at_most_one_get() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(100))
+                .set_body_string(body_typical()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let dir = tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let base_url = server.uri();
+    let first = gated_costs_this_month_with_cache(
+        &base_url,
+        "test-admin-key",
+        Duration::from_secs(30),
+        root.clone(),
+    );
+    let second = gated_costs_this_month_with_cache(
+        &base_url,
+        "test-admin-key",
+        Duration::from_secs(30),
+        root,
+    );
+    let (a, b) = tokio::join!(first, second);
+    assert!(a.is_ok() || b.is_ok());
+}
+
+#[tokio::test]
+async fn stored_401_suppresses_the_second_request_and_keeps_auth_guidance() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/organization/costs"))
@@ -111,192 +96,275 @@ async fn costs_this_month_with_maps_401_to_the_shared_admin_key_hint() {
         .expect(1)
         .mount(&server)
         .await;
+    let dir = tempdir().unwrap();
 
-    let err = costs_this_month_with(
+    let first = gated_costs_this_month_with_cache(
         &server.uri(),
-        "sk-admin-bad",
+        "bad-admin-key",
         Duration::from_secs(30),
-        &backoff::BackoffPolicy::fail_fast(),
+        dir.path().to_path_buf(),
     )
     .await
-    .expect_err("should fail with 401");
+    .expect_err("401");
+    let second = gated_costs_this_month_with_cache(
+        &server.uri(),
+        "bad-admin-key",
+        Duration::from_secs(30),
+        dir.path().to_path_buf(),
+    )
+    .await
+    .expect_err("stored 401");
+
+    assert_eq!(first.failure_kind(), Some(StoredFailureKind::AuthInvalid));
+    assert_eq!(second.failure_kind(), Some(StoredFailureKind::AuthInvalid));
     assert!(
-        matches!(err, OpenAiError::AuthInvalid { .. }),
-        "got {err:?}"
-    );
-    assert!(
-        err.admin_key_hint()
-            .is_some_and(|h| h.contains("set-openai-key")),
-        "401 should carry the shared admin-key hint"
+        second
+            .admin_key_hint()
+            .is_some_and(|hint| hint.contains("HTTP 401"))
     );
 }
 
 #[tokio::test]
-async fn http_401_returns_auth_invalid() {
+async fn stored_403_suppresses_the_second_request() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/organization/costs"))
-        .respond_with(
-            ResponseTemplate::new(401).set_body_string(r#"{"error":{"message":"bad key"}}"#),
-        )
+        .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
         .expect(1)
         .mount(&server)
         .await;
+    let dir = tempdir().unwrap();
 
-    let client = Client::new();
-    let (start, end) = window();
-    let err = fetch_costs(
-        &client,
-        &server.uri(),
-        "sk-admin-bad",
-        start,
-        Some(end),
-        &backoff::BackoffPolicy::fail_fast(),
-    )
-    .await
-    .expect_err("should fail with 401");
-    assert!(
-        matches!(err, OpenAiError::AuthInvalid { .. }),
-        "got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn http_403_returns_insufficient_scope_with_hint() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/v1/organization/costs"))
-        .respond_with(
-            ResponseTemplate::new(403).set_body_string(r#"{"error":{"message":"forbidden"}}"#),
+    for _ in 0..2 {
+        let error = gated_costs_this_month_with_cache(
+            &server.uri(),
+            "wrong-scope-key",
+            Duration::from_secs(30),
+            dir.path().to_path_buf(),
         )
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let client = Client::new();
-    let (start, end) = window();
-    let err = fetch_costs(
-        &client,
-        &server.uri(),
-        "sk-proj-XYZ",
-        start,
-        Some(end),
-        &backoff::BackoffPolicy::fail_fast(),
-    )
-    .await
-    .expect_err("should fail with 403");
-    let displayed = format!("{err}");
-    match &err {
-        OpenAiError::InsufficientScope { body } => {
-            assert!(body.contains("forbidden"));
-            assert!(displayed.contains("admin"), "hint missing: {displayed}");
-            assert!(
-                displayed.contains("admin-keys"),
-                "URL hint missing: {displayed}"
-            );
-        }
-        other => panic!("expected InsufficientScope, got {other:?}"),
+        .await
+        .expect_err("403");
+        assert_eq!(
+            error.failure_kind(),
+            Some(StoredFailureKind::InsufficientScope)
+        );
+        assert!(error.admin_key_hint().is_some());
     }
 }
 
 #[tokio::test]
-async fn http_500_returns_unexpected_status() {
+async fn rate_limit_never_retries_inside_the_gate() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/organization/costs"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("internal server error"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "1"))
         .expect(1)
         .mount(&server)
         .await;
+    let dir = tempdir().unwrap();
 
-    let client = Client::new();
-    let (start, end) = window();
-    let err = fetch_costs(
-        &client,
-        &server.uri(),
-        "sk-admin-test",
-        start,
-        Some(end),
-        &backoff::BackoffPolicy::fail_fast(),
-    )
-    .await
-    .expect_err("should fail with 500");
-    match err {
-        OpenAiError::UnexpectedStatus { status, body } => {
-            assert_eq!(status, 500);
-            assert_eq!(body, "internal server error");
-        }
-        other => panic!("expected UnexpectedStatus, got {other:?}"),
+    for _ in 0..2 {
+        let error = gated_costs_this_month_with_cache(
+            &server.uri(),
+            "test-admin-key",
+            Duration::from_secs(30),
+            dir.path().to_path_buf(),
+        )
+        .await
+        .expect_err("429");
+        assert_eq!(error.failure_kind(), Some(StoredFailureKind::RateLimited));
     }
 }
 
 #[tokio::test]
-async fn invalid_json_body_with_200_is_shape_error() {
+async fn transport_timeout_never_retries_inside_the_gate() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/v1/organization/costs"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let client = Client::new();
-    let (start, end) = window();
-    let err = fetch_costs(
-        &client,
-        &server.uri(),
-        "sk-admin-test",
-        start,
-        Some(end),
-        &backoff::BackoffPolicy::fail_fast(),
-    )
-    .await
-    .expect_err("should fail on invalid JSON");
-    assert!(matches!(err, OpenAiError::ResponseShape(_)), "got {err:?}");
-}
-
-#[tokio::test]
-async fn costs_retry_on_429_then_succeed() {
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/v1/organization/costs"))
-        .respond_with(ResponseTemplate::new(429))
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
     Mock::given(method("GET"))
         .and(path("/v1/organization/costs"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_string(r#"{"object":"page","data":[],"has_more":false}"#),
+                .set_delay(Duration::from_millis(100))
+                .set_body_string(body_typical()),
         )
+        .expect(1)
         .mount(&server)
         .await;
-    let client = reqwest::Client::new();
-    let zero = backoff::BackoffPolicy::custom(Duration::ZERO, 2, Duration::ZERO, 3);
-    let out = costs_this_month(&client, &server.uri(), "sk-admin-x", &zero).await;
-    assert!(out.is_ok(), "should succeed after one 429 retry: {out:?}");
+    let dir = tempdir().unwrap();
+
+    for _ in 0..2 {
+        let error = gated_costs_this_month_with_cache(
+            &server.uri(),
+            "test-admin-key",
+            Duration::from_millis(10),
+            dir.path().to_path_buf(),
+        )
+        .await
+        .expect_err("timeout");
+        assert_eq!(error.failure_kind(), Some(StoredFailureKind::Network));
+    }
 }
 
 #[tokio::test]
-async fn costs_403_does_not_retry() {
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-    let server = MockServer::start().await;
-    let mock = Mock::given(method("GET"))
+async fn redirects_are_not_followed_as_a_second_http_request() {
+    let first_server = MockServer::start().await;
+    let redirect_target = MockServer::start().await;
+    Mock::given(method("GET"))
         .and(path("/v1/organization/costs"))
-        .respond_with(ResponseTemplate::new(403))
+        .respond_with(ResponseTemplate::new(302).insert_header(
+            "Location",
+            format!("{}/v1/organization/costs", redirect_target.uri()),
+        ))
         .expect(1)
-        .named("openai 403");
-    server.register(mock).await;
-    let client = reqwest::Client::new();
-    let std_pol = backoff::BackoffPolicy::standard();
-    let out = costs_this_month(&client, &server.uri(), "sk-admin-x", &std_pol).await;
-    assert!(matches!(
-        out,
-        Err(openai_client::OpenAiError::InsufficientScope { .. })
-    ));
-    // server drop verifies .expect(1) - 403 was NOT retried.
+        .mount(&first_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body_typical()))
+        .expect(0)
+        .mount(&redirect_target)
+        .await;
+    let dir = tempdir().unwrap();
+
+    let error = gated_costs_this_month_with_cache(
+        &first_server.uri(),
+        "test-admin-key",
+        Duration::from_secs(30),
+        dir.path().to_path_buf(),
+    )
+    .await
+    .expect_err("redirect must be classified without following it");
+    assert_eq!(
+        error.failure_kind(),
+        Some(StoredFailureKind::UnexpectedStatus(302))
+    );
+}
+
+#[tokio::test]
+async fn server_and_shape_failures_each_send_one_get() {
+    for (status, body, expected) in [
+        (
+            500,
+            "internal server error",
+            StoredFailureKind::UnexpectedStatus(500),
+        ),
+        (200, "not json", StoredFailureKind::ResponseShape),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/organization/costs"))
+            .respond_with(ResponseTemplate::new(status).set_body_string(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempdir().unwrap();
+        for _ in 0..2 {
+            let error = gated_costs_this_month_with_cache(
+                &server.uri(),
+                "test-admin-key",
+                Duration::from_secs(30),
+                dir.path().to_path_buf(),
+            )
+            .await
+            .expect_err("provider failure");
+            assert_eq!(error.failure_kind(), Some(expected));
+        }
+    }
+}
+
+#[tokio::test]
+async fn different_keys_have_independent_entries() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body_typical()))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let dir = tempdir().unwrap();
+
+    for key in ["admin-key-a", "admin-key-b"] {
+        gated_costs_this_month_with_cache(
+            &server.uri(),
+            key,
+            Duration::from_secs(30),
+            dir.path().to_path_buf(),
+        )
+        .await
+        .expect("independent key fetch");
+    }
+}
+
+#[tokio::test]
+async fn same_key_with_different_api_bases_has_independent_entries() {
+    let first_server = MockServer::start().await;
+    let second_server = MockServer::start().await;
+    for server in [&first_server, &second_server] {
+        Mock::given(method("GET"))
+            .and(path("/v1/organization/costs"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body_typical()))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+    let dir = tempdir().unwrap();
+
+    for base_url in [first_server.uri(), second_server.uri()] {
+        gated_costs_this_month_with_cache(
+            &base_url,
+            "same-admin-key",
+            Duration::from_secs(30),
+            dir.path().to_path_buf(),
+        )
+        .await
+        .expect("independent API base fetch");
+    }
+}
+
+#[tokio::test]
+async fn corrupt_or_unsupported_store_fails_closed_before_http() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body_typical()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    for document in ["not json", r#"{"schema_version":999,"entries":{}}"#] {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("openai-cost.json"), document).unwrap();
+        let error = gated_costs_this_month_with_cache(
+            &server.uri(),
+            "test-admin-key",
+            Duration::from_secs(30),
+            dir.path().to_path_buf(),
+        )
+        .await
+        .expect_err("invalid gate store must fail closed");
+        assert!(matches!(error, CostsGateError::Unavailable { .. }));
+    }
+}
+
+#[tokio::test]
+async fn gate_publication_failure_sends_zero_gets() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body_typical()))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("not-a-directory");
+    std::fs::write(&file, b"x").unwrap();
+
+    let error = gated_costs_this_month_with_cache(
+        &server.uri(),
+        "test-admin-key",
+        Duration::from_secs(30),
+        file,
+    )
+    .await
+    .expect_err("gate must fail closed");
+    assert!(matches!(error, CostsGateError::Unavailable { .. }));
 }

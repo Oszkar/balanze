@@ -69,7 +69,7 @@ async fn self_compose_renders_openai_and_gates_to_one_fetch() {
     Mock::given(method("GET"))
         .and(path("/v1/organization/costs"))
         .respond_with(ResponseTemplate::new(200).set_body_json(costs_body()))
-        .expect(1) // the 300s cache must collapse two renders into one fetch
+        .expect(1) // the provider gate must collapse two renders into one fetch
         .mount(&server)
         .await;
 
@@ -84,7 +84,7 @@ async fn self_compose_renders_openai_and_gates_to_one_fetch() {
     .unwrap();
     let base = server.uri();
 
-    // Two renders within the TTL: the cache must yield exactly one upstream GET.
+    // Two renders inside the reservation: exactly one upstream GET.
     for _ in 0..2 {
         let (data, cache, codex, config, base) = (
             data_dir.path().to_path_buf(),
@@ -112,6 +112,48 @@ async fn self_compose_renders_openai_and_gates_to_one_fetch() {
     }
     // `server` drops here; `.expect(1)` is verified on drop ->
     // two renders, one fetch proves the 300s gate.
+}
+
+#[tokio::test]
+async fn failed_first_process_suppresses_the_second_process() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/organization/costs"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("down"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let codex_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        config_dir.path().join("settings.json"),
+        serde_json::to_vec(&settings_json_requesting_openai()).unwrap(),
+    )
+    .unwrap();
+    let base = server.uri();
+
+    for _ in 0..2 {
+        let (data, cache, codex, config, base) = (
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+            codex_dir.path().to_path_buf(),
+            config_dir.path().to_path_buf(),
+            base.clone(),
+        );
+        let output = tokio::task::spawn_blocking(move || {
+            run_statusline(&data, &cache, &codex, &base, Some(&config))
+        })
+        .await
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "statusline must degrade gracefully"
+        );
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("🌀 $"));
+    }
 }
 
 /// The demand gate: with the shipped default template the OpenAI segment is not

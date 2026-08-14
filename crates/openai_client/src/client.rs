@@ -104,121 +104,73 @@ fn deserialize_amount_value<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::E
 /// watcher, and statusline self-compose paths send one current UA instead of
 /// the stale per-crate strings (`balanze-cli/0.1.0`, `balanze-watcher/0.1.0`)
 /// they used to hardcode when each built its own client.
-const USER_AGENT: &str = concat!("balanze/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("balanze/", env!("CARGO_PKG_VERSION"));
 
-/// Convenience wrapper: query spend from the first of the current calendar
-/// month (00:00 UTC) through now, daily buckets, grouped by line item.
-///
-/// This is the default tile in the CLI; callers wanting different windows
-/// or grouping should use `fetch_costs` directly.
-pub async fn costs_this_month(
+/// Perform one month-to-date Costs request. The provider-owned gate reserves
+/// the request before calling this function, so this layer never retries.
+pub(crate) async fn fetch_costs_this_month(
     client: &Client,
     base_url: &str,
     admin_key: &str,
-    policy: &backoff::BackoffPolicy,
+    now: DateTime<Utc>,
 ) -> Result<OpenAiCosts, OpenAiError> {
-    let now = Utc::now();
     let month_start = first_of_month(now);
-    fetch_costs(client, base_url, admin_key, month_start, Some(now), policy).await
-}
-
-/// [`costs_this_month`] plus the HTTP client assembly, so callers inject only a
-/// per-request `timeout` and a [`backoff::BackoffPolicy`] instead of each
-/// rebuilding a `reqwest::Client`. Centralizes the client config (user agent,
-/// timeout) the CLI one-shot fetch (30s / fail_fast), the statusline
-/// self-compose path (3s / fail_fast), and the watcher poller (30s / standard)
-/// otherwise duplicated. A client-build failure surfaces as
-/// [`OpenAiError::Network`].
-pub async fn costs_this_month_with(
-    base_url: &str,
-    admin_key: &str,
-    timeout: std::time::Duration,
-    policy: &backoff::BackoffPolicy,
-) -> Result<OpenAiCosts, OpenAiError> {
-    let client = Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(timeout)
-        .build()?;
-    costs_this_month(&client, base_url, admin_key, policy).await
+    fetch_costs_once(client, base_url, admin_key, month_start, Some(now)).await
 }
 
 /// Fetch costs over a [start_time, end_time) window with daily buckets and
 /// `line_item` grouping. `end_time` defaults to "now" when None.
-///
-/// GET /v1/organization/costs is idempotent, so retrying on 429, 5xx, and
-/// transport errors is safe. 401/403/ResponseShape are permanent failures
-/// and are NOT retried.
-pub async fn fetch_costs(
+pub(crate) async fn fetch_costs_once(
     client: &Client,
     base_url: &str,
     admin_key: &str,
     start_time: DateTime<Utc>,
     end_time: Option<DateTime<Utc>>,
-    policy: &backoff::BackoffPolicy,
 ) -> Result<OpenAiCosts, OpenAiError> {
-    // Hoist url and actual_end outside the retry closure so every attempt
-    // queries the same window - deterministic regardless of clock drift.
     let url = format!("{}/v1/organization/costs", base_url.trim_end_matches('/'));
     let actual_end = end_time.unwrap_or_else(Utc::now);
 
-    let classify = |e: &OpenAiError| match e {
-        OpenAiError::RateLimited { retry_after } => {
-            backoff::RetryDecision::RetryAfter(*retry_after)
+    let mut req = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {admin_key}"))
+        .header("Accept", "application/json")
+        .query(&[
+            ("start_time", start_time.timestamp().to_string()),
+            ("end_time", actual_end.timestamp().to_string()),
+            ("bucket_width", "1d".to_string()),
+            ("limit", "31".to_string()),
+        ]);
+    req = req.query(&[("group_by[]", "line_item")]);
+
+    let resp = req.send().await?;
+    let status = resp.status();
+    let retry_after = parse_retry_after(resp.headers());
+    let body = resp.text().await?;
+
+    match status {
+        StatusCode::OK => {}
+        StatusCode::TOO_MANY_REQUESTS => {
+            return Err(OpenAiError::RateLimited { retry_after });
         }
-        OpenAiError::Network(_) => backoff::RetryDecision::RetryAfter(None),
-        OpenAiError::UnexpectedStatus { status, .. } if (500..=599).contains(status) => {
-            backoff::RetryDecision::RetryAfter(None)
+        StatusCode::UNAUTHORIZED => {
+            return Err(OpenAiError::AuthInvalid {
+                body: redact_for_display(&body),
+            });
         }
-        _ => backoff::RetryDecision::DoNotRetry, // AuthInvalid(401)/InsufficientScope(403)/ResponseShape
-    };
-
-    backoff::retry(policy, classify, || async {
-        let mut req = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {admin_key}"))
-            .header("Accept", "application/json")
-            .query(&[
-                ("start_time", start_time.timestamp().to_string()),
-                ("end_time", actual_end.timestamp().to_string()),
-                ("bucket_width", "1d".to_string()),
-                ("limit", "31".to_string()),
-            ]);
-        // group_by takes an array param; reqwest's .query() handles the
-        // `group_by[]=line_item` form when passed a Vec of (key, value) tuples.
-        req = req.query(&[("group_by[]", "line_item")]);
-
-        let resp = req.send().await?;
-        let status = resp.status();
-        // Capture Retry-After before consuming the response body.
-        let retry_after = parse_retry_after(resp.headers());
-        let body = resp.text().await?;
-
-        match status {
-            StatusCode::OK => {}
-            StatusCode::TOO_MANY_REQUESTS => {
-                return Err(OpenAiError::RateLimited { retry_after });
-            }
-            StatusCode::UNAUTHORIZED => {
-                return Err(OpenAiError::AuthInvalid {
-                    body: redact_for_display(&body),
-                });
-            }
-            StatusCode::FORBIDDEN => {
-                return Err(OpenAiError::InsufficientScope {
-                    body: redact_for_display(&body),
-                });
-            }
-            _ => {
-                return Err(OpenAiError::UnexpectedStatus {
-                    status: status.as_u16(),
-                    body: redact_for_display(&body),
-                });
-            }
+        StatusCode::FORBIDDEN => {
+            return Err(OpenAiError::InsufficientScope {
+                body: redact_for_display(&body),
+            });
         }
+        _ => {
+            return Err(OpenAiError::UnexpectedStatus {
+                status: status.as_u16(),
+                body: redact_for_display(&body),
+            });
+        }
+    }
 
-        parse_response(&body, start_time, actual_end, Utc::now())
-    })
-    .await
+    parse_response(&body, start_time, actual_end, Utc::now())
 }
 
 /// Sanitize an HTTP error body before it ends up in an `OpenAiError`'s
