@@ -3,12 +3,11 @@
 //! prints. Threshold coloring, the line-template layout, and the style-string
 //! parser live here; the config DATA lives in the `settings` crate.
 //!
-//! Cross-provider self-compose lives here too: Codex is read locally, while
-//! OpenAI billed spend goes through the machine-wide 300s fallback cache.
+//! Cross-provider self-compose lives here too. Codex is read locally, while
+//! the source adapter supplies an OpenAI cell from the provider-owned gate.
 
-pub mod cache;
 mod render;
 mod self_compose;
 pub mod style;
 pub use render::{CrossProvider, RenderInput, render, template_uses_segment};
-pub use self_compose::{CodexWindows, CrossSources, self_compose};
+pub use self_compose::{CodexWindows, CrossSources, OpenAiCell, self_compose};

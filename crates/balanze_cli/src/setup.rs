@@ -7,8 +7,6 @@ use std::env;
 use std::io::{self, Write};
 
 use anthropic_oauth::{load_from_source, locate_credentials};
-use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiError, costs_this_month};
-
 // ────────────────────────────────────────────────────────────────────
 // `balanze-cli setup` - interactive auth wizard.
 //
@@ -393,32 +391,12 @@ fn setup_statusline() {
 
 fn validate_openai_key_blocking(key: &str) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let client = reqwest::Client::builder()
-            .user_agent("balanze-cli/0.1.0")
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?;
-        // One-shot CLI must not block on provider backoff; watcher passes standard().
-        match costs_this_month(
-            &client,
-            OPENAI_API_BASE,
-            key,
-            &backoff::BackoffPolicy::fail_fast(),
-        )
-        .await
-        {
-            Ok(_) => Ok(()),
-            Err(OpenAiError::AuthInvalid { body }) => {
-                Err(anyhow!("OpenAI rejected the key (HTTP 401). Body: {body}"))
-            }
-            Err(OpenAiError::InsufficientScope { .. }) => Err(anyhow!(
-                "OpenAI returned 403 - this key lacks admin scope. \
-                 Generate an admin key at \
-                 https://platform.openai.com/settings/organization/admin-keys"
-            )),
-            Err(e) => Err(anyhow!("OpenAI request failed: {e}")),
+    match rt.block_on(watcher::validate_openai_key(key)) {
+        watcher::KeyProbe::Valid => Ok(()),
+        watcher::KeyProbe::Rejected(message) | watcher::KeyProbe::Unreachable(message) => {
+            Err(anyhow!(message))
         }
-    })
+    }
 }
 
 /// Render the 4-row readiness summary. The Anthropic-subscription and OpenAI-API

@@ -6,24 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "Renders the Balanze statusline: segment model, line layout, threshold coloring, fallback cache, and cross-provider composition."
+description = "Renders the Balanze statusline: segment model, line layout, threshold coloring, and cross-provider composition."
 
 [dependencies]
-atomic_file = { path = "../atomic_file" }
 claude_statusline = { path = "../claude_statusline" }
 settings = { path = "../settings" }
 window = { path = "../window" }
 chrono = { workspace = true }
-tracing = { workspace = true }
-directories = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 tokio = { workspace = true }
-
-[dev-dependencies]
-tempfile = "3"
-# `test-util` only, and only for tests: it enables tokio's pausable clock so the
-# refresh-lease timing tests assert the logic's timing instead of the runner's
-# load. Dev-only, so it is never compiled into a shipped binary, and it changes
-# nothing unless a test explicitly starts its runtime paused.
-tokio = { workspace = true, features = ["test-util"] }

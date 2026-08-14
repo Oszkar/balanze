@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **OpenAI Costs requests now share one machine-wide gate.** `status`, `export`, the watcher, setup/doctor/Tauri validation, and statusline self-compose can no longer bypass one another and multiply requests. A granted attempt reserves its key and API-base identity for exactly 300 seconds on success, failure, cancellation, or crash, and performs no in-call retry.
+- **OpenAI cache handoff is safe across old and new binaries.** The provider client migrates the prior statusline-only entry into a bounded 8-identity store, keeps a derived legacy headline projection for rolling upgrades, never persists keys or API base URLs, and serves stale headlines only to statusline while full-data callers defer.
+- **Concurrent OpenAI refreshes no longer hold coordination across HTTP.** One short store-wide lease protects reservation and completion transactions, and token-checked completion prevents a late request from overwriting its successor.
+
 ## [0.5.2] - Legibility - 2026-08-07
 
 The docs site becomes the place to send someone. It hosts the user guide with real screenshots, plus install, CLI, and FAQ chapters, and the README stops being a second manual.

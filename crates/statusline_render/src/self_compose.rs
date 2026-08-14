@@ -1,495 +1,149 @@
-//! Self-compose path: build cross-provider segments without the watcher.
+//! Self-compose path for cross-provider statusline cells.
 //!
-//! The statusline calls this only when there is no fresh `snapshot.json`. It
-//! reads Codex locally (cheap, every turn) and serves the OpenAI cost figure
-//! through the cache (cache.rs) so the billing API is hit at most once per 300s
-//! (AGENTS.md 3.1). It calls ONLY the two sources behind `CrossSources` - never
-//! the Anthropic OAuth path (AGENTS.md §3.1 politeness invariant); that is why this crate
-//! has no `anthropic_oauth` dependency.
-
-use std::path::Path;
-use std::time::Duration as StdDuration;
+//! This renderer owns presentation only. The real OpenAI source delegates to
+//! `openai_client`, which owns the durable machine-wide Costs gate. This path
+//! never calls Anthropic OAuth.
 
 use chrono::{DateTime, Utc};
 
-use crate::cache;
 use crate::render::CrossProvider;
 
-/// A prompt with no cached value waits briefly for the process currently
-/// refreshing it. A prompt with stale data never waits: it returns stale data
-/// immediately. The HTTP owner has its own 3-second timeout.
-const REFRESH_WAIT_TIMEOUT: StdDuration = StdDuration::from_millis(250);
-const REFRESH_WAIT_POLL: StdDuration = StdDuration::from_millis(20);
-
-/// A local Codex read: the two window utilizations plus whether they still
-/// describe a LIVE window.
-///
-/// `stale` is carried by the source rather than inferred here because reading
-/// Codex live does not make the DATA live: the rollout walker returns the
-/// newest-mtime session file however old it is, so a fresh read can hand back
-/// windows that reset days ago. The source owns the `resets_at` comparison
-/// (`codex_local::CodexQuotaSnapshot::any_window_expired`), which keeps this
-/// crate free of a `codex_local` dependency.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CodexWindows {
-    /// 5-hour window utilization (0..100). `None` if absent/unparsed or not
-    /// present on the plan.
     pub five_hour: Option<f32>,
-    /// Weekly window utilization (0..100). `None` if absent/unparsed or not
-    /// present on the plan.
     pub weekly: Option<f32>,
-    /// True when any present window has already reset as of the caller's `now`.
     pub stale: bool,
 }
 
-/// The two cross-provider sources, abstracted so the orchestrator (and its
-/// once-per-300s gate) is testable without network. The real implementation
-/// lives in `balanze_cli` (`LiveCrossSources`).
-// Static dispatch only; async-fn-in-trait is stable and safe here.
-// See snapshot_composer::SnapshotSources for the full rationale.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OpenAiCell {
+    pub total_micro_usd: Option<i64>,
+    pub stale: bool,
+}
+
 #[allow(async_fn_in_trait)]
 pub trait CrossSources {
-    /// `Ok(Some(v))` = fetched v (micro-USD); `Ok(None)` = no OpenAI key
-    /// configured (no cell, no cooldown); `Err(msg)` = the fetch attempt failed
-    /// (triggers the negative cooldown and keeps any prior value).
-    async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String>;
-    /// Local Codex windows, classified live/stale against `now`. `now` is passed
-    /// in (rather than read from the clock inside) so the whole compose path
-    /// stays a pure function of its inputs and is testable at a fixed instant.
+    async fn openai_cell(&self) -> OpenAiCell;
     fn codex_windows(&self, now: DateTime<Utc>) -> CodexWindows;
 }
 
-/// Compose the cross-provider cells without the watcher.
+/// Compose cross-provider cells without the watcher.
 ///
-/// `want_openai` is false when no configured statusline line contains the
-/// `{openai_cost}` placeholder. In that case the OpenAI cost is not fetched at
-/// all - not from the cache, not from the network. The politest call to a
-/// provider is the one you do not make (AGENTS.md §3.1).
+/// `want_openai = false` must leave the entire OpenAI path untouched. The
+/// caller uses the same exact template-token rule as the renderer.
 pub async fn self_compose<S: CrossSources>(
     sources: &S,
-    cache_dir: &Path,
-    fingerprint: &str,
     now: DateTime<Utc>,
     want_openai: bool,
 ) -> CrossProvider {
-    // Codex: local, cheap, never cached -> the READ is always current. The
-    // DATA still may not be (an old rollout file), which is why the source
-    // reports its own staleness rather than this path assuming `false`.
     let codex = sources.codex_windows(now);
-
-    let (openai_cost_micro_usd, openai_stale) = if want_openai {
-        openai_value(sources, cache_dir, fingerprint, now).await
+    let openai = if want_openai {
+        sources.openai_cell().await
     } else {
-        (None, false)
+        OpenAiCell::default()
     };
 
     CrossProvider {
         codex_five_hour: codex.five_hour,
         codex_weekly: codex.weekly,
-        openai_cost_micro_usd,
+        openai_cost_micro_usd: openai.total_micro_usd,
         codex_stale: codex.stale,
-        openai_stale,
-    }
-}
-
-async fn openai_value<S: CrossSources>(
-    sources: &S,
-    cache_dir: &Path,
-    fingerprint: &str,
-    now: DateTime<Utc>,
-) -> (Option<i64>, bool) {
-    let initial = cache::read(cache_dir, fingerprint);
-    if let Some(value) = usable_cached_value(initial.as_ref(), now) {
-        return value;
-    }
-    let stale = initial.as_ref().and_then(|entry| entry.total_micro_usd);
-
-    match cache::try_acquire_refresh_lease(cache_dir) {
-        Ok(cache::LeaseAttempt::Acquired(lease)) => {
-            refresh_under_lease(sources, cache_dir, fingerprint, now, lease).await
-        }
-        Ok(cache::LeaseAttempt::Busy) if stale.is_some() => (stale, true),
-        Ok(cache::LeaseAttempt::Busy) => {
-            wait_for_refresh_or_lease(sources, cache_dir, fingerprint, now).await
-        }
-        Err(error) => {
-            tracing::debug!("statusline cache lease acquisition failed: {error}");
-            (stale, stale.is_some())
-        }
-    }
-}
-
-/// Recheck the cache after acquisition. Another process may have published
-/// between our optimistic read and successful `create_new`, so this check is
-/// what turns the lease into an at-most-one-refresh gate rather than merely an
-/// at-most-one-concurrent-request gate.
-async fn refresh_under_lease<S: CrossSources>(
-    sources: &S,
-    cache_dir: &Path,
-    fingerprint: &str,
-    now: DateTime<Utc>,
-    _lease: cache::RefreshLease,
-) -> (Option<i64>, bool) {
-    let current = cache::read(cache_dir, fingerprint);
-    if let Some(value) = usable_cached_value(current.as_ref(), now) {
-        return value;
-    }
-    let stale = current.as_ref().and_then(|entry| entry.total_micro_usd);
-
-    match sources.fetch_openai_total_micro_usd().await {
-        Ok(Some(value)) => {
-            cache::write_success(cache_dir, fingerprint, value, now);
-            (Some(value), false)
-        }
-        Ok(None) => (None, false),
-        Err(error) => {
-            tracing::debug!("statusline: OpenAI self-compose fetch failed: {error}");
-            cache::write_failure(cache_dir, fingerprint, now);
-            (stale, stale.is_some())
-        }
-    }
-}
-
-async fn wait_for_refresh_or_lease<S: CrossSources>(
-    sources: &S,
-    cache_dir: &Path,
-    fingerprint: &str,
-    now: DateTime<Utc>,
-) -> (Option<i64>, bool) {
-    let deadline = tokio::time::Instant::now() + REFRESH_WAIT_TIMEOUT;
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            return (None, false);
-        }
-        tokio::time::sleep(remaining.min(REFRESH_WAIT_POLL)).await;
-
-        let current = cache::read(cache_dir, fingerprint);
-        if let Some(value) = usable_cached_value(current.as_ref(), now) {
-            return value;
-        }
-        let stale = current.as_ref().and_then(|entry| entry.total_micro_usd);
-        if stale.is_some() {
-            return (stale, true);
-        }
-
-        match cache::try_acquire_refresh_lease(cache_dir) {
-            Ok(cache::LeaseAttempt::Acquired(lease)) => {
-                return refresh_under_lease(sources, cache_dir, fingerprint, now, lease).await;
-            }
-            Ok(cache::LeaseAttempt::Busy) => {}
-            Err(error) => {
-                tracing::debug!("statusline cache lease acquisition failed: {error}");
-                return (None, false);
-            }
-        }
-    }
-}
-
-fn usable_cached_value(
-    entry: Option<&cache::OpenAiCostEntry>,
-    now: DateTime<Utc>,
-) -> Option<(Option<i64>, bool)> {
-    let entry = entry?;
-    if cache::is_fresh(entry, now) {
-        Some((entry.total_micro_usd, false))
-    } else if cache::in_cooldown(entry, now) {
-        Some((entry.total_micro_usd, entry.total_micro_usd.is_some()))
-    } else {
-        None
+        openai_stale: openai.stale,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache;
-    use chrono::{Duration, TimeZone as _, Utc};
+    use chrono::TimeZone as _;
     use std::cell::Cell;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use tempfile::tempdir;
 
-    fn t0() -> chrono::DateTime<Utc> {
+    fn t0() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 30, 12, 0, 0).unwrap()
     }
 
     struct Fake {
-        openai: Result<Option<i64>, String>,
-        codex: Option<f32>,
+        openai: OpenAiCell,
+        codex: CodexWindows,
         calls: Cell<u32>,
     }
+
     impl CrossSources for Fake {
-        async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String> {
+        async fn openai_cell(&self) -> OpenAiCell {
             self.calls.set(self.calls.get() + 1);
-            self.openai.clone()
+            self.openai
         }
+
         fn codex_windows(&self, _now: DateTime<Utc>) -> CodexWindows {
-            CodexWindows {
-                five_hour: self.codex,
-                weekly: None,
+            self.codex
+        }
+    }
+
+    #[tokio::test]
+    async fn current_source_cell_renders_current() {
+        let source = Fake {
+            openai: OpenAiCell {
+                total_micro_usd: Some(4_200_000),
                 stale: false,
-            }
-        }
-    }
-
-    /// `codex_stale` used to be hardcoded `false` here on the theory that a
-    /// local read is always current. The read is; the rollout behind it is not,
-    /// so the source's verdict must reach the renderer or a week-old figure
-    /// prints unmarked.
-    #[tokio::test]
-    async fn self_compose_propagates_the_sources_codex_staleness() {
-        struct StaleCodex;
-        impl CrossSources for StaleCodex {
-            async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String> {
-                Ok(None)
-            }
-            fn codex_windows(&self, _now: DateTime<Utc>) -> CodexWindows {
-                CodexWindows {
-                    five_hour: Some(85.0),
-                    weekly: Some(40.0),
-                    stale: true,
-                }
-            }
-        }
-        let dir = tempdir().unwrap();
-        let cp = self_compose(&StaleCodex, dir.path(), "fp", t0(), false).await;
-        assert_eq!(cp.codex_five_hour, Some(85.0));
-        assert!(cp.codex_stale, "an expired rollout must reach the renderer");
+            },
+            codex: CodexWindows::default(),
+            calls: Cell::new(0),
+        };
+        let composed = self_compose(&source, t0(), true).await;
+        assert_eq!(composed.openai_cost_micro_usd, Some(4_200_000));
+        assert!(!composed.openai_stale);
+        assert_eq!(source.calls.get(), 1);
     }
 
     #[tokio::test]
-    async fn empty_cache_fetches_once_and_caches() {
-        let dir = tempdir().unwrap();
-        let f = Fake {
-            openai: Ok(Some(4_200_000)),
-            codex: Some(6.0),
+    async fn stale_source_cell_renders_stale() {
+        let source = Fake {
+            openai: OpenAiCell {
+                total_micro_usd: Some(999),
+                stale: true,
+            },
+            codex: CodexWindows::default(),
             calls: Cell::new(0),
         };
-        let cp = self_compose(&f, dir.path(), "fp", t0(), true).await;
-        assert_eq!(cp.openai_cost_micro_usd, Some(4_200_000));
-        assert_eq!(cp.codex_five_hour, Some(6.0));
-        assert!(!cp.openai_stale && !cp.codex_stale);
-        assert_eq!(f.calls.get(), 1);
-        assert!(cache::read(dir.path(), "fp").is_some(), "value cached");
+        let composed = self_compose(&source, t0(), true).await;
+        assert_eq!(composed.openai_cost_micro_usd, Some(999));
+        assert!(composed.openai_stale);
     }
 
     #[tokio::test]
-    async fn second_call_within_ttl_does_not_refetch() {
-        let dir = tempdir().unwrap();
-        let f = Fake {
-            openai: Ok(Some(10)),
-            codex: None,
+    async fn absent_stale_value_leaves_the_cell_absent() {
+        let source = Fake {
+            openai: OpenAiCell {
+                total_micro_usd: None,
+                stale: true,
+            },
+            codex: CodexWindows::default(),
             calls: Cell::new(0),
         };
-        let _ = self_compose(&f, dir.path(), "fp", t0(), true).await;
-        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(120), true).await;
-        assert_eq!(cp.openai_cost_micro_usd, Some(10));
-        assert!(!cp.openai_stale);
-        assert_eq!(f.calls.get(), 1, "gated to one fetch per 300s");
+        let composed = self_compose(&source, t0(), true).await;
+        assert_eq!(composed.openai_cost_micro_usd, None);
+        assert!(composed.openai_stale);
     }
 
     #[tokio::test]
-    async fn expired_cache_refetches() {
-        let dir = tempdir().unwrap();
-        let f = Fake {
-            openai: Ok(Some(10)),
-            codex: None,
+    async fn want_openai_false_skips_the_source() {
+        let source = Fake {
+            openai: OpenAiCell {
+                total_micro_usd: Some(4_200_000),
+                stale: false,
+            },
+            codex: CodexWindows {
+                five_hour: Some(12.0),
+                weekly: Some(25.0),
+                stale: true,
+            },
             calls: Cell::new(0),
         };
-        let _ = self_compose(&f, dir.path(), "fp", t0(), true).await;
-        let _ = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(301), true).await;
-        assert_eq!(f.calls.get(), 2);
-    }
-
-    #[tokio::test]
-    async fn fetch_error_serves_stale_value_marked() {
-        let dir = tempdir().unwrap();
-        cache::write_success(dir.path(), "fp", 999, t0());
-        let f = Fake {
-            openai: Err("boom".into()),
-            codex: None,
-            calls: Cell::new(0),
-        };
-        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(400), true).await;
-        assert_eq!(cp.openai_cost_micro_usd, Some(999));
-        assert!(cp.openai_stale, "stale value marked");
-        assert_eq!(f.calls.get(), 1);
-    }
-
-    #[tokio::test]
-    async fn cooldown_skips_fetch() {
-        let dir = tempdir().unwrap();
-        cache::write_success(dir.path(), "fp", 999, t0());
-        cache::write_failure(dir.path(), "fp", t0() + Duration::seconds(400));
-        let f = Fake {
-            openai: Ok(Some(123)),
-            codex: None,
-            calls: Cell::new(0),
-        };
-        let cp = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(420), true).await;
-        assert_eq!(f.calls.get(), 0, "in cooldown, no fetch");
-        assert_eq!(cp.openai_cost_micro_usd, Some(999));
-        assert!(cp.openai_stale);
-    }
-
-    #[tokio::test]
-    async fn no_key_yields_no_openai_cell() {
-        let dir = tempdir().unwrap();
-        let f = Fake {
-            openai: Ok(None),
-            codex: Some(3.0),
-            calls: Cell::new(0),
-        };
-        let cp = self_compose(&f, dir.path(), "fp", t0(), true).await;
-        assert_eq!(cp.openai_cost_micro_usd, None);
-        assert!(!cp.openai_stale);
-        assert_eq!(cp.codex_five_hour, Some(3.0));
-        // One fetch attempt is made (empty cache, no cooldown), but a missing
-        // key caches nothing, so no cooldown starts.
-        assert_eq!(f.calls.get(), 1);
-    }
-
-    #[tokio::test]
-    async fn acquired_lease_rechecks_cache_before_fetching() {
-        let dir = tempdir().unwrap();
-        let lease = match cache::try_acquire_refresh_lease(dir.path()).unwrap() {
-            cache::LeaseAttempt::Acquired(lease) => lease,
-            cache::LeaseAttempt::Busy => panic!("lease must be available"),
-        };
-        cache::write_success(dir.path(), "fp", 77, t0());
-        let f = Fake {
-            openai: Ok(Some(88)),
-            codex: None,
-            calls: Cell::new(0),
-        };
-
-        let value = refresh_under_lease(&f, dir.path(), "fp", t0(), lease).await;
-
-        assert_eq!(value, (Some(77), false));
-        assert_eq!(f.calls.get(), 0, "under-lock recheck must avoid a fetch");
-    }
-
-    struct BlockingFake {
-        calls: Arc<AtomicUsize>,
-        started: Arc<tokio::sync::Notify>,
-        release: Arc<tokio::sync::Notify>,
-    }
-
-    impl CrossSources for BlockingFake {
-        async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            self.started.notify_one();
-            self.release.notified().await;
-            Ok(Some(42))
-        }
-
-        fn codex_windows(&self, _now: DateTime<Utc>) -> CodexWindows {
-            CodexWindows::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn concurrent_composers_perform_at_most_one_refresh() {
-        let dir = tempdir().unwrap();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let started = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Notify::new());
-        let first_source = BlockingFake {
-            calls: Arc::clone(&calls),
-            started: Arc::clone(&started),
-            release: Arc::clone(&release),
-        };
-        let second_source = BlockingFake {
-            calls: Arc::clone(&calls),
-            started: Arc::clone(&started),
-            release: Arc::clone(&release),
-        };
-        let path = dir.path().to_path_buf();
-        let first_path = path.clone();
-        let first = tokio::spawn(async move {
-            self_compose(&first_source, &first_path, "fp", t0(), true).await
-        });
-        started.notified().await;
-        let second =
-            tokio::spawn(
-                async move { self_compose(&second_source, &path, "fp", t0(), true).await },
-            );
-        tokio::time::sleep(StdDuration::from_millis(30)).await;
-        release.notify_waiters();
-
-        let first_value = first.await.unwrap();
-        let second_value = second.await.unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(first_value.openai_cost_micro_usd, Some(42));
-        assert_eq!(second_value.openai_cost_micro_usd, Some(42));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn stale_data_returns_immediately_while_another_process_refreshes() {
-        let dir = tempdir().unwrap();
-        cache::write_success(dir.path(), "fp", 55, t0());
-        let _lease = match cache::try_acquire_refresh_lease(dir.path()).unwrap() {
-            cache::LeaseAttempt::Acquired(lease) => lease,
-            cache::LeaseAttempt::Busy => panic!("lease must be available"),
-        };
-        let f = Fake {
-            openai: Ok(Some(66)),
-            codex: None,
-            calls: Cell::new(0),
-        };
-        let started = tokio::time::Instant::now();
-
-        let value = self_compose(&f, dir.path(), "fp", t0() + Duration::seconds(301), true).await;
-
-        assert!(started.elapsed() < StdDuration::from_millis(100));
-        assert_eq!(value.openai_cost_micro_usd, Some(55));
-        assert!(value.openai_stale);
-        assert_eq!(f.calls.get(), 0);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn waiting_for_another_process_is_bounded() {
-        let dir = tempdir().unwrap();
-        let _lease = match cache::try_acquire_refresh_lease(dir.path()).unwrap() {
-            cache::LeaseAttempt::Acquired(lease) => lease,
-            cache::LeaseAttempt::Busy => panic!("lease must be available"),
-        };
-        let f = Fake {
-            openai: Ok(Some(66)),
-            codex: None,
-            calls: Cell::new(0),
-        };
-        let started = tokio::time::Instant::now();
-
-        let value = self_compose(&f, dir.path(), "fp", t0(), true).await;
-
-        let elapsed = started.elapsed();
-        assert!(elapsed >= REFRESH_WAIT_TIMEOUT);
-        assert!(elapsed < REFRESH_WAIT_TIMEOUT + StdDuration::from_millis(150));
-        assert_eq!(value.openai_cost_micro_usd, None);
-        assert_eq!(f.calls.get(), 0);
-    }
-
-    /// want_openai=false must not touch the cache or the network at all: no
-    /// value, no staleness, and no fetch recorded on the fake. The Codex half
-    /// is unaffected - it is local and cheap, and the gate is only about OpenAI.
-    #[tokio::test]
-    async fn want_openai_false_skips_the_fetch_entirely() {
-        let dir = tempdir().unwrap();
-        let f = Fake {
-            openai: Ok(Some(4_200_000)),
-            codex: Some(12.0),
-            calls: Cell::new(0),
-        };
-        let cp = self_compose(&f, dir.path(), "fp", t0(), false).await;
-        assert_eq!(cp.openai_cost_micro_usd, None, "no value when not wanted");
-        assert!(!cp.openai_stale, "not stale, just absent");
-        assert_eq!(f.calls.get(), 0, "no upstream fetch when not wanted");
-        assert!(
-            cache::read(dir.path(), "fp").is_none(),
-            "no value is published to the cache when not wanted"
-        );
-        assert_eq!(cp.codex_five_hour, Some(12.0), "Codex still composed");
+        let composed = self_compose(&source, t0(), false).await;
+        assert_eq!(source.calls.get(), 0);
+        assert_eq!(composed.openai_cost_micro_usd, None);
+        assert_eq!(composed.codex_five_hour, Some(12.0));
+        assert_eq!(composed.codex_weekly, Some(25.0));
+        assert!(composed.codex_stale);
     }
 }

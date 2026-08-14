@@ -14,7 +14,7 @@ use claude_parser::{
     UsageEvent, dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir,
     find_jsonl_files, parse_str,
 };
-use openai_client::{DEFAULT_API_BASE as OPENAI_API_BASE, OpenAiCosts, costs_this_month_with};
+use openai_client::{OpenAiCosts, gated_costs_this_month};
 use state_coordinator::Snapshot;
 use tracing::{info, warn};
 
@@ -254,8 +254,7 @@ where
 /// Resolve the OpenAI admin key via [`keychain::resolve_openai_key`] (env
 /// override, else keychain). `Ok(None)` = not configured; `Err` = a real
 /// keychain failure. Thin `anyhow` adapter over the shared resolver, kept as
-/// the crate-local name used by the snapshot fetch and the statusline
-/// self-compose fingerprint.
+/// the crate-local name used by the snapshot fetch and statusline self-compose.
 pub(crate) fn resolve_openai_key() -> Result<Option<String>> {
     Ok(keychain::resolve_openai_key()?)
 }
@@ -263,7 +262,7 @@ pub(crate) fn resolve_openai_key() -> Result<Option<String>> {
 /// Production OpenAI base, overridable via `BALANZE_OPENAI_API_BASE` (a test
 /// seam; lets integration tests point the self-compose fetch at wiremock).
 fn openai_api_base() -> String {
-    std::env::var("BALANZE_OPENAI_API_BASE").unwrap_or_else(|_| OPENAI_API_BASE.to_string())
+    openai_client::api_base_url()
 }
 
 /// Fetch this-month OpenAI costs if the user has configured an admin key.
@@ -281,14 +280,7 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
         Some(k) => k,
         None => return Ok(None),
     };
-    // One-shot CLI must not block on provider backoff; watcher passes standard().
-    match costs_this_month_with(
-        OPENAI_API_BASE,
-        &key,
-        std::time::Duration::from_secs(30),
-        &backoff::BackoffPolicy::fail_fast(),
-    )
-    .await
+    match gated_costs_this_month(&openai_api_base(), &key, std::time::Duration::from_secs(30)).await
     {
         Ok(costs) => {
             info!(
@@ -299,9 +291,7 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
             );
             Ok(Some(costs))
         }
-        // Shared admin-key hint, kept in lockstep with the watcher poller
-        // (`openai_client::OpenAiError::admin_key_hint`); other errors surface
-        // via their `Display`.
+        // Shared admin-key hint, kept in lockstep with the watcher poller.
         Err(e) => match e.admin_key_hint() {
             Some(hint) => Err(anyhow!("{hint}")),
             None => Err(e.into()),
@@ -314,12 +304,13 @@ async fn live_fetch_openai() -> Result<Option<OpenAiCosts>> {
 /// NEITHER the Anthropic OAuth path NOR `snapshot_composer::compose` (AGENTS.md §3.1).
 pub(crate) struct LiveCrossSources {
     /// Resolved at most once per statusline invocation, and only when the OpenAI
-    /// segment is wanted. The same owned value drives both the on-disk
-    /// fingerprint and the Authorization header, so an account switch cannot mix
-    /// one key's cache identity with another key's request. `Ok(None)` when the
-    /// segment is off - the key is never read in that case.
+    /// segment is wanted. The same owned value drives both the provider-owned
+    /// request identity and Authorization header. `Ok(None)` when the segment is
+    /// off - the key is never read in that case.
     openai_key: Result<Option<String>, String>,
     openai_api_base: String,
+    #[cfg(test)]
+    openai_cache_dir: Option<std::path::PathBuf>,
 }
 
 impl LiveCrossSources {
@@ -336,45 +327,74 @@ impl LiveCrossSources {
                 Ok(None)
             },
             openai_api_base: openai_api_base(),
+            #[cfg(test)]
+            openai_cache_dir: None,
         }
     }
 
-    pub(crate) fn openai_fingerprint(&self) -> String {
-        statusline_render::cache::key_fingerprint(
-            self.openai_key.as_ref().ok().and_then(|key| key.as_deref()),
-        )
-    }
-
     #[cfg(test)]
-    fn from_resolved(openai_key: Result<Option<String>, String>, openai_api_base: String) -> Self {
+    fn from_resolved(
+        openai_key: Result<Option<String>, String>,
+        openai_api_base: String,
+        openai_cache_dir: std::path::PathBuf,
+    ) -> Self {
         Self {
             openai_key,
             openai_api_base,
+            openai_cache_dir: Some(openai_cache_dir),
         }
     }
 }
 
 impl statusline_render::CrossSources for LiveCrossSources {
-    async fn fetch_openai_total_micro_usd(&self) -> Result<Option<i64>, String> {
-        // Absent key -> no OpenAI cell (`Ok(None)`). A real resolver failure ->
-        // `Err`, so self_compose serves the last-known value marked stale and
-        // starts the cooldown instead of silently dropping the cell. Either way
-        // the statusline never errors: self_compose handles both outcomes.
+    async fn openai_cell(&self) -> statusline_render::OpenAiCell {
         let key = match &self.openai_key {
             Ok(Some(key)) => key,
-            Ok(None) => return Ok(None),
-            Err(error) => return Err(error.clone()),
+            Ok(None) => return statusline_render::OpenAiCell::default(),
+            Err(error) => {
+                tracing::debug!("statusline: OpenAI key resolution failed: {error}");
+                return statusline_render::OpenAiCell::default();
+            }
         };
-        // Short timeout: the statusline runs every turn; never hang the prompt.
-        let costs = costs_this_month_with(
+        #[cfg(test)]
+        let result = if let Some(cache_dir) = &self.openai_cache_dir {
+            openai_client::gated_costs_this_month_with_cache(
+                &self.openai_api_base,
+                key,
+                std::time::Duration::from_secs(3),
+                cache_dir.clone(),
+            )
+            .await
+        } else {
+            gated_costs_this_month(
+                &self.openai_api_base,
+                key,
+                std::time::Duration::from_secs(3),
+            )
+            .await
+        };
+        #[cfg(not(test))]
+        let result = gated_costs_this_month(
             &self.openai_api_base,
             key,
             std::time::Duration::from_secs(3),
-            &backoff::BackoffPolicy::fail_fast(),
         )
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(Some(costs.total_micro_usd))
+        .await;
+
+        match result {
+            Ok(costs) => statusline_render::OpenAiCell {
+                total_micro_usd: Some(costs.total_micro_usd),
+                stale: false,
+            },
+            Err(error) => {
+                let total_micro_usd = error.cached_total_micro_usd();
+                tracing::debug!("statusline: OpenAI self-compose deferred: {error}");
+                statusline_render::OpenAiCell {
+                    total_micro_usd,
+                    stale: total_micro_usd.is_some(),
+                }
+            }
+        }
     }
 
     fn codex_windows(&self, now: chrono::DateTime<chrono::Utc>) -> statusline_render::CodexWindows {
@@ -453,7 +473,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn statusline_uses_the_same_resolved_key_for_fingerprint_and_request() {
+    async fn statusline_uses_the_same_resolved_key_for_gate_and_request() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/organization/costs"))
@@ -465,17 +485,13 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let sources =
-            LiveCrossSources::from_resolved(Ok(Some("resolved-once".to_string())), server.uri());
-
-        assert_eq!(
-            sources.openai_fingerprint(),
-            statusline_render::cache::key_fingerprint(Some("resolved-once"))
+        let cache_dir = tempfile::tempdir().unwrap();
+        let sources = LiveCrossSources::from_resolved(
+            Ok(Some("resolved-once".to_string())),
+            server.uri(),
+            cache_dir.path().to_path_buf(),
         );
-        assert_eq!(
-            sources.fetch_openai_total_micro_usd().await.unwrap(),
-            Some(0)
-        );
+        assert_eq!(sources.openai_cell().await.total_micro_usd, Some(0));
     }
 
     #[tokio::test]

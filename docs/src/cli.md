@@ -6,7 +6,7 @@ Every command accepts the [global flags](#global-flags). Run `balanze-cli help`,
 
 ## `status`
 
-The 4-quadrant compact status: Anthropic quota, OpenAI quota, and each provider's real billed API dollars, on a single screen. This is also what runs when you invoke `balanze-cli` with no subcommand at all.
+The 4-quadrant compact status: Anthropic quota, OpenAI quota, and each provider's real billed API dollars, on a single screen. This is also what runs when you invoke `balanze-cli` with no subcommand at all. OpenAI Costs is shared with every other Balanze process through an exact 300-second gate; a recent failed or in-flight attempt can therefore defer that source instead of starting another request.
 
 | Flag | Effect |
 |---|---|
@@ -50,7 +50,7 @@ Diagnoses each integration one at a time - Claude OAuth credential, Codex rollou
 
 ## `export`
 
-Exports usage history as CSV, re-derived statelessly on every run - nothing is persisted. The output carries two provenance-segregated sections: Claude usage from the local JSONL (one row per day and model, with token counts plus a list-price *leverage* figure that is never money billed) and OpenAI current-month real billed spend per line item from the Admin Costs API. The OpenAI section needs network access and a configured OpenAI key; the Claude section does not.
+Exports usage history as CSV, re-derived statelessly on every run - nothing is persisted. The output carries two provenance-segregated sections: Claude usage from the local JSONL (one row per day and model, with token counts plus a list-price *leverage* figure that is never money billed) and OpenAI current-month real billed spend per line item from the Admin Costs API. The OpenAI section needs a configured OpenAI key and either a reusable current-month full result in the shared 300-second gate or permission from that gate to make one network request; the Claude section does not.
 
 | Flag | Effect |
 |---|---|
@@ -91,7 +91,7 @@ The Claude Code statusLine command. With no subcommand, this is the FROZEN stdin
 
 It needs no credentials of its own. The default line carries live 5-hour and 7-day Claude subscription quota, an estimate of the current session's cost, and cross-provider signal in the form of both Codex rate-limit windows.
 
-Real OpenAI API spend is available as a `{openai_cost}` segment but is **off by default**, because it is an uncapped dollar figure with no rolling window - it reads oddly next to a line that is otherwise percent-of-window, and it is the only segment that costs an API call. Adding it to your configured line is what switches the OpenAI leg on at all.
+Real OpenAI API spend is available as a `{openai_cost}` segment but is **off by default**, because it is an uncapped dollar figure with no rolling window - it reads oddly next to a line that is otherwise percent-of-window, and it is the only segment that can ask the shared OpenAI Costs gate for an API call. Adding it to your configured line switches the OpenAI leg on. During a deferred refresh, statusline can show the last headline with a stale marker; it does not need the full per-line-item result used by `export`.
 
 ### `statusline restore`
 
