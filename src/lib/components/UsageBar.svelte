@@ -1,13 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { paceVerdict, type Tone } from '$lib/presentation/pace';
+  import type { Tone } from '$lib/presentation/pace';
   let { used, elapsed = null, tone = 'ok', height = 11 }:
     { used: number; elapsed?: number | null; tone?: Tone; height?: number } = $props();
   const clamp = (n: number) => Math.min(100, Math.max(0, n));
-  // Pace verdict (quota used vs window elapsed) shown as a hover tooltip
-  // whenever the elapsed tick is present. Raw (unclamped) fractions so an
-  // over-cap window still reads honestly. Mirrors the CLI pace line.
-  const verdict = $derived(elapsed == null ? null : paceVerdict(used / 100, elapsed / 100));
 
   // The fill grows from 0 to its target on first paint, so the gauge reads as
   // "settling" when the popover opens rather than snapping. Reduced-motion ->
@@ -23,9 +19,8 @@
 <div
   class="track"
   style="height:{height}px"
-  role={verdict ? 'img' : undefined}
-  aria-label={verdict ? `Pace: ${verdict.text}` : undefined}
-  title={verdict ? `Pace: ${verdict.text}` : undefined}
+  role={elapsed != null ? 'img' : undefined}
+  aria-label={elapsed != null ? `${used.toFixed(0)}% used, ${clamp(elapsed).toFixed(0)}% elapsed` : undefined}
 >
   <div class="fill" style="width:{fillW}%; background:var(--{tone})"></div>
   {#if elapsed != null}
