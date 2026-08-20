@@ -191,7 +191,7 @@ impl IncrementalParser {
             path.to_path_buf(),
             FileCursor {
                 byte_pos: new_byte_pos,
-                size: current_size,
+                size: cursor_snapshot_size(current_size, new_byte_pos),
                 mtime: current_mtime,
                 identity: current_identity,
                 probe,
@@ -296,6 +296,10 @@ fn requires_replacement(
     current_size < cursor.size || (current_size == cursor.size && current_mtime != cursor.mtime)
 }
 
+fn cursor_snapshot_size(metadata_size: u64, new_byte_pos: u64) -> u64 {
+    metadata_size.max(new_byte_pos)
+}
+
 fn identity_changed(cursor: Option<&FileCursor>, current: Option<FileIdentity>) -> bool {
     matches!((cursor.and_then(|cursor| cursor.identity), current), (Some(previous), Some(current)) if previous != current)
 }
@@ -392,6 +396,11 @@ mod tests {
             identity: None,
             probe: FileProbe::default(),
         }
+    }
+
+    #[test]
+    fn cursor_size_covers_bytes_consumed_after_the_metadata_snapshot() {
+        assert_eq!(cursor_snapshot_size(10, 15), 15);
     }
 
     // --- pure decision logic: next_start_offset ---

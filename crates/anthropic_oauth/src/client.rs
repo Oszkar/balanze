@@ -11,8 +11,8 @@ const BETA_HEADER: &str = "oauth-2025-04-20";
 /// Parse a `Retry-After` header into a `Duration`, supporting both forms
 /// allowed by RFC 7231 §7.1.3: delta-seconds (`"30"`) and HTTP-date
 /// (`"Sun, 06 Nov 1994 08:49:37 GMT"`). HTTP-date values in the past
-/// clamp to zero (treated as "retry immediately") so a stale server clock
-/// can't park the retry indefinitely.
+/// clamp to zero; the backoff policy still applies its per-attempt floor, so a
+/// stale server clock cannot weaken provider politeness or park indefinitely.
 ///
 /// `now` is injected for testability; live callers pass `Utc::now()`.
 pub(crate) fn parse_retry_after_at(
@@ -626,7 +626,7 @@ mod tests {
     fn parse_retry_after_past_http_date_clamps_to_zero() {
         // A stale server clock could push the HTTP-date into the past. The
         // retry loop must not interpret that as a huge negative wait or an
-        // out-of-range u64 - clamp to zero ("retry immediately").
+        // out-of-range u64 - clamp to zero; the retry policy supplies the floor.
         use reqwest::header::{HeaderMap, HeaderValue};
         let mut h = HeaderMap::new();
         h.insert(

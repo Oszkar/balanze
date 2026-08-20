@@ -4,8 +4,8 @@
 //! (`claude_parser::IncrementalParser`, AGENTS.md §3.1) and emits the running
 //! deduped event set. A 60s fallback tick catches filesystem events `notify`
 //! drops (inotify exhaustion, atomic-rewrite detection lag) - also incremental,
-//! so it is NOT a periodic full reparse. The only full read is the first read
-//! of each file at launch.
+//! so it is NOT a periodic full reparse. Each file is read in full only when it
+//! is first discovered.
 //!
 //! This task owns the sole `IncrementalParser` for JSONL; the safety poll no
 //! longer re-scans JSONL (the 60s fallback here replaces that leg), so there is
@@ -54,6 +54,35 @@ impl ScanState {
             by_file: BTreeMap::new(),
         }
     }
+
+    fn remove_root(&mut self, root: &std::path::Path) {
+        let removed: Vec<PathBuf> = self
+            .by_file
+            .keys()
+            .filter(|path| path.starts_with(root))
+            .cloned()
+            .collect();
+        for path in removed {
+            self.by_file.remove(&path);
+            self.parser.invalidate(&path);
+        }
+    }
+}
+
+fn root_changes(current: &[PathBuf], discovered: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let current_set: HashSet<&PathBuf> = current.iter().collect();
+    let discovered_set: HashSet<&PathBuf> = discovered.iter().collect();
+    let added = discovered
+        .iter()
+        .filter(|root| !current_set.contains(root))
+        .cloned()
+        .collect();
+    let removed = current
+        .iter()
+        .filter(|root| !discovered_set.contains(root))
+        .cloned()
+        .collect();
+    (added, removed)
 }
 
 /// Spawn the JSONL notify task and return its `JoinHandle`.
@@ -71,6 +100,8 @@ impl ScanState {
 ///    once, establishing the byte cursors).
 /// 4. On each debounced notify batch OR 60s fallback tick, reads new bytes only
 ///    and re-emits the accumulated deduped events.
+/// 5. On fallback ticks, rediscovers roots, registers new watches, and removes
+///    watches plus owned contributions for roots that disappeared.
 ///
 /// The task exits `Ok(())` when the notify channel closes (tx dropped).
 pub(crate) fn spawn(
@@ -160,7 +191,7 @@ pub(crate) fn spawn(
         fallback.tick().await;
 
         // Initial scan - the first `read_incremental` of each existing file
-        // reads it in full (the only full read; AGENTS.md §3.1 "launch"), and
+        // reads it in full (the only full read for each existing file), and
         // sets the cursor so later reads pick up appends only. Note that
         // `watcher.watch(...)` above registers atomically with the OS; writes
         // after it returns are buffered by the OS and drained by the callback.
@@ -168,14 +199,48 @@ pub(crate) fn spawn(
         state = emit_incremental(&coord, &roots, state, generation).await;
 
         loop {
-            tokio::select! {
+            let rediscover_roots = tokio::select! {
                 _ = signal.notified() => {
                     // Debounce the burst - further notify_one() calls during
                     // this sleep coalesce into the next iteration (Notify keeps
                     // at most one pending permit).
                     tokio::time::sleep(DEBOUNCE).await;
+                    false
                 }
-                _ = fallback.tick() => {}
+                _ = fallback.tick() => true
+            };
+            if rediscover_roots {
+                let discovered = find_all_claude_projects_dirs();
+                let (added, removed) = root_changes(&roots, &discovered);
+                for root in &added {
+                    if let Err(error) = watcher.watch(root, RecursiveMode::Recursive) {
+                        tracing::error!(
+                            "watcher/jsonl: failed to watch newly discovered root {} ({error}); reporting NotifyExhausted",
+                            root.display()
+                        );
+                        return Err(WatcherError::NotifyExhausted {
+                            affected: Source::ClaudeJsonl,
+                        });
+                    }
+                    tracing::info!(
+                        "watcher/jsonl: discovered Claude projects root {}",
+                        root.display()
+                    );
+                }
+                for root in &removed {
+                    if let Err(error) = watcher.unwatch(root) {
+                        tracing::debug!(
+                            "watcher/jsonl: removed root {} was already unwatched ({error})",
+                            root.display()
+                        );
+                    }
+                    state.remove_root(root);
+                    tracing::info!(
+                        "watcher/jsonl: removed Claude projects root {}",
+                        root.display()
+                    );
+                }
+                roots = discovered;
             }
             state = emit_incremental(&coord, &roots, state, generation).await;
         }
@@ -441,6 +506,45 @@ mod tests {
             );
             handle.abort();
         });
+    }
+
+    #[test]
+    fn root_changes_detects_new_and_removed_install_locations() {
+        let old = PathBuf::from("old");
+        let stable = PathBuf::from("stable");
+        let new = PathBuf::from("new");
+        let (added, removed) = root_changes(&[old.clone(), stable.clone()], &[stable, new.clone()]);
+        assert_eq!(added, vec![new]);
+        assert_eq!(removed, vec![old]);
+    }
+
+    #[test]
+    fn removed_discovery_root_drops_its_owned_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let removed_root = dir.path().join("removed");
+        let surviving_root = dir.path().join("surviving");
+        std::fs::create_dir_all(&removed_root).unwrap();
+        std::fs::create_dir_all(&surviving_root).unwrap();
+        std::fs::write(
+            removed_root.join("a.jsonl"),
+            assistant_line("msg_a", "req_1", 100),
+        )
+        .unwrap();
+        std::fs::write(
+            surviving_root.join("b.jsonl"),
+            assistant_line("msg_b", "req_2", 200),
+        )
+        .unwrap();
+        let mut state = ScanState::new();
+        assert!(matches!(
+            scan_incremental(&[removed_root.clone(), surviving_root.clone()], &mut state),
+            ScanResult::Ok { .. }
+        ));
+
+        state.remove_root(&removed_root);
+        let events = scanned_events(&surviving_root, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_b"));
     }
 
     fn assistant_line(msg_id: &str, req_id: &str, output: u64) -> String {

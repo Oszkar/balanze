@@ -146,7 +146,16 @@ pub fn read_latest_quota_snapshot(path: &Path) -> Result<Option<CodexQuotaSnapsh
             }
         };
 
-        let secondary = parse_window(rate_limits.pointer("/secondary"));
+        let secondary = match rate_limits.get("secondary") {
+            None | Some(Value::Null) => None,
+            Some(value) => match parse_window(Some(value)) {
+                Some(window) => Some(window),
+                None => {
+                    last_drift_line = line_no;
+                    continue;
+                }
+            },
+        };
 
         let plan_type = rate_limits
             .get("plan_type")
@@ -521,6 +530,15 @@ mod tests {
         assert_eq!(secondary.used_percent, 7.5);
         assert_eq!(secondary.window_duration_minutes, 300);
         assert_eq!(snap.plan_type, "pro");
+    }
+
+    #[test]
+    fn malformed_present_secondary_window_is_schema_drift() {
+        let malformed_secondary = r#"{"timestamp":"2026-05-14T09:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":42.0,"window_minutes":10080,"resets_at":1779344602},"secondary":{"used_percent":"not-a-number","window_minutes":300,"resets_at":1779260400},"plan_type":"pro","rate_limit_reached_type":null}}}"#;
+        let f = write_jsonl(&[SESSION_META, malformed_secondary]);
+
+        let error = read_latest_quota_snapshot(f.path()).unwrap_err();
+        assert!(matches!(error, ParseError::SchemaDrift { line: 2, .. }));
     }
 
     #[test]

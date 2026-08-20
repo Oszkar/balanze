@@ -7,6 +7,7 @@
 
 use anthropic_oauth::{OAuthError, fetch_usage};
 use reqwest::Client;
+use std::time::Duration;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -54,7 +55,7 @@ async fn happy_path_parses_response_and_reads_org_header() {
 }
 
 #[tokio::test]
-async fn http_401_returns_auth_expired() {
+async fn http_401_returns_auth_expired_without_retrying() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/oauth/usage"))
@@ -70,11 +71,62 @@ async fn http_401_returns_auth_expired() {
         "expired-token",
         None,
         None,
-        &backoff::BackoffPolicy::fail_fast(),
+        &backoff::BackoffPolicy::custom(Duration::ZERO, 2, Duration::ZERO, 2),
     )
     .await
     .expect_err("should fail with 401");
     assert!(matches!(err, OAuthError::AuthExpired), "got {err:?}");
+}
+
+#[tokio::test]
+async fn http_429_is_retried_by_a_retry_enabled_policy() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/oauth/usage"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let client = Client::new();
+    let error = fetch_usage(
+        &client,
+        &server.uri(),
+        "token",
+        None,
+        None,
+        &backoff::BackoffPolicy::custom(Duration::ZERO, 2, Duration::ZERO, 2),
+    )
+    .await
+    .expect_err("429 should exhaust the retry-enabled policy");
+    assert!(matches!(error, OAuthError::RateLimited { .. }));
+}
+
+#[tokio::test]
+async fn http_5xx_is_retried_by_a_retry_enabled_policy() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/oauth/usage"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let client = Client::new();
+    let error = fetch_usage(
+        &client,
+        &server.uri(),
+        "token",
+        None,
+        None,
+        &backoff::BackoffPolicy::custom(Duration::ZERO, 2, Duration::ZERO, 2),
+    )
+    .await
+    .expect_err("5xx should exhaust the retry-enabled policy");
+    assert!(matches!(
+        error,
+        OAuthError::UnexpectedStatus { status: 503, .. }
+    ));
 }
 
 #[tokio::test]

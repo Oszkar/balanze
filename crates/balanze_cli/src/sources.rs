@@ -500,6 +500,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn statusline_key_resolution_failure_skips_openai_gate_state() {
+        let cache_dir = tempfile::tempdir().unwrap();
+        let sources = LiveCrossSources::from_resolved(
+            Err("keychain unavailable".to_string()),
+            "http://127.0.0.1:9".to_string(),
+            cache_dir.path().to_path_buf(),
+        );
+
+        assert_eq!(
+            sources.openai_cell().await,
+            statusline_render::OpenAiCell::default()
+        );
+        assert_eq!(std::fs::read_dir(cache_dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
     async fn oauth_401_rereads_rotated_bearer_once() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))

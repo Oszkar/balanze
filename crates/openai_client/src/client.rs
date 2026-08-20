@@ -10,8 +10,8 @@ use crate::types::{LineItemCost, OpenAiCosts, OpenAiError};
 /// Parse a `Retry-After` header into a `Duration`, supporting both forms
 /// allowed by RFC 7231 §7.1.3: delta-seconds (`"30"`) and HTTP-date
 /// (`"Sun, 06 Nov 1994 08:49:37 GMT"`). HTTP-date values in the past
-/// clamp to zero (treated as "retry immediately") so a stale server clock
-/// can't park the retry indefinitely.
+/// clamp to zero; the caller's durable reservation still governs the next
+/// request, so a stale server clock cannot park refresh indefinitely.
 fn parse_retry_after_at(
     headers: &reqwest::header::HeaderMap,
     now: DateTime<Utc>,
