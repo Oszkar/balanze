@@ -157,13 +157,12 @@ export interface CodexQuota {
 export function codexWindowsByKind(q: CodexQuotaSnapshot): { five: RateLimitWindow | null; weekly: RateLimitWindow | null } {
   const windows = [q.primary, ...(q.secondary ? [q.secondary] : [])];
   const five = windows.find((w) => nearDuration(w.window_duration_minutes, 300)) ?? null;
-  const exactWeekly = windows.find((w) => nearDuration(w.window_duration_minutes, 10080)) ?? null;
-  const fallback = windows
-    .filter((w) => w !== five && w !== exactWeekly)
+  const weekly = windows
+    .filter((w) => w !== five)
     .reduce<RateLimitWindow | null>((worst, w) => !worst || w.used_percent > worst.used_percent ? w : worst, null);
   return {
     five,
-    weekly: exactWeekly ?? fallback,
+    weekly,
   };
 }
 

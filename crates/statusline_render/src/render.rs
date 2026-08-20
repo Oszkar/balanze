@@ -202,10 +202,18 @@ fn render_usage(input: &RenderInput) -> Option<String> {
         .filter(|w| w.key != "five_hour")
         .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent));
     if let Some(w) = five {
-        windows.push(render_window("✳️ 5h", w, Duration::hours(5), c, input));
+        windows.push(render_window(
+            "✳️ 5h",
+            w,
+            Some(Duration::hours(5)),
+            c,
+            input,
+        ));
     }
     if let Some(w) = weekly {
-        windows.push(render_window("✳️ 7d", w, Duration::days(7), c, input));
+        let window_len =
+            (w.key == "seven_day" || w.key.starts_with("seven_day_")).then_some(Duration::days(7));
+        windows.push(render_window("✳️ 7d", w, window_len, c, input));
     }
     if windows.is_empty() {
         None
@@ -217,13 +225,15 @@ fn render_usage(input: &RenderInput) -> Option<String> {
 fn render_window(
     label: &str,
     w: &claude_statusline::RateWindow,
-    window_len: Duration,
+    window_len: Option<Duration>,
     c: &settings::statusline::UsageSegment,
     input: &RenderInput,
 ) -> String {
     let shown = w.used_percent.round() as i64;
     let mut text = format!("{label} {shown}%");
-    if c.show_pace {
+    if c.show_pace
+        && let Some(window_len) = window_len
+    {
         let p = window::pace(w.used_percent as f64, w.resets_at, window_len, input.now);
         if let Some(ratio) = p.ratio {
             let arrow = match window::PaceVerdict::from_ratio(Some(ratio)) {
@@ -495,6 +505,30 @@ mod tests {
 
         assert!(output.contains("✳️ 5h 10%"), "{output}");
         assert!(output.contains("✳️ 7d 95%"), "{output}");
+    }
+
+    #[test]
+    fn unknown_cadence_keeps_7d_slot_without_assumed_weekly_pace() {
+        let mut snapshot = snap();
+        snapshot.rate_limits.as_mut().unwrap().windows = vec![claude_statusline::RateWindow {
+            key: "monthly_phoenix".to_string(),
+            label: "Monthly Phoenix".to_string(),
+            used_percent: 50.0,
+            resets_at: now() + chrono::Duration::days(3),
+        }];
+        let config = cfg();
+        let output = render(&RenderInput {
+            snapshot: &snapshot,
+            cross: None,
+            config: &config,
+            now: now(),
+            color: false,
+        });
+        assert!(output.contains("✳️ 7d 50%"), "{output}");
+        assert!(
+            !output.contains('×'),
+            "unknown duration must not invent pace: {output}"
+        );
     }
 
     #[test]

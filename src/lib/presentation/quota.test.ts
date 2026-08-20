@@ -236,6 +236,14 @@ describe('quota', () => {
     expect(codexWindowLabel(codexWindowsByKind(changed).weekly!)).toBe('window');
   });
 
+  it('Codex weekly slot selects a worse unknown window over an exact weekly window', () => {
+    const q = codexSnap(
+      { used_percent: 20, window_duration_minutes: 10080, resets_at: '2026-07-14T12:00:00Z' },
+      { used_percent: 95, window_duration_minutes: 1440, resets_at: '2026-07-09T12:00:00Z' },
+    ).codex_quota!;
+    expect(codexWindowsByKind(q).weekly?.used_percent).toBe(95);
+  });
+
   it('codexQuota: null snapshot -> null', () => {
     expect(codexQuota(base)).toBeNull();
   });
