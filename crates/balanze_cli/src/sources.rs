@@ -384,13 +384,18 @@ impl statusline_render::CrossSources for LiveCrossSources {
         match result {
             Ok(costs) => statusline_render::OpenAiCell {
                 total_micro_usd: Some(costs.total_micro_usd),
+                partial: costs.truncated,
                 stale: false,
             },
             Err(error) => {
                 let total_micro_usd = error.cached_total_micro_usd();
+                let partial = error
+                    .cached_full_costs()
+                    .is_some_and(|costs| costs.truncated);
                 tracing::debug!("statusline: OpenAI self-compose deferred: {error}");
                 statusline_render::OpenAiCell {
                     total_micro_usd,
+                    partial,
                     stale: total_micro_usd.is_some(),
                 }
             }
@@ -401,7 +406,7 @@ impl statusline_render::CrossSources for LiveCrossSources {
         match codex_local::read_codex_quota() {
             Ok(Some(q)) => statusline_render::CodexWindows {
                 five_hour: q.five_hour().map(|w| w.used_percent as f32),
-                weekly: q.weekly().map(|w| w.used_percent as f32),
+                weekly: q.weekly_or_other().map(|w| w.used_percent as f32),
                 // The read is fresh; the rollout behind it may not be. Without
                 // this the statusline printed a week-old figure unmarked.
                 stale: q.any_window_expired(now),

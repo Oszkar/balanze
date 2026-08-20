@@ -34,6 +34,7 @@ pub mod snapshot_file;
 #[cfg(test)]
 mod test_support;
 
+pub use codex_local::WindowKind;
 pub use coordinator::{StateCoordinatorHandle, spawn, spawn_with_optional_file};
 pub use jsonl::{JsonlCells, summarize_jsonl};
 pub use messages::{
@@ -41,8 +42,8 @@ pub use messages::{
 };
 pub use sink::{LogSink, NullSink, Sink};
 pub use snapshot::{
-    JsonlSnapshot, SNAPSHOT_SCHEMA_VERSION, STATUSLINE_FRESHNESS_SECS, Snapshot, WindowPace,
-    pace_for_oauth, record_error,
+    AnthropicQuotaSource, JsonlSnapshot, SNAPSHOT_SCHEMA_VERSION, STATUSLINE_FRESHNESS_SECS,
+    Snapshot, WindowPace, pace_for_oauth, record_error,
 };
 pub use snapshot_file::{
     SnapshotFileError, SnapshotFilePayload, atomic_write_snapshot_file, read_snapshot_file,

@@ -8,7 +8,7 @@
 use anthropic_oauth::ClaudeOAuthSnapshot;
 use chrono::{DateTime, Duration, Utc};
 use claude_cost::Cost;
-use claude_statusline::StatuslineFilePayload;
+use claude_statusline::{RateLimits, StatuslineFilePayload};
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
 use serde::{Deserialize, Serialize};
@@ -100,6 +100,21 @@ pub const SNAPSHOT_SCHEMA_VERSION: u32 = 3;
 /// `src/lib/presentation/quota.ts`.
 pub const STATUSLINE_FRESHNESS_SECS: i64 = 900;
 
+/// Canonical Anthropic quota source for snapshot-driven Rust surfaces.
+/// Fresh statusline data wins because it reflects the current Claude Code
+/// turn; OAuth is the fallback. Extra-usage billing still comes from OAuth.
+#[derive(Debug, Clone, Copy)]
+pub enum AnthropicQuotaSource<'a> {
+    Statusline {
+        rate_limits: &'a RateLimits,
+        stale: bool,
+    },
+    OAuth {
+        snapshot: &'a ClaudeOAuthSnapshot,
+        stale: bool,
+    },
+}
+
 fn default_snapshot_schema_version() -> u32 {
     SNAPSHOT_SCHEMA_VERSION
 }
@@ -169,6 +184,39 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Whether the retained statusline payload is safe to present as current.
+    /// Future-dated payloads are rejected along with old ones.
+    pub fn statusline_fresh(&self) -> bool {
+        self.claude_statusline.as_ref().is_some_and(|sl| {
+            let age = self.fetched_at.signed_duration_since(sl.captured_at);
+            age >= Duration::zero() && age <= Duration::seconds(STATUSLINE_FRESHNESS_SECS)
+        })
+    }
+
+    /// Select the one Anthropic quota source every Rust presentation surface
+    /// should render. An empty/missing statusline rate-limit block is not a
+    /// quota source, so OAuth remains visible in that case.
+    pub fn anthropic_quota_source(&self) -> Option<AnthropicQuotaSource<'_>> {
+        if self.statusline_fresh()
+            && let Some(rate_limits) = self
+                .claude_statusline
+                .as_ref()
+                .and_then(|sl| sl.payload.rate_limits.as_ref())
+            && !rate_limits.windows.is_empty()
+        {
+            return Some(AnthropicQuotaSource::Statusline {
+                rate_limits,
+                stale: self.claude_statusline_error.is_some(),
+            });
+        }
+        self.claude_oauth
+            .as_ref()
+            .map(|snapshot| AnthropicQuotaSource::OAuth {
+                snapshot,
+                stale: self.claude_oauth_error.is_some(),
+            })
+    }
+
     /// An empty snapshot stamped with `fetched_at = now`. Used at coordinator
     /// startup before any source has reported in.
     pub fn empty(now: DateTime<Utc>) -> Self {
@@ -362,6 +410,94 @@ mod tests {
         record_oauth_unavailable(&mut s, "Claude Code not detected");
         clear_source(&mut s, Source::ClaudeOAuth);
         assert!(s.claude_oauth_unavailable.is_none());
+    }
+
+    #[test]
+    fn anthropic_quota_source_prefers_fresh_statusline_and_falls_back_when_stale() {
+        use claude_statusline::{RateWindow, StatuslineSnapshot};
+
+        let now = fixture_now();
+        let mut s = Snapshot::empty(now);
+        assert!(!s.statusline_fresh());
+        s.claude_oauth = Some(oauth_snapshot());
+        let payload = StatuslineSnapshot {
+            rate_limits: Some(RateLimits {
+                windows: vec![RateWindow {
+                    key: "five_hour".to_string(),
+                    label: "5-hour".to_string(),
+                    used_percent: 62.0,
+                    resets_at: now + Duration::hours(3),
+                }],
+            }),
+            session_cost_micro_usd: None,
+            claude_code_version: None,
+            model_display_name: None,
+            context_used_percent: None,
+        };
+        s.claude_statusline = Some(StatuslineFilePayload::new(payload.clone(), now));
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::Statusline { stale: false, .. })
+        ));
+
+        s.claude_statusline_error = Some("reader failed".to_string());
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::Statusline { stale: true, .. })
+        ));
+        s.claude_statusline_error = None;
+
+        s.claude_statusline = Some(StatuslineFilePayload::new(
+            payload.clone(),
+            now - Duration::seconds(STATUSLINE_FRESHNESS_SECS + 1),
+        ));
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::OAuth { .. })
+        ));
+        s.claude_oauth_error = Some("refresh failed".to_string());
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::OAuth { stale: true, .. })
+        ));
+        s.claude_oauth_error = None;
+
+        s.claude_statusline = Some(StatuslineFilePayload::new(
+            payload.clone(),
+            now + Duration::seconds(1),
+        ));
+        assert!(!s.statusline_fresh());
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::OAuth { .. })
+        ));
+
+        s.claude_statusline = Some(StatuslineFilePayload::new(
+            payload.clone(),
+            now + Duration::milliseconds(1),
+        ));
+        assert!(!s.statusline_fresh());
+
+        s.claude_statusline = Some(StatuslineFilePayload::new(
+            payload.clone(),
+            now - Duration::seconds(STATUSLINE_FRESHNESS_SECS),
+        ));
+        assert!(s.statusline_fresh());
+
+        s.claude_statusline = Some(StatuslineFilePayload::new(
+            payload.clone(),
+            now - Duration::seconds(STATUSLINE_FRESHNESS_SECS) - Duration::milliseconds(1),
+        ));
+        assert!(!s.statusline_fresh());
+
+        let mut empty = payload;
+        empty.rate_limits = Some(RateLimits { windows: vec![] });
+        s.claude_statusline = Some(StatuslineFilePayload::new(empty, now));
+        assert!(s.statusline_fresh());
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::OAuth { .. })
+        ));
     }
 
     // --- pace_for_oauth ---

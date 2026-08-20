@@ -11,6 +11,9 @@ pub struct CrossProvider {
     /// Local Codex weekly window utilization (0..100). `None` if absent.
     pub codex_weekly: Option<f32>,
     pub openai_cost_micro_usd: Option<i64>,
+    /// True when the OpenAI Costs endpoint reported that more pages exist, so
+    /// the displayed total is only the fetched prefix rather than the full bill.
+    pub openai_partial: bool,
     /// True when the Codex figure is stale: an old snapshot envelope, a failed
     /// last poll, or - on either path - a rollout whose window has already
     /// reset. Reading Codex locally every turn does NOT make it false: the
@@ -172,9 +175,10 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
         "openai_cost" => {
             let cross = input.cross?;
             let micro = cross.openai_cost_micro_usd?;
+            let partial = if cross.openai_partial { "*" } else { "" };
             let mark = if cross.openai_stale { " ⚠️" } else { "" };
             Some(paint(
-                &format!("🌀 {}{mark}", fmt_money(micro)),
+                &format!("🌀 {}{partial}{mark}", fmt_money(micro)),
                 resolve(&segs.openai_cost.style, theme, "openai_cost", Tone::Base),
                 "",
                 "",
@@ -191,11 +195,25 @@ fn render_usage(input: &RenderInput) -> Option<String> {
     let rl = input.snapshot.rate_limits.as_ref()?;
     let c = &input.config.segments.usage;
     let mut windows: Vec<String> = Vec::new();
-    if let Some(w) = rl.five_hour() {
-        windows.push(render_window("✳️ 5h", w, Duration::hours(5), c, input));
+    let five = rl.windows.iter().find(|w| w.key == "five_hour");
+    let weekly = rl
+        .windows
+        .iter()
+        .filter(|w| w.key != "five_hour")
+        .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent));
+    if let Some(w) = five {
+        windows.push(render_window(
+            "✳️ 5h",
+            w,
+            Some(Duration::hours(5)),
+            c,
+            input,
+        ));
     }
-    if let Some(w) = rl.seven_day() {
-        windows.push(render_window("✳️ 7d", w, Duration::days(7), c, input));
+    if let Some(w) = weekly {
+        let window_len =
+            (w.key == "seven_day" || w.key.starts_with("seven_day_")).then_some(Duration::days(7));
+        windows.push(render_window("✳️ 7d", w, window_len, c, input));
     }
     if windows.is_empty() {
         None
@@ -207,16 +225,23 @@ fn render_usage(input: &RenderInput) -> Option<String> {
 fn render_window(
     label: &str,
     w: &claude_statusline::RateWindow,
-    window_len: Duration,
+    window_len: Option<Duration>,
     c: &settings::statusline::UsageSegment,
     input: &RenderInput,
 ) -> String {
     let shown = w.used_percent.round() as i64;
     let mut text = format!("{label} {shown}%");
-    if c.show_pace {
+    if c.show_pace
+        && let Some(window_len) = window_len
+    {
         let p = window::pace(w.used_percent as f64, w.resets_at, window_len, input.now);
         if let Some(ratio) = p.ratio {
-            let arrow = if ratio >= 1.0 { '↑' } else { '↓' };
+            let arrow = match window::PaceVerdict::from_ratio(Some(ratio)) {
+                window::PaceVerdict::Under => '↓',
+                window::PaceVerdict::OnPace => '→',
+                window::PaceVerdict::Warn | window::PaceVerdict::Critical => '↑',
+                window::PaceVerdict::TooEarly => unreachable!("pace ratio is present"),
+            };
             text.push_str(&format!(" {arrow}{ratio:.1}×"));
         }
     }
@@ -450,6 +475,60 @@ mod tests {
             model_display_name: Some("Opus".to_string()),
             context_used_percent: Some(42.0),
         }
+    }
+
+    #[test]
+    fn model_specific_weekly_window_is_rendered_and_can_drive_severity() {
+        let mut snapshot = snap();
+        snapshot.rate_limits.as_mut().unwrap().windows = vec![
+            claude_statusline::RateWindow {
+                key: "five_hour".to_string(),
+                label: "5-hour".to_string(),
+                used_percent: 10.0,
+                resets_at: now() + chrono::Duration::hours(4),
+            },
+            claude_statusline::RateWindow {
+                key: "seven_day_opus".to_string(),
+                label: "Opus 7-day".to_string(),
+                used_percent: 95.0,
+                resets_at: now() + chrono::Duration::days(5),
+            },
+        ];
+        let config = cfg();
+        let output = render(&RenderInput {
+            snapshot: &snapshot,
+            cross: None,
+            config: &config,
+            now: now(),
+            color: false,
+        });
+
+        assert!(output.contains("✳️ 5h 10%"), "{output}");
+        assert!(output.contains("✳️ 7d 95%"), "{output}");
+    }
+
+    #[test]
+    fn unknown_cadence_keeps_7d_slot_without_assumed_weekly_pace() {
+        let mut snapshot = snap();
+        snapshot.rate_limits.as_mut().unwrap().windows = vec![claude_statusline::RateWindow {
+            key: "monthly_phoenix".to_string(),
+            label: "Monthly Phoenix".to_string(),
+            used_percent: 50.0,
+            resets_at: now() + chrono::Duration::days(3),
+        }];
+        let config = cfg();
+        let output = render(&RenderInput {
+            snapshot: &snapshot,
+            cross: None,
+            config: &config,
+            now: now(),
+            color: false,
+        });
+        assert!(output.contains("✳️ 7d 50%"), "{output}");
+        assert!(
+            !output.contains('×'),
+            "unknown duration must not invent pace: {output}"
+        );
     }
 
     #[test]

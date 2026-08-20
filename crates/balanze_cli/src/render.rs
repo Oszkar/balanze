@@ -14,7 +14,9 @@ use crate::format::{
     fmt_int, format_codex_age, format_codex_window, micro_usd_to_display_dollars, pretty_duration,
     short_cadence,
 };
-use crate::present::{Bucket, TRAY_ORANGE, bucket_for_fraction, bucket_for_pace_ratio};
+use crate::present::{
+    Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction, bucket_for_pace_ratio,
+};
 
 /// How the `extra_usage` overage block should be presented. Anthropic flips
 /// `is_enabled` to false once usage exceeds the monthly cap, but keeps the real
@@ -324,10 +326,10 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             q.observed_at.format("%Y-%m-%d %H:%M:%S UTC"),
         )?;
         for win in q.windows() {
-            let label = match win.window_duration_minutes {
-                300 => "5h",
-                10080 => "weekly",
-                _ => "window",
+            let label = match win.kind() {
+                codex_local::WindowKind::FiveHour => "5h",
+                codex_local::WindowKind::Weekly => "7d",
+                codex_local::WindowKind::Other => "window",
             };
             let resets_in = win.resets_at.signed_duration_since(snapshot.fetched_at);
             writeln!(
@@ -419,27 +421,28 @@ pub(crate) fn write_compact<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Res
 }
 
 fn compact_anthropic_quota(s: &Snapshot) -> String {
-    match (&s.claude_oauth, &s.claude_oauth_error) {
-        (Some(oauth), _) => {
-            if oauth.cadences.is_empty() {
+    match anthropic_display_windows(s) {
+        Some((source, windows, stale)) => {
+            if windows.is_empty() {
                 "✓ ready (no cadence bars reported)".to_string()
             } else {
-                // First two cadences. `anthropic_oauth` pre-sorts by
-                // cadence_sort_key (five_hour=0, seven_day=1, ...), so the
-                // common case is "5h + 7d". {:.1} (not {:.0}) so a
-                // genuine 0.4% doesn't render as "0%" - indistinguishable
-                // from the no-usage case.
-                let parts: Vec<String> = oauth
-                    .cadences
+                let parts: Vec<String> = windows
                     .iter()
-                    .take(2)
-                    .map(|c| format!("{:.1}% {}", c.utilization_percent, short_cadence(&c.key)))
+                    .map(|w| format!("{:.0}% {}", w.percent, short_cadence(w.key)))
                     .collect();
-                format!("✓ {} (oauth)", parts.join(", "))
+                let marker = if stale { "⚠" } else { "✓" };
+                let stale_tag = if stale { ", stale" } else { "" };
+                format!(
+                    "{marker} {} ({}{stale_tag})",
+                    parts.join(", "),
+                    source.as_str()
+                )
             }
         }
-        (None, Some(_)) => "✗ oauth fetch failed".to_string(),
-        (None, None) => "○ not configured".to_string(),
+        None if s.claude_oauth_error.is_some() || s.claude_statusline_error.is_some() => {
+            "✗ quota fetch failed".to_string()
+        }
+        None => "○ not configured".to_string(),
     }
 }
 
@@ -493,7 +496,12 @@ fn compact_subscription_leverage(s: &Snapshot) -> Option<String> {
 /// Per-window pace line: used % vs elapsed % of the window, plus the ratio.
 /// `None` when no pace data is present.
 fn compact_pace_line(s: &Snapshot) -> Option<String> {
-    if s.pace.is_empty() {
+    if s.pace.is_empty()
+        || !matches!(
+            s.anthropic_quota_source(),
+            Some(state_coordinator::AnthropicQuotaSource::OAuth { .. })
+        )
+    {
         return None;
     }
     let parts: Vec<String> = s
@@ -553,10 +561,8 @@ fn compact_codex_quota(s: &Snapshot) -> String {
             } else {
                 ("✓", "")
             };
-            // {:.1} for the same reason as the anthropic quota cell - a
-            // genuine 0.4% must not collapse to "0%".
             format!(
-                "{marker} {:.1}% {window} (codex {}{stale_tag}{age_tag})",
+                "{marker} {:.0}% {window} (codex {}{stale_tag}{age_tag})",
                 win.used_percent, q.plan_type
             )
         }
@@ -567,10 +573,14 @@ fn compact_codex_quota(s: &Snapshot) -> String {
 
 fn compact_openai_cost(s: &Snapshot) -> String {
     match (&s.openai, &s.openai_error) {
-        (Some(costs), _) => format!(
-            "{} (admin costs)",
-            micro_usd_to_display_dollars(costs.total_micro_usd)
-        ),
+        (Some(costs), _) => {
+            let partial = if costs.truncated { "* partial" } else { "" };
+            format!(
+                "{}{} (admin costs)",
+                micro_usd_to_display_dollars(costs.total_micro_usd),
+                partial
+            )
+        }
         (None, Some(_)) => "✗ admin costs fetch failed".to_string(),
         (None, None) => "○ not configured (run `balanze-cli setup`)".to_string(),
     }
@@ -609,14 +619,13 @@ fn pad_and_color(cell: &str, width: usize, style: Style) -> String {
 /// Worst utilization across the Anthropic OAuth cadence bars, as a fraction.
 /// `None` when no cadence signal (cold start / not configured) -> Neutral.
 fn anthropic_quota_fraction(s: &Snapshot) -> Option<f64> {
-    let oauth = s.claude_oauth.as_ref()?;
-    if oauth.cadences.is_empty() {
+    let (_, windows, _) = anthropic_display_windows(s)?;
+    if windows.is_empty() {
         return None;
     }
-    let worst = oauth
-        .cadences
+    let worst = windows
         .iter()
-        .map(|c| c.utilization_percent as f64)
+        .map(|w| w.percent as f64)
         .fold(0.0_f64, f64::max);
     Some(worst / 100.0)
 }
@@ -629,15 +638,14 @@ fn codex_quota_fraction(s: &Snapshot) -> Option<f64> {
     Some(codex_display_window(q).used_percent / 100.0)
 }
 
-/// True when a Codex quota snapshot is present AND the displayed (worst) window
-/// has already reset (fetched_at > that window's resets_at). This is the same
+/// True when a Codex quota snapshot is present AND any window has reset. This is the same
 /// staleness check `compact_codex_quota` shows as the `⚠` / "stale" marker;
 /// calling it here keeps the bucket decision in lockstep with the displayed
 /// glyph instead of relying on glyph-sniffing at the call site.
 fn codex_window_expired(s: &Snapshot) -> bool {
     s.codex_quota
         .as_ref()
-        .is_some_and(|q| s.fetched_at > codex_display_window(q).resets_at)
+        .is_some_and(|q| q.any_window_expired(s.fetched_at))
 }
 
 /// Colorized sibling of [`write_compact`]. Identical text content and column
@@ -664,8 +672,11 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     // window (fetched_at > the displayed worst window's resets_at, shown with ⚠)
     // is Warn; otherwise color by the row's quota fraction, Neutral when there's
     // no signal.
+    let anth_stale = anthropic_display_windows(snapshot).is_some_and(|(_, _, stale)| stale);
     let anth_bucket = if anth_quota.starts_with('✗') {
         Bucket::Critical
+    } else if anth_stale {
+        Bucket::Warn
     } else {
         match anthropic_quota_fraction(snapshot) {
             Some(f) => bucket_for_fraction(f),
@@ -897,6 +908,64 @@ mod tests {
         String::from_utf8(buf).expect("compact output is UTF-8")
     }
 
+    #[test]
+    fn compact_anthropic_uses_fresh_statusline_and_worst_non_five_hour_window() {
+        let mut snap = fully_populated_snapshot();
+        let now = snap.fetched_at;
+        snap.claude_statusline = Some(claude_statusline::StatuslineFilePayload::new(
+            claude_statusline::StatuslineSnapshot {
+                rate_limits: Some(claude_statusline::RateLimits {
+                    windows: vec![
+                        claude_statusline::RateWindow {
+                            key: "five_hour".to_string(),
+                            label: "5-hour".to_string(),
+                            used_percent: 10.0,
+                            resets_at: now + Duration::hours(2),
+                        },
+                        claude_statusline::RateWindow {
+                            key: "seven_day_opus".to_string(),
+                            label: "Opus weekly".to_string(),
+                            used_percent: 91.0,
+                            resets_at: now + Duration::days(3),
+                        },
+                    ],
+                }),
+                session_cost_micro_usd: None,
+                claude_code_version: None,
+                model_display_name: None,
+                context_used_percent: None,
+            },
+            now,
+        ));
+
+        let cell = compact_anthropic_quota(&snap);
+        assert!(cell.contains("10% 5h"), "{cell}");
+        assert!(cell.contains("91% 7d"), "{cell}");
+        assert!(cell.contains("(statusline)"), "{cell}");
+        assert!(!cell.contains("42%"), "OAuth must not be folded in: {cell}");
+
+        snap.claude_statusline_error = Some("reader failed".to_string());
+        let stale_cell = compact_anthropic_quota(&snap);
+        assert!(stale_cell.starts_with('⚠'), "{stale_cell}");
+        assert!(stale_cell.contains("statusline, stale"), "{stale_cell}");
+
+        let output = render_compact(&snap);
+        assert!(
+            !output.contains("Pace:"),
+            "OAuth pace must not be paired with selected statusline quota:\n{output}"
+        );
+
+        snap.claude_statusline = None;
+        snap.claude_statusline_error = None;
+        snap.claude_oauth_error = Some("refresh failed".to_string());
+        let oauth_stale_cell = compact_anthropic_quota(&snap);
+        assert!(oauth_stale_cell.starts_with('⚠'), "{oauth_stale_cell}");
+        assert!(
+            oauth_stale_cell.contains("oauth, stale"),
+            "{oauth_stale_cell}"
+        );
+    }
+
     /// Render the compact view through an AutoStream forced to a given choice,
     /// returning the raw bytes (so ANSI presence/absence is observable). Mirrors
     /// the sinks.rs TTY test pattern: a Vec<u8> sink wrapped by anstream, with the
@@ -1114,11 +1183,11 @@ mod tests {
         }
         let cell = compact_codex_quota(&snap);
         assert!(
-            cell.contains("82.0%"),
+            cell.contains("82%"),
             "compact cell must show the worst (weekly) window's %:\n{cell}"
         );
         assert!(
-            !cell.contains("4.0%"),
+            !cell.contains("4%"),
             "compact cell must NOT show the lower primary-slot (5h) %:\n{cell}"
         );
         assert!(
@@ -1262,6 +1331,14 @@ mod tests {
             out.contains("(-)"),
             "ratio: None must render as (-):\n{out}"
         );
+    }
+
+    #[test]
+    fn compact_openai_cost_marks_partial_total() {
+        let mut snap = fully_populated_snapshot();
+        snap.openai.as_mut().unwrap().truncated = true;
+        let cell = compact_openai_cost(&snap);
+        assert!(cell.contains("* partial"), "{cell}");
     }
 
     #[test]

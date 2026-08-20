@@ -26,6 +26,11 @@ pub const DEFAULT_BURN_WINDOW: Duration = Duration::minutes(30);
 /// Below this we'd be amplifying noise from one or two sparse calls.
 pub const DEFAULT_MIN_BURN_EVENTS: usize = 3;
 
+/// Suppress pace ratios until at least 4% of a quota window has elapsed.
+/// Ratios before this point amplify tiny usage into misleading four-digit
+/// multiples (for example, 1% used seconds into a seven-day window).
+pub const MIN_PACE_ELAPSED_FRACTION: f64 = 0.04;
+
 /// Per-model row in a [`WindowSummary::by_model`] breakdown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ByModel {
@@ -65,15 +70,15 @@ pub struct Pace {
     /// Fraction of the window's wall-clock elapsed, clamped to `[0.0, 1.0]`.
     pub elapsed_fraction: f64,
     /// `used_fraction / elapsed_fraction` - > 1.0 means burning faster than a
-    /// linear pace, < 1.0 means comfortably behind. `None` right after a reset
-    /// (no time elapsed yet), where no honest verdict is possible.
+    /// linear pace, < 1.0 means comfortably behind. `None` during the first 4%
+    /// of the window, where tiny elapsed time makes the ratio misleading.
     pub ratio: Option<f64>,
 }
 
 /// Compute the current pace of a quota window from its server-reported
 /// utilization and reset time. Pure: a function of `(used_percent, resets_at,
 /// window_len, now)` only - no warm-up state, no history, never lies after a
-/// reset (it just reports `ratio: None` until the clock moves).
+/// reset (it reports `ratio: None` during the first 4% of the window).
 pub fn pace(
     used_percent: f64,
     resets_at: DateTime<Utc>,
@@ -89,7 +94,7 @@ pub fn pace(
     } else {
         0.0
     };
-    let ratio = if elapsed_fraction > 0.0 {
+    let ratio = if elapsed_fraction >= MIN_PACE_ELAPSED_FRACTION {
         Some(used_fraction / elapsed_fraction)
     } else {
         None
@@ -98,6 +103,29 @@ pub fn pace(
         used_fraction,
         elapsed_fraction,
         ratio,
+    }
+}
+
+/// Shared interpretation of a pace ratio. Consumers may render these bands
+/// differently, but the meaning is identical across CLI and statusline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaceVerdict {
+    TooEarly,
+    Under,
+    OnPace,
+    Warn,
+    Critical,
+}
+
+impl PaceVerdict {
+    pub fn from_ratio(ratio: Option<f64>) -> Self {
+        match ratio {
+            None => Self::TooEarly,
+            Some(r) if r >= 1.5 => Self::Critical,
+            Some(r) if r >= 1.12 => Self::Warn,
+            Some(r) if r <= 0.85 => Self::Under,
+            Some(_) => Self::OnPace,
+        }
     }
 }
 
@@ -740,6 +768,28 @@ mod tests {
         let p = pace(25.0, resets_at, SEVEN_DAY_WINDOW, now);
         assert!((p.elapsed_fraction - 0.5).abs() < 1e-9);
         assert!((p.ratio.unwrap() - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pace_withholds_ratio_during_first_four_percent_of_window() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 2, 12, 0, 0).unwrap();
+        let resets_at = now + DEFAULT_WINDOW - Duration::minutes(11);
+        let p = pace(1.0, resets_at, DEFAULT_WINDOW, now);
+
+        assert!(p.elapsed_fraction > 0.0);
+        assert!(p.elapsed_fraction < 0.04);
+        assert_eq!(p.ratio, None);
+    }
+
+    #[test]
+    fn pace_verdict_uses_one_shared_scale() {
+        assert_eq!(PaceVerdict::from_ratio(None), PaceVerdict::TooEarly);
+        assert_eq!(PaceVerdict::from_ratio(Some(0.85)), PaceVerdict::Under);
+        assert_eq!(PaceVerdict::from_ratio(Some(0.86)), PaceVerdict::OnPace);
+        assert_eq!(PaceVerdict::from_ratio(Some(1.11)), PaceVerdict::OnPace);
+        assert_eq!(PaceVerdict::from_ratio(Some(1.12)), PaceVerdict::Warn);
+        assert_eq!(PaceVerdict::from_ratio(Some(1.49)), PaceVerdict::Warn);
+        assert_eq!(PaceVerdict::from_ratio(Some(1.5)), PaceVerdict::Critical);
     }
 
     // --- severity ---

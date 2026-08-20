@@ -18,6 +18,7 @@ pub struct CodexWindows {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OpenAiCell {
     pub total_micro_usd: Option<i64>,
+    pub partial: bool,
     pub stale: bool,
 }
 
@@ -50,6 +51,7 @@ pub async fn self_compose<S: CrossSources>(
         codex_five_hour: codex.five_hour,
         codex_weekly: codex.weekly,
         openai_cost_micro_usd: openai.total_micro_usd,
+        openai_partial: openai.partial,
         codex_stale: codex.stale,
         openai_stale: openai.stale,
     }
@@ -87,6 +89,7 @@ mod tests {
         let source = Fake {
             openai: OpenAiCell {
                 total_micro_usd: Some(4_200_000),
+                partial: true,
                 stale: false,
             },
             codex: CodexWindows::default(),
@@ -94,6 +97,7 @@ mod tests {
         };
         let composed = self_compose(&source, t0(), true).await;
         assert_eq!(composed.openai_cost_micro_usd, Some(4_200_000));
+        assert!(composed.openai_partial);
         assert!(!composed.openai_stale);
         assert_eq!(source.calls.get(), 1);
     }
@@ -103,6 +107,7 @@ mod tests {
         let source = Fake {
             openai: OpenAiCell {
                 total_micro_usd: Some(999),
+                partial: false,
                 stale: true,
             },
             codex: CodexWindows::default(),
@@ -118,6 +123,7 @@ mod tests {
         let source = Fake {
             openai: OpenAiCell {
                 total_micro_usd: None,
+                partial: false,
                 stale: true,
             },
             codex: CodexWindows::default(),
@@ -133,6 +139,7 @@ mod tests {
         let source = Fake {
             openai: OpenAiCell {
                 total_micro_usd: Some(4_200_000),
+                partial: false,
                 stale: false,
             },
             codex: CodexWindows {

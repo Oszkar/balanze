@@ -25,6 +25,11 @@ pub enum WindowKind {
     Other,
 }
 
+/// Provider durations are minute counts and can drift slightly when an
+/// upstream client rounds a boundary. Keep known windows stable within five
+/// minutes while leaving genuinely new cadences classified as `Other`.
+pub const WINDOW_DURATION_TOLERANCE_MINUTES: u64 = 5;
+
 /// Per-session token/context accounting from the `token_count` event's `info`
 /// block. INTERNAL ONLY: `#[serde(skip)]` on the snapshot keeps these off the
 /// IPC wire. Parsed and tested now; surfacing them in any UI is deferred
@@ -77,10 +82,13 @@ impl RateLimitWindow {
 
     /// Classify this window by its duration. See [`WindowKind`].
     pub fn kind(&self) -> WindowKind {
-        match self.window_duration_minutes {
-            300 => WindowKind::FiveHour,
-            10080 => WindowKind::Weekly,
-            _ => WindowKind::Other,
+        if self.window_duration_minutes.abs_diff(300) <= WINDOW_DURATION_TOLERANCE_MINUTES {
+            WindowKind::FiveHour
+        } else if self.window_duration_minutes.abs_diff(10_080) <= WINDOW_DURATION_TOLERANCE_MINUTES
+        {
+            WindowKind::Weekly
+        } else {
+            WindowKind::Other
         }
     }
 }
@@ -98,6 +106,14 @@ impl CodexQuotaSnapshot {
     /// The weekly (7-day) window, if present in either slot.
     pub fn weekly(&self) -> Option<&RateLimitWindow> {
         self.windows().find(|w| w.kind() == WindowKind::Weekly)
+    }
+    /// Weekly presentation slot: the worst non-5h window. This preserves the
+    /// named weekly window while ensuring a higher unknown cadence cannot be
+    /// silently hidden by it.
+    pub fn weekly_or_other(&self) -> Option<&RateLimitWindow> {
+        self.windows()
+            .filter(|w| w.kind() != WindowKind::FiveHour)
+            .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
     }
     /// The highest-utilization window ("how close to a limit am I"). Always
     /// `Some` because `primary` is always present.
@@ -248,6 +264,28 @@ mod tests {
         assert!(g.five_hour().is_none());
         assert_eq!(g.weekly().unwrap().used_percent, 3.0);
         assert_eq!(g.worst_window().unwrap().used_percent, 3.0);
+    }
+
+    #[test]
+    fn window_kind_tolerates_small_duration_rounding_drift() {
+        assert_eq!(win(1.0, 295).kind(), WindowKind::FiveHour);
+        assert_eq!(win(1.0, 305).kind(), WindowKind::FiveHour);
+        assert_eq!(win(1.0, 10_075).kind(), WindowKind::Weekly);
+        assert_eq!(win(1.0, 10_085).kind(), WindowKind::Weekly);
+        assert_eq!(win(1.0, 306).kind(), WindowKind::Other);
+        assert_eq!(win(1.0, 10_074).kind(), WindowKind::Other);
+    }
+
+    #[test]
+    fn weekly_slot_falls_back_to_worst_other_window() {
+        let s = snap(win(1.0, 300), Some(win(77.0, 1440)));
+        assert_eq!(s.weekly_or_other().unwrap().used_percent, 77.0);
+    }
+
+    #[test]
+    fn weekly_slot_uses_worse_other_window_when_weekly_is_present() {
+        let s = snap(win(20.0, 10080), Some(win(95.0, 1440)));
+        assert_eq!(s.weekly_or_other().unwrap().used_percent, 95.0);
     }
 
     #[test]

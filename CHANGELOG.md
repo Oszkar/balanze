@@ -6,8 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Changed
+
+- **CLI JSON output advances to schema version 2.** The new nullable `claude_oauth_unavailable` field distinguishes "Claude Code not installed" from cold start. Consumers that reject unknown schema versions must add version 2 before upgrading; all version 1 fields keep their existing names and types.
+
 ### Fixed
 
+- **Quota presentation now agrees across every shipped surface.** The tray, popover, compact CLI, TUI, and statusline share Anthropic source precedence, preserve model-specific weekly limits, tolerate small Codex duration drift, keep expired Codex values visibly stale, and use the same rounded severity and pace rules.
+- **Partial OpenAI totals are visibly marked everywhere.** Compact and detailed CLI output, the TUI, statusline, and both popover layouts no longer present a truncated Costs response as a complete billed total.
 - **OpenAI Costs requests now share one machine-wide gate.** `status`, `export`, the watcher, setup/doctor/Tauri validation, and statusline self-compose can no longer bypass one another and multiply requests. A granted attempt reserves its key and API-base identity for exactly 300 seconds on success, failure, cancellation, or crash, and performs no in-call retry.
 - **OpenAI cache handoff is safe across old and new binaries.** The provider client migrates the prior statusline-only entry into a bounded 8-identity store, keeps a derived legacy headline projection for rolling upgrades, never persists keys or API base URLs, and serves stale headlines only to statusline while full-data callers defer.
 - **Concurrent OpenAI refreshes no longer hold coordination across HTTP.** One short store-wide lease protects reservation and completion transactions, and token-checked completion prevents a late request from overwriting its successor.

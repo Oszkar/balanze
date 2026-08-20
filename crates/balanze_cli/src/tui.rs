@@ -36,7 +36,7 @@ use state_coordinator::{Sink, Snapshot, Source, StateCoordinatorHandle, StateMsg
 use tokio::sync::watch;
 
 use crate::format::{format_codex_window, micro_usd_to_display_dollars};
-use crate::present::{Bucket, TRAY_ORANGE, bucket_for_fraction};
+use crate::present::{Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction};
 use crate::render::{OverageState, classify_overage};
 
 // ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ fn bucket_color(b: Bucket) -> Color {
 }
 
 /// Render one labeled gauge row: a bar colored by the utilization fraction
-/// (0.0..=1.0+) with `<label> NN.N%` centered on it. `percent` is
+/// (0.0..=1.0+) with `<label> NN%` centered on it. `percent` is
 /// Anthropic-style 0..100. The label and percent share the gauge's own centered
 /// label (NOT a Block title) because each gauge occupies a single 1-row area - a
 /// titled Block would eat that row and leave no room for the bar.
@@ -188,7 +188,7 @@ fn quota_gauge(label: &str, percent: f32) -> Gauge<'static> {
     Gauge::default()
         .gauge_style(Style::default().fg(bucket_color(bucket)))
         .ratio(frac)
-        .label(format!("{label} {percent:.1}%"))
+        .label(format!("{label} {percent:.0}%"))
 }
 
 /// Short cadence label (`5h` / `7d`) from a raw cadence key. Mirrors render.rs
@@ -286,46 +286,43 @@ fn draw_anthropic(frame: &mut Frame, area: Rect, s: &Snapshot) {
         ])
         .split(inner);
 
-    match &s.claude_oauth {
-        Some(oauth) if !oauth.cadences.is_empty() => {
-            // First two cadences (pre-sorted 5h, 7d by anthropic_oauth).
-            for (i, c) in oauth.cadences.iter().take(2).enumerate() {
-                let label = short_cadence_label(&c.key);
-                frame.render_widget(quota_gauge(label, c.utilization_percent), rows[i]);
+    match anthropic_display_windows(s) {
+        Some((_, windows, _)) if !windows.is_empty() => {
+            for (i, w) in windows.iter().enumerate() {
+                frame.render_widget(quota_gauge(short_cadence_label(w.key), w.percent), rows[i]);
             }
-            // Extra-usage overage (real billed). Mirrors render::classify_overage:
-            // an over-cap overage (is_enabled=false but used >= limit) is real
-            // money, not "not enabled".
-            let eu_line = match oauth.extra_usage.as_ref() {
-                Some(eu) => match classify_overage(eu) {
-                    OverageState::Active => format!(
-                        "extra usage {}/{} (real billed)",
-                        micro_usd_to_display_dollars(eu.used_credits_micro_usd),
-                        micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
-                    ),
-                    OverageState::OverLimit => format!(
-                        "extra usage {}/{} over limit (real billed)",
-                        micro_usd_to_display_dollars(eu.used_credits_micro_usd),
-                        micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
-                    ),
-                    OverageState::NotConfigured => "extra usage: not enabled".to_string(),
-                },
-                None => "extra usage: not enabled".to_string(),
-            };
-            frame.render_widget(Paragraph::new(eu_line), rows[2]);
         }
         Some(_) => {
             frame.render_widget(Paragraph::new("ready (no cadence bars)"), rows[0]);
         }
         None => {
-            let msg = if s.claude_oauth_error.is_some() {
-                "oauth fetch failed"
+            let msg = if s.claude_oauth_error.is_some() || s.claude_statusline_error.is_some() {
+                "quota fetch failed"
             } else {
                 "not configured"
             };
             frame.render_widget(Paragraph::new(msg), rows[0]);
         }
     }
+    // Extra-usage billing always belongs to OAuth, independent of which quota
+    // source won the fresh-statusline-first selector.
+    let eu_line = match s.claude_oauth.as_ref().and_then(|o| o.extra_usage.as_ref()) {
+        Some(eu) => match classify_overage(eu) {
+            OverageState::Active => format!(
+                "extra usage {}/{} (real billed)",
+                micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
+            ),
+            OverageState::OverLimit => format!(
+                "extra usage {}/{} over limit (real billed)",
+                micro_usd_to_display_dollars(eu.used_credits_micro_usd),
+                micro_usd_to_display_dollars(eu.monthly_limit_micro_usd),
+            ),
+            OverageState::NotConfigured => "extra usage: not enabled".to_string(),
+        },
+        None => "extra usage: not enabled".to_string(),
+    };
+    frame.render_widget(Paragraph::new(eu_line), rows[2]);
 }
 
 fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
@@ -356,8 +353,9 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
 
     let admin_line = match &s.openai {
         Some(costs) => format!(
-            "admin costs {}",
-            micro_usd_to_display_dollars(costs.total_micro_usd)
+            "admin costs {}{}",
+            micro_usd_to_display_dollars(costs.total_micro_usd),
+            if costs.truncated { "* partial" } else { "" }
         ),
         None if s.openai_error.is_some() => "admin costs: fetch failed".to_string(),
         None => "admin costs: not configured".to_string(),
@@ -463,7 +461,12 @@ fn draw_codex_windows(
 }
 
 fn draw_pace(frame: &mut Frame, area: Rect, s: &Snapshot) {
-    if s.pace.is_empty() {
+    if s.pace.is_empty()
+        || !matches!(
+            s.anthropic_quota_source(),
+            Some(state_coordinator::AnthropicQuotaSource::OAuth { .. })
+        )
+    {
         frame.render_widget(Paragraph::new("Pace: -"), area);
         return;
     }
@@ -909,6 +912,49 @@ mod tests {
     }
 
     #[test]
+    fn tui_marks_partial_openai_total() {
+        let mut snap = populated_snapshot();
+        snap.openai.as_mut().unwrap().truncated = true;
+        let terminal = render_to_terminal(&snap);
+        let text = buffer_text(&terminal);
+        assert!(text.contains("* partial"), "{text}");
+    }
+
+    #[test]
+    fn tui_does_not_pair_oauth_pace_with_selected_statusline_quota() {
+        let mut snap = populated_snapshot();
+        let now = snap.fetched_at;
+        snap.claude_statusline = Some(claude_statusline::StatuslineFilePayload::new(
+            claude_statusline::StatuslineSnapshot {
+                rate_limits: Some(claude_statusline::RateLimits {
+                    windows: vec![claude_statusline::RateWindow {
+                        key: "five_hour".to_string(),
+                        label: "5-hour".to_string(),
+                        used_percent: 12.0,
+                        resets_at: now + chrono::Duration::hours(2),
+                    }],
+                }),
+                session_cost_micro_usd: None,
+                claude_code_version: None,
+                model_display_name: None,
+                context_used_percent: None,
+            },
+            now,
+        ));
+        snap.pace = vec![state_coordinator::WindowPace {
+            key: "five_hour".to_string(),
+            used_fraction: 0.9,
+            elapsed_fraction: 0.1,
+            ratio: Some(9.0),
+        }];
+
+        let terminal = render_to_terminal(&snap);
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Pace: -"), "{text}");
+        assert!(!text.contains("9.0x"), "{text}");
+    }
+
+    #[test]
     fn tui_render_shows_both_codex_windows_when_present() {
         // plus/pro layout: primary=5h (low), secondary=weekly (high). The TUI
         // must render BOTH windows as separate labeled gauges - mirroring the
@@ -945,8 +991,8 @@ mod tests {
             text.contains("Codex 7d"),
             "missing labeled Codex weekly gauge in:\n{text}"
         );
-        assert!(text.contains("12.0"), "missing 5h percent in:\n{text}");
-        assert!(text.contains("76.0"), "missing weekly percent in:\n{text}");
+        assert!(text.contains("12%"), "missing 5h percent in:\n{text}");
+        assert!(text.contains("76%"), "missing weekly percent in:\n{text}");
     }
 
     #[test]
@@ -1001,7 +1047,7 @@ mod tests {
             "5h window still shown in:\n{text}"
         );
         assert!(
-            text.contains("91.0"),
+            text.contains("91%"),
             "unclassified worst window must not be dropped in:\n{text}"
         );
         assert!(
@@ -1043,7 +1089,7 @@ mod tests {
             "the lower unclassified window must still fill the free row in:\n{text}"
         );
         assert!(
-            text.contains("30.0"),
+            text.contains("30%"),
             "the lower unclassified window's utilization must not be dropped in:\n{text}"
         );
     }

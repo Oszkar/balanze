@@ -4,7 +4,7 @@
 //! deduped by `(ColorBucket, title, tooltip)` per AGENTS.md §3.1.
 
 use serde::Serialize;
-use state_coordinator::{STATUSLINE_FRESHNESS_SECS, Sink, Snapshot, Source};
+use state_coordinator::{AnthropicQuotaSource, Sink, Snapshot, Source, WindowKind};
 use tauri::{AppHandle, Emitter};
 
 use crate::tray_icon;
@@ -80,44 +80,22 @@ fn degraded_tooltip(source: Source) -> String {
     format!("Balanze - {} unavailable", degraded_source_label(source))
 }
 
-/// The statusLine payload feeds the tray only while fresh. Mirrors the
-/// coordinator's ingest guard and the popover's render-time check
-/// (`STATUSLINE_FRESHNESS_MS` in `quota.ts`): a frozen file (another tool owns
-/// the single `statusLine` slot, so Balanze's writer never refreshes it) must
-/// not drive the tray heat as if live. Age is `fetched_at - captured_at` -
-/// `fetched_at` is re-stamped on every coordinator emit, so this is a pure,
-/// wall-clock-free measure consistent with both peer checks. This is the tray's
-/// own guard, independent of the coordinator's error slot (belt-and-suspenders):
-/// even if the ingest marker regressed, a stale window still can't heat the tray.
-fn statusline_fresh(s: &Snapshot) -> bool {
-    s.claude_statusline.as_ref().is_some_and(|sl| {
-        // `.num_seconds()` on the TimeDelta keeps this free of a direct `chrono`
-        // dependency (chrono is dev-only in src-tauri); the method resolves via
-        // the re-exported `DateTime<Utc>` fields on `Snapshot`. Fresh iff the age
-        // is within `[0, threshold]` - a negative age (future-dated captured_at,
-        // clock skew) is not trusted, matching the coordinator/popover guards.
-        let age_secs = s
-            .fetched_at
-            .signed_duration_since(sl.captured_at)
-            .num_seconds();
-        (0..=STATUSLINE_FRESHNESS_SECS).contains(&age_secs)
-    })
-}
-
 /// The tray's canonical windows, per provider: Claude 5h, Claude weekly (7d =
 /// the worst of every non-5h cadence), Codex 5h, and Codex weekly (the worst of
 /// every non-5h Codex window). The ring color, the menu-bar title, and the
 /// tooltip ALL derive from this one view, so a red ring
 /// always corresponds to a number the user can see. (The old bug: the ring came
 /// from the worst window across everything, but the title only ever printed the
-/// 5h - a red icon could sit next to "C 20%".) Folds OAuth cadences and fresh
-/// statusline windows; a stale statusline is excluded (see `statusline_fresh`).
+/// 5h - a red icon could sit next to "C 20%".) Folds the selected source's
+/// windows. Source precedence comes from
+/// `Snapshot::anthropic_quota_source` so tray, CLI, and TUI cannot disagree.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct TrayView {
     claude_5h: Option<f32>,
     claude_7d: Option<f32>,
     codex_5h: Option<f32>,
     codex_weekly: Option<f32>,
+    codex_expired: bool,
 }
 
 fn fold_max(slot: &mut Option<f32>, v: f32) {
@@ -127,42 +105,36 @@ fn fold_max(slot: &mut Option<f32>, v: f32) {
 impl TrayView {
     fn from_snapshot(s: &Snapshot) -> Self {
         let mut v = TrayView::default();
-        if let Some(o) = &s.claude_oauth {
-            for c in &o.cadences {
-                if c.key == "five_hour" {
-                    fold_max(&mut v.claude_5h, c.utilization_percent);
-                } else {
-                    // Every non-5h cadence is a weekly variant; folding them all
-                    // into 7d guarantees no window can hide from the ring/title.
-                    fold_max(&mut v.claude_7d, c.utilization_percent);
+        match s.anthropic_quota_source() {
+            Some(AnthropicQuotaSource::OAuth { snapshot: o, .. }) => {
+                for c in &o.cadences {
+                    if c.key == "five_hour" {
+                        fold_max(&mut v.claude_5h, c.utilization_percent);
+                    } else {
+                        fold_max(&mut v.claude_7d, c.utilization_percent);
+                    }
                 }
             }
-        }
-        if statusline_fresh(s)
-            && let Some(rl) = s
-                .claude_statusline
-                .as_ref()
-                .and_then(|sl| sl.payload.rate_limits.as_ref())
-        {
-            for w in &rl.windows {
-                if w.key == "five_hour" {
-                    fold_max(&mut v.claude_5h, w.used_percent);
-                } else {
-                    fold_max(&mut v.claude_7d, w.used_percent);
+            Some(AnthropicQuotaSource::Statusline {
+                rate_limits: rl, ..
+            }) => {
+                for w in &rl.windows {
+                    if w.key == "five_hour" {
+                        fold_max(&mut v.claude_5h, w.used_percent);
+                    } else {
+                        fold_max(&mut v.claude_7d, w.used_percent);
+                    }
                 }
             }
+            None => {}
         }
         if let Some(q) = &s.codex_quota {
-            // An expired window is excluded for the same reason a stale
-            // statusline is (see `statusline_fresh`): it is not a live cap. Its
-            // used_percent describes an elapsed window, and unlike a poll-driven
-            // source this never self-corrects - the rollout walker keeps
-            // returning the same old file, so an expired window would otherwise
-            // hold the ring orange forever while the real quota sits at zero.
-            // The tray folds only live signals, so a hot ring always means a cap
-            // the user is actually near.
-            for w in q.windows().filter(|w| !w.expired(s.fetched_at)) {
-                if w.window_duration_minutes == 300 {
+            // Keep the same last-known values every other surface shows, but
+            // retain one stale bit so the tray uses its warning treatment rather
+            // than presenting an expired rollout as confidently live.
+            v.codex_expired = q.any_window_expired(s.fetched_at);
+            for w in q.windows() {
+                if w.kind() == WindowKind::FiveHour {
                     fold_max(&mut v.codex_5h, w.used_percent as f32);
                 } else {
                     // Weekly (10080) or any other duration folds into the weekly
@@ -309,10 +281,11 @@ impl TauriSink {
 
     fn paint_target(&self, s: &Snapshot, degraded: bool) -> (ColorBucket, String, String) {
         let view = TrayView::from_snapshot(s);
+        let stale = degraded || view.codex_expired;
         (
-            bucket_for_view(&view, degraded),
+            bucket_for_view(&view, stale),
             tray_title(&view),
-            tray_tooltip(&view, degraded),
+            tray_tooltip(&view, stale),
         )
     }
 }
@@ -451,7 +424,8 @@ mod tests {
     #[test]
     fn statusline_window_beyond_named_ones_drives_worst_utilization() {
         use chrono::Utc;
-        let mut s = Snapshot::empty(Utc::now());
+        let now = Utc::now();
+        let mut s = Snapshot::empty(now);
         s.claude_statusline = Some(claude_statusline::StatuslineFilePayload::new(
             claude_statusline::StatuslineSnapshot {
                 rate_limits: Some(claude_statusline::RateLimits {
@@ -475,10 +449,37 @@ mod tests {
                 model_display_name: None,
                 context_used_percent: None,
             },
-            Utc::now(),
+            now,
         ));
         assert_eq!(worst_utilization(&s), 95.0);
         assert!(has_quota_data(&s));
+    }
+
+    #[test]
+    fn fresh_statusline_replaces_oauth_instead_of_folding_both() {
+        use chrono::Utc;
+        let now = Utc::now();
+        let mut s = Snapshot::empty(now);
+        s.claude_oauth = Some(oauth_with_util(95.0));
+        s.claude_statusline = Some(claude_statusline::StatuslineFilePayload::new(
+            claude_statusline::StatuslineSnapshot {
+                rate_limits: Some(claude_statusline::RateLimits {
+                    windows: vec![claude_statusline::RateWindow {
+                        key: "five_hour".to_string(),
+                        label: "5-hour".to_string(),
+                        used_percent: 10.0,
+                        resets_at: now,
+                    }],
+                }),
+                session_cost_micro_usd: None,
+                claude_code_version: None,
+                model_display_name: None,
+                context_used_percent: None,
+            },
+            now,
+        ));
+
+        assert_eq!(worst_utilization(&s), 10.0);
     }
 
     /// A stale statusLine payload (frozen file - another tool owns the slot)
@@ -663,13 +664,11 @@ mod tests {
         }
     }
 
-    /// An expired Codex window must not heat the tray. The rollout walker
-    /// returns the newest-mtime session file regardless of age, so a user who
-    /// last ran Codex days ago parses a well-formed snapshot whose 5h window
-    /// reset long ago - and polling never corrects it. Before this check the
-    /// ring sat orange at 85% forever while the real quota was zero.
+    /// Expired Codex values stay visible, matching every detailed surface, but
+    /// the tray carries the rollout-level stale bit and paints Warning rather
+    /// than presenting the old percentage as confidently live.
     #[test]
-    fn expired_codex_window_does_not_heat_the_tray() {
+    fn expired_codex_window_stays_visible_with_stale_warning() {
         use chrono::{Duration, Utc};
         let now = Utc::now();
         let mut s = Snapshot::empty(now);
@@ -678,21 +677,21 @@ mod tests {
         s.codex_quota = Some(q);
 
         let view = TrayView::from_snapshot(&s);
-        assert_eq!(view.codex_5h, None, "an elapsed window is not a live cap");
+        assert_eq!(view.codex_5h, Some(85.0));
+        assert_eq!(view.codex_weekly, Some(4.0));
+        assert!(view.codex_expired);
+        assert_eq!(tray_title(&view), "Codex 85%");
         assert_eq!(
-            view.codex_weekly,
-            Some(4.0),
-            "the live weekly window survives"
+            bucket_for_view(&view, view.codex_expired),
+            ColorBucket::Warn
         );
-        assert_eq!(tray_title(&view), "Codex 4%");
-        assert_eq!(bucket_for_view(&view, false), ColorBucket::Green);
+        assert!(tray_tooltip(&view, view.codex_expired).contains("stale"));
     }
 
-    /// With every window expired the Codex signal is gone entirely rather than
-    /// frozen at its last value - and with no other provider present that means
-    /// Neutral, not a stale-but-green paint.
+    /// Even when every window expired, last-known numbers remain available and
+    /// are explicitly stale rather than silently disappearing.
     #[test]
-    fn fully_expired_codex_leaves_the_tray_neutral() {
+    fn fully_expired_codex_remains_visible_and_warns() {
         use chrono::{Duration, Utc};
         let now = Utc::now();
         let mut s = Snapshot::empty(now);
@@ -702,8 +701,12 @@ mod tests {
         s.codex_quota = Some(q);
 
         let view = TrayView::from_snapshot(&s);
-        assert!(!view.has_data(), "no live window remains");
-        assert_eq!(bucket_for_view(&view, false), ColorBucket::Neutral);
+        assert!(view.has_data(), "last-known values remain visible");
+        assert_eq!(tray_title(&view), "Codex 92%");
+        assert_eq!(
+            bucket_for_view(&view, view.codex_expired),
+            ColorBucket::Warn
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { quotaTone, anthropicQuota, codexElapsedFraction, codexWindowExpired, codexQuota, classifyOverage, overageCell } from './quota';
+import { quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, classifyOverage, openAiCostCell, overageCell } from './quota';
 import type { Snapshot, ExtraUsage } from '../types/snapshot';
 
 const base: Snapshot = {
@@ -43,6 +43,39 @@ describe('quota', () => {
     expect(q.source).toBe('statusline');
     expect(q.headline.pct).toBe(62);
     expect(q.secondary?.pct).toBe(48);
+  });
+  it('marks retained statusline quota stale after a reader error', () => {
+    const s: Snapshot = { ...base,
+      claude_statusline_error: 'reader failed',
+      claude_statusline: { schema_version: 2, captured_at: '2026-06-03T12:00:00Z',
+        payload: { rate_limits: { windows: [
+          { key: 'five_hour', label: '5-hour', used_percent: 62, resets_at: '2026-06-03T14:41:00Z' },
+        ] }, session_cost_micro_usd: null, claude_code_version: null } },
+    };
+    expect(anthropicSourceView(s)).toMatchObject({ source: 'statusline', stale: true });
+  });
+  it('marks retained oauth quota stale after a refresh error', () => {
+    const s: Snapshot = { ...base,
+      claude_oauth_error: 'refresh failed',
+      claude_oauth: { cadences: [
+        { key: 'five_hour', display_label: '5h', utilization_percent: 62, resets_at: '2026-06-03T14:41:00Z' },
+      ], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: '2026-06-03T12:00:00Z' },
+    };
+    expect(anthropicSourceView(s)).toMatchObject({ source: 'oauth', stale: true });
+  });
+  it('folds every non-5h cadence into the visible 7d slot and tones by the worst', () => {
+    const s: Snapshot = { ...base,
+      claude_oauth: { cadences: [
+        { key: 'five_hour', display_label: '5h', utilization_percent: 10, resets_at: '2026-06-03T14:41:00Z' },
+        { key: 'seven_day', display_label: '7d', utilization_percent: 20, resets_at: '2026-06-06T16:00:00Z' },
+        { key: 'seven_day_opus', display_label: 'Opus 7d', utilization_percent: 95, resets_at: '2026-06-06T16:00:00Z' },
+      ], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: '2026-06-03T12:00:00Z' },
+    };
+    const q = anthropicQuota(s)!;
+    expect(q.headline.pct).toBe(10);
+    expect(q.secondary?.pct).toBe(95);
+    expect(q.secondary?.key).toBe('seven_day_opus');
+    expect(q.tone).toBe('bad');
   });
   it('falls back to oauth when the statusline payload is stale', () => {
     // Same data as above, but captured_at is >15min before fetched_at (a frozen
@@ -186,8 +219,48 @@ describe('quota', () => {
     expect(q.secondary).toEqual({ pct: 10, label: '5h' });
   });
 
+  it('Codex duration selectors tolerate five-minute drift and re-home an unknown window', () => {
+    const tolerant = codexSnap(
+      { used_percent: 10, window_duration_minutes: 305, resets_at: '2026-07-08T12:00:00Z' },
+      { used_percent: 20, window_duration_minutes: 10075, resets_at: '2026-07-14T12:00:00Z' },
+    ).codex_quota!;
+    expect(codexWindowsByKind(tolerant).five?.used_percent).toBe(10);
+    expect(codexWindowsByKind(tolerant).weekly?.used_percent).toBe(20);
+    expect(codexWindowLabel(tolerant.primary)).toBe('5h');
+
+    const changed = codexSnap(
+      { used_percent: 10, window_duration_minutes: 300, resets_at: '2026-07-08T12:00:00Z' },
+      { used_percent: 77, window_duration_minutes: 1440, resets_at: '2026-07-09T12:00:00Z' },
+    ).codex_quota!;
+    expect(codexWindowsByKind(changed).weekly?.used_percent).toBe(77);
+    expect(codexWindowLabel(codexWindowsByKind(changed).weekly!)).toBe('window');
+  });
+
+  it('Codex weekly slot selects a worse unknown window over an exact weekly window', () => {
+    const q = codexSnap(
+      { used_percent: 20, window_duration_minutes: 10080, resets_at: '2026-07-14T12:00:00Z' },
+      { used_percent: 95, window_duration_minutes: 1440, resets_at: '2026-07-09T12:00:00Z' },
+    ).codex_quota!;
+    expect(codexWindowsByKind(q).weekly?.used_percent).toBe(95);
+  });
+
   it('codexQuota: null snapshot -> null', () => {
     expect(codexQuota(base)).toBeNull();
+  });
+});
+
+describe('OpenAI partial totals', () => {
+  it('marks truncated totals instead of presenting them as complete', () => {
+    const partial: Snapshot = { ...base, openai: {
+      total_micro_usd: 12_340_000,
+      start_time: '2026-06-01T00:00:00Z',
+      end_time: '2026-07-01T00:00:00Z',
+      by_line_item: [],
+      truncated: true,
+      fetched_at: '2026-06-03T12:00:00Z',
+    } };
+    expect(openAiCostCell(partial)).toMatchObject({ amount: '$12.34*' });
+    expect(openAiCostCell(partial)?.note).toContain('partial');
   });
 });
 

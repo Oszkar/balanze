@@ -3,6 +3,7 @@
 //! crosses to f64 here at the display boundary (AGENTS.md §2.1).
 
 use chrono::{DateTime, Duration, Utc};
+use codex_local::WINDOW_DURATION_TOLERANCE_MINUTES;
 
 /// Format an `i64` micro-USD value as a human-readable USD string. Pure
 /// display path per AGENTS.md §2.1: integer math everywhere internally;
@@ -13,9 +14,14 @@ pub(crate) fn micro_usd_to_display_dollars(micro: i64) -> String {
 
 /// Render a Codex window duration in human units. Codex windows are commonly
 /// 300 minutes (5h) or 10080 minutes (7d); dividing by 1440 and flooring
-/// collapsed the 5h case to "0d". Pick the coarsest exact unit instead.
+/// collapsed the 5h case to "0d". Known 5h and 7d windows use the connector's
+/// tolerant classifier; other durations use their coarsest exact unit.
 pub(crate) fn format_codex_window(minutes: u64) -> String {
-    if minutes >= 1440 && minutes.is_multiple_of(1440) {
+    if minutes.abs_diff(300) <= WINDOW_DURATION_TOLERANCE_MINUTES {
+        "5h".to_string()
+    } else if minutes.abs_diff(10_080) <= WINDOW_DURATION_TOLERANCE_MINUTES {
+        "7d".to_string()
+    } else if minutes >= 1440 && minutes.is_multiple_of(1440) {
         format!("{}d", minutes / 1440)
     } else if minutes >= 60 && minutes.is_multiple_of(60) {
         format!("{}h", minutes / 60)
@@ -161,5 +167,13 @@ mod tests {
         // Exact-hour and sub-hour windows.
         assert_eq!(format_codex_window(60), "1h");
         assert_eq!(format_codex_window(90), "90m");
+    }
+
+    #[test]
+    fn format_codex_window_uses_tolerant_known_labels() {
+        assert_eq!(format_codex_window(295), "5h");
+        assert_eq!(format_codex_window(305), "5h");
+        assert_eq!(format_codex_window(10_075), "7d");
+        assert_eq!(format_codex_window(10_085), "7d");
     }
 }

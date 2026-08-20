@@ -141,6 +141,11 @@ fn pick_cross(
             codex_five_hour: c.codex_five_hour.or(s.codex_five_hour),
             codex_weekly: c.codex_weekly.or(s.codex_weekly),
             openai_cost_micro_usd: c.openai_cost_micro_usd.or(s.openai_cost_micro_usd),
+            openai_partial: if c.openai_cost_micro_usd.is_some() {
+                c.openai_partial
+            } else {
+                s.openai_partial
+            },
             codex_stale: if c.codex_five_hour.is_some() || c.codex_weekly.is_some() {
                 c.codex_stale
             } else {
@@ -205,12 +210,13 @@ fn cross_from_payload(
     now: chrono::DateTime<chrono::Utc>,
 ) -> statusline_render::CrossProvider {
     let snap = &payload.snapshot;
-    let age = now.signed_duration_since(payload.captured_at).num_seconds();
+    let age = now.signed_duration_since(payload.captured_at);
     // The host rewrites the envelope on every coordinator update, so its age
     // only tells us the whole snapshot is old. A single source can be stale
     // while the envelope is young (e.g. Claude JSONL keeps updating while OpenAI
     // polls fail), so also mark a cell stale when its source last errored.
-    let envelope_stale = age > SNAPSHOT_FRESHNESS_SECS;
+    let envelope_stale =
+        age < chrono::Duration::zero() || age > chrono::Duration::seconds(SNAPSHOT_FRESHNESS_SECS);
     // A FRESH envelope can still carry an EXPIRED Codex window: the rollout
     // walker returns the newest-mtime session file however old it is, so a
     // user who last ran Codex days ago gets a young envelope wrapping windows
@@ -231,9 +237,10 @@ fn cross_from_payload(
         codex_weekly: snap
             .codex_quota
             .as_ref()
-            .and_then(|q| q.weekly())
+            .and_then(|q| q.weekly_or_other())
             .map(|w| w.used_percent as f32),
         openai_cost_micro_usd: snap.openai.as_ref().map(|c| c.total_micro_usd),
+        openai_partial: snap.openai.as_ref().is_some_and(|c| c.truncated),
         codex_stale: envelope_stale || snap.codex_quota_error.is_some() || codex_expired,
         openai_stale: envelope_stale || snap.openai_error.is_some(),
     }
@@ -373,7 +380,7 @@ mod statusline_tests {
             end_time: now,
             total_micro_usd: 4_200_000,
             by_line_item: vec![],
-            truncated: false,
+            truncated: true,
             fetched_at: now,
         });
         let fresh = state_coordinator::SnapshotFilePayload::new(s.clone(), now);
@@ -382,13 +389,44 @@ mod statusline_tests {
         assert_eq!(c.codex_weekly, Some(6.0));
         assert_eq!(c.codex_five_hour, None);
         assert_eq!(c.openai_cost_micro_usd, Some(4_200_000));
+        assert!(c.openai_partial);
         assert!(!c.codex_stale, "fresh payload: codex not stale");
         assert!(!c.openai_stale, "fresh payload: openai not stale");
+        let exact_boundary = state_coordinator::SnapshotFilePayload::new(
+            fresh.snapshot.clone(),
+            now - chrono::Duration::seconds(super::SNAPSHOT_FRESHNESS_SECS),
+        );
+        let exact = super::cross_from_payload(&exact_boundary, now);
+        assert!(!exact.openai_stale, "exact boundary remains fresh");
+        let just_old = state_coordinator::SnapshotFilePayload::new(
+            fresh.snapshot.clone(),
+            now - chrono::Duration::seconds(super::SNAPSHOT_FRESHNESS_SECS)
+                - chrono::Duration::milliseconds(1),
+        );
+        assert!(
+            super::cross_from_payload(&just_old, now).openai_stale,
+            "one millisecond past the boundary is stale"
+        );
+        let just_future = state_coordinator::SnapshotFilePayload::new(
+            fresh.snapshot.clone(),
+            now + chrono::Duration::milliseconds(1),
+        );
+        assert!(
+            super::cross_from_payload(&just_future, now).openai_stale,
+            "one millisecond in the future is stale"
+        );
         let stale_payload =
             state_coordinator::SnapshotFilePayload::new(s, now - chrono::Duration::seconds(200));
         let stale = super::cross_from_payload(&stale_payload, now);
         assert!(stale.codex_stale, "old payload: codex stale");
         assert!(stale.openai_stale, "old payload: openai stale");
+        let future_payload = state_coordinator::SnapshotFilePayload::new(
+            fresh.snapshot,
+            now + chrono::Duration::seconds(1),
+        );
+        let future = super::cross_from_payload(&future_payload, now);
+        assert!(future.codex_stale, "future payload: codex stale");
+        assert!(future.openai_stale, "future payload: openai stale");
     }
 
     #[test]
@@ -489,6 +527,7 @@ mod statusline_tests {
             codex_five_hour: Some(6.0),
             codex_weekly: None,
             openai_cost_micro_usd: Some(4_200_000),
+            openai_partial: true,
             codex_stale: false,
             openai_stale: false,
         };
@@ -501,7 +540,7 @@ mod statusline_tests {
         };
         let out = super::render_with(&snap, &config, false, Some(&cross));
         assert!(out.contains("🌀 5h 6%"), "{out}");
-        assert!(out.contains("🌀 $4.20"), "{out}");
+        assert!(out.contains("🌀 $4.20*"), "{out}");
     }
 
     /// Like `EnvGuard` but for multiple env vars under a single `ENV_LOCK`
@@ -636,6 +675,7 @@ mod statusline_tests {
             codex_five_hour: codex,
             codex_weekly: None,
             openai_cost_micro_usd: openai,
+            openai_partial: false,
             codex_stale: false,
             openai_stale: false,
         }
@@ -646,6 +686,7 @@ mod statusline_tests {
             codex_five_hour: codex,
             codex_weekly: None,
             openai_cost_micro_usd: openai,
+            openai_partial: false,
             codex_stale: true,
             openai_stale: true,
         }
