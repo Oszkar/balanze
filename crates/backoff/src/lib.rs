@@ -78,7 +78,7 @@ pub enum RetryDecision {
     /// Permanent failure - return it immediately.
     DoNotRetry,
     /// Transient - retry. `Some(d)` = server-suggested delay (e.g. parsed
-    /// `Retry-After`), used instead of the schedule (clamped to the cap).
+    /// `Retry-After`), clamped between the policy schedule and cap.
     /// `None` = use the policy schedule.
     RetryAfter(Option<Duration>),
 }
@@ -103,7 +103,7 @@ where
                 RetryDecision::RetryAfter(_) if attempt >= policy.max_retries => return Err(e),
                 RetryDecision::RetryAfter(server) => {
                     let delay = match server {
-                        Some(d) => d.min(policy.cap()),
+                        Some(d) => d.clamp(policy.delay_for_attempt(attempt), policy.cap()),
                         None => policy.delay_for_attempt(attempt),
                     };
                     tokio::time::sleep(delay).await;
@@ -180,7 +180,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn server_retry_after_is_honored_and_capped() {
+    async fn server_retry_after_is_floored_by_the_policy_schedule() {
         let start = tokio::time::Instant::now();
         let calls = AtomicU32::new(0);
         let _ = retry::<(), &str, _, _>(
@@ -192,8 +192,8 @@ mod tests {
             },
         )
         .await;
-        // One retry, slept the server-suggested 5s (not the 30s schedule).
-        assert_eq!(start.elapsed(), Duration::from_secs(5));
+        // A too-short server hint cannot weaken the 30s provider floor.
+        assert_eq!(start.elapsed(), Duration::from_secs(30));
     }
 
     #[tokio::test(start_paused = true)]

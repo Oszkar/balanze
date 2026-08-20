@@ -187,12 +187,25 @@ impl IncrementalParser {
         // call retries once the writer finishes.
         let new_byte_pos = start_offset + parsed_byte_count as u64;
         let probe = read_probe(&mut file, new_byte_pos, path)?;
+        // If the read consumed an append that landed after the initial metadata
+        // call, refresh both size and mtime from the same post-read snapshot.
+        // Mixing the later byte position with the earlier mtime would make the
+        // next unchanged scan look like a same-size rewrite.
+        let (cursor_size, cursor_mtime) = if new_byte_pos > current_size {
+            let post_read_metadata = file.metadata().map_err(|e| io_to_parse_err(path, e))?;
+            let post_read_mtime = post_read_metadata
+                .modified()
+                .map_err(|e| io_to_parse_err(path, e))?;
+            raced_cursor_snapshot(post_read_metadata.len(), post_read_mtime, new_byte_pos)
+        } else {
+            (current_size, current_mtime)
+        };
         self.cursors.insert(
             path.to_path_buf(),
             FileCursor {
                 byte_pos: new_byte_pos,
-                size: current_size,
-                mtime: current_mtime,
+                size: cursor_size,
+                mtime: cursor_mtime,
                 identity: current_identity,
                 probe,
             },
@@ -296,6 +309,14 @@ fn requires_replacement(
     current_size < cursor.size || (current_size == cursor.size && current_mtime != cursor.mtime)
 }
 
+fn raced_cursor_snapshot(
+    post_read_size: u64,
+    post_read_mtime: SystemTime,
+    new_byte_pos: u64,
+) -> (u64, SystemTime) {
+    (post_read_size.max(new_byte_pos), post_read_mtime)
+}
+
 fn identity_changed(cursor: Option<&FileCursor>, current: Option<FileIdentity>) -> bool {
     matches!((cursor.and_then(|cursor| cursor.identity), current), (Some(previous), Some(current)) if previous != current)
 }
@@ -392,6 +413,17 @@ mod tests {
             identity: None,
             probe: FileProbe::default(),
         }
+    }
+
+    #[test]
+    fn raced_append_cursor_uses_matching_post_read_size_and_mtime() {
+        let (size, mtime) = raced_cursor_snapshot(15, mtime_at(2), 15);
+        assert_eq!(size, 15);
+        assert_eq!(mtime, mtime_at(2));
+        assert!(
+            !requires_replacement(Some(&cursor(15, size, 2)), 15, mtime_at(2)),
+            "the next unchanged scan must remain incremental"
+        );
     }
 
     // --- pure decision logic: next_start_offset ---

@@ -456,6 +456,44 @@ mod tests {
         assert_eq!(all, vec![root.join("rollout-inside.jsonl")]);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn walkers_skip_unprivileged_junction_cycles_and_tree_escapes() {
+        fn junction(target: &Path, link: &Path) {
+            let output = std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "New-Item -ItemType Junction -Path $env:BALANZE_TEST_JUNCTION_LINK -Target $env:BALANZE_TEST_JUNCTION_TARGET -ErrorAction Stop | Out-Null",
+                ])
+                .env("BALANZE_TEST_JUNCTION_LINK", link)
+                .env("BALANZE_TEST_JUNCTION_TARGET", target)
+                .output()
+                .expect("powershell.exe must be available on supported Windows hosts");
+            assert!(
+                output.status.success(),
+                "failed to create test junction: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("sessions");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        touch_jsonl(&root.join("rollout-inside.jsonl"), "{}", -60);
+        touch_jsonl(&outside.join("rollout-outside.jsonl"), "{}", 0);
+        junction(&root, &root.join("nested/cycle"));
+        junction(&outside, &root.join("escape"));
+
+        let latest = find_latest_session(&root).unwrap().unwrap();
+        assert!(latest.ends_with("rollout-inside.jsonl"));
+        let all = collect_sessions_newest_first(&root).unwrap();
+        assert_eq!(all, vec![root.join("rollout-inside.jsonl")]);
+    }
+
     #[test]
     fn read_codex_quota_falls_back_to_older_session_when_newest_has_no_token_count() {
         // Regression: read_codex_quota previously parsed only the newest

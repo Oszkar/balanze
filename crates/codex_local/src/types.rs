@@ -111,15 +111,12 @@ impl CodexQuotaSnapshot {
     /// named weekly window while ensuring a higher unknown cadence cannot be
     /// silently hidden by it.
     pub fn weekly_or_other(&self) -> Option<&RateLimitWindow> {
-        self.windows()
-            .filter(|w| w.kind() != WindowKind::FiveHour)
-            .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
+        max_by_used_percent(self.windows().filter(|w| w.kind() != WindowKind::FiveHour))
     }
     /// The highest-utilization window ("how close to a limit am I"). Always
     /// `Some` because `primary` is always present.
     pub fn worst_window(&self) -> Option<&RateLimitWindow> {
-        self.windows()
-            .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
+        max_by_used_percent(self.windows())
     }
 
     /// True when ANY present window has already reset as of `now` - i.e. this
@@ -133,6 +130,22 @@ impl CodexQuotaSnapshot {
     pub fn any_window_expired(&self, now: DateTime<Utc>) -> bool {
         self.windows().any(|w| w.expired(now))
     }
+}
+
+fn max_by_used_percent<'a>(
+    windows: impl Iterator<Item = &'a RateLimitWindow>,
+) -> Option<&'a RateLimitWindow> {
+    windows.reduce(|worst, candidate| {
+        if candidate
+            .used_percent
+            .total_cmp(&worst.used_percent)
+            .is_gt()
+        {
+            candidate
+        } else {
+            worst
+        }
+    })
 }
 
 /// One Codex rate-limit window. Classify by duration
@@ -264,6 +277,16 @@ mod tests {
         assert!(g.five_hour().is_none());
         assert_eq!(g.weekly().unwrap().used_percent, 3.0);
         assert_eq!(g.worst_window().unwrap().used_percent, 3.0);
+    }
+
+    #[test]
+    fn worst_window_tie_keeps_the_first_window() {
+        let s = snap(win(42.0, 300), Some(win(42.0, 10080)));
+        assert_eq!(
+            s.worst_window().unwrap().window_duration_minutes,
+            300,
+            "an exact utilization tie must not make the secondary slot win"
+        );
     }
 
     #[test]

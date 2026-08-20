@@ -28,8 +28,8 @@ pub enum ParseError {
         source: std::io::Error,
     },
 
-    /// A JSONL line failed to parse, or a `token_count` event was
-    /// present but its `rate_limits.primary` block had unexpected shape.
+    /// A JSONL line failed to parse, or a `token_count` event was present but
+    /// one of its required or present rate-limit windows had unexpected shape.
     /// `line` is 1-indexed (matches the file when grepping). The parser
     /// continues past schema drift on individual lines - the latest
     /// well-formed `token_count` event still gets extracted - but
