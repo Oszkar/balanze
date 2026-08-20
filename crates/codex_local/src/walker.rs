@@ -465,7 +465,7 @@ mod tests {
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    "New-Item -ItemType Junction -Path $env:BALANZE_TEST_JUNCTION_LINK -Target $env:BALANZE_TEST_JUNCTION_TARGET | Out-Null",
+                    "New-Item -ItemType Junction -Path $env:BALANZE_TEST_JUNCTION_LINK -Target $env:BALANZE_TEST_JUNCTION_TARGET -ErrorAction Stop | Out-Null",
                 ])
                 .env("BALANZE_TEST_JUNCTION_LINK", link)
                 .env("BALANZE_TEST_JUNCTION_TARGET", target)

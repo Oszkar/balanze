@@ -1,11 +1,10 @@
 //! JSONL notify task. Watches `<claude_home>/projects/**/*.jsonl` via
-//! `notify::recommended_watcher`, debounces bursts for 300ms, then reads only
-//! the newly-appended bytes of each changed file via a per-file byte cursor
-//! (`claude_parser::IncrementalParser`, AGENTS.md §3.1) and emits the running
-//! deduped event set. A 60s fallback tick catches filesystem events `notify`
-//! drops (inotify exhaustion, atomic-rewrite detection lag) - also incremental,
-//! so it is NOT a periodic full reparse. Each file is read in full only when it
-//! is first discovered.
+//! `notify::recommended_watcher`, debounces bursts for 300ms, then processes
+//! each changed file through a per-file byte cursor
+//! (`claude_parser::IncrementalParser`, AGENTS.md §3.1). Ordinary appends read
+//! only new bytes; first discovery and detected rewrites use replacement reads
+//! so obsolete events cannot survive. A 60s fallback tick catches filesystem
+//! events `notify` drops (inotify exhaustion, atomic-rewrite detection lag).
 //!
 //! This task owns the sole `IncrementalParser` for JSONL; the safety poll no
 //! longer re-scans JSONL (the 60s fallback here replaces that leg), so there is
@@ -191,8 +190,9 @@ pub(crate) fn spawn(
         fallback.tick().await;
 
         // Initial scan - the first `read_incremental` of each existing file
-        // reads it in full (the only full read for each existing file), and
-        // sets the cursor so later reads pick up appends only. Note that
+        // reads it in full and sets the cursor so ordinary appends remain
+        // incremental. Detected rewrites can trigger a later replacement read
+        // to remove obsolete events. Note that
         // `watcher.watch(...)` above registers atomically with the OS; writes
         // after it returns are buffered by the OS and drained by the callback.
         let mut state = ScanState::new();
