@@ -44,9 +44,9 @@ const SESSION_ID_REDACTED: &str = "<redacted>";
 /// when the wire shape changes so machine consumers can detect a break; keep the
 /// AGENTS.md §2.1 `--json` row and the README example in lockstep. Independent
 /// of `state_coordinator::SNAPSHOT_SCHEMA_VERSION` (the IPC `Snapshot` is a
-/// different surface). Version 1 is the first explicitly-versioned schema and
-/// carries the i64-micro-USD OpenAI cell shape.
-const SCHEMA_VERSION: u32 = 1;
+/// different surface). Version 2 adds the neutral
+/// `claude_oauth_unavailable` state; version 1 introduced i64 micro-USD money.
+const SCHEMA_VERSION: u32 = 2;
 
 /// Serialize `snap` as pretty-printed JSON suitable for `balanze-cli status
 /// --json`. When `verbose=false`, account identifiers (`org_uuid`,
@@ -76,6 +76,7 @@ struct JsonDoc<'a> {
     fetched_at: DateTime<Utc>,
     claude_oauth: Option<JsonClaudeOAuth<'a>>,
     claude_oauth_error: Option<&'a str>,
+    claude_oauth_unavailable: Option<&'a str>,
     claude_jsonl: Option<&'a JsonlSnapshot>,
     claude_jsonl_error: Option<&'a str>,
     anthropic_api_cost: Option<JsonAnthropicApiCost<'a>>,
@@ -99,6 +100,7 @@ impl<'a> JsonDoc<'a> {
                 .as_ref()
                 .map(|o| JsonClaudeOAuth::from_snapshot(o, verbose)),
             claude_oauth_error: snap.claude_oauth_error.as_deref(),
+            claude_oauth_unavailable: snap.claude_oauth_unavailable.as_deref(),
             claude_jsonl: snap.claude_jsonl.as_ref(),
             claude_jsonl_error: snap.claude_jsonl_error.as_deref(),
             anthropic_api_cost: snap
@@ -522,11 +524,22 @@ mod tests {
         let s = Snapshot::empty(fixed_now());
         let v = render_to_value(&s, false);
         // The DTO carries an explicit, top-level schema version for consumers.
-        assert_eq!(v["schema_version"], 1);
+        assert_eq!(v["schema_version"], 2);
         assert!(v["anthropic_api_cost"].is_null());
         assert!(v["openai"].is_null());
         assert!(v["claude_oauth"].is_null());
         assert!(v["codex_quota"].is_null());
+    }
+
+    #[test]
+    fn oauth_unavailable_is_distinct_from_cold_start() {
+        let mut s = Snapshot::empty(fixed_now());
+        s.claude_oauth_unavailable = Some("Claude Code not installed".to_string());
+        let v = render_to_value(&s, false);
+
+        assert_eq!(v["claude_oauth_unavailable"], "Claude Code not installed");
+        assert!(v["claude_oauth"].is_null());
+        assert!(v["claude_oauth_error"].is_null());
     }
 
     #[test]

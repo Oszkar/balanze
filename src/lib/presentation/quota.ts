@@ -34,7 +34,7 @@ export function quotaTone(pct: number): Tone {
   return 'ok';
 }
 
-export interface QuotaWindow { pct: number; resetsAt: string; label: string; }
+export interface QuotaWindow { key: string; pct: number; resetsAt: string; label: string; }
 export interface AnthropicQuota {
   headline: QuotaWindow;
   secondary: QuotaWindow | null;
@@ -42,38 +42,50 @@ export interface AnthropicQuota {
   tone: Tone;
 }
 
-export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
-  // Only trust the statusLine as the live source while it is fresh. Age is
-  // fetched_at - captured_at (NOT wall-clock now) so this stays a pure function
-  // of the snapshot and matches codexWindowExpired's fetched_at anchor;
-  // fetched_at is re-stamped on every coordinator emit, so it tracks "now"
-  // within the safety-poll cadence. Fresh iff the age is within [0, threshold]:
-  // unparseable timestamps -> NaN and a future-dated captured_at -> negative age
-  // both fail the check, so we fall back to the live OAuth source rather than
-  // trust a bad or clock-skewed stamp (mirrors the coordinator's ingest guard).
+export type AnthropicSourceWindow = QuotaWindow;
+export interface AnthropicSourceView {
+  source: 'statusline' | 'oauth';
+  windows: AnthropicSourceWindow[];
+  stale: boolean;
+}
+
+/** Fresh statusline-first Anthropic quota selection, mirroring
+ * `Snapshot::anthropic_quota_source` on the Rust side. */
+export function anthropicSourceView(s: Snapshot): AnthropicSourceView | null {
   const sl = s.claude_statusline;
   const slAgeMs = sl ? Date.parse(s.fetched_at) - Date.parse(sl.captured_at) : Infinity;
   const slFresh = Number.isFinite(slAgeMs) && slAgeMs >= 0 && slAgeMs <= STATUSLINE_FRESHNESS_MS;
   const slWindows = slFresh && sl ? (sl.payload.rate_limits?.windows ?? []) : [];
-  const slFive = slWindows.find((w) => w.key === 'five_hour');
-  if (slFive) {
-    const slSeven = slWindows.find((w) => w.key === 'seven_day');
+  if (slWindows.length > 0) {
     return {
-      headline: { pct: slFive.used_percent, resetsAt: slFive.resets_at, label: '5h' },
-      secondary: slSeven ? { pct: slSeven.used_percent, resetsAt: slSeven.resets_at, label: '7-day' } : null,
       source: 'statusline',
-      tone: quotaTone(slFive.used_percent),
+      windows: slWindows.map((w) => ({ key: w.key, label: w.label, pct: w.used_percent, resetsAt: w.resets_at })),
+      stale: s.claude_statusline_error !== null,
     };
   }
-  const cad = s.claude_oauth?.cadences ?? [];
-  const five = cad.find((c) => c.key === 'five_hour');
-  if (!five) return null;
-  const seven = cad.find((c) => c.key === 'seven_day');
+  const cadences = s.claude_oauth?.cadences ?? [];
+  if (cadences.length === 0) return null;
   return {
-    headline: { pct: five.utilization_percent, resetsAt: five.resets_at, label: '5h' },
-    secondary: seven ? { pct: seven.utilization_percent, resetsAt: seven.resets_at, label: '7-day' } : null,
     source: 'oauth',
-    tone: quotaTone(five.utilization_percent),
+    windows: cadences.map((c) => ({ key: c.key, label: c.display_label, pct: c.utilization_percent, resetsAt: c.resets_at })),
+    stale: s.claude_oauth_error !== null,
+  };
+}
+
+export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
+  const selected = anthropicSourceView(s);
+  if (!selected) return null;
+  const five = selected.windows.find((w) => w.key === 'five_hour') ?? null;
+  const seven = selected.windows
+    .filter((w) => w.key !== 'five_hour')
+    .reduce<AnthropicSourceWindow | null>((worst, w) => !worst || w.pct > worst.pct ? w : worst, null);
+  const headline = five ?? seven;
+  if (!headline) return null;
+  return {
+    headline: { key: headline.key, pct: headline.pct, resetsAt: headline.resetsAt, label: five ? '5h' : '7-day' },
+    secondary: five && seven ? { key: seven.key, pct: seven.pct, resetsAt: seven.resetsAt, label: '7-day' } : null,
+    source: selected.source,
+    tone: quotaTone(Math.max(five?.pct ?? 0, seven?.pct ?? 0)),
   };
 }
 
@@ -108,10 +120,16 @@ export function codexElapsedFraction(
 // window is still selectable rather than dropped, mirroring the watch TUI's
 // "never silently drop a live cap" rule.
 export type CodexWindowLabel = '5h' | '7d' | 'window';
+// Keep this mirror in lockstep with codex_local::WINDOW_DURATION_TOLERANCE_MINUTES.
+export const CODEX_WINDOW_TOLERANCE_MINUTES = 5;
+
+function nearDuration(actual: number, expected: number): boolean {
+  return Math.abs(actual - expected) <= CODEX_WINDOW_TOLERANCE_MINUTES;
+}
 
 export function codexWindowLabel(w: RateLimitWindow): CodexWindowLabel {
-  if (w.window_duration_minutes === 300) return '5h';
-  if (w.window_duration_minutes === 10080) return '7d';
+  if (nearDuration(w.window_duration_minutes, 300)) return '5h';
+  if (nearDuration(w.window_duration_minutes, 10080)) return '7d';
   return 'window';
 }
 
@@ -134,11 +152,18 @@ export interface CodexQuota {
 
 // Codex reports windows of 300 min (5h) and 10080 min (weekly); which JSON slot
 // holds which varies by plan, so select by duration, never by position.
+// `weekly` names the second presentation slot. When Codex introduces an
+// unknown cadence, that slot deliberately carries the worst unclassified cap.
 export function codexWindowsByKind(q: CodexQuotaSnapshot): { five: RateLimitWindow | null; weekly: RateLimitWindow | null } {
   const windows = [q.primary, ...(q.secondary ? [q.secondary] : [])];
+  const five = windows.find((w) => nearDuration(w.window_duration_minutes, 300)) ?? null;
+  const exactWeekly = windows.find((w) => nearDuration(w.window_duration_minutes, 10080)) ?? null;
+  const fallback = windows
+    .filter((w) => w !== five && w !== exactWeekly)
+    .reduce<RateLimitWindow | null>((worst, w) => !worst || w.used_percent > worst.used_percent ? w : worst, null);
   return {
-    five: windows.find((w) => w.window_duration_minutes === 300) ?? null,
-    weekly: windows.find((w) => w.window_duration_minutes === 10080) ?? null,
+    five,
+    weekly: exactWeekly ?? fallback,
   };
 }
 
@@ -213,4 +238,14 @@ export function overageCell(eu: ExtraUsage | null): OverageCell {
     return { amount, note, badge: PROV.anthropicBilledOverage.badge, title: PROV.anthropicBilledOverage.title };
   }
   return { amount: null, placeholder: 'none', note: 'overage · this cycle', title: PROV.anthropicBilledNa.title };
+}
+
+export function openAiCostCell(s: Snapshot): { amount: string; note: string; title: string } | null {
+  if (!s.openai) return null;
+  const partial = s.openai.truncated;
+  return {
+    amount: `${microUsdToDollars(s.openai.total_micro_usd)}${partial ? '*' : ''}`,
+    note: `${partial ? 'partial · ' : ''}admin api · this cycle`,
+    title: partial ? `${PROV.openaiBilled.title} Partial total; more pages are available.` : PROV.openaiBilled.title,
+  };
 }

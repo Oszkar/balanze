@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, codexElapsedFraction, codexQuota, overageCell } from '$lib/presentation/quota';
-  import { microUsdToDollars } from '$lib/presentation/format';
+  import { anthropicQuota, anthropicSourceView, codexElapsedFraction, codexQuota, openAiCostCell, overageCell } from '$lib/presentation/quota';
   import { PROV } from '$lib/presentation/provenance';
   import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
@@ -16,13 +15,16 @@
       onDismissOpenai?: () => void; onSettings?: () => void } = $props();
 
   const aq = $derived(anthropicQuota(snapshot));
-  const fivePace = $derived(snapshot.pace.find((p) => p.key === 'five_hour') ?? null);
+  const anthPace = $derived(aq?.source === 'oauth'
+    ? snapshot.pace.find((p) => p.key === aq.headline.key) ?? null
+    : null);
   const codex = $derived(snapshot.codex_quota);
   const cq = $derived(codexQuota(snapshot));
   const eu = $derived(snapshot.claude_oauth?.extra_usage ?? null);
   const overage = $derived(overageCell(eu));
   const openai = $derived(snapshot.openai);
-  const anthStale = $derived(!!degraded['claude_statusline'] && aq?.source === 'oauth');
+  const openaiCost = $derived(openAiCostCell(snapshot));
+  const anthStale = $derived(anthropicSourceView(snapshot)?.stale ?? false);
   // When no quota is available, distinguish a real failure (an error slot is
   // set) from a cold-start window where the first OAuth poll is still in flight
   // (no data, no error yet - OAuth backs off on the 429s that happen during
@@ -52,8 +54,8 @@
   {/if}
 
   {#if anthState.kind === 'data' && aq}
-    <QuotaCell pct={aq.headline.pct} used={(fivePace?.used_fraction ?? aq.headline.pct / 100) * 100}
-      elapsed={fivePace ? fivePace.elapsed_fraction * 100 : null} tone={aq.tone}
+    <QuotaCell pct={aq.headline.pct} used={(anthPace?.used_fraction ?? aq.headline.pct / 100) * 100}
+      elapsed={anthPace ? anthPace.elapsed_fraction * 100 : null} tone={aq.tone}
       resetsAt={aq.headline.resetsAt} secondary={aq.secondary ? `7d ${aq.secondary.pct.toFixed(0)}%` : ''}
       stale={anthStale}
       title={aq.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title} />
@@ -103,9 +105,9 @@
   <BilledCell amount={overage.amount} placeholder={overage.placeholder ?? 'none'} hatch={overage.amount === null}
     note={overage.note} badge={overage.badge ?? null} title={overage.title} />
   {#if showOpenAI && colState.kind !== 'connect' && colState.kind !== 'error'}
-    {#if openai}
-      <BilledCell amount={microUsdToDollars(openai.total_micro_usd)}
-        note="admin api · this cycle" badge={PROV.openaiBilled.badge} title={PROV.openaiBilled.title} />
+    {#if openaiCost}
+      <BilledCell amount={openaiCost.amount}
+        note={openaiCost.note} badge={PROV.openaiBilled.badge} title={openaiCost.title} />
     {:else}
       <BilledCell hatch note={openaiErr ? 'fetch failed' : 'not configured'}
         title={openaiErr ? `OpenAI spend unavailable - ${openaiErr}` : 'OpenAI spend unavailable'} />

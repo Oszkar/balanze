@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, quotaTone, codexElapsedFraction, codexWindowExpired, codexWindowsByKind, overageCell } from '$lib/presentation/quota';
-  import { microUsdToDollars } from '$lib/presentation/format';
+  import { anthropicQuota, anthropicSourceView, quotaTone, codexElapsedFraction, codexWindowExpired, codexWindowLabel, codexWindowsByKind, openAiCostCell, overageCell } from '$lib/presentation/quota';
   import { PROV } from '$lib/presentation/provenance';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
   import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
@@ -26,10 +25,12 @@
   // fallback, so Cards shows the same stale cue (per-window "stale"
   // instead of the reset countdown).
   const anthQuota = $derived(anthropicQuota(snapshot));
+  const anthView = $derived(anthropicSourceView(snapshot));
   const anthSource = $derived(anthQuota?.source ?? 'oauth');
-  const anthStale = $derived(!!degraded['claude_statusline'] && anthSource === 'oauth');
+  const anthStale = $derived(anthView?.stale ?? false);
 
   const paceElapsed = (key: string): number | null => {
+    if (anthSource === 'statusline') return null;
     const p = snapshot.pace.find((x) => x.key === key);
     return p ? p.elapsed_fraction * 100 : null;
   };
@@ -38,26 +39,15 @@
   // cadence as its own bar (richer than Grid's 5h-headline + 7d-string) - a
   // deliberate density difference, not a parity bug.
   const anthWindows = $derived.by<CardWindow[]>(() => {
-    const rl = snapshot.claude_statusline?.payload.rate_limits;
-    if (anthSource === 'statusline' && rl) {
-      return rl.windows.map((w) => ({
-        label: w.label,
-        used: w.used_percent,
-        elapsed: paceElapsed(w.key),
-        tone: quotaTone(w.used_percent),
-        resetsAt: w.resets_at,
-        title: PROV.anthropicQuotaStatusline.title,
-      }));
-    }
-    const cad = snapshot.claude_oauth?.cadences ?? [];
-    return cad.map((c) => ({
-      label: c.display_label,
-      used: c.utilization_percent,
-      elapsed: paceElapsed(c.key),
-      tone: quotaTone(c.utilization_percent),
-      resetsAt: c.resets_at,
+    if (!anthView) return [];
+    return anthView.windows.map((w) => ({
+      label: w.label,
+      used: w.pct,
+      elapsed: paceElapsed(w.key),
+      tone: quotaTone(w.pct),
+      resetsAt: w.resetsAt,
       stale: anthStale,
-      title: PROV.anthropicQuotaOauth.title,
+      title: anthView.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title,
     }));
   });
 
@@ -87,6 +77,7 @@
   const anthBilled = $derived(overageCell(eu));
   const codex = $derived(snapshot.codex_quota);
   const openai = $derived(snapshot.openai);
+  const openaiCost = $derived(openAiCostCell(snapshot));
   const openaiErr = $derived(snapshot.openai_error ?? null);
   const anthPlan = $derived(snapshot.claude_oauth?.subscription_type ?? 'Claude');
 
@@ -112,10 +103,10 @@
     if (!codex) return [];
     const { five, weekly } = codexWindowsByKind(codex);
     const out: CardWindow[] = [];
-    for (const [win, name] of [[five, '5h'], [weekly, 'weekly']] as const) {
+    for (const win of [five, weekly]) {
       if (!win) continue;
       out.push({
-        label: `Codex ${name} · ${codex.plan_type}`,
+        label: `Codex ${codexWindowLabel(win)} · ${codex.plan_type}`,
         used: win.used_percent,
         elapsed: codexElapsedFraction(win, snapshot.fetched_at) * 100,
         tone: quotaTone(win.used_percent),
@@ -138,8 +129,8 @@
       dismiss={{ aria: OPENAI_COL_COPY.dismiss.aria, title: OPENAI_COL_COPY.dismiss.title, onClick: () => onDismissOpenai?.() }}
       onConnect={onSettings}
       billed={colState.kind === 'data'
-        ? (openai
-            ? { amount: microUsdToDollars(openai.total_micro_usd), note: 'admin api · this cycle', badge: 'real', title: PROV.openaiBilled.title }
+        ? (openaiCost
+            ? { ...openaiCost, badge: 'real' }
             : { amount: null, placeholder: 'unavailable', note: openaiErr ? 'fetch failed' : 'not configured',
                 title: openaiErr ? `OpenAI spend unavailable - ${openaiErr}` : 'OpenAI spend unavailable' })
         : undefined} />

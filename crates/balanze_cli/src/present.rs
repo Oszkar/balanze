@@ -9,6 +9,8 @@
 //! Consumed by the colored one-shot `status` renderer and the `watch` TUI so
 //! the matrix coloring logic is not forked.
 
+use state_coordinator::{AnthropicQuotaSource, Snapshot};
+
 /// Color bucket for a presented value. The four utilization heat bands mirror
 /// `window::Severity` (Ok=Green, Warn=Yellow, Orange, Critical=Red), plus
 /// `Neutral` for "no signal yet" (cold start / missing pace ratio). Pace-ratio
@@ -28,6 +30,73 @@ pub(crate) enum Bucket {
 /// color ever changes. The 16-color ANSI palette has no orange, hence truecolor.
 pub(crate) const TRAY_ORANGE: (u8, u8, u8) = (0xd9, 0x6a, 0x2a);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AnthropicSourceLabel {
+    Statusline,
+    OAuth,
+}
+
+impl AnthropicSourceLabel {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Statusline => "statusline",
+            Self::OAuth => "oauth",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AnthropicWindow<'a> {
+    pub(crate) key: &'a str,
+    pub(crate) percent: f32,
+}
+
+/// The compact/TUI density rule: show the five-hour window plus the worst
+/// non-five-hour cadence from the canonical fresh-statusline-first source.
+pub(crate) fn anthropic_display_windows(
+    s: &Snapshot,
+) -> Option<(AnthropicSourceLabel, Vec<AnthropicWindow<'_>>, bool)> {
+    fn select<'a>(windows: impl Iterator<Item = AnthropicWindow<'a>>) -> Vec<AnthropicWindow<'a>> {
+        let mut five = None;
+        let mut weekly = None;
+        for window in windows {
+            if window.key == "five_hour" {
+                five.get_or_insert(window);
+            } else if weekly
+                .is_none_or(|current: AnthropicWindow<'_>| window.percent > current.percent)
+            {
+                weekly = Some(window);
+            }
+        }
+        [five, weekly].into_iter().flatten().collect()
+    }
+
+    match s.anthropic_quota_source()? {
+        AnthropicQuotaSource::Statusline {
+            rate_limits: rl,
+            stale,
+        } => Some((
+            AnthropicSourceLabel::Statusline,
+            select(rl.windows.iter().map(|w| AnthropicWindow {
+                key: &w.key,
+                percent: w.used_percent,
+            })),
+            stale,
+        )),
+        AnthropicQuotaSource::OAuth {
+            snapshot: oauth,
+            stale,
+        } => Some((
+            AnthropicSourceLabel::OAuth,
+            select(oauth.cadences.iter().map(|c| AnthropicWindow {
+                key: &c.key,
+                percent: c.utilization_percent,
+            })),
+            stale,
+        )),
+    }
+}
+
 /// Map a utilization fraction (0.0..=1.0+, may exceed 1.0 on overage) to a
 /// color bucket via the shared `window::Severity` classifier, so the CLI matrix
 /// agrees with the tray, popover, and statusline at 50 / 75 / 90.
@@ -45,11 +114,11 @@ pub(crate) fn bucket_for_fraction(used: f64) -> Bucket {
 /// `Neutral`. Burning faster than the clock (> 1.0) is `Warn`; well over pace
 /// (> 1.5) is `Critical`; at or under pace (< 1.0) is `Ok`.
 pub(crate) fn bucket_for_pace_ratio(ratio: Option<f64>) -> Bucket {
-    match ratio {
-        None => Bucket::Neutral,
-        Some(r) if r > 1.5 => Bucket::Critical,
-        Some(r) if r >= 1.0 => Bucket::Warn,
-        Some(_) => Bucket::Ok,
+    match window::PaceVerdict::from_ratio(ratio) {
+        window::PaceVerdict::TooEarly => Bucket::Neutral,
+        window::PaceVerdict::Critical => Bucket::Critical,
+        window::PaceVerdict::Warn => Bucket::Warn,
+        window::PaceVerdict::Under | window::PaceVerdict::OnPace => Bucket::Ok,
     }
 }
 
@@ -85,10 +154,11 @@ mod tests {
     #[test]
     fn bucket_for_pace_ratio_buckets_by_burn() {
         assert_eq!(bucket_for_pace_ratio(Some(0.5)), Bucket::Ok);
-        assert_eq!(bucket_for_pace_ratio(Some(0.999)), Bucket::Ok);
-        assert_eq!(bucket_for_pace_ratio(Some(1.0)), Bucket::Warn);
-        assert_eq!(bucket_for_pace_ratio(Some(1.5)), Bucket::Warn);
-        assert_eq!(bucket_for_pace_ratio(Some(1.51)), Bucket::Critical);
+        assert_eq!(bucket_for_pace_ratio(Some(1.0)), Bucket::Ok);
+        assert_eq!(bucket_for_pace_ratio(Some(1.11)), Bucket::Ok);
+        assert_eq!(bucket_for_pace_ratio(Some(1.12)), Bucket::Warn);
+        assert_eq!(bucket_for_pace_ratio(Some(1.49)), Bucket::Warn);
+        assert_eq!(bucket_for_pace_ratio(Some(1.5)), Bucket::Critical);
         assert_eq!(bucket_for_pace_ratio(Some(3.0)), Bucket::Critical);
     }
 }

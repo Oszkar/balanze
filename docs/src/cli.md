@@ -19,8 +19,8 @@ On a terminal it renders like this:
 === Balanze status (2026-05-20 04:27:42 UTC) ===
 
                     Quota %                                 API $ (real billed)
-Anthropic           ok 82.0% 5h, 88.0% 7d (oauth)           $20.92/$25.00 overage (real)
-OpenAI              ok 6.0% 7d (codex go)                   $4.20 (admin costs)
+Anthropic           ok 82% 5h, 88% 7d (oauth)               $20.92/$25.00 overage (real)
+OpenAI              ok 6% 7d (codex go)                     $4.20 (admin costs)
 
 Pace: 5h 82% used / 60% elapsed (1.4x);  7d 88% used / 95% elapsed (0.9x)
 Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (leverage - NOT billed)
@@ -30,7 +30,9 @@ Without pay-as-you-go "Extra usage" enabled on claude.ai, the Anthropic API-$ ce
 
 ### The `--json` schema
 
-`status --json` (and `watch --json`) emit a document keyed by a top-level `schema_version`, and every money cell is tagged `{ value_micro_usd, source, confidence, details }` in i64 micro-USD - so a consumer can tell an estimate from real billed spend straight from the wire shape, without parsing labels. The full schema is documented in [`docs/ARCHITECTURE.md`](https://github.com/Oszkar/balanze/blob/main/docs/ARCHITECTURE.md).
+`status --json` (and `watch --json`) currently emit schema version 2. Version 2 adds the nullable `claude_oauth_unavailable: string | null` field so a consumer can distinguish "Claude Code not installed" from a cold start. All version 1 fields keep their existing names and types, but consumers that reject unknown schema versions must explicitly accept version 2 before upgrading.
+
+Every money cell is tagged `{ value_micro_usd, source, confidence, details }` in i64 micro-USD - so a consumer can tell an estimate from real billed spend straight from the wire shape, without parsing labels. The full schema is documented in [`docs/ARCHITECTURE.md`](https://github.com/Oszkar/balanze/blob/main/docs/ARCHITECTURE.md).
 
 ## `watch`
 
