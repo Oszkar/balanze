@@ -209,7 +209,7 @@ pub(crate) fn spawn(
         // `watcher.watch(...)` above registers atomically with the OS; writes
         // after it returns are buffered by the OS and drained by the callback.
         let mut state = ScanState::new();
-        state = emit_incremental(&coord, &roots, state, generation).await;
+        state = emit_incremental(&coord, &roots, state, generation, false).await;
 
         loop {
             let rediscover_roots = tokio::select! {
@@ -255,7 +255,7 @@ pub(crate) fn spawn(
                 }
                 roots = discovered;
             }
-            state = emit_incremental(&coord, &roots, state, generation).await;
+            state = emit_incremental(&coord, &roots, state, generation, rediscover_roots).await;
         }
     })
 }
@@ -284,6 +284,7 @@ async fn emit_incremental(
     roots: &[PathBuf],
     state: ScanState,
     generation: WatcherGeneration,
+    rederive_time_dependent_cells: bool,
 ) -> ScanState {
     let roots_owned: Vec<PathBuf> = roots.to_vec();
 
@@ -303,7 +304,11 @@ async fn emit_incremental(
                 changed,
             },
         )) => {
-            if changed {
+            // File notifications stay change-driven. The 60-second fallback
+            // also forwards the same cached Arc when no file changed so the
+            // coordinator can age the rolling window and cross UTC month
+            // boundaries without rebuilding or cloning the deduped vector.
+            if changed || rederive_time_dependent_cells {
                 let _ = coord
                     .send(StateMsg::Update(SourceUpdate {
                         generation,
@@ -790,6 +795,51 @@ mod tests {
         };
 
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn fallback_scan_rederives_without_rebuilding_unchanged_events() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Clone)]
+        struct CountingSink(Arc<AtomicUsize>);
+        impl state_coordinator::Sink for CountingSink {
+            fn on_snapshot(&mut self, _snapshot: &state_coordinator::Snapshot) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+
+            fn on_degraded(&mut self, _source: Source, _error: &str) {}
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("session.jsonl"),
+            assistant_line("msg_a", "req_1", 100),
+        )
+        .unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let (coord, _coord_task) = state_coordinator::spawn(CountingSink(count.clone()));
+
+        let state = emit_incremental(
+            &coord,
+            &[dir.path().to_path_buf()],
+            ScanState::new(),
+            0,
+            false,
+        )
+        .await;
+        coord.query().await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+
+        let state = emit_incremental(&coord, &[dir.path().to_path_buf()], state, 0, false).await;
+        coord.query().await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+
+        let cached = state.deduped.clone();
+        let state = emit_incremental(&coord, &[dir.path().to_path_buf()], state, 0, true).await;
+        coord.query().await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert!(Arc::ptr_eq(&cached, &state.deduped));
     }
 
     #[test]

@@ -791,7 +791,7 @@ fn lease_is_stale(path: &Path, now: SystemTime) -> bool {
         .ok()
         .is_some_and(|modified| {
             now.duration_since(modified)
-                .map_or(true, |age| age >= LEASE_STALE_AFTER)
+                .is_ok_and(|age| age >= LEASE_STALE_AFTER)
         })
 }
 
@@ -1231,7 +1231,7 @@ mod tests {
     }
 
     #[test]
-    fn future_dated_lease_does_not_wedge_acquisition() {
+    fn future_dated_lease_remains_live_to_preserve_exclusion() {
         let dir = tempdir().unwrap();
         let future = dir
             .path()
@@ -1243,8 +1243,28 @@ mod tests {
 
         assert!(matches!(
             try_acquire_store_lease(dir.path()).unwrap(),
-            LeaseAttempt::Acquired(_)
+            LeaseAttempt::Busy
         ));
+    }
+
+    #[test]
+    fn successful_publish_does_not_sweep_future_dated_lease() {
+        let dir = tempdir().unwrap();
+        let future = dir
+            .path()
+            .join(format!("{LEASE_FILE_PREFIX}future{LEASE_FILE_SUFFIX}"));
+        std::fs::write(&future, b"owner:future").unwrap();
+        let file = OpenOptions::new().write(true).open(&future).unwrap();
+        file.set_modified(SystemTime::now() + StdDuration::from_secs(60))
+            .unwrap();
+
+        sweep_stale_leases_best_effort(
+            dir.path(),
+            &dir.path().join("different-owner"),
+            SystemTime::now(),
+        );
+
+        assert!(future.exists());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Runtime-rendered gauge tray icon. Hand-rolled RGBA raster (no extra dep):
 //! a colored ring on a transparent background, color chosen by `ColorBucket`.
-//! AGENTS.md §3.1: painting is deduped upstream in `tauri_sink`.
+//! AGENTS.md §3.1: targets are deduped upstream in `tauri_sink`; this worker
+//! also retains per-property successes while retrying a partial paint.
 
 use tauri::AppHandle;
 use tauri::image::Image;
@@ -16,6 +17,40 @@ pub(crate) struct PaintTarget {
     pub(crate) bucket: ColorBucket,
     pub(crate) title: String,
     pub(crate) tooltip: String,
+}
+
+/// Tray properties that the operating system has accepted. A target is cached
+/// as fully painted only when every property matches, but a partial success is
+/// retained so retries do not churn setters that already succeeded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AppliedPaint {
+    bucket: Option<ColorBucket>,
+    tooltip: Option<String>,
+    #[cfg(target_os = "macos")]
+    title: Option<String>,
+}
+
+impl AppliedPaint {
+    fn needs_icon(&self, target: &PaintTarget) -> bool {
+        self.bucket != Some(target.bucket)
+    }
+
+    fn effective_tooltip(target: &PaintTarget) -> &str {
+        if target.tooltip.is_empty() {
+            "Balanze"
+        } else {
+            &target.tooltip
+        }
+    }
+
+    fn needs_tooltip(&self, target: &PaintTarget) -> bool {
+        self.tooltip.as_deref() != Some(Self::effective_tooltip(target))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn needs_title(&self, target: &PaintTarget) -> bool {
+        self.title.as_deref() != Some(target.title.as_str())
+    }
 }
 
 fn bucket_rgb(bucket: ColorBucket) -> (u8, u8, u8) {
@@ -57,46 +92,45 @@ pub(crate) fn render_gauge(bucket: ColorBucket, size: u32) -> Vec<u8> {
 /// Paint the tray icon, macOS menu-bar title, and hover tooltip. `title` is the
 /// compact `Claude X% · Codex Y%` line (macOS menu bar only); `tooltip` is the
 /// multi-line status panel shown on hover (and the only text on Windows, where
-/// the tray has no persistent label). Logs and no-ops on any Tauri error - a
-/// failed repaint is returned to the dedicated painter, which retries without
-/// blocking the coordinator actor or caching a target that did not land.
-fn paint(app: &AppHandle, bucket: ColorBucket, title: &str, tooltip: &str) -> Result<(), String> {
+/// the tray has no persistent label). Setter failures are collected and
+/// returned to the dedicated painter, which retries without blocking the
+/// coordinator actor or repeating properties that already landed.
+fn paint(app: &AppHandle, target: &PaintTarget, applied: &mut AppliedPaint) -> Result<(), String> {
     let Some(tray) = app.tray_by_id("main") else {
         return Err("tray 'main' not found".to_string());
     };
-    let mut failure = None;
-    let rgba = render_gauge(bucket, SIZE);
-    let img = Image::new_owned(rgba, SIZE, SIZE);
-    if let Err(e) = tray.set_icon(Some(img)) {
-        failure = Some(format!("set_icon failed: {e}"));
+    let mut failures = Vec::new();
+    if applied.needs_icon(target) {
+        let rgba = render_gauge(target.bucket, SIZE);
+        let img = Image::new_owned(rgba, SIZE, SIZE);
+        match tray.set_icon(Some(img)) {
+            Ok(()) => applied.bucket = Some(target.bucket),
+            Err(error) => failures.push(format!("set_icon failed: {error}")),
+        }
     }
-    let tip = if tooltip.is_empty() {
-        "Balanze"
-    } else {
-        tooltip
-    };
-    if let Err(e) = tray.set_tooltip(Some(tip)) {
-        failure.get_or_insert_with(|| format!("set_tooltip failed: {e}"));
+    let tooltip = AppliedPaint::effective_tooltip(target);
+    if applied.needs_tooltip(target) {
+        match tray.set_tooltip(Some(tooltip)) {
+            Ok(()) => applied.tooltip = Some(tooltip.to_string()),
+            Err(error) => failures.push(format!("set_tooltip failed: {error}")),
+        }
     }
     // `title` is the macOS menu-bar text only; Windows/Linux trays have no label.
     #[cfg(target_os = "macos")]
     {
-        if let Err(e) = tray.set_title(Some(title)) {
-            failure.get_or_insert_with(|| format!("set_title failed: {e}"));
+        if applied.needs_title(target) {
+            match tray.set_title(Some(&target.title)) {
+                Ok(()) => applied.title = Some(target.title.clone()),
+                Err(error) => failures.push(format!("set_title failed: {error}")),
+            }
         }
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = title;
-    failure.map_or(Ok(()), Err)
-}
-
-fn cache_successful_paint(
-    last_painted: &mut Option<PaintTarget>,
-    target: &PaintTarget,
-    succeeded: bool,
-) {
-    if succeeded {
-        *last_painted = Some(target.clone());
+    let _ = &target.title;
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
@@ -112,6 +146,7 @@ pub(crate) fn spawn_painter(
     let (tx, mut rx) = tokio::sync::watch::channel::<Option<PaintTarget>>(None);
     let join = tokio::spawn(async move {
         let mut last_painted = None;
+        let mut applied = AppliedPaint::default();
         let mut last_warn: Option<std::time::Instant> = None;
         loop {
             if rx.changed().await.is_err() {
@@ -126,14 +161,17 @@ pub(crate) fn spawn_painter(
             loop {
                 let paint_app = app.clone();
                 let attempt = target.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    paint(&paint_app, attempt.bucket, &attempt.title, &attempt.tooltip)
+                let mut attempt_applied = applied.clone();
+                let (next_applied, result) = tokio::task::spawn_blocking(move || {
+                    let result = paint(&paint_app, &attempt, &mut attempt_applied);
+                    (attempt_applied, result)
                 })
                 .await
                 .map_err(|error| format!("tray repaint worker failed: {error}"))?;
+                applied = next_applied;
                 match result {
                     Ok(()) => {
-                        cache_successful_paint(&mut last_painted, &target, true);
+                        last_painted = Some(target.clone());
                         break;
                     }
                     Err(error)
@@ -183,17 +221,23 @@ mod tests {
     }
 
     #[test]
-    fn failed_paint_is_not_cached_as_successful() {
+    fn partial_success_retries_only_unapplied_properties() {
         let target = PaintTarget {
             bucket: ColorBucket::Green,
             title: "Claude 10%".to_string(),
             tooltip: "Balanze".to_string(),
         };
-        let mut last = None;
+        let mut applied = AppliedPaint::default();
 
-        cache_successful_paint(&mut last, &target, false);
-        assert!(last.is_none());
-        cache_successful_paint(&mut last, &target, true);
-        assert_eq!(last.as_ref(), Some(&target));
+        assert!(applied.needs_icon(&target));
+        assert!(applied.needs_tooltip(&target));
+        applied.bucket = Some(target.bucket);
+        assert!(!applied.needs_icon(&target));
+        assert!(applied.needs_tooltip(&target));
+
+        applied.tooltip = Some(target.tooltip.clone());
+        assert!(!applied.needs_tooltip(&target));
+        #[cfg(target_os = "macos")]
+        assert!(applied.needs_title(&target));
     }
 }
