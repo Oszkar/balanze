@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use crate::errors::ParseError;
 
@@ -101,7 +101,7 @@ pub fn find_codex_sessions_dir() -> Result<PathBuf, ParseError> {
 /// assumed. Canonical containment and a visited-directory set prevent linked
 /// subtrees from escaping `root` or forming traversal cycles.
 pub fn find_latest_session(root: &Path) -> Result<Option<PathBuf>, ParseError> {
-    Ok(collect_sessions_with_mtime(root)?
+    Ok(collect_sessions_with_mtime(root, None)?
         .into_iter()
         .next()
         .map(|(_, path)| path))
@@ -112,18 +112,34 @@ pub fn find_latest_session(root: &Path) -> Result<Option<PathBuf>, ParseError> {
 /// or subtree `read_dir` failures propagate as `IoError`; per-entry stat
 /// failures are best-effort-skipped.
 ///
-/// Used by [`crate::read_codex_quota`] to walk older sessions when a fresh
-/// rollout file has no `token_count` event yet (e.g. just-created session
-/// at a day-rollover). The pure-walker shape keeps the boundary that
+/// Used by [`crate::read_codex_quota`] to select its bounded newest-first
+/// fallback candidates when a fresh rollout file has no `token_count` event yet
+/// (e.g. just-created session at a day-rollover). The pure-walker shape keeps the boundary that
 /// `codex_local` is the only reader of `~/.codex/` (AGENTS.md §4 #11).
 pub fn collect_sessions_newest_first(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
-    Ok(collect_sessions_with_mtime(root)?
+    Ok(collect_sessions_with_mtime(root, None)?
         .into_iter()
         .map(|(_, path)| path)
         .collect())
 }
 
-fn collect_sessions_with_mtime(root: &Path) -> Result<Vec<(SystemTime, PathBuf)>, ParseError> {
+/// Collect newest-first rollout candidates while cooperatively observing a
+/// foreground deadline. If the deadline expires, return the candidates found
+/// so far rather than continuing an all-history walk on the prompt hot path.
+pub fn collect_sessions_newest_first_until(
+    root: &Path,
+    deadline: Instant,
+) -> Result<Vec<PathBuf>, ParseError> {
+    Ok(collect_sessions_with_mtime(root, Some(deadline))?
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect())
+}
+
+fn collect_sessions_with_mtime(
+    root: &Path,
+    deadline: Option<Instant>,
+) -> Result<Vec<(SystemTime, PathBuf)>, ParseError> {
     if !root.exists() {
         return Err(ParseError::FileMissing(root.to_path_buf()));
     }
@@ -136,6 +152,7 @@ fn collect_sessions_with_mtime(root: &Path) -> Result<Vec<(SystemTime, PathBuf)>
         &canonical_root,
         &mut visited,
         &mut all,
+        deadline,
     )?;
     // Descending by mtime; PathBuf tiebreaker keeps the order deterministic
     // when two files share an mtime (filesystem mtime resolution varies).
@@ -149,7 +166,11 @@ fn walk_sessions(
     canonical_root: &Path,
     visited: &mut HashSet<PathBuf>,
     out: &mut Vec<(SystemTime, PathBuf)>,
+    deadline: Option<Instant>,
 ) -> Result<(), ParseError> {
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Ok(());
+    }
     if !canonical_dir.starts_with(canonical_root) || !visited.insert(canonical_dir.to_path_buf()) {
         return Ok(());
     }
@@ -158,6 +179,9 @@ fn walk_sessions(
         source,
     })?;
     for entry_result in entries {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            break;
+        }
         let entry = match entry_result {
             Ok(e) => e,
             Err(_) => continue,
@@ -172,7 +196,14 @@ fn walk_sessions(
                 Ok(path) if path.starts_with(canonical_root) => path,
                 Ok(_) | Err(_) => continue,
             };
-            walk_sessions(&path, &canonical_child, canonical_root, visited, out)?;
+            walk_sessions(
+                &path,
+                &canonical_child,
+                canonical_root,
+                visited,
+                out,
+                deadline,
+            )?;
             continue;
         }
         if !metadata.is_file() {
@@ -387,6 +418,20 @@ mod tests {
             Err(ParseError::FileMissing(p)) => assert_eq!(p, nonexistent),
             other => panic!("expected FileMissing, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn bounded_collection_stops_at_an_expired_deadline() {
+        let tmp = TempDir::new().unwrap();
+        touch_jsonl(&tmp.path().join("rollout-present.jsonl"), "{}", 0);
+
+        let sessions = collect_sessions_newest_first_until(
+            tmp.path(),
+            Instant::now() - Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(sessions.is_empty());
     }
 
     #[cfg(unix)]

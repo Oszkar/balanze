@@ -8,7 +8,7 @@
 //! watcher used to compute its own window with a hard-coded `None` anchor and
 //! silently diverged from the CLI here; centralizing the math fixes that.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike as _, TimeZone as _, Utc};
 use claude_cost::{Cost, PriceTable, compute_cost};
 use claude_parser::UsageEvent;
 use window::{DEFAULT_BURN_WINDOW, DEFAULT_MIN_BURN_EVENTS, DEFAULT_WINDOW, summarize_window};
@@ -49,8 +49,17 @@ pub fn summarize_jsonl(
         DEFAULT_MIN_BURN_EVENTS,
         anchor,
     );
+    let month_start = Utc
+        .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+        .single()
+        .expect("valid UTC month start");
+    let current_month_events = events
+        .iter()
+        .filter(|event| event.ts >= month_start && event.ts <= now)
+        .cloned()
+        .collect::<Vec<_>>();
     let cost = match prices {
-        Some(p) => Ok(compute_cost(events, p)),
+        Some(p) => Ok(compute_cost(&current_month_events, p)),
         None => Err("claude_cost: bundled price table unavailable".to_string()),
     };
     JsonlCells {
@@ -91,5 +100,25 @@ mod tests {
         assert!(cells.cost.is_err(), "no price table => cost is Err");
         // The window is still produced regardless of the price-table failure.
         assert_eq!(cells.jsonl.window.total_events_in_window, 0);
+    }
+
+    #[test]
+    fn api_rate_cost_is_bounded_to_the_current_calendar_month() {
+        let mut events = crate::test_support::sample_events();
+        let current = events[0].clone();
+        let mut prior_month = current.clone();
+        prior_month.ts = Utc.with_ymd_and_hms(2026, 4, 30, 23, 59, 0).unwrap();
+        let mut future = current.clone();
+        future.ts = now() + chrono::Duration::seconds(1);
+        events = vec![prior_month, current.clone(), future];
+        let prices = claude_cost::load_bundled_prices().unwrap();
+
+        let cells = summarize_jsonl(&events, now(), 1, None, Some(&prices));
+        let expected = compute_cost(&[current], &prices);
+
+        assert_eq!(
+            cells.cost.unwrap().total_micro_usd,
+            expected.total_micro_usd
+        );
     }
 }

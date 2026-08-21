@@ -5,7 +5,11 @@ import type { Snapshot } from '../types/snapshot';
 // getSnapshot (the self-healing path), NOT re-emit through refresh_now: a
 // regression to the event-only path is exactly the freeze this guards against.
 const getSnapshot = vi.fn<() => Promise<Snapshot>>();
-const onUsageUpdated = vi.fn(async (_cb: (s: Snapshot) => void) => () => {});
+let usageUpdatedCallback: ((s: Snapshot) => void) | null = null;
+const onUsageUpdated = vi.fn(async (cb: (s: Snapshot) => void) => {
+  usageUpdatedCallback = cb;
+  return () => {};
+});
 const onDegraded = vi.fn(async (_cb: (d: { source: string; error: string }) => void) => () => {});
 const onWindowShown = vi.fn(async (_cb: () => void) => () => {});
 vi.mock('../ipc', () => ({
@@ -39,8 +43,12 @@ function snapshotWith(error: string | null = null): Snapshot {
 describe('UsageStore.refresh', () => {
   beforeEach(() => {
     getSnapshot.mockReset();
+    usageUpdatedCallback = null;
     onUsageUpdated.mockReset();
-    onUsageUpdated.mockImplementation(async (_cb: (s: Snapshot) => void) => () => {});
+    onUsageUpdated.mockImplementation(async (cb: (s: Snapshot) => void) => {
+      usageUpdatedCallback = cb;
+      return () => {};
+    });
     onDegraded.mockReset();
     onDegraded.mockImplementation(
       async (_cb: (d: { source: string; error: string }) => void) => () => {},
@@ -111,6 +119,112 @@ describe('UsageStore.refresh', () => {
 
     usage.destroy();
     expect(unlistenUsage).toHaveBeenCalledOnce();
+  });
+
+  it('does not let the initial getSnapshot response overwrite a newer live event', async () => {
+    let resolveSnapshot!: (snapshot: Snapshot) => void;
+    getSnapshot.mockImplementation(
+      () => new Promise<Snapshot>((resolve) => { resolveSnapshot = resolve; }),
+    );
+    const init = usage.init();
+    await vi.waitFor(() => expect(usageUpdatedCallback).not.toBeNull());
+    await vi.waitFor(() => expect(getSnapshot).toHaveBeenCalledOnce());
+
+    const newer = snapshotWith('newer event error');
+    usageUpdatedCallback!(newer);
+    resolveSnapshot(snapshotWith(null));
+    await init;
+
+    expect(usage.snapshot).toBe(newer);
+    expect(usage.degraded.claude_oauth).toBe('newer event error');
+  });
+
+  it('does not let a refresh response overwrite a newer live event', async () => {
+    getSnapshot.mockResolvedValueOnce(snapshotWith(null));
+    await usage.init();
+
+    let resolveRefresh!: (snapshot: Snapshot) => void;
+    getSnapshot.mockImplementationOnce(
+      () => new Promise<Snapshot>((resolve) => { resolveRefresh = resolve; }),
+    );
+    const refresh = usage.refresh();
+    await vi.waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(2));
+
+    const newer = snapshotWith('newer refresh event error');
+    usageUpdatedCallback!(newer);
+    resolveRefresh(snapshotWith(null));
+    await refresh;
+
+    expect(usage.snapshot).toBe(newer);
+    expect(usage.degraded.claude_oauth).toBe('newer refresh event error');
+  });
+
+  it('does not let an older overlapping refresh overwrite the newest request', async () => {
+    let resolveFirst!: (snapshot: Snapshot) => void;
+    let resolveSecond!: (snapshot: Snapshot) => void;
+    getSnapshot
+      .mockImplementationOnce(
+        () => new Promise<Snapshot>((resolve) => { resolveFirst = resolve; }),
+      )
+      .mockImplementationOnce(
+        () => new Promise<Snapshot>((resolve) => { resolveSecond = resolve; }),
+      );
+
+    const first = usage.refresh();
+    const second = usage.refresh();
+    await vi.waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(2));
+
+    const newest = snapshotWith('newest request error');
+    resolveSecond(newest);
+    await second;
+    resolveFirst(snapshotWith('older request error'));
+    await first;
+
+    expect(usage.snapshot).toBe(newest);
+    expect(usage.degraded.claude_oauth).toBe('newest request error');
+  });
+
+  it('ignores an older overlapping refresh rejection after a newer success', async () => {
+    let rejectFirst!: (error: Error) => void;
+    let resolveSecond!: (snapshot: Snapshot) => void;
+    getSnapshot
+      .mockImplementationOnce(
+        () => new Promise<Snapshot>((_resolve, reject) => { rejectFirst = reject; }),
+      )
+      .mockImplementationOnce(
+        () => new Promise<Snapshot>((resolve) => { resolveSecond = resolve; }),
+      );
+
+    const first = usage.refresh();
+    const second = usage.refresh();
+    const newest = snapshotWith(null);
+    resolveSecond(newest);
+    await second;
+    rejectFirst(new Error('stale failure'));
+    await first;
+
+    expect(usage.snapshot).toBe(newest);
+    expect(usage.lastError).toBeNull();
+  });
+
+  it('unlistens registrations that finish after destroy', async () => {
+    const unlistenUsage = vi.fn();
+    const unlistenDegraded = vi.fn();
+    let resolveDegraded!: (unlisten: typeof unlistenDegraded) => void;
+    onUsageUpdated.mockResolvedValueOnce(unlistenUsage);
+    onDegraded.mockImplementationOnce(
+      () => new Promise<(typeof unlistenDegraded)>((resolve) => { resolveDegraded = resolve; }),
+    );
+
+    const init = usage.init();
+    await vi.waitFor(() => expect(onDegraded).toHaveBeenCalledOnce());
+    usage.destroy();
+    resolveDegraded(unlistenDegraded);
+    await init;
+
+    expect(unlistenUsage).toHaveBeenCalledOnce();
+    expect(unlistenDegraded).toHaveBeenCalledOnce();
+    expect(onWindowShown).not.toHaveBeenCalled();
   });
 
   it('clears the public frontend event marker on destroy', () => {

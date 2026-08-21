@@ -345,6 +345,7 @@ fn reserve_once(
         let decision = active_decision(entry, now, remaining);
         if normalized {
             write_store(cache_dir, &mut store)?;
+            sweep_stale_leases_best_effort(cache_dir, &lease.path, SystemTime::now());
         }
         drop(lease);
         return Ok(ReserveAttempt::Decision(decision));
@@ -386,6 +387,7 @@ fn reserve_once(
         },
     );
     write_store(cache_dir, &mut store)?;
+    sweep_stale_leases_best_effort(cache_dir, &lease.path, SystemTime::now());
     drop(lease);
     Ok(ReserveAttempt::Decision(ReserveDecision::Reserved {
         token,
@@ -506,6 +508,7 @@ fn complete_once(
     }
     entry.touched_at = now;
     write_store(cache_dir, &mut store)?;
+    sweep_stale_leases_best_effort(cache_dir, &lease.path, SystemTime::now());
     drop(lease);
     Ok(true)
 }
@@ -786,8 +789,34 @@ fn lease_is_stale(path: &Path, now: SystemTime) -> bool {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .ok()
-        .and_then(|modified| now.duration_since(modified).ok())
-        .is_some_and(|age| age >= LEASE_STALE_AFTER)
+        .is_some_and(|modified| {
+            now.duration_since(modified)
+                .is_ok_and(|age| age >= LEASE_STALE_AFTER)
+        })
+}
+
+/// Remove abandoned candidates only after this owner has durably published.
+/// Acquisition itself remains delete-free, so concurrent contenders never
+/// race by unlinking a file another process is still promoting.
+fn sweep_stale_leases_best_effort(cache_dir: &Path, own_path: &Path, now: SystemTime) {
+    let entries = match std::fs::read_dir(cache_dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::debug!("OpenAI Costs gate lease sweep failed: {error}");
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path != own_path
+            && is_lease_candidate(&entry.file_name())
+            && lease_is_stale(&path, now)
+            && let Err(error) = std::fs::remove_file(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::debug!("OpenAI Costs gate stale lease cleanup failed: {error}");
+        }
+    }
 }
 
 fn unique_token() -> String {
@@ -1199,6 +1228,66 @@ mod tests {
         assert!(successor_path.exists());
         drop(successor);
         assert!(!successor_path.exists());
+    }
+
+    #[test]
+    fn future_dated_lease_remains_live_to_preserve_exclusion() {
+        let dir = tempdir().unwrap();
+        let future = dir
+            .path()
+            .join(format!("{LEASE_FILE_PREFIX}future{LEASE_FILE_SUFFIX}"));
+        std::fs::write(&future, b"owner:future").unwrap();
+        let file = OpenOptions::new().write(true).open(&future).unwrap();
+        file.set_modified(SystemTime::now() + StdDuration::from_secs(60))
+            .unwrap();
+
+        assert!(matches!(
+            try_acquire_store_lease(dir.path()).unwrap(),
+            LeaseAttempt::Busy
+        ));
+    }
+
+    #[test]
+    fn successful_publish_does_not_sweep_future_dated_lease() {
+        let dir = tempdir().unwrap();
+        let future = dir
+            .path()
+            .join(format!("{LEASE_FILE_PREFIX}future{LEASE_FILE_SUFFIX}"));
+        std::fs::write(&future, b"owner:future").unwrap();
+        let file = OpenOptions::new().write(true).open(&future).unwrap();
+        file.set_modified(SystemTime::now() + StdDuration::from_secs(60))
+            .unwrap();
+
+        sweep_stale_leases_best_effort(
+            dir.path(),
+            &dir.path().join("different-owner"),
+            SystemTime::now(),
+        );
+
+        assert!(future.exists());
+    }
+
+    #[test]
+    fn successful_publish_sweeps_abandoned_lease_files() {
+        let dir = tempdir().unwrap();
+        let abandoned = dir
+            .path()
+            .join(format!("{LEASE_FILE_PREFIX}abandoned{LEASE_FILE_SUFFIX}"));
+        std::fs::write(&abandoned, b"owner:abandoned").unwrap();
+        let file = OpenOptions::new().write(true).open(&abandoned).unwrap();
+        file.set_modified(SystemTime::now() - LEASE_STALE_AFTER - StdDuration::from_secs(1))
+            .unwrap();
+
+        let decision = reserve_once(
+            dir.path(),
+            &request_fingerprint("key", "https://api.openai.com"),
+            &key_fingerprint("key"),
+            t0(),
+        )
+        .unwrap();
+
+        assert!(matches!(decision, ReserveAttempt::Decision(_)));
+        assert!(!abandoned.exists());
     }
 
     #[test]

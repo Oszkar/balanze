@@ -14,11 +14,14 @@ use tauri_sink::TauriSink;
 ///
 /// Every successful show path calls this so the popover reflects the latest
 /// state even if its webview listener missed a live emit (the OpenAI-only
-/// startup race). `try_send` is sync + non-blocking; a full channel or an
-/// absent coordinator (boot ordering, headless tests) is a no-op, not an error.
+/// startup race). `try_send` is sync + non-blocking; an absent coordinator
+/// (boot ordering, headless tests) is ignored, while a saturated or closed
+/// channel is logged so the dropped refresh remains observable.
 fn refresh_state_on_open(app: &tauri::AppHandle) {
-    if let Some(handle) = app.try_state::<state_coordinator::StateCoordinatorHandle>() {
-        let _ = handle.try_send(state_coordinator::StateMsg::Refresh);
+    if let Some(handle) = app.try_state::<state_coordinator::StateCoordinatorHandle>()
+        && let Err(error) = handle.try_send(state_coordinator::StateMsg::Refresh)
+    {
+        tracing::warn!("state_coordinator: dropped popover refresh message: {error}");
     }
 }
 
@@ -381,9 +384,27 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
 fn boot_backend(app: &App, rt: &tokio::runtime::Handle) {
     let _enter = rt.enter();
 
-    let sink = TauriSink::new(app.handle().clone());
+    let (sink, painter_join) = TauriSink::new(app.handle().clone());
     let (handle, coord_join) = state_coordinator::spawn_with_optional_file(sink);
     app.manage(handle.clone());
+
+    let painter_app = app.handle().clone();
+    rt.spawn(async move {
+        match painter_join.await {
+            Ok(Ok(())) => tracing::info!("tray painter stopped (shutdown)"),
+            Ok(Err(error)) => {
+                tracing::error!("tray painter failed ({error}); exiting");
+                painter_app.exit(1);
+            }
+            Err(error) if error.is_cancelled() => {
+                tracing::info!("tray painter aborted (shutdown)")
+            }
+            Err(error) => {
+                tracing::error!("tray painter panicked ({error}); exiting");
+                painter_app.exit(1);
+            }
+        }
+    });
 
     // Live settings-apply: settings/key commands signal a reload; the
     // supervisor re-spawns the watcher with fresh settings so provider toggles
@@ -401,7 +422,11 @@ fn boot_backend(app: &App, rt: &tokio::runtime::Handle) {
     let supervisor_app = app.handle().clone();
     rt.spawn(async move {
         match supervisor_join.await {
-            Ok(()) => tracing::info!("watcher supervisor stopped (shutdown)"),
+            Ok(Ok(())) => tracing::info!("watcher supervisor stopped (shutdown)"),
+            Ok(Err(error)) => {
+                tracing::error!("watcher supervisor failed ({error}); exiting");
+                supervisor_app.exit(1);
+            }
             Err(je) if je.is_cancelled() => {
                 tracing::info!("watcher supervisor aborted (shutdown)")
             }
@@ -450,6 +475,22 @@ fn respawn_backoff(consecutive_failures: u32) -> std::time::Duration {
 /// as a fresh streak (reset the backoff) rather than escalating from the last.
 const FAILURE_RESET_WINDOW: std::time::Duration = std::time::Duration::from_secs(300);
 
+enum RestartWake {
+    DelayElapsed,
+    Reload(Box<commands::SettingsTransition>),
+    Shutdown,
+}
+
+async fn wait_for_restart_or_reload(
+    delay: std::time::Duration,
+    reload_rx: &mut tokio::sync::mpsc::Receiver<commands::SettingsTransition>,
+) -> RestartWake {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => RestartWake::DelayElapsed,
+        transition = reload_rx.recv() => transition.map_or(RestartWake::Shutdown, |value| RestartWake::Reload(Box::new(value))),
+    }
+}
+
 /// Own the watcher's task lifecycle. Re-spawns the task set on two triggers:
 /// a settings reload (fresh settings, so provider toggles apply live) and an
 /// *unexpected* task death (an `Err` return or panic). On a death it surfaces a
@@ -462,10 +503,11 @@ const FAILURE_RESET_WINDOW: std::time::Duration = std::time::Duration::from_secs
 async fn supervise_watcher(
     handle: state_coordinator::StateCoordinatorHandle,
     mut reload_rx: tokio::sync::mpsc::Receiver<commands::SettingsTransition>,
-) {
+) -> Result<(), String> {
     enum Wake {
         Reload(Box<commands::SettingsTransition>),
         Death(&'static str),
+        NoActiveTasks,
         Shutdown,
     }
 
@@ -473,27 +515,26 @@ async fn supervise_watcher(
     let mut last_failure: Option<std::time::Instant> = None;
     let mut generation: state_coordinator::WatcherGeneration = 1;
     let mut current_settings = settings::load_or_default();
-    let mut watched = match activate_watcher_generation(&handle, &current_settings, generation)
-        .await
-    {
-        Ok(watched) => watched,
-        Err(error) => {
-            tracing::error!("watcher supervisor failed to activate initial generation: {error}");
-            return;
-        }
-    };
+    let mut watched = activate_watcher_generation(&handle, &current_settings, generation).await?;
+    let mut death_channel_open = true;
 
     loop {
         let wake = tokio::select! {
             r = reload_rx.recv() => r.map_or(Wake::Shutdown, |transition| Wake::Reload(Box::new(transition))),
-            label = watched.recv_death() => label.map_or(Wake::Shutdown, Wake::Death),
+            label = watched.recv_death(), if death_channel_open => label.map_or(Wake::NoActiveTasks, Wake::Death),
         };
 
         match wake {
             Wake::Shutdown => {
                 watched.shutdown().await;
                 tracing::info!("watcher supervisor: settings channel closed; stopping");
-                return;
+                return Ok(());
+            }
+            Wake::NoActiveTasks => {
+                // Every task in this generation exited cleanly (including the
+                // valid zero-enabled-provider case). Keep the supervisor and
+                // settings receiver alive so a later toggle can start tasks.
+                death_channel_open = false;
             }
             Wake::Reload(transition) => {
                 generation = match generation.checked_add(1) {
@@ -503,13 +544,14 @@ async fn supervise_watcher(
                             .applied
                             .send(Err("watcher generation counter exhausted".to_string()));
                         watched.shutdown().await;
-                        return;
+                        return Err("watcher generation counter exhausted".to_string());
                     }
                 };
                 let settings = transition.settings;
                 match replace_watcher_generation(watched, &handle, &settings, generation).await {
                     Ok(next) => {
                         watched = next;
+                        death_channel_open = true;
                         current_settings = settings;
                         consecutive_failures = 0;
                         tracing::info!(
@@ -519,8 +561,7 @@ async fn supervise_watcher(
                     }
                     Err(error) => {
                         let _ = transition.applied.send(Err(error.clone()));
-                        tracing::error!("watcher settings transition failed: {error}");
-                        return;
+                        return Err(format!("watcher settings transition failed: {error}"));
                     }
                 }
             }
@@ -553,23 +594,47 @@ async fn supervise_watcher(
                     "watcher: task '{label}' died; re-spawning in {}s",
                     delay.as_secs()
                 );
-                tokio::time::sleep(delay).await;
+                let mut replacement_settings = current_settings.clone();
+                let mut transition_ack = None;
+                match wait_for_restart_or_reload(delay, &mut reload_rx).await {
+                    RestartWake::DelayElapsed => {}
+                    RestartWake::Reload(transition) => {
+                        replacement_settings = transition.settings;
+                        transition_ack = Some(transition.applied);
+                        consecutive_failures = 0;
+                        tracing::info!("watcher: settings reload pre-empted restart backoff");
+                    }
+                    RestartWake::Shutdown => return Ok(()),
+                }
                 generation = match generation.checked_add(1) {
                     Some(next) => next,
                     None => {
-                        tracing::error!("watcher generation counter exhausted");
-                        return;
+                        if let Some(applied) = transition_ack {
+                            let _ = applied
+                                .send(Err("watcher generation counter exhausted".to_string()));
+                        }
+                        return Err("watcher generation counter exhausted".to_string());
                     }
                 };
-                watched = match activate_watcher_generation(&handle, &current_settings, generation)
-                    .await
-                {
-                    Ok(next) => next,
-                    Err(error) => {
-                        tracing::error!("watcher restart failed: {error}");
-                        return;
-                    }
-                };
+                watched =
+                    match activate_watcher_generation(&handle, &replacement_settings, generation)
+                        .await
+                    {
+                        Ok(next) => {
+                            current_settings = replacement_settings;
+                            death_channel_open = true;
+                            if let Some(applied) = transition_ack {
+                                let _ = applied.send(Ok(()));
+                            }
+                            next
+                        }
+                        Err(error) => {
+                            if let Some(applied) = transition_ack {
+                                let _ = applied.send(Err(error.clone()));
+                            }
+                            return Err(format!("watcher restart failed: {error}"));
+                        }
+                    };
             }
         }
     }
@@ -688,7 +753,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{reanchored_position, replace_watcher_generation, respawn_backoff};
+    use super::{
+        RestartWake, reanchored_position, replace_watcher_generation, respawn_backoff,
+        wait_for_restart_or_reload,
+    };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -741,6 +809,27 @@ mod tests {
         // Large shifts must saturate to the cap, never panic on overflow.
         assert_eq!(respawn_backoff(64).as_secs(), 60);
         assert_eq!(respawn_backoff(u32::MAX).as_secs(), 60);
+    }
+
+    #[tokio::test]
+    async fn settings_reload_preempts_restart_backoff() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let (applied, _completed) = tokio::sync::oneshot::channel();
+        tx.send(crate::commands::SettingsTransition {
+            settings: settings::Settings::default(),
+            applied,
+        })
+        .await
+        .unwrap();
+
+        let wake = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            wait_for_restart_or_reload(std::time::Duration::from_secs(60), &mut rx),
+        )
+        .await
+        .expect("queued settings reload must not wait for restart backoff");
+
+        assert!(matches!(wake, RestartWake::Reload(_)));
     }
 
     // A roomy 1920x1080 monitor at the origin, so the clamp is a no-op and these

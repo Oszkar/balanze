@@ -288,20 +288,34 @@ pub struct SettingsTransition {
 
 pub struct WatcherReload(pub tokio::sync::mpsc::Sender<SettingsTransition>);
 
+const SETTINGS_TRANSITION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Await one supervised settings transition. The supervisor joins the old
 /// pollers, advances the coordinator generation, starts the replacement task
 /// set, and only then completes the reply. A closed supervisor is an explicit
 /// command error, never a silently dropped live update.
 async fn apply_settings_live(reload: &WatcherReload, settings: Settings) -> Result<(), String> {
+    apply_settings_live_with_timeout(reload, settings, SETTINGS_TRANSITION_TIMEOUT).await
+}
+
+async fn apply_settings_live_with_timeout(
+    reload: &WatcherReload,
+    settings: Settings,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
     let (applied, completed) = tokio::sync::oneshot::channel();
-    reload
-        .0
-        .send(SettingsTransition { settings, applied })
-        .await
-        .map_err(|_| "watcher settings supervisor has shut down".to_string())?;
-    completed
-        .await
-        .map_err(|_| "watcher settings supervisor dropped the transition".to_string())?
+    tokio::time::timeout(timeout, async {
+        reload
+            .0
+            .send(SettingsTransition { settings, applied })
+            .await
+            .map_err(|_| "watcher settings supervisor has shut down".to_string())?;
+        completed
+            .await
+            .map_err(|_| "watcher settings supervisor dropped the transition".to_string())?
+    })
+    .await
+    .map_err(|_| "watcher settings transition timed out".to_string())?
 }
 
 /// Validate + normalize an inbound API key before it touches the keychain.
@@ -449,7 +463,10 @@ fn plan_statusline_action(wired: bool, status: &WireStatus) -> StatuslineAction 
 
 #[cfg(test)]
 mod tests {
-    use super::{StatuslineAction, plan_statusline_action, prepare_api_key};
+    use super::{
+        SETTINGS_TRANSITION_TIMEOUT, StatuslineAction, WatcherReload,
+        apply_settings_live_with_timeout, plan_statusline_action, prepare_api_key,
+    };
     use claude_statusline::WireStatus;
 
     #[test]
@@ -495,6 +512,28 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(runtime_thread, worker_thread);
+    }
+
+    #[tokio::test]
+    async fn settings_transition_ack_has_a_bounded_wait() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let reload = WatcherReload(tx);
+        let transition = tokio::spawn(async move {
+            let pending = rx.recv().await.expect("transition sent");
+            let _keep_ack_open = pending.applied;
+            std::future::pending::<()>().await;
+        });
+
+        let result = apply_settings_live_with_timeout(
+            &reload,
+            settings::Settings::default(),
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err(), "watcher settings transition timed out");
+        assert_eq!(SETTINGS_TRANSITION_TIMEOUT.as_secs(), 15);
+        transition.abort();
     }
 
     #[test]

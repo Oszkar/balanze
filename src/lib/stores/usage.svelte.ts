@@ -26,12 +26,18 @@ class UsageStore {
   lastError = $state<string | null>(null);
   #unlisten: UnlistenFn[] = [];
   #frontendEventError: string | null = null;
+  #destroyed = false;
+  #lifecycle = 0;
+  #eventRevision = 0;
+  #requestSequence = 0;
+  #latestRequest = 0;
 
-  #applySnapshot(s: Snapshot) {
+  #applySnapshot(s: Snapshot, fromEvent = false) {
     this.snapshot = s;
     const degraded = degradedFromSnapshot(s);
     if (this.#frontendEventError) degraded.frontend_events = this.#frontendEventError;
     this.degraded = degraded;
+    if (fromEvent) this.#eventRevision += 1;
   }
 
   #recordFrontendEventError(e: unknown) {
@@ -39,6 +45,7 @@ class UsageStore {
     this.lastError = msg;
     this.#frontendEventError = msg;
     this.degraded = { ...this.degraded, frontend_events: msg };
+    this.#eventRevision += 1;
   }
 
   #unlistenAll(unlistenFns: UnlistenFn[]) {
@@ -54,6 +61,8 @@ class UsageStore {
   }
 
   async init() {
+    const lifecycle = ++this.#lifecycle;
+    this.#destroyed = false;
     // Register listeners BEFORE the initial fetch so a live emit during init
     // can't be lost (the OpenAI-only startup race: a `usage_updated` fired
     // between fetch and listen would be missed). Guarded separately: outside
@@ -62,35 +71,52 @@ class UsageStore {
     const pendingUnlisten: UnlistenFn[] = [];
     try {
       pendingUnlisten.push(await onUsageUpdated((s) => {
+        if (this.#destroyed || lifecycle !== this.#lifecycle) return;
         // Reconcile from the snapshot's error slots so recovered sources clear.
-        this.#applySnapshot(s);
+        this.#applySnapshot(s, true);
       }));
+      if (this.#destroyed || lifecycle !== this.#lifecycle) {
+        this.#unlistenAll(pendingUnlisten);
+        return;
+      }
       pendingUnlisten.push(await onDegraded((d) => {
+        if (this.#destroyed || lifecycle !== this.#lifecycle) return;
         // Immediate marker for a failure that didn't ride a snapshot (the
         // coordinator emits degraded_state without a usage_updated on error).
         this.degraded = { ...this.degraded, [d.source]: d.error };
+        this.#eventRevision += 1;
       }));
+      if (this.#destroyed || lifecycle !== this.#lifecycle) {
+        this.#unlistenAll(pendingUnlisten);
+        return;
+      }
       // Re-pull on every popover open: fresh-on-open, and self-healing if the
       // live event channel above ever dies (a webview reload orphans the
       // listener; without this the UI would stay frozen until the next emit
       // that happens to land on a live listener - which never comes).
-      pendingUnlisten.push(await onWindowShown(() => void this.refresh()));
+      pendingUnlisten.push(await onWindowShown(() => {
+        if (!this.#destroyed && lifecycle === this.#lifecycle) void this.refresh();
+      }));
+      if (this.#destroyed || lifecycle !== this.#lifecycle) {
+        this.#unlistenAll(pendingUnlisten);
+        return;
+      }
       this.#unlisten.push(...pendingUnlisten);
       this.#frontendEventError = null;
     } catch (e) {
       this.#unlistenAll(pendingUnlisten);
-      this.#recordFrontendEventError(e);
+      if (!this.#destroyed && lifecycle === this.#lifecycle) this.#recordFrontendEventError(e);
     }
+    if (this.#destroyed || lifecycle !== this.#lifecycle) return;
 
-    // Seed first paint. A late-arriving live emit overwrites this; an emit
-    // that arrives during the await is already captured by the listeners above.
+    // Seed first paint. A live event that arrives during the await advances the
+    // event revision, so the older response is discarded instead of wiping it.
     try {
-      const s = await getSnapshot();
-      this.#applySnapshot(s);
+      await this.#refreshSnapshot();
     } catch (e) {
-      this.lastError = String(e);
+      if (!this.#destroyed && lifecycle === this.#lifecycle) this.lastError = String(e);
     } finally {
-      this.loading = false;
+      if (!this.#destroyed && lifecycle === this.#lifecycle) this.loading = false;
     }
   }
 
@@ -101,15 +127,39 @@ class UsageStore {
   // returns the coordinator's current snapshot, kept fresh by the pollers, so
   // this both repaints reliably and doesn't depend on the event channel.
   async refresh() {
+    await this.#refreshSnapshot();
+  }
+
+  async #refreshSnapshot() {
+    const lifecycle = this.#lifecycle;
+    const eventRevision = this.#eventRevision;
+    const request = ++this.#requestSequence;
+    this.#latestRequest = request;
     try {
-      const s = await getSnapshot();
-      this.#applySnapshot(s);
+      const snapshot = await getSnapshot();
+      // A live event is newer than the request's seed point, and the most recent
+      // pull supersedes any older in-flight pull. Either condition makes this
+      // response stale even if its IPC call happened to finish last.
+      if (
+        lifecycle === this.#lifecycle
+        && eventRevision === this.#eventRevision
+        && request === this.#latestRequest
+      ) {
+        this.#applySnapshot(snapshot);
+        if (!this.#frontendEventError) this.lastError = null;
+      }
     } catch (e) {
-      this.lastError = String(e);
+      if (lifecycle === this.#lifecycle && request === this.#latestRequest) {
+        this.lastError = String(e);
+      }
     }
   }
 
   destroy() {
+    this.#destroyed = true;
+    this.#lifecycle += 1;
+    this.#eventRevision += 1;
+    this.#latestRequest = ++this.#requestSequence;
     this.#unlistenAll(this.#unlisten);
     this.#unlisten = [];
     this.#frontendEventError = null;

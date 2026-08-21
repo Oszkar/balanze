@@ -23,7 +23,7 @@ Anthropic           ok 82% 5h, 88% 7d (oauth)               $20.92/$25.00 overag
 OpenAI              ok 6% 7d (codex go)                     $4.20 (admin costs)
 
 Pace: 5h 82% used / 60% elapsed (1.4x);  7d 88% used / 95% elapsed (0.9x)
-Subscription leverage: ~$2197.11 of Claude Code usage at API list prices (leverage - NOT billed)
+Subscription leverage: ~$2197.11 of this month's Claude Code usage at API list prices (leverage - NOT billed)
 ```
 
 Without pay-as-you-go "Extra usage" enabled on claude.ai, the Anthropic API-$ cell reads `- not available` instead, and only the leverage line carries a Claude dollar figure. That is deliberate: Anthropic exposes no per-user API spend, and the cell is never backfilled with a substitute number.

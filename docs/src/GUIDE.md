@@ -42,7 +42,7 @@ The popover is one normalized snapshot of your AI usage. Everything in the grid 
 
 ### Subscription leverage (a separate estimate)
 
-Below the grid, the **Subscription leverage** box shows what your Claude Code usage *would* cost at API list prices (local JSONL times a vendored price table). For Pro/Max users this is leverage from the subscription, **never billed** - so it sits outside the matrix, where it can't be mistaken for spend.
+Below the grid, the **Subscription leverage** box shows what the current calendar month's Claude Code usage *would* cost at API list prices (local JSONL times a vendored price table). For Pro/Max users this is leverage from the subscription, **never billed** - so it sits outside the matrix, where it can't be mistaken for spend.
 
 ### Pace and burn
 

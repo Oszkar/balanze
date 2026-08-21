@@ -248,7 +248,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
     if let Some(cost) = &snapshot.anthropic_api_cost {
         writeln!(
             w,
-            "ANTHROPIC API COST - ESTIMATE ONLY (JSONL × LiteLLM list-price @ {} / {}):",
+            "ANTHROPIC API COST - CURRENT-MONTH ESTIMATE ONLY (JSONL × LiteLLM list-price @ {} / {}):",
             claude_cost::PRICE_TABLE_COMMIT,
             claude_cost::PRICE_TABLE_DATE,
         )?;
@@ -480,7 +480,7 @@ fn compact_subscription_leverage(s: &Snapshot) -> Option<String> {
         && cost.total_event_count > 0
     {
         return Some(format!(
-            "Subscription leverage: ~{} of Claude Code usage at API list prices (leverage - NOT billed)",
+            "Subscription leverage: ~{} of this month's Claude Code usage at API list prices (leverage - NOT billed)",
             micro_usd_to_display_dollars(cost.total_micro_usd)
         ));
     }
@@ -1414,7 +1414,7 @@ mod tests {
         // The estimate block MUST carry "ESTIMATE ONLY" and the leverage
         // disclaimer on the value line.
         assert!(
-            out.contains("ANTHROPIC API COST - ESTIMATE ONLY"),
+            out.contains("ANTHROPIC API COST - CURRENT-MONTH ESTIMATE ONLY"),
             "ANTHROPIC API COST section header must carry the ESTIMATE ONLY tag:\n{out}"
         );
         assert!(
@@ -1471,7 +1471,7 @@ mod tests {
             "EXTRA USAGE block must be hidden when extra_usage is None:\n{out}"
         );
         assert!(
-            out.contains("ANTHROPIC API COST - ESTIMATE ONLY"),
+            out.contains("ANTHROPIC API COST - CURRENT-MONTH ESTIMATE ONLY"),
             "estimate block qualifier must survive extra_usage going away:\n{out}"
         );
         assert!(

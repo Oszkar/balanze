@@ -402,8 +402,38 @@ impl statusline_render::CrossSources for LiveCrossSources {
         }
     }
 
-    fn codex_windows(&self, now: chrono::DateTime<chrono::Utc>) -> statusline_render::CodexWindows {
-        match codex_local::read_codex_quota() {
+    async fn codex_windows(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> statusline_render::CodexWindows {
+        const CODEX_READ_BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
+        let deadline = std::time::Instant::now() + CODEX_READ_BUDGET;
+        let (send, receive) = tokio::sync::oneshot::channel();
+        if let Err(error) = std::thread::Builder::new()
+            .name("balanze-codex-statusline".to_string())
+            .spawn(move || {
+                let _ = send.send(codex_local::read_codex_quota_until(deadline));
+            })
+        {
+            tracing::debug!("statusline: failed to start Codex read worker: {error}");
+            return statusline_render::CodexWindows::default();
+        }
+        let read = tokio::time::timeout(CODEX_READ_BUDGET, receive).await;
+        let quota = match read {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
+                tracing::debug!("statusline: Codex read worker closed: {error}");
+                return statusline_render::CodexWindows::default();
+            }
+            Err(_) => {
+                tracing::debug!(
+                    ?CODEX_READ_BUDGET,
+                    "statusline: Codex read exceeded foreground budget"
+                );
+                return statusline_render::CodexWindows::default();
+            }
+        };
+        match quota {
             Ok(Some(q)) => statusline_render::CodexWindows {
                 five_hour: q.five_hour().map(|w| w.used_percent as f32),
                 weekly: q.weekly_or_other().map(|w| w.used_percent as f32),

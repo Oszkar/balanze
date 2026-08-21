@@ -1,7 +1,7 @@
 //! Production sink for the `state_coordinator` actor (AGENTS.md §4 #7 - the
 //! only crate that may call Tauri tray APIs). Emits `usage_updated` /
-//! `degraded_state` to the Svelte UI and repaints the gauge tray icon,
-//! deduped by `(ColorBucket, title, tooltip)` per AGENTS.md §3.1.
+//! `degraded_state` to the Svelte UI and enqueues gauge tray targets, deduped by
+//! `(ColorBucket, title, tooltip)` per AGENTS.md §3.1.
 
 use serde::Serialize;
 use state_coordinator::{AnthropicQuotaSource, Sink, Snapshot, Source, WindowKind};
@@ -268,15 +268,21 @@ fn tray_tooltip(view: &TrayView, degraded: bool) -> String {
 
 pub(crate) struct TauriSink {
     app: AppHandle,
-    last_painted: Option<(ColorBucket, String, String)>,
+    repaint: tokio::sync::watch::Sender<Option<tray_icon::PaintTarget>>,
+    last_requested: Option<(ColorBucket, String, String)>,
 }
 
 impl TauriSink {
-    pub(crate) fn new(app: AppHandle) -> Self {
-        Self {
-            app,
-            last_painted: None,
-        }
+    pub(crate) fn new(app: AppHandle) -> (Self, tokio::task::JoinHandle<Result<(), String>>) {
+        let (repaint, painter) = tray_icon::spawn_painter(app.clone());
+        (
+            Self {
+                app,
+                repaint,
+                last_requested: None,
+            },
+            painter,
+        )
     }
 
     fn paint_target(&self, s: &Snapshot, degraded: bool) -> (ColorBucket, String, String) {
@@ -309,9 +315,13 @@ impl Sink for TauriSink {
             tracing::warn!("tauri_sink: emit usage_updated failed: {e}");
         }
         let target = self.paint_target(snapshot, any_source_degraded(snapshot));
-        if self.last_painted.as_ref() != Some(&target) {
-            tray_icon::paint(&self.app, target.0, &target.1, &target.2);
-            self.last_painted = Some(target);
+        if self.last_requested.as_ref() != Some(&target) {
+            self.repaint.send_replace(Some(tray_icon::PaintTarget {
+                bucket: target.0,
+                title: target.1.clone(),
+                tooltip: target.2.clone(),
+            }));
+            self.last_requested = Some(target);
         }
     }
 
@@ -328,14 +338,18 @@ impl Sink for TauriSink {
         // red icon is always explained, including a cold-start failure with no
         // prior paint (which would otherwise show the generic "Balanze").
         let title = self
-            .last_painted
+            .last_requested
             .as_ref()
             .map(|(_, t, _)| t.clone())
             .unwrap_or_default();
         let target = (ColorBucket::Warn, title, degraded_tooltip(source));
-        if self.last_painted.as_ref() != Some(&target) {
-            tray_icon::paint(&self.app, target.0, &target.1, &target.2);
-            self.last_painted = Some(target);
+        if self.last_requested.as_ref() != Some(&target) {
+            self.repaint.send_replace(Some(tray_icon::PaintTarget {
+                bucket: target.0,
+                title: target.1.clone(),
+                tooltip: target.2.clone(),
+            }));
+            self.last_requested = Some(target);
         }
     }
 }

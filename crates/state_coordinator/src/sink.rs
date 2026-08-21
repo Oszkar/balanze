@@ -2,24 +2,27 @@
 //!
 //! The coordinator notifies the sink on every snapshot change and on every
 //! source-level error. Concrete sinks decide what to do: log, emit a Tauri
-//! event, repaint the tray, dedup against `last_painted` (see AGENTS.md
-//! §3.1), persist to history, etc.
+//! event, enqueue a tray repaint target, persist to history, etc.
 //!
 //! Implementations must be `Send + 'static` because the sink lives inside the
-//! coordinator's spawned tokio task. Methods are synchronous; tray/event
-//! calls in Tauri are sync, and anything CPU-bound (color-bucket math,
-//! string formatting) is fast.
+//! coordinator's spawned tokio task. Methods are synchronous and must return
+//! quickly. Blocking OS/main-thread tray calls belong behind a dedicated
+//! worker; color-bucket math and string formatting are fast enough inline.
 
 use crate::messages::Source;
 use crate::snapshot::Snapshot;
 
 pub trait Sink: Send + 'static {
-    /// Called after a successful merge into the snapshot, AND on every
-    /// `Refresh` message. Implementations that need to dedup repaints
-    /// (e.g., the production tray sink - `(ColorBucket, title_text)` per
-    /// AGENTS.md §3.1) should track their own `last_painted` state and
-    /// no-op when unchanged.
+    /// Called after a successful merge into the snapshot. Implementations that
+    /// enqueue repaints should dedup their target before sending it to a worker.
     fn on_snapshot(&mut self, snapshot: &Snapshot);
+
+    /// Presentation-only re-notification of unchanged source state. The default
+    /// preserves ordinary sink behavior; durability wrappers override this so
+    /// a UI/TUI repaint does not fsync an identical `snapshot.json`.
+    fn on_refresh(&mut self, snapshot: &Snapshot) {
+        self.on_snapshot(snapshot);
+    }
 
     /// Called when snapshot state must be durably published without notifying
     /// presentation sinks. Error-slot transitions use this path so

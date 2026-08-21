@@ -19,13 +19,28 @@ use crate::types::UsageEvent;
 /// Stable: original ordering of retained events is preserved. O(n) time,
 /// O(unique-keys) space.
 pub fn dedup_events(events: &mut Vec<UsageEvent>) {
-    let mut seen: HashSet<(String, String)> = HashSet::new();
-    events.retain(
-        |e| match (e.message_id.as_deref(), e.request_id.as_deref()) {
-            (Some(m), Some(r)) => seen.insert((m.to_string(), r.to_string())),
-            _ => true,
-        },
-    );
+    // First decide against borrowed keys, then compact after `seen` is dropped.
+    // Holding references while mutating the vector would be invalid, while
+    // cloning both strings for every event made each debounce O(history) in
+    // allocations as well as comparisons.
+    let keep = {
+        let mut seen: HashSet<(&str, &str)> = HashSet::new();
+        events
+            .iter()
+            .map(
+                |event| match (event.message_id.as_deref(), event.request_id.as_deref()) {
+                    (Some(message), Some(request)) => seen.insert((message, request)),
+                    _ => true,
+                },
+            )
+            .collect::<Vec<_>>()
+    };
+    let mut index = 0;
+    events.retain(|_| {
+        let retain = keep[index];
+        index += 1;
+        retain
+    });
 }
 
 #[cfg(test)]
