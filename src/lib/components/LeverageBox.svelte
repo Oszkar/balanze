@@ -7,7 +7,7 @@
 {#if eventCount > 0}
   <div class="lev" title={PROV.leverageEstimate.title}>
     <div class="row"><span class="cap">Subscription leverage</span><span class="val">~{microUsdToDollars(totalMicroUsd)}</span></div>
-    <div class="note">Claude usage at API list prices · not billed</div>
+    <div class="note">This month at API list prices · not billed</div>
   </div>
 {:else if error}
   <div class="lev"><div class="note">Subscription leverage: ✗ {error}</div></div>

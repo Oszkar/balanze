@@ -8,6 +8,15 @@ use tauri::image::Image;
 use crate::tauri_sink::ColorBucket;
 
 const SIZE: u32 = 32;
+const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+const WARN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaintTarget {
+    pub(crate) bucket: ColorBucket,
+    pub(crate) title: String,
+    pub(crate) tooltip: String,
+}
 
 fn bucket_rgb(bucket: ColorBucket) -> (u8, u8, u8) {
     match bucket {
@@ -49,16 +58,17 @@ pub(crate) fn render_gauge(bucket: ColorBucket, size: u32) -> Vec<u8> {
 /// compact `Claude X% · Codex Y%` line (macOS menu bar only); `tooltip` is the
 /// multi-line status panel shown on hover (and the only text on Windows, where
 /// the tray has no persistent label). Logs and no-ops on any Tauri error - a
-/// failed repaint must never crash the coordinator task.
-pub(crate) fn paint(app: &AppHandle, bucket: ColorBucket, title: &str, tooltip: &str) {
+/// failed repaint is returned to the dedicated painter, which retries without
+/// blocking the coordinator actor or caching a target that did not land.
+fn paint(app: &AppHandle, bucket: ColorBucket, title: &str, tooltip: &str) -> Result<(), String> {
     let Some(tray) = app.tray_by_id("main") else {
-        tracing::warn!("tray_icon: tray 'main' not found; skipping paint");
-        return;
+        return Err("tray 'main' not found".to_string());
     };
+    let mut failure = None;
     let rgba = render_gauge(bucket, SIZE);
     let img = Image::new_owned(rgba, SIZE, SIZE);
     if let Err(e) = tray.set_icon(Some(img)) {
-        tracing::warn!("tray_icon: set_icon failed: {e}");
+        failure = Some(format!("set_icon failed: {e}"));
     }
     let tip = if tooltip.is_empty() {
         "Balanze"
@@ -66,17 +76,94 @@ pub(crate) fn paint(app: &AppHandle, bucket: ColorBucket, title: &str, tooltip: 
         tooltip
     };
     if let Err(e) = tray.set_tooltip(Some(tip)) {
-        tracing::warn!("tray_icon: set_tooltip failed: {e}");
+        failure.get_or_insert_with(|| format!("set_tooltip failed: {e}"));
     }
     // `title` is the macOS menu-bar text only; Windows/Linux trays have no label.
     #[cfg(target_os = "macos")]
     {
         if let Err(e) = tray.set_title(Some(title)) {
-            tracing::warn!("tray_icon: set_title failed: {e}");
+            failure.get_or_insert_with(|| format!("set_title failed: {e}"));
         }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = title;
+    failure.map_or(Ok(()), Err)
+}
+
+fn cache_successful_paint(
+    last_painted: &mut Option<PaintTarget>,
+    target: &PaintTarget,
+    succeeded: bool,
+) {
+    if succeeded {
+        *last_painted = Some(target.clone());
+    }
+}
+
+/// Start the single repaint worker. The watch channel coalesces a burst to the
+/// newest target, and each blocking Tauri/main-thread round trip runs on the
+/// blocking pool rather than on the coordinator's tokio worker.
+pub(crate) fn spawn_painter(
+    app: AppHandle,
+) -> (
+    tokio::sync::watch::Sender<Option<PaintTarget>>,
+    tokio::task::JoinHandle<Result<(), String>>,
+) {
+    let (tx, mut rx) = tokio::sync::watch::channel::<Option<PaintTarget>>(None);
+    let join = tokio::spawn(async move {
+        let mut last_painted = None;
+        let mut last_warn: Option<std::time::Instant> = None;
+        loop {
+            if rx.changed().await.is_err() {
+                return Ok(());
+            }
+            let Some(mut target) = rx.borrow_and_update().clone() else {
+                continue;
+            };
+            if last_painted.as_ref() == Some(&target) {
+                continue;
+            }
+            loop {
+                let paint_app = app.clone();
+                let attempt = target.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    paint(&paint_app, attempt.bucket, &attempt.title, &attempt.tooltip)
+                })
+                .await
+                .map_err(|error| format!("tray repaint worker failed: {error}"))?;
+                match result {
+                    Ok(()) => {
+                        cache_successful_paint(&mut last_painted, &target, true);
+                        break;
+                    }
+                    Err(error)
+                        if last_warn
+                            .is_none_or(|last_warn| last_warn.elapsed() >= WARN_INTERVAL) =>
+                    {
+                        tracing::warn!("tray_icon: repaint failed: {error}; retrying");
+                        last_warn = Some(std::time::Instant::now());
+                    }
+                    Err(error) => tracing::debug!("tray_icon: repaint retry failed: {error}"),
+                }
+
+                tokio::select! {
+                    changed = rx.changed() => {
+                        if changed.is_err() {
+                            return Ok(());
+                        }
+                        if let Some(next) = rx.borrow_and_update().clone() {
+                            target = next;
+                            if last_painted.as_ref() == Some(&target) {
+                                break;
+                            }
+                        }
+                    }
+                    _ = tokio::time::sleep(RETRY_DELAY) => {}
+                }
+            }
+        }
+    });
+    (tx, join)
 }
 
 #[cfg(test)]
@@ -93,5 +180,20 @@ mod tests {
             opaque < (SIZE * SIZE) as usize,
             "ring must not be fully filled"
         );
+    }
+
+    #[test]
+    fn failed_paint_is_not_cached_as_successful() {
+        let target = PaintTarget {
+            bucket: ColorBucket::Green,
+            title: "Claude 10%".to_string(),
+            tooltip: "Balanze".to_string(),
+        };
+        let mut last = None;
+
+        cache_successful_paint(&mut last, &target, false);
+        assert!(last.is_none());
+        cache_successful_paint(&mut last, &target, true);
+        assert_eq!(last.as_ref(), Some(&target));
     }
 }

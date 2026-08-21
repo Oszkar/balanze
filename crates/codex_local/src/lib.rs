@@ -64,16 +64,21 @@ pub use types::{
     WINDOW_DURATION_TOLERANCE_MINUTES, WindowKind,
 };
 pub use walker::{
-    CODEX_CONFIG_DIR_ENV, collect_sessions_newest_first, find_codex_sessions_dir,
-    find_latest_session,
+    CODEX_CONFIG_DIR_ENV, collect_sessions_newest_first, collect_sessions_newest_first_until,
+    find_codex_sessions_dir, find_latest_session,
 };
 
+/// After the newest rollout proves empty, inspect only a bounded number of
+/// older files. A corrupt or freshly-created session should not turn every
+/// statusline prompt into an all-history JSONL parse.
+const MAX_FALLBACK_SESSION_FILES: usize = 32;
+
 /// One-stop convenience: resolve the Codex sessions directory, walk rollout
-/// files newest-first, parse each until one yields a `token_count` snapshot,
-/// return it.
+/// files newest-first, parse the newest plus at most 32 fallback files until one
+/// yields a `token_count` snapshot, return it.
 ///
-/// Returns `Ok(None)` if Codex is installed but every rollout file lacks a
-/// parseable `token_count` event (or no rollout files exist at all).
+/// Returns `Ok(None)` if Codex is installed but the bounded candidate set lacks
+/// a parseable `token_count` event (or no rollout files exist at all).
 /// Returns `Err(FileMissing)` if Codex isn't installed at all. Surfaces the
 /// first `SchemaDrift` / `IoError` from the newest file that hit it, instead
 /// of silently masking a drift signal behind older data.
@@ -84,16 +89,44 @@ pub use walker::{
 /// quota state.
 pub fn read_codex_quota() -> Result<Option<CodexQuotaSnapshot>, ParseError> {
     let dir = find_codex_sessions_dir()?;
-    let already_probed = match try_latest_quota_snapshot(&dir)? {
+    read_codex_quota_from_dir(&dir)
+}
+
+/// Prompt-path variant of [`read_codex_quota`] that cooperatively stops both
+/// rollout discovery and fallback parsing at `deadline`.
+pub fn read_codex_quota_until(
+    deadline: std::time::Instant,
+) -> Result<Option<CodexQuotaSnapshot>, ParseError> {
+    let dir = find_codex_sessions_dir()?;
+    let sessions = collect_sessions_newest_first_until(&dir, deadline)?;
+    for path in sessions
+        .into_iter()
+        .take(MAX_FALLBACK_SESSION_FILES.saturating_add(1))
+    {
+        if std::time::Instant::now() >= deadline {
+            return Ok(None);
+        }
+        if let Some(snapshot) = read_latest_quota_snapshot(&path)? {
+            return Ok(Some(snapshot));
+        }
+    }
+    Ok(None)
+}
+
+fn read_codex_quota_from_dir(
+    dir: &std::path::Path,
+) -> Result<Option<CodexQuotaSnapshot>, ParseError> {
+    let already_probed = match try_latest_quota_snapshot(dir)? {
         LatestQuotaProbe::HasSnapshot { snapshot, .. } => return Ok(Some(snapshot)),
         LatestQuotaProbe::NoSessions => return Ok(None),
         LatestQuotaProbe::NoSnapshotInLatest(path) => path,
     };
-    let sessions = collect_sessions_newest_first(&dir)?;
-    for path in sessions {
-        if path == already_probed {
-            continue;
-        }
+    let sessions = collect_sessions_newest_first(dir)?;
+    for path in sessions
+        .into_iter()
+        .filter(|path| path != &already_probed)
+        .take(MAX_FALLBACK_SESSION_FILES)
+    {
         // ? propagates SchemaDrift / IoError immediately so a Codex schema
         // change isn't hidden behind older sessions. Ok(None) ("session has
         // no token_count yet") falls through to the next-older candidate.
@@ -184,6 +217,29 @@ mod tests {
         assert_eq!(
             try_latest_quota_snapshot(root).expect("latest shortcut succeeds"),
             LatestQuotaProbe::NoSnapshotInLatest(newest)
+        );
+    }
+
+    #[test]
+    fn fallback_does_not_parse_unbounded_old_session_history() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        touch_jsonl(
+            &root.join("rollout-valid-but-too-old.jsonl"),
+            &format!("{SESSION_META}\n{TOKEN_COUNT_3PCT}\n"),
+            -10_000,
+        );
+        for index in 0..=MAX_FALLBACK_SESSION_FILES {
+            touch_jsonl(
+                &root.join(format!("rollout-empty-{index:02}.jsonl")),
+                SESSION_META,
+                -(index as i64),
+            );
+        }
+
+        assert!(
+            read_codex_quota_from_dir(root).unwrap().is_none(),
+            "a snapshot beyond the bounded fallback must not be parsed"
         );
     }
 }

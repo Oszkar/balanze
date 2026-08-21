@@ -172,6 +172,10 @@ impl<S: Sink> Sink for PublishingSink<S> {
         self.inner.on_degraded(source, error);
     }
 
+    fn on_refresh(&mut self, snapshot: &Snapshot) {
+        self.inner.on_refresh(snapshot);
+    }
+
     fn on_snapshot_durable(&mut self, snapshot: &Snapshot) {
         if let Some(publisher) = &mut self.publisher {
             publisher.publish(snapshot);
@@ -298,7 +302,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             // Re-notify with current state. Sinks that need to repaint will
             // do so; sinks that dedup against `last_painted` will no-op.
             recompute_pace(state);
-            sink.on_snapshot(&state.snapshot);
+            sink.on_refresh(&state.snapshot);
         }
         StateMsg::SettingsChanged {
             settings: s,
@@ -761,12 +765,17 @@ mod tests {
     #[tokio::test]
     async fn jsonl_update_derives_window_and_cost_cells() {
         let (handle, _join) = spawn(NullSink);
+        let mut events = sample_events();
+        let now = Utc::now();
+        for (index, event) in events.iter_mut().enumerate() {
+            event.ts = now - Duration::minutes(index as i64);
+        }
         handle
             .send(StateMsg::Update(SourceUpdate {
                 generation: 0,
                 source: Source::ClaudeJsonl,
                 result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
-                    events: Arc::new(sample_events()),
+                    events: Arc::new(events),
                     files_scanned: 2,
                 })),
             }))
@@ -981,6 +990,34 @@ mod tests {
         let _ = handle.query().await.unwrap();
 
         assert_eq!(sink.snapshot_count(), 1, "Refresh should call on_snapshot");
+    }
+
+    #[tokio::test]
+    async fn refresh_repaints_without_publishing_snapshot_file() {
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&writes);
+        let write = Arc::new(move |_path: &Path, _payload: &crate::SnapshotFilePayload| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }) as crate::sink_file::WriteFn;
+        let (publisher, writer) =
+            crate::sink_file::spawn_snapshot_writer_with("unused".into(), write);
+        let inner = RecordingSink::default();
+        let mut sink = PublishingSink {
+            inner: inner.clone(),
+            publisher: Some(publisher),
+        };
+
+        sink.on_refresh(&Snapshot::empty(Utc::now()));
+        drop(sink);
+        writer.shutdown().await;
+
+        assert_eq!(inner.snapshot_count(), 1, "presentation still refreshes");
+        assert_eq!(
+            writes.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "unchanged refresh must not publish snapshot.json"
+        );
     }
 
     #[tokio::test]

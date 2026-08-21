@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  A local-first tray utility that consolidates personal AI usage into one normalized view - Claude subscription quota, an estimate of Claude Code's API-rate value, OpenAI Codex quota, and real OpenAI API spend, all at a glance.<br>
+  A local-first tray utility that consolidates personal AI usage into one normalized view - Claude subscription quota, this month's estimate of Claude Code's API-rate value, OpenAI Codex quota, and real OpenAI API spend, all at a glance.<br>
   Rust + Tauri 2 + Svelte 5. Windows 11 (x64) and macOS 15+ (Apple Silicon); the CLI also runs on Linux.
 </p>
 
@@ -50,7 +50,7 @@ The Claude list-price figure is deliberately **not** a matrix cell - it sits out
 - **Anthropic API $ - real or nothing.** Anthropic exposes no per-user API spend, so this cell shows the real `extra_usage` overage *if* you enabled it on claude.ai, and otherwise reads **not available** - never backfilled with a substitute number.
 - **OpenAI Codex quota** - the server-computed rate-limit % for both rolling windows (5-hour and weekly), read from the local Codex CLI rollout files (`~/.codex/sessions/`).
 - **OpenAI API $** - this-month spend plus a per-line-item breakdown from `/v1/organization/costs`, using an `sk-admin-...` key. Real billing data.
-- **Subscription leverage (a separate estimate)** - `claude_cost` multiplies your local Claude Code JSONL by a vendored LiteLLM price table to show what that usage *would* cost at API list prices. For Pro/Max users that is leverage from the subscription, **never billed**.
+- **Subscription leverage (a separate estimate)** - `claude_cost` multiplies the current calendar month's local Claude Code JSONL by a vendored LiteLLM price table to show what that usage *would* cost at API list prices. For Pro/Max users that is leverage from the subscription, **never billed**.
 
 Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); user-facing answers in the [FAQ](https://oszkar.github.io/balanze/faq.html) and developer traps in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md).
 

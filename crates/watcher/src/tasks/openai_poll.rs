@@ -39,7 +39,15 @@ pub(crate) fn spawn(
     tokio::spawn(async move {
         // Resolve the key once at task startup. The key rarely changes during
         // a watcher session; if the user adds/rotates it they restart the app.
-        let key = match resolve_key() {
+        let key = match tokio::task::spawn_blocking(resolve_key).await {
+            Ok(key) => key,
+            Err(error) => {
+                return Err(WatcherError::Io(std::io::Error::other(format!(
+                    "OpenAI key resolution worker failed: {error}"
+                ))));
+            }
+        };
+        let key = match key {
             Some(k) => k,
             None => {
                 tracing::info!(

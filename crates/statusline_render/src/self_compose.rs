@@ -28,7 +28,7 @@ pub struct OpenAiCell {
 #[allow(async_fn_in_trait)]
 pub trait CrossSources {
     async fn openai_cell(&self) -> OpenAiCell;
-    fn codex_windows(&self, now: DateTime<Utc>) -> CodexWindows;
+    async fn codex_windows(&self, now: DateTime<Utc>) -> CodexWindows;
 }
 
 /// Compose cross-provider cells without the watcher.
@@ -40,7 +40,7 @@ pub async fn self_compose<S: CrossSources>(
     now: DateTime<Utc>,
     want_openai: bool,
 ) -> CrossProvider {
-    let codex = sources.codex_windows(now);
+    let codex = sources.codex_windows(now).await;
     let openai = if want_openai {
         sources.openai_cell().await
     } else {
@@ -79,7 +79,7 @@ mod tests {
             self.openai
         }
 
-        fn codex_windows(&self, _now: DateTime<Utc>) -> CodexWindows {
+        async fn codex_windows(&self, _now: DateTime<Utc>) -> CodexWindows {
             self.codex
         }
     }

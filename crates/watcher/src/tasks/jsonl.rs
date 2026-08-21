@@ -37,6 +37,8 @@ const DEBOUNCE: Duration = Duration::from_millis(300);
 /// Fallback re-scan cadence. A safety net for events `notify` misses; reads
 /// incrementally (only new bytes), so it costs nothing like a full reparse.
 const FALLBACK_POLL: Duration = Duration::from_secs(60);
+const READ_ERROR_WARN_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const PRUNE_INTERVAL: chrono::Duration = chrono::Duration::hours(1);
 
 /// Per-task incremental scan state: the byte-cursor parser plus each file's
 /// owned event contribution. Threaded through `spawn_blocking` (moved in,
@@ -44,6 +46,11 @@ const FALLBACK_POLL: Duration = Duration::from_secs(60);
 struct ScanState {
     parser: IncrementalParser,
     by_file: BTreeMap<PathBuf, Vec<UsageEvent>>,
+    deduped: Arc<Vec<UsageEvent>>,
+    dirty: bool,
+    files_scanned: Option<usize>,
+    last_retention_start: Option<chrono::DateTime<chrono::Utc>>,
+    read_error_warned_at: BTreeMap<PathBuf, std::time::Instant>,
 }
 
 impl ScanState {
@@ -51,6 +58,11 @@ impl ScanState {
         Self {
             parser: IncrementalParser::new(),
             by_file: BTreeMap::new(),
+            deduped: Arc::new(Vec::new()),
+            dirty: true,
+            files_scanned: None,
+            last_retention_start: None,
+            read_error_warned_at: BTreeMap::new(),
         }
     }
 
@@ -62,8 +74,9 @@ impl ScanState {
             .cloned()
             .collect();
         for path in removed {
-            self.by_file.remove(&path);
+            self.dirty |= self.by_file.remove(&path).is_some();
             self.parser.invalidate(&path);
+            self.read_error_warned_at.remove(&path);
         }
     }
 }
@@ -253,8 +266,9 @@ pub(crate) fn spawn(
 enum ScanResult {
     /// Successful walk + incremental read + dedup.
     Ok {
-        events: Vec<UsageEvent>,
+        events: Arc<Vec<UsageEvent>>,
         files_scanned: usize,
+        changed: bool,
     },
     /// `find_jsonl_files` itself failed on every root - the scan never started.
     Fatal { error: String },
@@ -286,18 +300,21 @@ async fn emit_incremental(
             ScanResult::Ok {
                 events,
                 files_scanned,
+                changed,
             },
         )) => {
-            let _ = coord
-                .send(StateMsg::Update(SourceUpdate {
-                    generation,
-                    source: Source::ClaudeJsonl,
-                    result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
-                        events: Arc::new(events),
-                        files_scanned,
-                    })),
-                }))
-                .await;
+            if changed {
+                let _ = coord
+                    .send(StateMsg::Update(SourceUpdate {
+                        generation,
+                        source: Source::ClaudeJsonl,
+                        result: Ok(SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                            events,
+                            files_scanned,
+                        })),
+                    }))
+                    .await;
+            }
             state
         }
         Ok((state, ScanResult::Fatal { error })) => {
@@ -369,6 +386,9 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
 
     let files_scanned = files.len();
     let discovered: HashSet<&PathBuf> = files.iter().collect();
+    state.read_error_warned_at.retain(|path, _| {
+        !reconciled_roots.iter().any(|root| path.starts_with(root)) || discovered.contains(&path)
+    });
     let removed: Vec<PathBuf> = state
         .by_file
         .keys()
@@ -378,62 +398,131 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
         .cloned()
         .collect();
     for path in removed {
-        state.by_file.remove(&path);
+        state.dirty |= state.by_file.remove(&path).is_some();
         state.parser.invalidate(&path);
+        state.read_error_warned_at.remove(&path);
     }
 
+    let now = chrono::Utc::now();
+    let retention_start = jsonl_retention_start(now);
     for path in &files {
         match state.parser.read_incremental(path) {
-            Ok(IncrementalRead::Append(new_events)) => {
-                state
-                    .by_file
-                    .entry(path.clone())
-                    .or_default()
-                    .extend(new_events);
+            Ok(IncrementalRead::Append(mut new_events)) => {
+                new_events.retain(|event| event.ts >= retention_start);
+                if !new_events.is_empty() {
+                    state.dirty = true;
+                    state
+                        .by_file
+                        .entry(path.clone())
+                        .or_default()
+                        .extend(new_events);
+                }
+                state.read_error_warned_at.remove(path);
             }
-            Ok(IncrementalRead::Replace(events)) => {
-                state.by_file.insert(path.clone(), events);
+            Ok(IncrementalRead::Replace(mut events)) => {
+                events.retain(|event| event.ts >= retention_start);
+                if state.by_file.get(path) != Some(&events) {
+                    state.dirty = true;
+                    state.by_file.insert(path.clone(), events);
+                }
+                state.read_error_warned_at.remove(path);
             }
             Err(ParseError::FileMissing(_)) => {
                 state.parser.invalidate(path);
-                state.by_file.remove(path);
+                state.dirty |= state.by_file.remove(path).is_some();
+                state.read_error_warned_at.remove(path);
             }
             Err(e) => {
-                tracing::warn!(
-                    "watcher/jsonl: incremental read error in {} ({e})",
-                    path.display()
-                );
+                let now = std::time::Instant::now();
+                if should_warn_read_error(&mut state.read_error_warned_at, path, now) {
+                    tracing::warn!(
+                        "watcher/jsonl: incremental read error in {} ({e})",
+                        path.display()
+                    );
+                } else {
+                    tracing::debug!(
+                        "watcher/jsonl: repeated incremental read error in {} ({e})",
+                        path.display()
+                    );
+                }
             }
         }
     }
-    // Preserve the walker's newest-first order for the normal path so the
-    // existing first-wins dedup behavior stays stable. Contributions retained
-    // from a temporarily unreadable root follow in deterministic path order.
-    let mut emitted = HashSet::new();
-    let mut events = Vec::new();
-    for path in &files {
-        if emitted.insert(path.clone())
-            && let Some(file_events) = state.by_file.get(path)
-        {
-            events.extend(file_events.iter().cloned());
+
+    if state
+        .last_retention_start
+        .is_none_or(|previous| retention_start - previous >= PRUNE_INTERVAL)
+    {
+        for events in state.by_file.values_mut() {
+            let before = events.len();
+            events.retain(|event| event.ts >= retention_start);
+            state.dirty |= events.len() != before;
         }
+        state.last_retention_start = Some(retention_start);
     }
-    for (path, file_events) in &state.by_file {
-        if emitted.insert(path.clone()) {
-            events.extend(file_events.iter().cloned());
+
+    let files_changed = state.files_scanned != Some(files_scanned);
+    state.dirty |= files_changed;
+    if state.dirty {
+        // Preserve the walker's newest-first order for the normal path so the
+        // existing first-wins dedup behavior stays stable. Contributions retained
+        // from a temporarily unreadable root follow in deterministic path order.
+        let mut emitted = HashSet::new();
+        let mut events = Vec::new();
+        for path in &files {
+            if emitted.insert(path.clone())
+                && let Some(file_events) = state.by_file.get(path)
+            {
+                events.extend(file_events.iter().cloned());
+            }
         }
+        for (path, file_events) in &state.by_file {
+            if emitted.insert(path.clone()) {
+                events.extend(file_events.iter().cloned());
+            }
+        }
+        dedup_events(&mut events);
+        state.deduped = Arc::new(events);
     }
-    dedup_events(&mut events);
+    let changed = state.dirty;
+    state.dirty = false;
+    state.files_scanned = Some(files_scanned);
 
     ScanResult::Ok {
-        events,
+        events: Arc::clone(&state.deduped),
         files_scanned,
+        changed,
     }
+}
+
+fn should_warn_read_error(
+    warned_at: &mut BTreeMap<PathBuf, std::time::Instant>,
+    path: &std::path::Path,
+    now: std::time::Instant,
+) -> bool {
+    if warned_at
+        .get(path)
+        .is_some_and(|last| now.duration_since(*last) < READ_ERROR_WARN_INTERVAL)
+    {
+        return false;
+    }
+    warned_at.insert(path.to_path_buf(), now);
+    true
+}
+
+fn jsonl_retention_start(now: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    use chrono::{Datelike as _, TimeZone as _};
+    let month_start = chrono::Utc
+        .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+        .single()
+        .expect("valid UTC month start");
+    std::cmp::min(month_start, now - chrono::Duration::hours(5))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone as _;
     use std::time::{Duration, SystemTime};
 
     /// Serializes env-mutating tests in this module. `cargo nextest` isolates
@@ -548,12 +637,17 @@ mod tests {
     }
 
     fn assistant_line(msg_id: &str, req_id: &str, output: u64) -> String {
+        let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        assistant_line_at(&timestamp, msg_id, req_id, output)
+    }
+
+    fn assistant_line_at(timestamp: &str, msg_id: &str, req_id: &str, output: u64) -> String {
         format!(
-            r#"{{"type":"assistant","timestamp":"2026-05-06T14:28:06.800Z","requestId":"{req_id}","message":{{"id":"{msg_id}","model":"m","usage":{{"input_tokens":1,"output_tokens":{output}}}}}}}"#
+            r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"{req_id}","message":{{"id":"{msg_id}","model":"m","usage":{{"input_tokens":1,"output_tokens":{output}}}}}}}"#
         ) + "\n"
     }
 
-    fn scanned_events(root: &std::path::Path, state: &mut ScanState) -> Vec<UsageEvent> {
+    fn scanned_events(root: &std::path::Path, state: &mut ScanState) -> Arc<Vec<UsageEvent>> {
         match scan_incremental(&[root.to_path_buf()], state) {
             ScanResult::Ok { events, .. } => events,
             ScanResult::Fatal { error } => panic!("scan failed: {error}"),
@@ -665,6 +759,104 @@ mod tests {
 
         let events = scanned_events(dir.path(), &mut ScanState::new());
         assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn unchanged_scan_reuses_cached_deduped_events() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("session.jsonl"),
+            assistant_line("msg_a", "req_1", 100),
+        )
+        .unwrap();
+        let mut state = ScanState::new();
+        let first = match scan_incremental(&[dir.path().to_path_buf()], &mut state) {
+            ScanResult::Ok {
+                events, changed, ..
+            } => {
+                assert!(changed);
+                events
+            }
+            ScanResult::Fatal { error } => panic!("scan failed: {error}"),
+        };
+        let second = match scan_incremental(&[dir.path().to_path_buf()], &mut state) {
+            ScanResult::Ok {
+                events, changed, ..
+            } => {
+                assert!(!changed);
+                events
+            }
+            ScanResult::Fatal { error } => panic!("scan failed: {error}"),
+        };
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn scan_prunes_events_older_than_month_and_rolling_window_retention() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = (chrono::Utc::now() - chrono::Duration::days(40))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        std::fs::write(
+            dir.path().join("session.jsonl"),
+            assistant_line_at(&old, "msg_old", "req_old", 100)
+                + &assistant_line("msg_current", "req_current", 200),
+        )
+        .unwrap();
+
+        let events = scanned_events(dir.path(), &mut ScanState::new());
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_current"));
+    }
+
+    #[test]
+    fn replacement_cannot_reintroduce_history_between_periodic_sweeps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let current = assistant_line("msg_current", "req_current", 100);
+        std::fs::write(&path, &current).unwrap();
+        let mut state = ScanState::new();
+        assert_eq!(scanned_events(dir.path(), &mut state).len(), 1);
+
+        let old = (chrono::Utc::now() - chrono::Duration::days(40))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let replacement = assistant_line_at(&old, "msg_old", "req_old", 200)
+            + &assistant_line("msg_new", "req_new", 300);
+        replace_file(&path, replacement.as_bytes());
+
+        let events = scanned_events(dir.path(), &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].message_id.as_deref(), Some("msg_new"));
+    }
+
+    #[test]
+    fn retention_keeps_previous_month_tail_during_rollover_window() {
+        let now = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 2, 0, 0).unwrap();
+
+        assert_eq!(
+            jsonl_retention_start(now),
+            chrono::Utc.with_ymd_and_hms(2026, 5, 31, 21, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn repeated_read_error_warning_is_rate_limited_per_file() {
+        let path = PathBuf::from("unreadable.jsonl");
+        let start = std::time::Instant::now();
+        let mut warned = BTreeMap::new();
+
+        assert!(should_warn_read_error(&mut warned, &path, start));
+        assert!(!should_warn_read_error(
+            &mut warned,
+            &path,
+            start + READ_ERROR_WARN_INTERVAL - Duration::from_secs(1)
+        ));
+        assert!(should_warn_read_error(
+            &mut warned,
+            &path,
+            start + READ_ERROR_WARN_INTERVAL
+        ));
     }
 
     #[test]
