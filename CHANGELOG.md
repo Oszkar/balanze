@@ -9,9 +9,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 ### Changed
 
 - **CLI JSON output advances to schema version 2.** The new nullable `claude_oauth_unavailable` field distinguishes "Claude Code not installed" from cold start. Consumers that reject unknown schema versions must add version 2 before upgrading; all version 1 fields keep their existing names and types.
+- **Atomic-write guarantees now match each supported platform.** Unix publishes remain crash-durable through the parent-directory sync, while Windows is documented as atomic old-or-new publication with the newest successful write still at risk during power loss.
 
 ### Fixed
 
+- **Claude settings wiring now respects dotfile-managed configuration.** Existing JSON key order is preserved, symlinks remain symlinks, dangling links are rejected, and a link retarget cannot redirect a read-modify-write transaction to a different file.
 - **Settings and tray updates no longer stall behind failed background work.** Watcher restarts remain interruptible, settings acknowledgments time out cleanly, tray repainting runs off the coordinator task, and transient operating-system paint failures are retried instead of cached as success.
 - **Live usage state now stays ordered and supervised.** Older snapshot replies cannot overwrite newer events or refreshes, listener setup cannot leak across a closed popover, dropped refreshes are visible in logs, and an exhausted watcher generation remains supervised instead of silently leaving every source stopped.
 - **Local usage caches stay bounded during normal use.** JSONL history is retained only for the current month plus the five-hour rollover tail, repeated file errors are rate-limited and reclaimed, statusline leases are swept safely, and Codex fallback discovery observes a prompt-path deadline.

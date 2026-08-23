@@ -1,22 +1,24 @@
-//! Perms-preserving, durable atomic file replace.
+//! Perms-preserving atomic file replace.
 //!
 //! One home for the subtle sequence AGENTS.md 3.4 relies on, previously
-//! copy-pasted across the snapshot, statusline, settings, and OAuth-credential
+//! copy-pasted across the snapshot, statusline, settings, and OpenAI-gate
 //! writers where a copy risked silently dropping the directory fsync or a
 //! perms-preserving step:
 //!
-//! 1. create a unique `*.tmp` sibling in the target's directory with
+//! 1. resolve an existing target so a symlink itself is never replaced,
+//! 2. create a unique `*.tmp` sibling in the target's directory with
 //!    `O_CREAT | O_EXCL` (so two writers never share a tmp),
-//! 2. write the bytes and `sync_all` the tmp (a crash between write and rename
+//! 3. write the bytes and `sync_all` the tmp (a crash between write and rename
 //!    cannot lose data),
-//! 3. on unix, copy the existing target's permissions onto the tmp (preserve
+//! 4. on unix, copy the existing target's permissions onto the tmp (preserve
 //!    the file's mode across the replace),
-//! 4. `rename` the tmp over the target (atomic on the same filesystem),
-//! 5. on unix, fsync the parent directory so the rename itself is durable.
+//! 5. `rename` the tmp over the target (atomic on the same filesystem),
+//! 6. on unix, fsync the parent directory so the rename itself is durable.
 //!
 //! The tmp is removed on any failure. Windows has no portable directory fsync
-//! and no unix mode; there the file fsync + rename is the durability guarantee
-//! and new files inherit the parent directory's ACL.
+//! and `std::fs::rename` does not request write-through rename semantics. The
+//! replace remains atomic there, but a power loss after reported success may
+//! discard the newest write. New files inherit the parent directory's ACL.
 //!
 //! This crate owns ONLY the byte-level write. Callers that must merge into an
 //! existing file (e.g. touch only certain JSON fields, or never regress a
@@ -36,9 +38,6 @@ pub enum Permissions {
     /// still copied onto the tmp before the rename (so an existing file's
     /// permissions are preserved); a brand-new file gets the umask default.
     Default,
-    /// Create the tmp `0o600` (owner read/write only) on unix, for secret
-    /// files. A no-op on non-unix, where the parent directory ACL governs.
-    OwnerOnly,
 }
 
 /// Atomically replace `path`'s contents with `bytes`. See the crate docs for
@@ -59,23 +58,24 @@ fn atomic_write_with_parent_sync(
     perms: Permissions,
     sync_parent: impl FnOnce(&Path) -> io::Result<()>,
 ) -> io::Result<()> {
+    let resolved_path = resolve_write_target(path)?;
+    let path = resolved_path.as_path();
     let parent = resolve_parent(path);
     let tmp = parent.join(tmp_name(path));
 
     let write_result = (|| -> io::Result<()> {
         let mut f = create_tmp(&tmp, perms)?;
-        // Preserve the existing target's mode across the replace - but ONLY for
-        // `Default`, and BEFORE `sync_all` so the mode change is durable, not
-        // just the bytes (a crash after rename must not leave the file at the
-        // tmp's umask-default mode). For `OwnerOnly` the tmp is already 0o600
-        // from `O_CREAT` and MUST stay restrictive even when the existing file
-        // is looser (e.g. a 0o644 credential file), so its mode is never copied.
-        // A copy failure is non-fatal (we keep the safe default rather than fail).
+        // Preserve the existing target's mode before `sync_all` so the mode
+        // change is durable with the bytes. A copy failure is non-fatal because
+        // the freshly created tmp keeps the OS default rather than becoming
+        // more permissive than its containing directory allows.
         #[cfg(unix)]
-        if perms == Permissions::Default
-            && let Ok(meta) = fs::metadata(path)
-        {
-            let _ = f.set_permissions(meta.permissions());
+        match perms {
+            Permissions::Default => {
+                if let Ok(meta) = fs::metadata(path) {
+                    let _ = f.set_permissions(meta.permissions());
+                }
+            }
         }
         f.write_all(bytes)?;
         // fsync before rename: a crash/power-loss between write and rename
@@ -106,25 +106,35 @@ fn sync_parent_directory(parent: &Path) -> io::Result<()> {
 
 #[cfg(not(unix))]
 fn sync_parent_directory(_parent: &Path) -> io::Result<()> {
-    // Windows has no portable directory fsync. File sync + same-directory
-    // rename is the strongest guarantee exposed by the standard library.
+    // Windows has no portable directory fsync, and std's rename does not expose
+    // write-through semantics. Atomicity holds, but the newest successful write
+    // can be lost on power failure.
     Ok(())
 }
 
-#[cfg(unix)]
 fn create_tmp(tmp: &Path, perms: Permissions) -> io::Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    if perms == Permissions::OwnerOnly {
-        opts.mode(0o600);
+    match perms {
+        Permissions::Default => fs::File::create_new(tmp),
     }
-    opts.open(tmp)
 }
 
-#[cfg(not(unix))]
-fn create_tmp(tmp: &Path, _perms: Permissions) -> io::Result<fs::File> {
-    fs::File::create_new(tmp)
+/// Resolve an existing target before choosing its sibling tmp and rename
+/// destination. This preserves a dotfile-manager symlink instead of replacing
+/// the link itself with a regular file. A dangling symlink is an error: treating
+/// it as a missing path would silently destroy the user's link.
+/// Resolve the destination of an existing target for a read-modify-write
+/// transaction. Callers that derive new bytes from the old contents must use
+/// the returned path for both the read and [`atomic_write`], so a symlink
+/// retarget cannot redirect publication to a different file.
+///
+/// Missing paths are returned unchanged so callers can create them. A dangling
+/// symlink is an error rather than a missing path.
+pub fn resolve_write_target(path: &Path) -> io::Result<std::path::PathBuf> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => fs::canonicalize(path),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(e) => Err(e),
+    }
 }
 
 /// The directory the tmp lands in and the parent to fsync. A bare relative
@@ -166,6 +176,41 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[cfg(unix)]
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(error) if windows_symlink_privilege_missing(&error) => {
+                eprintln!("skipping symlink test: Windows symlink privilege is unavailable");
+                false
+            }
+            Err(error) => panic!("failed to create symlink fixture: {error}"),
+        }
+    }
+
+    #[cfg(windows)]
+    fn windows_symlink_privilege_missing(error: &io::Error) -> bool {
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_missing_windows_symlink_privilege_is_skippable() {
+        assert!(windows_symlink_privilege_missing(
+            &io::Error::from_raw_os_error(1314)
+        ));
+        assert!(!windows_symlink_privilege_missing(
+            &io::Error::from_raw_os_error(5)
+        ));
+    }
+
     #[test]
     fn writes_a_new_file() {
         let dir = tempdir().unwrap();
@@ -181,6 +226,53 @@ mod tests {
         fs::write(&p, b"old-and-longer").unwrap();
         atomic_write(&p, b"new", Permissions::Default).unwrap();
         assert_eq!(fs::read(&p).unwrap(), b"new");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn overwrites_symlink_target_without_replacing_the_symlink() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("managed-settings.json");
+        let link = dir.path().join("settings.json");
+        fs::write(&target, b"old").unwrap();
+        if !create_symlink_or_skip(&target, &link) {
+            return;
+        }
+
+        atomic_write(&link, b"new", Permissions::Default).unwrap();
+
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "atomic replacement must preserve an existing symlink"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn dangling_symlink_is_rejected_without_replacing_the_link() {
+        let dir = tempdir().unwrap();
+        let missing_target = dir.path().join("missing-settings.json");
+        let link = dir.path().join("settings.json");
+        if !create_symlink_or_skip(&missing_target, &link) {
+            return;
+        }
+
+        let error = atomic_write(&link, b"new", Permissions::Default).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "a dangling symlink must remain intact after a rejected write"
+        );
+        assert!(!missing_target.exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
@@ -224,40 +316,12 @@ mod tests {
         assert_eq!(resolve_parent(Path::new("dir/f.json")), Path::new("dir"));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn owner_only_stays_restrictive_over_a_permissive_existing_file() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = tempdir().unwrap();
-        let p = dir.path().join("secret");
-        // An existing world-readable file must NOT loosen an OwnerOnly write.
-        fs::write(&p, b"old").unwrap();
-        fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
-        atomic_write(&p, b"tok", Permissions::OwnerOnly).unwrap();
-        let mode = fs::metadata(&p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(
-            mode, 0o600,
-            "OwnerOnly must stay 0o600 over a 0o644 file, got {mode:o}"
-        );
-    }
-
     #[test]
     fn concurrent_unique_tmp_names() {
         // Two names generated back to back must differ (seq counter), so
         // create_new can't collide between concurrent writers.
         let p = Path::new("/some/dir/target.json");
         assert_ne!(tmp_name(p), tmp_name(p));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn owner_only_creates_0o600() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = tempdir().unwrap();
-        let p = dir.path().join("secret");
-        atomic_write(&p, b"tok", Permissions::OwnerOnly).unwrap();
-        let mode = fs::metadata(&p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "got {mode:o}");
     }
 
     #[cfg(unix)]
