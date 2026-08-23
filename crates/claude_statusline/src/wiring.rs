@@ -144,13 +144,14 @@ pub fn read_wire_status(path: &Path) -> Result<WireStatus, StatuslineError> {
 /// caller, which must call [`read_wire_status`] first. Safe to call repeatedly
 /// with the canonical invocation (idempotent).
 ///
-/// Note: the file is rewritten via `serde_json::to_vec_pretty`, so it is
-/// normalized to pretty-printed JSON with object keys sorted
-/// (`serde_json::Value` is a `BTreeMap`; the workspace does not enable
-/// `preserve_order`). Semantically safe - Claude Code re-parses by key -
-/// but a user who hand-ordered their settings.json will see keys sorted
-/// after the first wire.
+/// Note: the file is rewritten via `serde_json::to_vec_pretty`, so whitespace
+/// is normalized, but existing object-key insertion order is preserved.
 pub fn wire_statusline(path: &Path, invocation: &str) -> Result<(), StatuslineError> {
+    let path = resolve_settings_target(path)?;
+    wire_statusline_resolved(&path, invocation)
+}
+
+fn wire_statusline_resolved(path: &Path, invocation: &str) -> Result<(), StatuslineError> {
     // Load + parse existing content, or start with an empty object.
     // A single match on std::fs::read avoids the TOCTOU race of `if path.exists()
     // { std::fs::read(path) }` where a delete between the two calls would yield
@@ -231,6 +232,11 @@ pub fn restore_statusline(path: &Path, previous: Option<&str>) -> Result<bool, S
 /// should check [`read_wire_status`] first so it never strips another tool's
 /// `statusLine`.
 pub fn unwire_statusline(path: &Path) -> Result<(), StatuslineError> {
+    let path = resolve_settings_target(path)?;
+    unwire_statusline_resolved(&path)
+}
+
+fn unwire_statusline_resolved(path: &Path) -> Result<(), StatuslineError> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         // Nothing to remove.
@@ -263,15 +269,20 @@ pub fn unwire_statusline(path: &Path) -> Result<(), StatuslineError> {
     atomic_write_json(path, &root)
 }
 
+fn resolve_settings_target(path: &Path) -> Result<PathBuf, StatuslineError> {
+    atomic_file::resolve_write_target(path).map_err(|source| StatuslineError::SettingsIo {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 /// Atomically write `root` as pretty JSON to `path`: mkdir -p the parent,
 /// write a uniquely-named tmp, fsync, rename over the target, then fsync the
 /// dir (Unix). Shared by [`wire_statusline`] and [`unwire_statusline`].
 ///
-/// Normalizes to pretty-printed JSON with object keys sorted (`serde_json::Value`
-/// is a `BTreeMap`; the workspace does not enable `preserve_order`). Semantically
-/// safe - Claude Code re-parses by key - but a hand-ordered settings.json will
-/// see keys sorted after the first write. No 0o600 requirement: settings.json
-/// is not a secret file.
+/// Normalizes whitespace to pretty-printed JSON while preserving existing
+/// object-key insertion order. No 0o600 requirement: settings.json is not a
+/// secret file.
 fn atomic_write_json(path: &Path, root: &serde_json::Value) -> Result<(), StatuslineError> {
     let serialized =
         serde_json::to_vec_pretty(root).map_err(|e| StatuslineError::SettingsMalformed {
@@ -306,6 +317,16 @@ mod tests {
 
     fn write_settings(path: &Path, content: &str) {
         std::fs::write(path, content.as_bytes()).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_file(target, link)
     }
 
     // ── read_wire_status ────────────────────────────────────────────────────
@@ -458,6 +479,52 @@ mod tests {
     }
 
     #[test]
+    fn wire_preserves_existing_object_key_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        write_settings(
+            &path,
+            r#"{"zLastAlphabetically":1,"aFirstAlphabetically":2}"#,
+        );
+
+        wire_statusline(&path, INVOCATION).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        let z = written.find("zLastAlphabetically").unwrap();
+        let a = written.find("aFirstAlphabetically").unwrap();
+        let statusline = written.find("statusLine").unwrap();
+        assert!(
+            z < a && a < statusline,
+            "existing keys must retain insertion order and statusLine must be appended: {written}"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn resolved_transaction_cannot_be_redirected_by_retargeting_the_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.json");
+        let second = dir.path().join("second.json");
+        let link = dir.path().join("settings.json");
+        write_settings(&first, r#"{"owner":"first"}"#);
+        write_settings(&second, r#"{"owner":"second"}"#);
+        symlink_file(&first, &link).unwrap();
+
+        let resolved = resolve_settings_target(&link).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        symlink_file(&second, &link).unwrap();
+        wire_statusline_resolved(&resolved, INVOCATION).unwrap();
+
+        let first_json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&first).unwrap()).unwrap();
+        let second_json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&second).unwrap()).unwrap();
+        assert_eq!(first_json["owner"], "first");
+        assert_eq!(first_json["statusLine"]["command"], INVOCATION);
+        assert_eq!(second_json, serde_json::json!({"owner": "second"}));
+    }
+
+    #[test]
     fn wire_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -556,6 +623,37 @@ mod tests {
         assert_eq!(v["theme"], "dark");
         assert!(v.get("statusLine").is_none(), "statusLine should be gone");
         assert_eq!(read_wire_status(&path).unwrap(), WireStatus::Unwired);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn resolved_unwire_cannot_be_redirected_by_retargeting_the_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.json");
+        let second = dir.path().join("second.json");
+        let link = dir.path().join("settings.json");
+        write_settings(
+            &first,
+            r#"{"owner":"first","statusLine":{"type":"command","command":"balanze-cli statusline"}}"#,
+        );
+        write_settings(
+            &second,
+            r#"{"owner":"second","statusLine":{"type":"command","command":"other-tool"}}"#,
+        );
+        symlink_file(&first, &link).unwrap();
+
+        let resolved = resolve_settings_target(&link).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        symlink_file(&second, &link).unwrap();
+        unwire_statusline_resolved(&resolved).unwrap();
+
+        let first_json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&first).unwrap()).unwrap();
+        let second_json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&second).unwrap()).unwrap();
+        assert_eq!(first_json, serde_json::json!({"owner": "first"}));
+        assert_eq!(second_json["owner"], "second");
+        assert_eq!(second_json["statusLine"]["command"], "other-tool");
     }
 
     #[test]
