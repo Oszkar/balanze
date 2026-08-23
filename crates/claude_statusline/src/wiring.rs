@@ -328,13 +328,38 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
-        std::os::unix::fs::symlink(target, link)
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).unwrap();
+        true
     }
 
     #[cfg(windows)]
-    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
-        std::os::windows::fs::symlink_file(target, link)
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(error) if windows_symlink_privilege_missing(&error) => {
+                eprintln!("skipping symlink test: Windows symlink privilege is unavailable");
+                false
+            }
+            Err(error) => panic!("failed to create symlink fixture: {error}"),
+        }
+    }
+
+    #[cfg(windows)]
+    fn windows_symlink_privilege_missing(error: &std::io::Error) -> bool {
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_missing_windows_symlink_privilege_is_skippable() {
+        assert!(windows_symlink_privilege_missing(
+            &std::io::Error::from_raw_os_error(1314)
+        ));
+        assert!(!windows_symlink_privilege_missing(
+            &std::io::Error::from_raw_os_error(5)
+        ));
     }
 
     // ── read_wire_status ────────────────────────────────────────────────────
@@ -516,11 +541,15 @@ mod tests {
         let link = dir.path().join("settings.json");
         write_settings(&first, r#"{"owner":"first"}"#);
         write_settings(&second, r#"{"owner":"second"}"#);
-        symlink_file(&first, &link).unwrap();
+        if !create_symlink_or_skip(&first, &link) {
+            return;
+        }
 
         let resolved = resolve_settings_target(&link).unwrap();
         std::fs::remove_file(&link).unwrap();
-        symlink_file(&second, &link).unwrap();
+        if !create_symlink_or_skip(&second, &link) {
+            return;
+        }
         wire_statusline_resolved(&resolved, INVOCATION).unwrap();
 
         let first_json: serde_json::Value =
@@ -648,11 +677,15 @@ mod tests {
             &second,
             r#"{"owner":"second","statusLine":{"type":"command","command":"other-tool"}}"#,
         );
-        symlink_file(&first, &link).unwrap();
+        if !create_symlink_or_skip(&first, &link) {
+            return;
+        }
 
         let resolved = resolve_settings_target(&link).unwrap();
         std::fs::remove_file(&link).unwrap();
-        symlink_file(&second, &link).unwrap();
+        if !create_symlink_or_skip(&second, &link) {
+            return;
+        }
         unwire_statusline_resolved(&resolved).unwrap();
 
         let first_json: serde_json::Value =
@@ -738,11 +771,15 @@ mod tests {
             &second,
             r#"{"statusLine":{"type":"command","command":"other-tool"}}"#,
         );
-        symlink_file(&first, &link).unwrap();
+        if !create_symlink_or_skip(&first, &link) {
+            return;
+        }
 
         let resolved = resolve_settings_target(&link).unwrap();
         std::fs::remove_file(&link).unwrap();
-        symlink_file(&second, &link).unwrap();
+        if !create_symlink_or_skip(&second, &link) {
+            return;
+        }
         assert!(restore_statusline_resolved(&resolved, Some("saved-tool")).unwrap());
 
         assert_eq!(
@@ -770,11 +807,15 @@ mod tests {
             &second,
             r#"{"statusLine":{"type":"command","command":"other-tool"}}"#,
         );
-        symlink_file(&first, &link).unwrap();
+        if !create_symlink_or_skip(&first, &link) {
+            return;
+        }
 
         let resolved = resolve_settings_target(&link).unwrap();
         std::fs::remove_file(&link).unwrap();
-        symlink_file(&second, &link).unwrap();
+        if !create_symlink_or_skip(&second, &link) {
+            return;
+        }
         assert!(restore_statusline_resolved(&resolved, None).unwrap());
 
         assert_eq!(read_wire_status(&first).unwrap(), WireStatus::Unwired);

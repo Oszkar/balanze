@@ -177,13 +177,38 @@ mod tests {
     use tempfile::tempdir;
 
     #[cfg(unix)]
-    fn symlink_file(target: &Path, link: &Path) -> io::Result<()> {
-        std::os::unix::fs::symlink(target, link)
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).unwrap();
+        true
     }
 
     #[cfg(windows)]
-    fn symlink_file(target: &Path, link: &Path) -> io::Result<()> {
-        std::os::windows::fs::symlink_file(target, link)
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(error) if windows_symlink_privilege_missing(&error) => {
+                eprintln!("skipping symlink test: Windows symlink privilege is unavailable");
+                false
+            }
+            Err(error) => panic!("failed to create symlink fixture: {error}"),
+        }
+    }
+
+    #[cfg(windows)]
+    fn windows_symlink_privilege_missing(error: &io::Error) -> bool {
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_missing_windows_symlink_privilege_is_skippable() {
+        assert!(windows_symlink_privilege_missing(
+            &io::Error::from_raw_os_error(1314)
+        ));
+        assert!(!windows_symlink_privilege_missing(
+            &io::Error::from_raw_os_error(5)
+        ));
     }
 
     #[test]
@@ -210,7 +235,9 @@ mod tests {
         let target = dir.path().join("managed-settings.json");
         let link = dir.path().join("settings.json");
         fs::write(&target, b"old").unwrap();
-        symlink_file(&target, &link).unwrap();
+        if !create_symlink_or_skip(&target, &link) {
+            return;
+        }
 
         atomic_write(&link, b"new", Permissions::Default).unwrap();
 
@@ -230,7 +257,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let missing_target = dir.path().join("missing-settings.json");
         let link = dir.path().join("settings.json");
-        symlink_file(&missing_target, &link).unwrap();
+        if !create_symlink_or_skip(&missing_target, &link) {
+            return;
+        }
 
         let error = atomic_write(&link, b"new", Permissions::Default).unwrap_err();
 
