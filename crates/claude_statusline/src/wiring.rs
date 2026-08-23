@@ -207,16 +207,24 @@ fn wire_statusline_resolved(path: &Path, invocation: &str) -> Result<(), Statusl
 /// Returns `true` if the stanza was written (restored or unwired), `false` if a
 /// foreign command was left in place - so the caller can keep its backup.
 pub fn restore_statusline(path: &Path, previous: Option<&str>) -> Result<bool, StatuslineError> {
+    let path = resolve_settings_target(path)?;
+    restore_statusline_resolved(&path, previous)
+}
+
+fn restore_statusline_resolved(
+    path: &Path,
+    previous: Option<&str>,
+) -> Result<bool, StatuslineError> {
     let status = read_wire_status(path)?;
     match previous {
         // A foreign command owns the stanza now - never overwrite it.
         Some(_) if matches!(status, WireStatus::OccupiedBy(_)) => Ok(false),
         Some(cmd) => {
-            wire_statusline(path, cmd)?;
+            wire_statusline_resolved(path, cmd)?;
             Ok(true)
         }
         None if status == WireStatus::WiredToBalanze => {
-            unwire_statusline(path)?;
+            unwire_statusline_resolved(path)?;
             Ok(true)
         }
         None => Ok(false),
@@ -713,6 +721,67 @@ mod tests {
         wire_statusline(&path, INVOCATION).unwrap();
         assert!(restore_statusline(&path, None).unwrap(), "wrote (unwired)");
         assert_eq!(read_wire_status(&path).unwrap(), WireStatus::Unwired);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn resolved_restore_command_cannot_be_redirected_by_retargeting_the_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.json");
+        let second = dir.path().join("second.json");
+        let link = dir.path().join("settings.json");
+        write_settings(
+            &first,
+            r#"{"statusLine":{"type":"command","command":"balanze-cli statusline"}}"#,
+        );
+        write_settings(
+            &second,
+            r#"{"statusLine":{"type":"command","command":"other-tool"}}"#,
+        );
+        symlink_file(&first, &link).unwrap();
+
+        let resolved = resolve_settings_target(&link).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        symlink_file(&second, &link).unwrap();
+        assert!(restore_statusline_resolved(&resolved, Some("saved-tool")).unwrap());
+
+        assert_eq!(
+            read_wire_status(&first).unwrap(),
+            WireStatus::OccupiedBy("saved-tool".to_string())
+        );
+        assert_eq!(
+            read_wire_status(&second).unwrap(),
+            WireStatus::OccupiedBy("other-tool".to_string())
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn resolved_restore_none_cannot_be_redirected_by_retargeting_the_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.json");
+        let second = dir.path().join("second.json");
+        let link = dir.path().join("settings.json");
+        write_settings(
+            &first,
+            r#"{"statusLine":{"type":"command","command":"balanze-cli statusline"}}"#,
+        );
+        write_settings(
+            &second,
+            r#"{"statusLine":{"type":"command","command":"other-tool"}}"#,
+        );
+        symlink_file(&first, &link).unwrap();
+
+        let resolved = resolve_settings_target(&link).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        symlink_file(&second, &link).unwrap();
+        assert!(restore_statusline_resolved(&resolved, None).unwrap());
+
+        assert_eq!(read_wire_status(&first).unwrap(), WireStatus::Unwired);
+        assert_eq!(
+            read_wire_status(&second).unwrap(),
+            WireStatus::OccupiedBy("other-tool".to_string())
+        );
     }
 
     #[test]
