@@ -166,7 +166,7 @@ Before claiming work is done:
 |---|---|
 | Any `**/*.rs` in workspace | `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace`, `cargo fmt --all -- --check` |
 | Any crate's logic | That crate's own tests stay green **and** you add/extend a test for the specific invariant you changed. For pure crates (`window`, `claude_cost`): write the test **before** the impl change. Don't weaken an assertion to make it pass - see §7 |
-| `crates/claude_parser/**` | + documented failure modes still pass (file missing / partial final line / schema drift / empty / permission denied) + real-data smoke (`cargo run -p claude_parser --example smoke`) |
+| `crates/claude_parser/**` | + documented failure modes still pass (file missing / partial final line / schema drift / empty / permission denied) + real-data smoke (`cargo run -p claude_parser --example claude_parser_smoke`) |
 | `crates/keychain/**` | + run the `#[ignore]`'d real-keychain smoke **manually on each OS before tagging a release** - cross-OS keychain in CI is unreliable, so CI green ≠ keychain works |
 | `crates/{anthropic_oauth,openai_client}/**` | + the wiremock suite; manual check against the real endpoint on the dev machine |
 | `src-tauri/src/**/*.rs` | + `bun run tauri dev` smoke (tray icon appears, click opens window, Quit exits cleanly) |
