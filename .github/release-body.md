@@ -3,7 +3,7 @@ Auto-generated release.
 **Desktop app**
 
 - **Windows (x64):** `Balanze_*_x64_en-US.msi`, or `Balanze_*_x64-setup.exe` for the NSIS installer. Unsigned - SmartScreen will warn on first run; click "More info" -> "Run anyway". [Why we don't sign](https://github.com/Oszkar/balanze/blob/main/docs/PRD.md#code-signing).
-- **macOS 15+ (Apple Silicon):** `Balanze_*_aarch64.dmg`. Signed and notarized - Gatekeeper should not warn. Intel Macs are not supported.
+- **macOS 15+ (Apple Silicon):** `brew install --cask oszkar/balanze/balanze`, or download `Balanze_*_aarch64.dmg`. Signed and notarized - Gatekeeper should not warn. Intel Macs are not supported.
 
 **Command-line tool**
 

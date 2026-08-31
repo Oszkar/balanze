@@ -58,7 +58,7 @@ Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and 
 
 ## Install
 
-**Desktop app (tray popover):** download from [GitHub Releases](https://github.com/Oszkar/balanze/releases/latest) - no Rust toolchain required.
+**Desktop app (tray popover):** download from [GitHub Releases](https://github.com/Oszkar/balanze/releases/latest) - no Rust toolchain required. On macOS, you can instead install the desktop cask with `brew install --cask oszkar/balanze/balanze`.
 
 | Your machine | Download | First run |
 |---|---|---|

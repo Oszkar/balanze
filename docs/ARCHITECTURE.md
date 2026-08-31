@@ -56,7 +56,7 @@ balanze/
 │   ├── settings/               owns settings.json (cross-process serialized field mutations, atomic publication, schema-versioned, non-secrets only)
 │   ├── logging/                shared `tracing` subscriber setup (BALANZE_LOG env filter + daily-rotating file sink); owns tracing-subscriber/tracing-appender so they stay out of the pure library crates; used only by the two binaries via `init_tracing(prefix)`
 │   └── balanze_cli/            CLI glue; composes the crates into a Snapshot. clap-derive command tree (cli); subcommands: status (colored 4-quadrant via present + anstream/owo-colors), watch (ratatui/crossterm TUI in tui, else streaming sinks), doctor/setup (headless probes), export (stateless CSV; no persistence), completions + hidden man (clap_complete/clap_mangen, also rendered to OUT_DIR by build.rs); exit owns the 0/1/2/3/4/5 exit-code taxonomy.
-└── .github/workflows/          ci.yml + release.yml
+└── .github/workflows/          ci.yml + dependabot-auto-merge.yml + docs.yml + pages.yml + pr-title.yml + release.yml + tap.yml
 ```
 
 ## Boundaries
@@ -86,7 +86,7 @@ Frontend ↔ backend, via Tauri commands and events only. Commands return `Resul
 | Command | `get_history` | Recent rolling-window-sized history. |
 | Command | `refresh_now` | Trigger an immediate poll/refresh. |
 | Command | `hide_window` | Hide the popover (ESC-to-dismiss); window manipulation stays in Rust. |
-| Command | `resize_popover` | Resize the popover window to a content-hugging height (clamped) and re-anchor to the tray/dock. Frontend-driven via `ResizeObserver`; webview holds no window capability. |
+| Command | `resize_popover` | Resize the popover window to a content-hugging height (clamped) and re-anchor to the tray/dock. Frontend-driven via `ResizeObserver`; the webview's core defaults expose window introspection and Tauri's internal titlebar maximize toggle, but no direct size or position setter. |
 | Command | `get_launch_at_login` / `set_launch_at_login` | Read / set the OS launch-at-login state via `tauri-plugin-autostart` (approach A: the OS login item is the source of truth, so there is no `Settings` field to reconcile). Driven from Rust so the webview holds no `autostart` capability; the Windows `Run` key / macOS LaunchAgent I/O runs through `spawn_blocking`. |
 | Command | `set_api_key` / `has_api_key` / `clear_api_key` | Store / probe-presence / remove the user-supplied OpenAI key in the keychain (never returns the value). |
 | Command | `validate_api_key` | Probe a user-supplied key against the provider WITHOUT storing it (async; one fail-fast month-to-date costs request, the same call the poller makes). Returns `{ ok, retryable, message }` so Settings gives immediate feedback: `ok` authenticated, `retryable` failed transiently (network / 429) so the UI may offer "save anyway", neither means the key is definitively wrong. Never logs or echoes the key. |

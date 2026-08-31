@@ -10,7 +10,7 @@
 //! `Settings` shape - the key itself never crosses back to the frontend.
 //!
 //! statusLine: `get_statusline_status` / `set_statusline_wired` /
-//! `replace_statusline` / `restore_statusline` are sync commands that delegate
+//! `replace_statusline` / `restore_statusline` are async commands that delegate
 //! to `claude_statusline` (the only owner/writer of the `statusLine` stanza in
 //! Claude Code's `settings.json`, boundary #12). `set_statusline_wired` enforces
 //! a no-clobber policy - it never overwrites or strips another tool's
@@ -87,9 +87,9 @@ fn resized_outer_height(logical_height: u32, scale_factor: f64) -> u32 {
 
 /// Resize the popover to hug its content height, then re-anchor it to the
 /// tray/dock. Window manipulation lives in Rust (like `hide_window`), so the
-/// webview holds no window capability. The width is preserved (only the height
-/// follows content); the new height is clamped to the [`POPOVER_MIN_H`,
-/// `POPOVER_MAX_H`] bounds before it is applied.
+/// webview holds no direct size or position setter. The width is preserved
+/// (only the height follows content); the new height is clamped to the
+/// [`POPOVER_MIN_H`, `POPOVER_MAX_H`] bounds before it is applied.
 #[tauri::command]
 pub fn resize_popover(window: tauri::WebviewWindow, height: u32) -> Result<(), String> {
     let h = clamp_popover_height(height);
