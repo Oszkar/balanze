@@ -72,6 +72,8 @@ test('real popover keeps oversized degraded content reachable', async ({ page })
     return element.scrollTop > 0 && last.bottom <= viewport.bottom && last.bottom >= viewport.top;
   });
   expect(reachedEnd).toBe(true);
+});
+
 test('Cards marks every bar stale when one Codex window has reset', async ({ page }) => {
   await page.clock.setFixedTime(FIXED);
   await page.goto('/gallery.html?theme=light', { waitUntil: 'domcontentloaded' });
