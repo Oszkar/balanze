@@ -178,10 +178,12 @@ jobs:
           # Idempotency: a dispatch replay against an already-current tag is a
           # no-op, not a failure. This is what makes the dispatch path safe to
           # re-run after fixing an unrelated step.
-          if git diff --quiet; then
+          # Stage first so the comparison includes a formula or cask created
+          # for the first time, not only modifications to tracked files.
+          git add Formula/balanze-cli.rb Casks/balanze.rb
+          if git diff --cached --quiet; then
             echo "tap already up to date for $TAG"
             exit 0
           fi
-          git add Formula/balanze-cli.rb Casks/balanze.rb
           git commit -m "chore: update balanze to ${TAG}"
           git push

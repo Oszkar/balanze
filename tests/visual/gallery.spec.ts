@@ -49,6 +49,31 @@ for (const theme of ['light', 'dark'] as const) {
   });
 }
 
+test('real popover keeps oversized degraded content reachable', async ({ page }) => {
+  await page.goto('/gallery.html?scroll-regression', { waitUntil: 'domcontentloaded' });
+
+  const popover = page.locator('[data-testid="scroll-regression"] .pop');
+  await expect(popover).toBeVisible();
+  await expect(popover).toHaveCSS('overflow-y', 'auto');
+  await expect(popover).toHaveCSS('max-height', '720px');
+
+  const dimensions = await popover.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.clientHeight);
+
+  const reachedEnd = await popover.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    const lastChild = element.lastElementChild;
+    if (!lastChild) return false;
+    const viewport = element.getBoundingClientRect();
+    const last = lastChild.getBoundingClientRect();
+    return element.scrollTop > 0 && last.bottom <= viewport.bottom && last.bottom >= viewport.top;
+  });
+  expect(reachedEnd).toBe(true);
+});
+
 test('Cards marks every bar stale when one Codex window has reset', async ({ page }) => {
   await page.clock.setFixedTime(FIXED);
   await page.goto('/gallery.html?theme=light', { waitUntil: 'domcontentloaded' });

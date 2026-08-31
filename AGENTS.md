@@ -194,7 +194,7 @@ Before claiming work is done:
 - **Unit tests:** inline `#[cfg(test)] mod tests` in each crate's `src/`. `cargo nextest run --workspace` is the gate (plain `cargo test --workspace` works too).
 - **Integration:** `crates/<crate>/tests/` - `anthropic_oauth` / `openai_client` use `wiremock`; `balanze_cli/tests/integration_4quadrant.rs` is the end-to-end composition test against committed fixtures with a fixed `now`.
 - **Real-data smokes:** `cargo run -p <crate> --example <name>` against the developer's actual `~/.claude` / `~/.codex` - not run in CI; maintainer runs them before tagging.
-- **`#[ignore]`'d:** the real-resource smokes - the real-keychain smoke (`keychain`), the macOS Keychain credential read (`anthropic_oauth`), and the live Anthropic refresh endpoint (`anthropic_oauth`, gated on `BALANZE_SMOKE_REFRESH_TOKEN`). CI keychain/network is unreliable; run these manually per §6.
+- **`#[ignore]`'d:** the real-keychain smoke (`keychain`) and the macOS Keychain credential read (`anthropic_oauth`). CI keychain access is unreliable; run these manually per §6.
 
 ## 8. Change Control
 

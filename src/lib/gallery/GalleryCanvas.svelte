@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
+  import Popover from '$lib/components/Popover.svelte';
   import GalleryFrame from './GalleryFrame.svelte';
-  import { GALLERY_STATES, DEMO_SETTINGS, DEMO_STATUSLINE } from './fixtures';
+  import { GALLERY_STATES, DEMO_SETTINGS, DEMO_STATUSLINE, baseSnapshot } from './fixtures';
 
   // Theme is seeded from the URL (?theme=dark) so a snapshot harness can pin a
   // palette deterministically before paint; the toggle keeps it interactive.
@@ -11,6 +12,22 @@
     return new URLSearchParams(window.location.search).get('theme') === 'dark' ? 'dark' : 'light';
   }
   let theme = $state<'light' | 'dark'>(initialTheme());
+  const scrollRegression =
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('scroll-regression');
+  const scrollRegressionDegraded = Object.fromEntries(
+    [
+      'claude_oauth',
+      'claude_jsonl',
+      'anthropic_api_cost',
+      'codex_quota',
+      'openai_costs',
+      'claude_statusline',
+      'frontend_events',
+    ].map((source, index) => [
+      source,
+      `${'Long provider error. '.repeat(18)}${index === 6 ? 'END OF DEGRADED CONTENT' : ''}`,
+    ]),
+  );
 
   // Install the stub during component init, NOT in onMount: a child's onMount
   // (SettingsView's `load`) runs before the parent's, so an onMount setup would
@@ -56,24 +73,30 @@
 </script>
 
 <div class="canvas" class:dark={theme === 'dark'} class:light={theme === 'light'}>
-  <header class="bar">
-    <h1>Balanze - states gallery</h1>
-    <button type="button" onclick={() => (theme = theme === 'light' ? 'dark' : 'light')}>
-      Switch to {theme === 'light' ? 'dark' : 'light'}
-    </button>
-  </header>
-  <div class="grid">
-    {#each GALLERY_STATES as s (s.label)}
-      <GalleryFrame
-        label={s.label}
-        view={s.view}
-        snapshot={s.snapshot}
-        degraded={s.degraded}
-        openaiEnabled={s.openaiEnabled}
-        empty={s.empty}
-      />
-    {/each}
-  </div>
+  {#if scrollRegression}
+    <div class="scroll-regression" data-testid="scroll-regression">
+      <Popover snapshot={baseSnapshot()} degraded={scrollRegressionDegraded} onRefresh={async () => {}} />
+    </div>
+  {:else}
+    <header class="bar">
+      <h1>Balanze - states gallery</h1>
+      <button type="button" onclick={() => (theme = theme === 'light' ? 'dark' : 'light')}>
+        Switch to {theme === 'light' ? 'dark' : 'light'}
+      </button>
+    </header>
+    <div class="grid">
+      {#each GALLERY_STATES as s (s.label)}
+        <GalleryFrame
+          label={s.label}
+          view={s.view}
+          snapshot={s.snapshot}
+          degraded={s.degraded}
+          openaiEnabled={s.openaiEnabled}
+          empty={s.empty}
+        />
+      {/each}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -86,6 +109,7 @@
   .bar button:hover { opacity: .88; }
   .bar button:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, 360px); gap: 44px 28px; align-items: start; }
+  .scroll-regression { width: 360px; }
 
   /* Force a theme independent of the OS `prefers-color-scheme`. theme.css only
      exposes the dark palette via a media query, so both palettes are mirrored

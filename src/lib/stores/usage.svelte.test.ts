@@ -23,9 +23,11 @@ import { usage } from './usage.svelte';
 
 function snapshotWith(error: string | null = null): Snapshot {
   return {
+    schema_version: 2,
     fetched_at: '2026-06-17T00:00:00Z',
     claude_oauth: null,
     claude_oauth_error: error,
+    claude_oauth_unavailable: null,
     claude_jsonl: null,
     claude_jsonl_error: null,
     anthropic_api_cost: null,
@@ -37,7 +39,7 @@ function snapshotWith(error: string | null = null): Snapshot {
     claude_statusline: null,
     claude_statusline_error: null,
     pace: [],
-  } as unknown as Snapshot;
+  };
 }
 
 describe('UsageStore.refresh', () => {

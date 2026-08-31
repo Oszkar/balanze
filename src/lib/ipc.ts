@@ -53,8 +53,8 @@ export interface ApiKeyValidation {
 export const validateApiKey = (provider: string, key: string): Promise<ApiKeyValidation> =>
   invoke<ApiKeyValidation>('validate_api_key', { provider, key });
 
-// Open an external URL in the user's default browser via the opener plugin
-// (the `opener:default` capability is already granted to the main window).
+// Open the fixed OpenAI admin-key URL in the user's default browser. The
+// opener capability scopes this command to that exact URL.
 export const openExternal = (url: string): Promise<void> => openUrl(url);
 
 // Claude Code statusLine wiring (delegates to claude_statusline backend-side;
