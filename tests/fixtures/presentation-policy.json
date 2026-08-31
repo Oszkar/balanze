@@ -1,0 +1,136 @@
+{
+  "anthropic": [
+    {
+      "name": "fresh statusline wins and keeps the worst weekly variant",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "statusline": {
+        "capturedAt": "2026-07-08T09:45:00Z",
+        "error": false,
+        "windows": [
+          { "key": "five_hour", "percent": 62 },
+          { "key": "seven_day", "percent": 48 },
+          { "key": "seven_day_opus", "percent": 91 }
+        ]
+      },
+      "oauth": {
+        "error": false,
+        "windows": [
+          { "key": "five_hour", "percent": 10 },
+          { "key": "seven_day", "percent": 20 }
+        ]
+      },
+      "expected": {
+        "source": "statusline",
+        "stale": false,
+        "windows": [
+          { "key": "five_hour", "percent": 62 },
+          { "key": "seven_day_opus", "percent": 91 }
+        ]
+      }
+    },
+    {
+      "name": "stale statusline falls back to oauth",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "statusline": {
+        "capturedAt": "2026-07-08T09:44:59Z",
+        "error": true,
+        "windows": [{ "key": "five_hour", "percent": 95 }]
+      },
+      "oauth": {
+        "error": false,
+        "windows": [
+          { "key": "five_hour", "percent": 10 },
+          { "key": "seven_day_sonnet", "percent": 30 }
+        ]
+      },
+      "expected": {
+        "source": "oauth",
+        "stale": false,
+        "windows": [
+          { "key": "five_hour", "percent": 10 },
+          { "key": "seven_day_sonnet", "percent": 30 }
+        ]
+      }
+    },
+    {
+      "name": "future statusline falls back to stale oauth",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "statusline": {
+        "capturedAt": "2026-07-08T10:00:00.001Z",
+        "error": false,
+        "windows": [{ "key": "five_hour", "percent": 95 }]
+      },
+      "oauth": {
+        "error": true,
+        "windows": [{ "key": "seven_day", "percent": 40 }]
+      },
+      "expected": {
+        "source": "oauth",
+        "stale": true,
+        "windows": [{ "key": "seven_day", "percent": 40 }]
+      }
+    },
+    {
+      "name": "selected statusline retains its reader error",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "statusline": {
+        "capturedAt": "2026-07-08T09:59:00Z",
+        "error": true,
+        "windows": [{ "key": "five_hour", "percent": 55 }]
+      },
+      "oauth": null,
+      "expected": {
+        "source": "statusline",
+        "stale": true,
+        "windows": [{ "key": "five_hour", "percent": 55 }]
+      }
+    }
+  ],
+  "codex": [
+    {
+      "name": "one reset window makes the whole rollout stale",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "windows": [
+        { "percent": 30, "durationMinutes": 300, "resetsAt": "2026-07-08T09:00:00Z" },
+        { "percent": 95, "durationMinutes": 10080, "resetsAt": "2026-07-14T04:25:36Z" }
+      ],
+      "expected": { "worstIndex": 1, "fiveIndex": 0, "weeklyIndex": 1, "expired": true, "labels": ["5h", "7d"] }
+    },
+    {
+      "name": "reset instant remains live and ties keep the first window",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "windows": [
+        { "percent": 42, "durationMinutes": 300, "resetsAt": "2026-07-08T10:00:00Z" },
+        { "percent": 42, "durationMinutes": 10080, "resetsAt": "2026-07-14T04:25:36Z" }
+      ],
+      "expected": { "worstIndex": 0, "fiveIndex": 0, "weeklyIndex": 1, "expired": false, "labels": ["5h", "7d"] }
+    },
+    {
+      "name": "known durations tolerate five minutes of drift",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "windows": [
+        { "percent": 10, "durationMinutes": 305, "resetsAt": "2026-07-08T12:00:00Z" },
+        { "percent": 20, "durationMinutes": 10075, "resetsAt": "2026-07-14T12:00:00Z" }
+      ],
+      "expected": { "worstIndex": 1, "fiveIndex": 0, "weeklyIndex": 1, "expired": false, "labels": ["5h", "7d"] }
+    },
+    {
+      "name": "a worse unknown cadence owns the weekly presentation slot",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "windows": [
+        { "percent": 20, "durationMinutes": 10080, "resetsAt": "2026-07-14T12:00:00Z" },
+        { "percent": 95, "durationMinutes": 1440, "resetsAt": "2026-07-09T12:00:00Z" }
+      ],
+      "expected": { "worstIndex": 1, "fiveIndex": null, "weeklyIndex": 1, "expired": false, "labels": ["7d", "window"] }
+    }
+  ],
+  "severity": [
+    { "percent": 49.4, "expected": "green" },
+    { "percent": 49.5, "expected": "yellow" },
+    { "percent": 74.4, "expected": "yellow" },
+    { "percent": 74.5, "expected": "orange" },
+    { "percent": 89.4, "expected": "orange" },
+    { "percent": 89.5, "expected": "red" },
+    { "percent": 125, "expected": "red" }
+  ]
+}

@@ -125,6 +125,102 @@ pub(crate) fn bucket_for_pace_ratio(ratio: Option<f64>) -> Bucket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot};
+    use chrono::{DateTime, Utc};
+    use claude_statusline::{RateLimits, RateWindow, StatuslineFilePayload, StatuslineSnapshot};
+    use codex_local::{CodexQuotaSnapshot, RateLimitWindow, WindowKind};
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PolicyFixture {
+        anthropic: Vec<AnthropicCase>,
+        codex: Vec<CodexCase>,
+        severity: Vec<SeverityCase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AnthropicCase {
+        name: String,
+        fetched_at: String,
+        statusline: Option<StatuslineInput>,
+        oauth: Option<OAuthInput>,
+        expected: ExpectedAnthropic,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StatuslineInput {
+        captured_at: String,
+        error: bool,
+        windows: Vec<PolicyWindow>,
+    }
+
+    #[derive(Deserialize)]
+    struct OAuthInput {
+        error: bool,
+        windows: Vec<PolicyWindow>,
+    }
+
+    #[derive(Deserialize)]
+    struct PolicyWindow {
+        key: String,
+        percent: f32,
+    }
+
+    #[derive(Deserialize)]
+    struct ExpectedAnthropic {
+        source: String,
+        stale: bool,
+        windows: Vec<PolicyWindow>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CodexCase {
+        name: String,
+        fetched_at: String,
+        windows: Vec<CodexWindowInput>,
+        expected: ExpectedCodex,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CodexWindowInput {
+        percent: f64,
+        duration_minutes: u64,
+        resets_at: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ExpectedCodex {
+        worst_index: usize,
+        five_index: Option<usize>,
+        weekly_index: Option<usize>,
+        expired: bool,
+        labels: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct SeverityCase {
+        percent: f64,
+        expected: String,
+    }
+
+    fn policy_fixture() -> PolicyFixture {
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/presentation-policy.json"
+        ))
+        .expect("shared presentation-policy fixture parses")
+    }
+
+    fn timestamp(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .expect("policy timestamp is RFC 3339")
+            .with_timezone(&Utc)
+    }
 
     #[test]
     fn bucket_for_fraction_matches_severity_bands() {
@@ -160,5 +256,153 @@ mod tests {
         assert_eq!(bucket_for_pace_ratio(Some(1.49)), Bucket::Warn);
         assert_eq!(bucket_for_pace_ratio(Some(1.5)), Bucket::Critical);
         assert_eq!(bucket_for_pace_ratio(Some(3.0)), Bucket::Critical);
+    }
+
+    #[test]
+    fn shared_anthropic_policy_vectors_match_rust() {
+        for case in policy_fixture().anthropic {
+            let fetched_at = timestamp(&case.fetched_at);
+            let resets_at = timestamp("2026-07-15T10:00:00Z");
+            let mut snapshot = Snapshot::empty(fetched_at);
+            if let Some(statusline) = case.statusline {
+                snapshot.claude_statusline = Some(StatuslineFilePayload::new(
+                    StatuslineSnapshot {
+                        rate_limits: Some(RateLimits {
+                            windows: statusline
+                                .windows
+                                .into_iter()
+                                .map(|w| RateWindow {
+                                    label: w.key.clone(),
+                                    key: w.key,
+                                    used_percent: w.percent,
+                                    resets_at,
+                                })
+                                .collect(),
+                        }),
+                        session_cost_micro_usd: None,
+                        claude_code_version: None,
+                        model_display_name: None,
+                        context_used_percent: None,
+                    },
+                    timestamp(&statusline.captured_at),
+                ));
+                if statusline.error {
+                    snapshot.claude_statusline_error = Some("reader failed".to_string());
+                }
+            }
+            if let Some(oauth) = case.oauth {
+                snapshot.claude_oauth = Some(ClaudeOAuthSnapshot {
+                    cadences: oauth
+                        .windows
+                        .into_iter()
+                        .map(|w| CadenceBar {
+                            display_label: w.key.clone(),
+                            key: w.key,
+                            utilization_percent: w.percent,
+                            resets_at,
+                        })
+                        .collect(),
+                    extra_usage: None,
+                    subscription_type: None,
+                    rate_limit_tier: None,
+                    org_uuid: None,
+                    fetched_at,
+                });
+                if oauth.error {
+                    snapshot.claude_oauth_error = Some("refresh failed".to_string());
+                }
+            }
+
+            let (source, windows, stale) = anthropic_display_windows(&snapshot)
+                .unwrap_or_else(|| panic!("{}: expected a selected source", case.name));
+            assert_eq!(source.as_str(), case.expected.source, "{}", case.name);
+            assert_eq!(stale, case.expected.stale, "{}", case.name);
+            let actual: Vec<(&str, f32)> = windows.iter().map(|w| (w.key, w.percent)).collect();
+            let expected: Vec<(&str, f32)> = case
+                .expected
+                .windows
+                .iter()
+                .map(|w| (w.key.as_str(), w.percent))
+                .collect();
+            assert_eq!(actual, expected, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn shared_codex_policy_vectors_match_rust() {
+        for case in policy_fixture().codex {
+            let fetched_at = timestamp(&case.fetched_at);
+            let windows: Vec<RateLimitWindow> = case
+                .windows
+                .iter()
+                .map(|w| RateLimitWindow {
+                    used_percent: w.percent,
+                    window_duration_minutes: w.duration_minutes,
+                    resets_at: timestamp(&w.resets_at),
+                })
+                .collect();
+            let snapshot = CodexQuotaSnapshot {
+                observed_at: fetched_at,
+                session_id: "policy".to_string(),
+                primary: windows[0].clone(),
+                secondary: windows.get(1).cloned(),
+                plan_type: "pro".to_string(),
+                rate_limit_reached: false,
+                tokens: None,
+                credits: None,
+            };
+            let index_of = |window: &RateLimitWindow| {
+                snapshot
+                    .windows()
+                    .position(|candidate| std::ptr::eq(candidate, window))
+            };
+            assert_eq!(
+                index_of(snapshot.worst_window().expect("primary always exists")),
+                Some(case.expected.worst_index),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                snapshot.five_hour().and_then(index_of),
+                case.expected.five_index,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                snapshot.weekly_or_other().and_then(index_of),
+                case.expected.weekly_index,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                snapshot.any_window_expired(fetched_at),
+                case.expected.expired,
+                "{}",
+                case.name
+            );
+            let labels: Vec<&str> = snapshot
+                .windows()
+                .map(|w| match w.kind() {
+                    WindowKind::FiveHour => "5h",
+                    WindowKind::Weekly => "7d",
+                    WindowKind::Other => "window",
+                })
+                .collect();
+            assert_eq!(labels, case.expected.labels, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn shared_severity_policy_vectors_match_rust() {
+        for case in policy_fixture().severity {
+            let actual = match bucket_for_fraction(case.percent / 100.0) {
+                Bucket::Ok => "green",
+                Bucket::Warn => "yellow",
+                Bucket::Orange => "orange",
+                Bucket::Critical => "red",
+                Bucket::Neutral => "neutral",
+            };
+            assert_eq!(actual, case.expected, "{}%", case.percent);
+        }
     }
 }

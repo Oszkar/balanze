@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, classifyOverage, openAiCostCell, overageCell } from './quota';
 import type { Snapshot, ExtraUsage } from '../types/snapshot';
+import policy from '../../../tests/fixtures/presentation-policy.json';
 
 const base: Snapshot = {
   schema_version: 2,
@@ -246,6 +247,82 @@ describe('quota', () => {
 
   it('codexQuota: null snapshot -> null', () => {
     expect(codexQuota(base)).toBeNull();
+  });
+
+  it('matches the shared Anthropic presentation-policy vectors', () => {
+    for (const c of policy.anthropic) {
+      const resetsAt = '2026-07-15T10:00:00Z';
+      const s: Snapshot = {
+        ...base,
+        fetched_at: c.fetchedAt,
+        claude_statusline: c.statusline ? {
+          schema_version: 2,
+          captured_at: c.statusline.capturedAt,
+          payload: {
+            rate_limits: { windows: c.statusline.windows.map((w) => ({
+              key: w.key,
+              label: w.key,
+              used_percent: w.percent,
+              resets_at: resetsAt,
+            })) },
+            session_cost_micro_usd: null,
+            claude_code_version: null,
+          },
+        } : null,
+        claude_statusline_error: c.statusline?.error ? 'reader failed' : null,
+        claude_oauth: c.oauth ? {
+          cadences: c.oauth.windows.map((w) => ({
+            key: w.key,
+            display_label: w.key,
+            utilization_percent: w.percent,
+            resets_at: resetsAt,
+          })),
+          extra_usage: null,
+          subscription_type: null,
+          rate_limit_tier: null,
+          org_uuid: null,
+          fetched_at: c.fetchedAt,
+        } : null,
+        claude_oauth_error: c.oauth?.error ? 'refresh failed' : null,
+      };
+
+      const selected = anthropicSourceView(s);
+      const compact = anthropicQuota(s);
+      expect(selected?.source, c.name).toBe(c.expected.source);
+      expect(selected?.stale, c.name).toBe(c.expected.stale);
+      expect(
+        compact ? [compact.headline, compact.secondary]
+          .filter((w) => w !== null)
+          .map((w) => ({ key: w.key, percent: w.pct })) : [],
+        c.name,
+      ).toEqual(c.expected.windows);
+    }
+  });
+
+  it('matches the shared Codex presentation-policy vectors', () => {
+    for (const c of policy.codex) {
+      const windows = c.windows.map((w) => ({
+        used_percent: w.percent,
+        window_duration_minutes: w.durationMinutes,
+        resets_at: w.resetsAt,
+      }));
+      const s = codexSnap(windows[0], windows[1] ?? null, 'pro', c.fetchedAt);
+      const raw = s.codex_quota!;
+      const compact = codexQuota(s)!;
+      const byKind = codexWindowsByKind(raw);
+      expect(windows.indexOf(compact.headline.window), c.name).toBe(c.expected.worstIndex);
+      expect(byKind.five ? windows.indexOf(byKind.five) : null, c.name).toBe(c.expected.fiveIndex);
+      expect(byKind.weekly ? windows.indexOf(byKind.weekly) : null, c.name).toBe(c.expected.weeklyIndex);
+      expect(compact.expired, c.name).toBe(c.expected.expired);
+      expect(windows.map(codexWindowLabel), c.name).toEqual(c.expected.labels);
+    }
+  });
+
+  it('matches the shared rounded severity vectors', () => {
+    const semanticTone = { ok: 'green', warn: 'yellow', orange: 'orange', bad: 'red', ink: 'neutral' } as const;
+    for (const c of policy.severity) {
+      expect(semanticTone[quotaTone(c.percent)], `${c.percent}%`).toBe(c.expected);
+    }
   });
 });
 

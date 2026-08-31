@@ -48,3 +48,19 @@ for (const theme of ['light', 'dark'] as const) {
     }
   });
 }
+
+test('Cards marks every bar stale when one Codex window has reset', async ({ page }) => {
+  await page.clock.setFixedTime(FIXED);
+  await page.goto('/gallery.html?theme=light', { waitUntil: 'domcontentloaded' });
+
+  const frame = page.locator('figure.frame').filter({
+    has: page.getByText('Cards - Codex stale window', { exact: true }),
+  });
+  await expect(frame).toHaveCount(1);
+  const codexCard = frame.locator('.pcard').filter({
+    has: page.getByText('OpenAI', { exact: true }),
+  });
+  await expect(codexCard).toHaveCount(1);
+  await expect(codexCard.locator('.brow')).toHaveCount(2);
+  await expect(codexCard.locator('.sfb')).toHaveCount(2);
+});

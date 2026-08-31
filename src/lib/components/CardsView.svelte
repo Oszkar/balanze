@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, anthropicSourceView, quotaTone, codexElapsedFraction, codexWindowExpired, codexWindowLabel, codexWindowsByKind, openAiCostCell, overageCell } from '$lib/presentation/quota';
+  import { anthropicQuota, anthropicSourceView, quotaTone, codexElapsedFraction, codexQuota, codexWindowLabel, codexWindowsByKind, openAiCostCell, overageCell } from '$lib/presentation/quota';
   import { PROV } from '$lib/presentation/provenance';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
   import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
@@ -76,6 +76,7 @@
   const eu = $derived(snapshot.claude_oauth?.extra_usage ?? null);
   const anthBilled = $derived(overageCell(eu));
   const codex = $derived(snapshot.codex_quota);
+  const codexView = $derived(codexQuota(snapshot));
   const openai = $derived(snapshot.openai);
   const openaiCost = $derived(openAiCostCell(snapshot));
   const openaiErr = $derived(snapshot.openai_error ?? null);
@@ -111,7 +112,9 @@
         elapsed: codexElapsedFraction(win, snapshot.fetched_at) * 100,
         tone: quotaTone(win.used_percent),
         resetsAt: win.resets_at,
-        stale: codexWindowExpired(win, snapshot.fetched_at) || !!degraded['codex_quota'],
+        // Staleness belongs to the rollout, not an individual bar. Once any
+        // window has reset, every figure in that old rollout is an undercount.
+        stale: !!codexView?.expired || !!degraded['codex_quota'],
         title: PROV.codexQuota.title,
       });
     }
