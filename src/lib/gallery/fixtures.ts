@@ -135,10 +135,14 @@ function singleProvider(): Snapshot {
   return s;
 }
 
-/** Codex primary window already reset (resets_at in the past) -> stale flag. */
+/** One Codex window reset while the other remains live. The whole rollout is
+ * stale, so both Cards bars and the Grid headline must carry the warning. */
 function codexStale(): Snapshot {
   const s = clone(baseSnapshot());
-  if (s.codex_quota) s.codex_quota.primary.resets_at = iso(-1 * H);
+  if (s.codex_quota) {
+    s.codex_quota.primary = { used_percent: 30, window_duration_minutes: 300, resets_at: iso(-1 * H) };
+    s.codex_quota.secondary = { used_percent: 95, window_duration_minutes: 10_080, resets_at: iso(72 * H) };
+  }
   return s;
 }
 
