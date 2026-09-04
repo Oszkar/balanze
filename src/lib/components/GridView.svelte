@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, anthropicSourceView, codexElapsedFraction, codexQuota, openAiCostCell, overageCell } from '$lib/presentation/quota';
+  import { anthropicQuota, anthropicSourceView, codexElapsedFraction, codexQuota, matchingAnthropicPace, openAiCostCell, overageCell } from '$lib/presentation/quota';
   import { PROV } from '$lib/presentation/provenance';
   import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
@@ -15,8 +15,8 @@
       onDismissOpenai?: () => void; onSettings?: () => void } = $props();
 
   const aq = $derived(anthropicQuota(snapshot));
-  const anthPace = $derived(aq?.source === 'oauth'
-    ? snapshot.pace.find((p) => p.key === aq.headline.key) ?? null
+  const anthPace = $derived(aq
+    ? matchingAnthropicPace(snapshot).find((p) => p.key === aq.headline.key) ?? null
     : null);
   const codex = $derived(snapshot.codex_quota);
   const cq = $derived(codexQuota(snapshot));

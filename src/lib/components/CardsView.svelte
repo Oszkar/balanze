@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, anthropicSourceView, quotaTone, codexElapsedFraction, codexQuota, codexWindowLabel, codexWindowsByKind, openAiCostCell, overageCell } from '$lib/presentation/quota';
+  import { anthropicQuota, anthropicSourceView, quotaTone, codexElapsedFraction, codexQuota, codexWindowLabel, codexWindowsByKind, matchingAnthropicPace, openAiCostCell, overageCell } from '$lib/presentation/quota';
   import { PROV } from '$lib/presentation/provenance';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
   import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
@@ -26,12 +26,11 @@
   // instead of the reset countdown).
   const anthQuota = $derived(anthropicQuota(snapshot));
   const anthView = $derived(anthropicSourceView(snapshot));
-  const anthSource = $derived(anthQuota?.source ?? 'oauth');
   const anthStale = $derived(anthView?.stale ?? false);
+  const anthPace = $derived(matchingAnthropicPace(snapshot));
 
   const paceElapsed = (key: string): number | null => {
-    if (anthSource === 'statusline') return null;
-    const p = snapshot.pace.find((x) => x.key === key);
+    const p = anthPace.find((x) => x.key === key);
     return p ? p.elapsed_fraction * 100 : null;
   };
   // Each window carries its pace tick (looked up by key) and the matching
@@ -54,10 +53,9 @@
   // Cold-start / error / not-configured states for the Anthropic quota area,
   // mirroring GridView's anthState branches (same selector, same copy via
   // ANTH_QUOTA_COPY). The overage billed row still renders underneath regardless
-  // of quota state. `hasQuota` reuses the same `anthQuota` computed above (Grid's
-  // exact gate, which requires a five_hour cadence) so the two views agree on
-  // data-vs-loading even when only a seven_day / model-specific cadence is
-  // present; the all-cadence bar rendering (anthWindows) is unaffected.
+  // of quota state. `hasQuota` reuses the same `anthQuota` computed above, so
+  // both views agree on data-vs-loading when the selected source has any quota
+  // window; the all-cadence bar rendering (anthWindows) is unaffected.
   const anthErr = $derived(snapshot.claude_oauth_error ?? snapshot.claude_statusline_error ?? null);
   const anthQuotaState = $derived.by<CardQuotaState>(() => {
     const s = anthropicQuotaState({ hasQuota: !!anthQuota, error: anthErr, unavailable: snapshot.claude_oauth_unavailable });

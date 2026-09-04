@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, classifyOverage, openAiCostCell, overageCell } from './quota';
+import { quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, classifyOverage, matchingAnthropicPace, openAiCostCell, overageCell } from './quota';
 import type { Snapshot, ExtraUsage } from '../types/snapshot';
 import policy from '../../../tests/fixtures/presentation-policy.json';
 
@@ -44,6 +44,47 @@ describe('quota', () => {
     expect(q.source).toBe('statusline');
     expect(q.headline.pct).toBe(62);
     expect(q.secondary?.pct).toBe(48);
+  });
+  it('keeps only pace keys belonging to the selected statusline source', () => {
+    const s: Snapshot = { ...base,
+      claude_statusline: { schema_version: 2, captured_at: '2026-06-03T12:00:00Z',
+        payload: { rate_limits: { windows: [
+          { key: 'five_hour', label: '5-hour', used_percent: 62, resets_at: '2026-06-03T14:41:00Z' },
+        ] }, session_cost_micro_usd: null, claude_code_version: null } },
+      claude_oauth: { cadences: [{ key: 'seven_day', display_label: '7d', utilization_percent: 10, resets_at: '2026-06-06T16:00:00Z' }], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: '2026-06-03T12:00:00Z' },
+      pace: [
+        { key: 'five_hour', used_fraction: 0.62, elapsed_fraction: 0.4, ratio: 1.55 },
+        { key: 'seven_day', used_fraction: 0.1, elapsed_fraction: 0.5, ratio: 0.2 },
+      ],
+    };
+    expect(matchingAnthropicPace(s).map((p) => p.key)).toEqual(['five_hour']);
+  });
+  it('keeps OAuth pace on OAuth fallback and suppresses it for unknown-only statusline quota', () => {
+    const oauth = { cadences: [{ key: 'five_hour', display_label: '5h', utilization_percent: 10, resets_at: '2026-06-03T14:41:00Z' }], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: '2026-06-03T12:00:00Z' };
+    const oauthPace = [{ key: 'five_hour', used_fraction: 0.1, elapsed_fraction: 0.4, ratio: 0.25 }];
+    expect(matchingAnthropicPace({ ...base, claude_oauth: oauth, pace: oauthPace })).toEqual(oauthPace);
+
+    const unknownOnly: Snapshot = { ...base, claude_oauth: oauth, pace: oauthPace,
+      claude_statusline: { schema_version: 2, captured_at: '2026-06-03T12:00:00Z',
+        payload: { rate_limits: { windows: [
+          { key: 'monthly', label: 'Monthly', used_percent: 62, resets_at: '2026-06-30T00:00:00Z' },
+        ] }, session_cost_micro_usd: null, claude_code_version: null } },
+    };
+    expect(anthropicSourceView(unknownOnly)?.source).toBe('statusline');
+    expect(matchingAnthropicPace(unknownOnly)).toEqual([]);
+  });
+  it('uses a refresh-recorded timestamp error without changing fetched_at', () => {
+    const s: Snapshot = { ...base,
+      claude_statusline_error: 'statusline payload is stale (16 min old)',
+      claude_statusline: { schema_version: 2, captured_at: '2026-06-03T12:00:00Z',
+        payload: { rate_limits: { windows: [
+          { key: 'five_hour', label: '5-hour', used_percent: 62, resets_at: '2026-06-03T14:41:00Z' },
+        ] }, session_cost_micro_usd: null, claude_code_version: null } },
+      claude_oauth: { cadences: [{ key: 'five_hour', display_label: '5h', utilization_percent: 10, resets_at: '2026-06-03T14:41:00Z' }], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: '2026-06-03T12:00:00Z' },
+      pace: [{ key: 'five_hour', used_fraction: 0.1, elapsed_fraction: 0.4, ratio: 0.25 }],
+    };
+    expect(anthropicSourceView(s)?.source).toBe('oauth');
+    expect(matchingAnthropicPace(s)).toEqual(s.pace);
   });
   it('marks retained statusline quota stale after a reader error', () => {
     const s: Snapshot = { ...base,

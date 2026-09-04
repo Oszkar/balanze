@@ -1,4 +1,4 @@
-import type { Snapshot, CodexQuotaSnapshot, RateLimitWindow, ExtraUsage } from '../types/snapshot';
+import type { Snapshot, CodexQuotaSnapshot, RateLimitWindow, ExtraUsage, WindowPace } from '../types/snapshot';
 import type { Tone } from './pace';
 import { microUsdToDollars } from './format';
 import { PROV } from './provenance';
@@ -54,7 +54,9 @@ export interface AnthropicSourceView {
 export function anthropicSourceView(s: Snapshot): AnthropicSourceView | null {
   const sl = s.claude_statusline;
   const slAgeMs = sl ? Date.parse(s.fetched_at) - Date.parse(sl.captured_at) : Infinity;
-  const slFresh = Number.isFinite(slAgeMs) && slAgeMs >= 0 && slAgeMs <= STATUSLINE_FRESHNESS_MS;
+  const timestampError = s.claude_statusline_error?.startsWith('statusline payload is stale (')
+    || s.claude_statusline_error?.startsWith('statusline payload is future-dated (');
+  const slFresh = !timestampError && Number.isFinite(slAgeMs) && slAgeMs >= 0 && slAgeMs <= STATUSLINE_FRESHNESS_MS;
   const slWindows = slFresh && sl ? (sl.payload.rate_limits?.windows ?? []) : [];
   if (slWindows.length > 0) {
     return {
@@ -70,6 +72,14 @@ export function anthropicSourceView(s: Snapshot): AnthropicSourceView | null {
     windows: cadences.map((c) => ({ key: c.key, label: c.display_label, pct: c.utilization_percent, resetsAt: c.resets_at })),
     stale: s.claude_oauth_error !== null,
   };
+}
+
+/** Pace entries whose keys belong to the selected Anthropic quota source. */
+export function matchingAnthropicPace(s: Snapshot): WindowPace[] {
+  const selected = anthropicSourceView(s);
+  if (!selected) return [];
+  const selectedKeys = new Set(selected.windows.map((w) => w.key));
+  return s.pace.filter((pace) => selectedKeys.has(pace.key));
 }
 
 export function anthropicQuota(s: Snapshot): AnthropicQuota | null {

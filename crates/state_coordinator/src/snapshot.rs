@@ -16,9 +16,9 @@ use window::{DEFAULT_WINDOW, Pace, SEVEN_DAY_WINDOW, WindowSummary, pace};
 
 use crate::messages::Source;
 
-/// Per-window pace, mirrored from the OAuth cadence bars. Replaces the retired
-/// forward predictor: measured used % vs elapsed % of the window, plus their
-/// ratio. One entry per cadence whose window length is known.
+/// Per-window pace derived from the selected Anthropic quota source. Replaces
+/// the retired forward predictor: measured used % vs elapsed % of the window,
+/// plus their ratio. One entry per cadence whose window length is known.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowPace {
     /// Cadence key, e.g. `"five_hour"` / `"seven_day"`.
@@ -62,6 +62,26 @@ pub fn pace_for_oauth(oauth: &ClaudeOAuthSnapshot, now: DateTime<Utc>) -> Vec<Wi
         .collect()
 }
 
+/// Map statusline rate-limit windows into per-window pace. Uses the same
+/// window-family mapping as [`pace_for_oauth`] so source precedence cannot
+/// change which cadence keys are understood.
+pub(crate) fn pace_for_statusline(rate_limits: &RateLimits, now: DateTime<Utc>) -> Vec<WindowPace> {
+    rate_limits
+        .windows
+        .iter()
+        .filter_map(|window| {
+            let len = window_len_for(&window.key)?;
+            let p: Pace = pace(window.used_percent as f64, window.resets_at, len, now);
+            Some(WindowPace {
+                key: window.key.clone(),
+                used_fraction: p.used_fraction,
+                elapsed_fraction: p.elapsed_fraction,
+                ratio: p.ratio,
+            })
+        })
+        .collect()
+}
+
 /// Canonical Balanze state. `None` fields = "not yet observed"; `*_error`
 /// fields hold the most recent failure for that source. Successful data and
 /// an error can coexist: the data stays (stale) while the error explains
@@ -70,7 +90,7 @@ pub fn pace_for_oauth(oauth: &ClaudeOAuthSnapshot, now: DateTime<Utc>) -> Vec<Wi
 /// The shape maps onto the 4-quadrant matrix (see `Source` for the
 /// per-cell mapping):
 ///
-/// - Anthropic quota %      ← `claude_oauth`
+/// - Anthropic quota %      ← fresh `claude_statusline`, then `claude_oauth`
 /// - Anthropic API $ (est.) ← `anthropic_api_cost`  (derived from JSONL)
 /// - OpenAI Codex %         ← `codex_quota`
 /// - OpenAI API $           ← `openai`
@@ -173,13 +193,14 @@ pub struct Snapshot {
     pub claude_statusline: Option<StatuslineFilePayload>,
     /// Most recent degradation of the statusline feed: reader failure (file
     /// missing, schema drift) OR a freshness violation (the on-disk payload's
-    /// `captured_at` is older than `STATUSLINE_FRESHNESS_SECS`). Coexists with
-    /// `claude_statusline` when a previously-good read is now stale - the stale
-    /// payload is retained (stale-with-indicator, AGENTS.md §3.2) so consumers
+    /// `captured_at` is older than `STATUSLINE_FRESHNESS_SECS` or future-dated).
+    /// Coexists with `claude_statusline` when a previously-good read is now stale.
+    /// The payload is retained (stale-with-indicator, AGENTS.md §3.2) so consumers
     /// can render it with a marker rather than have it vanish.
     pub claude_statusline_error: Option<String>,
-    /// Per-window pace (used vs elapsed) derived from the OAuth cadence bars.
-    /// Empty until an OAuth snapshot with a known cadence is present.
+    /// Per-window pace (used vs elapsed) derived from a fresh statusline source
+    /// when it has a known cadence family, otherwise from OAuth. Entries from
+    /// the two sources are never merged.
     pub pace: Vec<WindowPace>,
 }
 
@@ -187,10 +208,33 @@ impl Snapshot {
     /// Whether the retained statusline payload is safe to present as current.
     /// Future-dated payloads are rejected along with old ones.
     pub fn statusline_fresh(&self) -> bool {
+        self.statusline_eligible_at(self.fetched_at)
+    }
+
+    /// Whether the retained statusline payload is fresh at an explicit
+    /// recomputation time. The inclusive boundary and future-date rejection
+    /// are shared by ingestion, presentation selection, and pace derivation.
+    pub fn statusline_fresh_at(&self, now: DateTime<Utc>) -> bool {
         self.claude_statusline.as_ref().is_some_and(|sl| {
-            let age = self.fetched_at.signed_duration_since(sl.captured_at);
+            let age = now.signed_duration_since(sl.captured_at);
             age >= Duration::zero() && age <= Duration::seconds(STATUSLINE_FRESHNESS_SECS)
         })
+    }
+
+    /// Whether the retained payload is timestamp-eligible at `now`. A
+    /// freshness error recorded by an explicit refresh remains authoritative
+    /// even though `fetched_at` continues to expose the last source merge.
+    pub(crate) fn statusline_eligible_at(&self, now: DateTime<Utc>) -> bool {
+        self.statusline_fresh_at(now) && !self.statusline_timestamp_ineligible()
+    }
+
+    pub(crate) fn statusline_timestamp_ineligible(&self) -> bool {
+        self.claude_statusline_error
+            .as_deref()
+            .is_some_and(|error| {
+                error.starts_with("statusline payload is stale (")
+                    || error.starts_with("statusline payload is future-dated (")
+            })
     }
 
     /// Select the one Anthropic quota source every Rust presentation surface
@@ -445,6 +489,11 @@ mod tests {
             s.anthropic_quota_source(),
             Some(AnthropicQuotaSource::Statusline { stale: true, .. })
         ));
+        s.claude_statusline_error = Some("statusline payload is stale (16 min old)".to_string());
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::OAuth { .. })
+        ));
         s.claude_statusline_error = None;
 
         s.claude_statusline = Some(StatuslineFilePayload::new(
@@ -521,6 +570,22 @@ mod tests {
             rate_limit_tier: None,
             org_uuid: None,
             fetched_at: fixture_now(),
+        }
+    }
+
+    fn make_rate_limits(windows: &[(&str, f32, DateTime<Utc>)]) -> RateLimits {
+        use claude_statusline::RateWindow;
+
+        RateLimits {
+            windows: windows
+                .iter()
+                .map(|(key, used, resets)| RateWindow {
+                    key: key.to_string(),
+                    label: key.to_string(),
+                    used_percent: *used,
+                    resets_at: *resets,
+                })
+                .collect(),
         }
     }
 
@@ -622,5 +687,36 @@ mod tests {
             (seven.elapsed_fraction - expected_seven.elapsed_fraction).abs() < 1e-9,
             "seven_day elapsed_fraction mismatch"
         );
+    }
+
+    #[test]
+    fn pace_for_statusline_maps_known_window_families() {
+        let now = t("2026-06-02T12:00:00Z");
+        let five_resets = now + chrono::Duration::hours(3);
+        let seven_resets = now + chrono::Duration::days(3) + chrono::Duration::hours(12);
+        let limits = make_rate_limits(&[
+            ("five_hour", 82.0, five_resets),
+            ("seven_day", 25.0, seven_resets),
+            ("seven_day_sonnet", 50.0, seven_resets),
+        ]);
+
+        let result = pace_for_statusline(&limits, now);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].key, "five_hour");
+        assert_eq!(result[1].key, "seven_day");
+        assert_eq!(result[2].key, "seven_day_sonnet");
+        assert!((result[0].elapsed_fraction - 0.4).abs() < 1e-9);
+        assert!((result[1].elapsed_fraction - 0.5).abs() < 1e-9);
+        assert!((result[2].elapsed_fraction - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pace_for_statusline_empty_and_unknown_windows_return_empty_vec() {
+        let now = t("2026-06-02T12:00:00Z");
+        assert!(pace_for_statusline(&make_rate_limits(&[]), now).is_empty());
+
+        let limits = make_rate_limits(&[("monthly", 50.0, now + Duration::days(15))]);
+        assert!(pace_for_statusline(&limits, now).is_empty());
     }
 }
