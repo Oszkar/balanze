@@ -9,7 +9,7 @@
 //! Consumed by the colored one-shot `status` renderer and the `watch` TUI so
 //! the matrix coloring logic is not forked.
 
-use state_coordinator::{AnthropicQuotaSource, Snapshot};
+use state_coordinator::{AnthropicQuotaSource, Snapshot, WindowPace};
 
 /// Color bucket for a presented value. The four utilization heat bands mirror
 /// `window::Severity` (Ok=Green, Warn=Yellow, Orange, Critical=Red), plus
@@ -94,6 +94,25 @@ pub(crate) fn anthropic_display_windows(
             })),
             stale,
         )),
+    }
+}
+
+/// Pace entries whose keys belong to the currently selected Anthropic quota
+/// source. This prevents an OAuth fallback vector from being paired with a
+/// statusline-only window family that did not produce pace.
+pub(crate) fn matching_anthropic_pace(s: &Snapshot) -> Vec<&WindowPace> {
+    match s.anthropic_quota_source() {
+        Some(AnthropicQuotaSource::Statusline { rate_limits, .. }) => s
+            .pace
+            .iter()
+            .filter(|pace| rate_limits.windows.iter().any(|w| w.key == pace.key))
+            .collect(),
+        Some(AnthropicQuotaSource::OAuth { snapshot, .. }) => s
+            .pace
+            .iter()
+            .filter(|pace| snapshot.cadences.iter().any(|c| c.key == pace.key))
+            .collect(),
+        None => Vec::new(),
     }
 }
 

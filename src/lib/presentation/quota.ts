@@ -1,4 +1,4 @@
-import type { Snapshot, CodexQuotaSnapshot, RateLimitWindow, ExtraUsage } from '../types/snapshot';
+import type { Snapshot, CodexQuotaSnapshot, RateLimitWindow, ExtraUsage, WindowPace } from '../types/snapshot';
 import type { Tone } from './pace';
 import { microUsdToDollars } from './format';
 import { PROV } from './provenance';
@@ -70,6 +70,14 @@ export function anthropicSourceView(s: Snapshot): AnthropicSourceView | null {
     windows: cadences.map((c) => ({ key: c.key, label: c.display_label, pct: c.utilization_percent, resetsAt: c.resets_at })),
     stale: s.claude_oauth_error !== null,
   };
+}
+
+/** Pace entries whose keys belong to the selected Anthropic quota source. */
+export function matchingAnthropicPace(s: Snapshot): WindowPace[] {
+  const selected = anthropicSourceView(s);
+  if (!selected) return [];
+  const selectedKeys = new Set(selected.windows.map((w) => w.key));
+  return s.pace.filter((pace) => selectedKeys.has(pace.key));
 }
 
 export function anthropicQuota(s: Snapshot): AnthropicQuota | null {

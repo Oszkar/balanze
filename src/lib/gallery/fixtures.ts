@@ -207,17 +207,17 @@ function statuslineThreeWindows(): Snapshot {
     },
   };
   s.claude_statusline_error = null;
+  s.pace = [
+    { key: 'five_hour', used_fraction: 0.17, elapsed_fraction: 0.2, ratio: 0.85 },
+    { key: 'seven_day', used_fraction: 0.02, elapsed_fraction: 0.3, ratio: 0.07 },
+    { key: 'seven_day_fable', used_fraction: 0, elapsed_fraction: 0.3, ratio: 0 },
+  ];
   return s;
 }
 
-/** Regression fixture: statusline present but missing its five_hour window
- * (only seven_day), with OAuth ALSO configured. anthSource/anthWindows must
- * fall through to the OAuth cadences here, matching quota.ts's own gate -
- * NOT render the incomplete statusline windows. Pins the source-selection
- * agreement documented in CardsView.svelte's own comment ("the two views
- * never disagree on which source they render"), which a broader "any window"
- * gate would silently break. Expect: Cards shows the OAuth 5-hour/7-day pair
- * (62%/41%, from baseSnapshot), not the statusline's lone 7-day 5% window. */
+/** Statusline present with only a known seven-day family. The entire statusline
+ * source remains selected and its matching pace tick renders without borrowing
+ * the missing five-hour cadence from OAuth. */
 function statuslineMissingFiveHour(): Snapshot {
   const s = clone(baseSnapshot());
   s.claude_statusline = {
@@ -232,6 +232,7 @@ function statuslineMissingFiveHour(): Snapshot {
     },
   };
   s.claude_statusline_error = null;
+  s.pace = [{ key: 'seven_day', used_fraction: 0.05, elapsed_fraction: 0.3, ratio: 0.17 }];
   return s;
 }
 
@@ -266,6 +267,7 @@ export const GALLERY_STATES: GalleryState[] = [
   },
   { label: 'Grid - overage billed', view: 'grid', openaiEnabled: true, snapshot: overageBilled() },
   { label: 'Grid - overage over limit', view: 'grid', openaiEnabled: true, snapshot: overageOverLimit() },
+  { label: 'Grid - statusline pace', view: 'grid', openaiEnabled: true, snapshot: statuslineThreeWindows() },
 
   { label: 'Cards - two providers', view: 'cards', openaiEnabled: true, snapshot: baseSnapshot() },
   { label: 'Cards - Anthropic only', view: 'cards', openaiEnabled: false, snapshot: singleProvider() },
@@ -289,7 +291,7 @@ export const GALLERY_STATES: GalleryState[] = [
     snapshot: statuslineThreeWindows(),
   },
   {
-    label: 'Cards - statusline missing 5h, OAuth fallback (regression)',
+    label: 'Cards - statusline 7d only',
     view: 'cards',
     openaiEnabled: true,
     snapshot: statuslineMissingFiveHour(),

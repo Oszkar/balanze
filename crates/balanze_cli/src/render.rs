@@ -16,6 +16,7 @@ use crate::format::{
 };
 use crate::present::{
     Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction, bucket_for_pace_ratio,
+    matching_anthropic_pace,
 };
 
 /// How the `extra_usage` overage block should be presented. Anthropic flips
@@ -496,17 +497,12 @@ fn compact_subscription_leverage(s: &Snapshot) -> Option<String> {
 /// Per-window pace line: used % vs elapsed % of the window, plus the ratio.
 /// `None` when no pace data is present.
 fn compact_pace_line(s: &Snapshot) -> Option<String> {
-    if s.pace.is_empty()
-        || !matches!(
-            s.anthropic_quota_source(),
-            Some(state_coordinator::AnthropicQuotaSource::OAuth { .. })
-        )
-    {
+    let pace = matching_anthropic_pace(s);
+    if pace.is_empty() {
         return None;
     }
-    let parts: Vec<String> = s
-        .pace
-        .iter()
+    let parts: Vec<String> = pace
+        .into_iter()
         .map(|p| {
             let ratio = match p.ratio {
                 Some(r) => format!("{r:.1}×"),
@@ -717,9 +713,8 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
 
     if let Some(pace) = compact_pace_line(snapshot) {
         // Color the whole pace line by the worst per-window ratio bucket.
-        let worst_ratio = snapshot
-            .pace
-            .iter()
+        let worst_ratio = matching_anthropic_pace(snapshot)
+            .into_iter()
             .filter_map(|p| p.ratio)
             .fold(None, |acc: Option<f64>, r| {
                 Some(acc.map_or(r, |a| a.max(r)))
@@ -949,10 +944,31 @@ mod tests {
         assert!(stale_cell.starts_with('⚠'), "{stale_cell}");
         assert!(stale_cell.contains("statusline, stale"), "{stale_cell}");
 
+        snap.pace = vec![state_coordinator::WindowPace {
+            key: "five_hour".to_string(),
+            used_fraction: 0.10,
+            elapsed_fraction: 0.60,
+            ratio: Some(1.0 / 6.0),
+        }];
         let output = render_compact(&snap);
         assert!(
-            !output.contains("Pace:"),
-            "OAuth pace must not be paired with selected statusline quota:\n{output}"
+            output.contains("Pace: 5h 10% used / 60% elapsed (0.2×)"),
+            "matching statusline pace must be shown:\n{output}"
+        );
+
+        snap.claude_statusline
+            .as_mut()
+            .unwrap()
+            .payload
+            .rate_limits
+            .as_mut()
+            .unwrap()
+            .windows[0]
+            .key = "monthly".to_string();
+        let mismatched = render_compact(&snap);
+        assert!(
+            !mismatched.contains("Pace:"),
+            "pace for an unselected key must be suppressed:\n{mismatched}"
         );
 
         snap.claude_statusline = None;

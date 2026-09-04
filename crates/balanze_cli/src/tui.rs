@@ -36,7 +36,9 @@ use state_coordinator::{Sink, Snapshot, Source, StateCoordinatorHandle, StateMsg
 use tokio::sync::watch;
 
 use crate::format::{format_codex_window, micro_usd_to_display_dollars};
-use crate::present::{Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction};
+use crate::present::{
+    Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction, matching_anthropic_pace,
+};
 use crate::render::{OverageState, classify_overage};
 
 // ---------------------------------------------------------------------------
@@ -461,18 +463,13 @@ fn draw_codex_windows(
 }
 
 fn draw_pace(frame: &mut Frame, area: Rect, s: &Snapshot) {
-    if s.pace.is_empty()
-        || !matches!(
-            s.anthropic_quota_source(),
-            Some(state_coordinator::AnthropicQuotaSource::OAuth { .. })
-        )
-    {
+    let pace = matching_anthropic_pace(s);
+    if pace.is_empty() {
         frame.render_widget(Paragraph::new("Pace: -"), area);
         return;
     }
-    let parts: Vec<String> = s
-        .pace
-        .iter()
+    let parts: Vec<String> = pace
+        .into_iter()
         .map(|p| {
             let ratio = match p.ratio {
                 Some(r) => format!("{r:.1}x"),
@@ -921,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn tui_does_not_pair_oauth_pace_with_selected_statusline_quota() {
+    fn tui_shows_matching_statusline_pace() {
         let mut snap = populated_snapshot();
         let now = snap.fetched_at;
         snap.claude_statusline = Some(claude_statusline::StatuslineFilePayload::new(
@@ -932,6 +929,42 @@ mod tests {
                         label: "5-hour".to_string(),
                         used_percent: 12.0,
                         resets_at: now + chrono::Duration::hours(2),
+                    }],
+                }),
+                session_cost_micro_usd: None,
+                claude_code_version: None,
+                model_display_name: None,
+                context_used_percent: None,
+            },
+            now,
+        ));
+        snap.pace = vec![state_coordinator::WindowPace {
+            key: "five_hour".to_string(),
+            used_fraction: 0.9,
+            elapsed_fraction: 0.1,
+            ratio: Some(9.0),
+        }];
+
+        let terminal = render_to_terminal(&snap);
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Pace: 5h 90% used / 10% elapsed (9.0x)"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn tui_suppresses_pace_for_a_key_outside_the_selected_statusline_source() {
+        let mut snap = populated_snapshot();
+        let now = snap.fetched_at;
+        snap.claude_statusline = Some(claude_statusline::StatuslineFilePayload::new(
+            claude_statusline::StatuslineSnapshot {
+                rate_limits: Some(claude_statusline::RateLimits {
+                    windows: vec![claude_statusline::RateWindow {
+                        key: "monthly".to_string(),
+                        label: "Monthly".to_string(),
+                        used_percent: 12.0,
+                        resets_at: now + chrono::Duration::days(15),
                     }],
                 }),
                 session_cost_micro_usd: None,

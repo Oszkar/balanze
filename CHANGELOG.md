@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Added
+
+- **Pace now follows the active Anthropic quota source.** Fresh Claude statusline limits provide elapsed-window pace across the tray popover, compact CLI, and TUI, with OAuth used as a whole-source fallback when statusline data is unavailable or ineligible.
+
 ### Changed
 
 - **CLI JSON output advances to schema version 2.** The new nullable `claude_oauth_unavailable` field distinguishes "Claude Code not installed" from cold start. Consumers that reject unknown schema versions must add version 2 before upgrading; all version 1 fields keep their existing names and types.
