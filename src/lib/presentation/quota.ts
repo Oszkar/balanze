@@ -54,7 +54,9 @@ export interface AnthropicSourceView {
 export function anthropicSourceView(s: Snapshot): AnthropicSourceView | null {
   const sl = s.claude_statusline;
   const slAgeMs = sl ? Date.parse(s.fetched_at) - Date.parse(sl.captured_at) : Infinity;
-  const slFresh = Number.isFinite(slAgeMs) && slAgeMs >= 0 && slAgeMs <= STATUSLINE_FRESHNESS_MS;
+  const timestampError = s.claude_statusline_error?.startsWith('statusline payload is stale (')
+    || s.claude_statusline_error?.startsWith('statusline payload is future-dated (');
+  const slFresh = !timestampError && Number.isFinite(slAgeMs) && slAgeMs >= 0 && slAgeMs <= STATUSLINE_FRESHNESS_MS;
   const slWindows = slFresh && sl ? (sl.payload.rate_limits?.windows ?? []) : [];
   if (slWindows.length > 0) {
     return {

@@ -145,9 +145,8 @@ pub struct Snapshot {
     /// so an older or partial document still deserializes.
     #[serde(default = "default_snapshot_schema_version")]
     pub schema_version: u32,
-    /// Freshness and pace anchor for this snapshot. Live presentation snapshots
-    /// advance it on updates, refreshes, and settings transitions; durable file
-    /// snapshots preserve the last successful source-merge time.
+    /// Wall-clock time of the most recent coordinator-side merge. Updated on
+    /// every successful `Update` message.
     pub fetched_at: DateTime<Utc>,
     /// Most recent successful Anthropic OAuth usage fetch. `None` until the
     /// first success.
@@ -209,7 +208,7 @@ impl Snapshot {
     /// Whether the retained statusline payload is safe to present as current.
     /// Future-dated payloads are rejected along with old ones.
     pub fn statusline_fresh(&self) -> bool {
-        self.statusline_fresh_at(self.fetched_at)
+        self.statusline_eligible_at(self.fetched_at)
     }
 
     /// Whether the retained statusline payload is fresh at an explicit
@@ -220,6 +219,22 @@ impl Snapshot {
             let age = now.signed_duration_since(sl.captured_at);
             age >= Duration::zero() && age <= Duration::seconds(STATUSLINE_FRESHNESS_SECS)
         })
+    }
+
+    /// Whether the retained payload is timestamp-eligible at `now`. A
+    /// freshness error recorded by an explicit refresh remains authoritative
+    /// even though `fetched_at` continues to expose the last source merge.
+    pub(crate) fn statusline_eligible_at(&self, now: DateTime<Utc>) -> bool {
+        self.statusline_fresh_at(now) && !self.statusline_timestamp_ineligible()
+    }
+
+    pub(crate) fn statusline_timestamp_ineligible(&self) -> bool {
+        self.claude_statusline_error
+            .as_deref()
+            .is_some_and(|error| {
+                error.starts_with("statusline payload is stale (")
+                    || error.starts_with("statusline payload is future-dated (")
+            })
     }
 
     /// Select the one Anthropic quota source every Rust presentation surface
@@ -473,6 +488,11 @@ mod tests {
         assert!(matches!(
             s.anthropic_quota_source(),
             Some(AnthropicQuotaSource::Statusline { stale: true, .. })
+        ));
+        s.claude_statusline_error = Some("statusline payload is stale (16 min old)".to_string());
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::OAuth { .. })
         ));
         s.claude_statusline_error = None;
 

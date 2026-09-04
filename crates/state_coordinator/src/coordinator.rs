@@ -27,10 +27,6 @@ use crate::snapshot::{
 /// (a clone of the mpsc `Sender`) is shared.
 struct CoordinatorState {
     snapshot: Snapshot,
-    /// Timestamp of the last successful source merge. Presentation-only
-    /// refreshes may advance `snapshot.fetched_at`, but durable publication
-    /// must retain this anchor so stale provider data never looks newly fetched.
-    source_fetched_at: chrono::DateTime<Utc>,
     active_generation: WatcherGeneration,
     last_settings: Option<Settings>,
     /// Most recent deduped JSONL event slice (from the `ClaudeJsonl` source).
@@ -233,7 +229,6 @@ async fn run_loop<S: Sink>(
     let now = Utc::now();
     let mut state = CoordinatorState {
         snapshot: Snapshot::empty(now),
-        source_fetched_at: now,
         active_generation: 0,
         last_settings: None,
         jsonl_events: None,
@@ -282,7 +277,6 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 let now = Utc::now();
                 let derived_cost_error = apply_partial(state, partial, now);
                 state.snapshot.fetched_at = now;
-                state.source_fetched_at = now;
                 let statusline_freshness_error = record_new_statusline_freshness_error(state, now);
                 recompute_pace_at(state, now);
                 sink.on_snapshot(&state.snapshot);
@@ -302,7 +296,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 // Error slots are part of the durable Snapshot contract, but
                 // the data cells did not change. Publish only to durability;
                 // presentation sinks receive the dedicated degraded event.
-                sink.on_snapshot_durable(&durable_snapshot(state));
+                sink.on_snapshot_durable(&state.snapshot);
                 sink.on_degraded(source, &err);
             }
         },
@@ -314,7 +308,6 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             // Re-notify with current state. Sinks that need to repaint will
             // do so; sinks that dedup against `last_painted` will no-op.
             let now = Utc::now();
-            state.snapshot.fetched_at = now;
             let freshness_error = record_new_statusline_freshness_error(state, now);
             recompute_pace_at(state, now);
             sink.on_refresh(&state.snapshot);
@@ -348,12 +341,9 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             state.last_settings = Some(*s);
             state.active_generation = generation;
             let now = Utc::now();
-            state.snapshot.fetched_at = now;
             let freshness_error = record_new_statusline_freshness_error(state, now);
             recompute_pace_at(state, now);
-            let durable = durable_snapshot(state);
-            sink.on_snapshot_durable(&durable);
-            sink.on_refresh(&state.snapshot);
+            sink.on_snapshot(&state.snapshot);
             if let Some(err) = freshness_error {
                 sink.on_degraded(Source::ClaudeStatusline, &err);
             }
@@ -380,16 +370,14 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             Source::ClaudeOAuth => {
                 // Neutral "not configured" state, NOT an error: set the marker,
                 // drop any stale OAuth data/error, recompute pace from any live
-                // statusline source, and repaint via on_snapshot (never
-                // on_degraded, which would redden the tray).
+                // statusline source, and repaint via on_snapshot. OAuth absence
+                // is never degraded; an independently detected stale statusline
+                // still emits its own degradation below.
                 record_oauth_unavailable(&mut state.snapshot, &reason);
                 let now = Utc::now();
-                state.snapshot.fetched_at = now;
                 let freshness_error = record_new_statusline_freshness_error(state, now);
                 recompute_pace_at(state, now);
-                let durable = durable_snapshot(state);
-                sink.on_snapshot_durable(&durable);
-                sink.on_refresh(&state.snapshot);
+                sink.on_snapshot(&state.snapshot);
                 if let Some(err) = freshness_error {
                     sink.on_degraded(Source::ClaudeStatusline, &err);
                 }
@@ -541,7 +529,7 @@ fn pace_for_snapshot_at(
     snapshot: &Snapshot,
     now: chrono::DateTime<Utc>,
 ) -> Vec<crate::snapshot::WindowPace> {
-    if snapshot.statusline_fresh_at(now)
+    if snapshot.statusline_eligible_at(now)
         && let Some(rate_limits) = snapshot
             .claude_statusline
             .as_ref()
@@ -560,18 +548,11 @@ fn pace_for_snapshot_at(
         .unwrap_or_default()
 }
 
-fn durable_snapshot(state: &CoordinatorState) -> Snapshot {
-    let mut snapshot = state.snapshot.clone();
-    snapshot.fetched_at = state.source_fetched_at;
-    snapshot.pace = pace_for_snapshot_at(&snapshot, state.source_fetched_at);
-    snapshot
-}
-
 fn record_new_statusline_freshness_error(
     state: &mut CoordinatorState,
     now: chrono::DateTime<Utc>,
 ) -> Option<String> {
-    if state.snapshot.claude_statusline_error.is_some() {
+    if state.snapshot.statusline_timestamp_ineligible() {
         return None;
     }
     let statusline = state.snapshot.claude_statusline.as_ref()?;
@@ -740,7 +721,6 @@ mod tests {
     fn test_state(now: chrono::DateTime<Utc>) -> CoordinatorState {
         CoordinatorState {
             snapshot: Snapshot::empty(now),
-            source_fetched_at: now,
             active_generation: 0,
             last_settings: None,
             jsonl_events: None,
@@ -1148,7 +1128,6 @@ mod tests {
         // it arrived as its own `Err` update that reached `on_degraded`).
         let mut state = CoordinatorState {
             snapshot: Snapshot::empty(Utc::now()),
-            source_fetched_at: Utc::now(),
             active_generation: 0,
             last_settings: None,
             jsonl_events: Some(Arc::new(sample_events())),
@@ -1582,7 +1561,6 @@ mod tests {
         let reset = now + Duration::hours(3);
         let mut state = CoordinatorState {
             snapshot: Snapshot::empty(now),
-            source_fetched_at: now,
             active_generation: 0,
             last_settings: None,
             jsonl_events: None,
@@ -1740,7 +1718,6 @@ mod tests {
     fn jsonl_update_recomputes_existing_oauth_pace_before_notifying_sink() {
         let mut state = CoordinatorState {
             snapshot: Snapshot::empty(Utc::now()),
-            source_fetched_at: Utc::now(),
             active_generation: 0,
             last_settings: None,
             jsonl_events: None,
@@ -1787,7 +1764,6 @@ mod tests {
     fn refresh_recomputes_existing_oauth_pace_before_notifying_sink() {
         let mut state = CoordinatorState {
             snapshot: Snapshot::empty(Utc::now()),
-            source_fetched_at: Utc::now(),
             active_generation: 0,
             last_settings: None,
             jsonl_events: None,
@@ -1820,7 +1796,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_keeps_quota_and_pace_on_the_same_aged_source() {
+    fn refresh_ages_statusline_without_changing_the_source_timestamp() {
         let mut state = statusline_that_ages_out_with_oauth_fallback();
         let fetched_at = state.snapshot.fetched_at;
         let mut sink = RecordingSink::default();
@@ -1832,13 +1808,35 @@ mod tests {
             snap.anthropic_quota_source(),
             Some(crate::snapshot::AnthropicQuotaSource::OAuth { .. })
         ));
-        assert!(snap.fetched_at > fetched_at);
+        assert_eq!(snap.fetched_at, fetched_at);
         assert!((snap.pace[0].used_fraction - 0.10).abs() < 1e-9);
         assert!(snap.claude_statusline_error.is_some());
     }
 
     #[test]
-    fn settings_change_keeps_quota_and_pace_on_the_same_aged_source() {
+    fn refresh_ages_statusline_out_even_after_a_reader_error() {
+        let mut state = statusline_that_ages_out_with_oauth_fallback();
+        state.snapshot.claude_statusline_error = Some("reader failed".to_string());
+        let fetched_at = state.snapshot.fetched_at;
+        let mut sink = RecordingSink::default();
+
+        handle_msg(&mut state, &mut sink, StateMsg::Refresh);
+
+        let snap = sink.last_snapshot().expect("Refresh emits snapshot");
+        assert_eq!(snap.fetched_at, fetched_at);
+        assert!(matches!(
+            snap.anthropic_quota_source(),
+            Some(crate::snapshot::AnthropicQuotaSource::OAuth { .. })
+        ));
+        assert!(
+            snap.claude_statusline_error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("statusline payload is stale ("))
+        );
+    }
+
+    #[test]
+    fn settings_change_ages_statusline_without_changing_the_source_timestamp() {
         let mut state = statusline_that_ages_out_with_oauth_fallback();
         let fetched_at = state.snapshot.fetched_at;
         let mut sink = RecordingSink::default();
@@ -1861,17 +1859,9 @@ mod tests {
             snap.anthropic_quota_source(),
             Some(crate::snapshot::AnthropicQuotaSource::OAuth { .. })
         ));
-        assert!(snap.fetched_at > fetched_at);
+        assert_eq!(snap.fetched_at, fetched_at);
         assert!((snap.pace[0].used_fraction - 0.10).abs() < 1e-9);
         assert!(snap.claude_statusline_error.is_some());
-
-        let durable = durable_snapshot(&state);
-        assert_eq!(durable.fetched_at, fetched_at);
-        assert!(matches!(
-            durable.anthropic_quota_source(),
-            Some(crate::snapshot::AnthropicQuotaSource::Statusline { .. })
-        ));
-        assert!((durable.pace[0].used_fraction - 0.62).abs() < 1e-9);
     }
 
     #[test]
