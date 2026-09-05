@@ -742,7 +742,7 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     let openai_cost = compact_openai_cost(snapshot);
 
     // A failed-fetch cell (starts with ✗) is always Critical; a stale Codex
-    // window (fetched_at > the displayed worst window's resets_at, shown with ⚠)
+    // rollout (any expired window or a cached source error, shown with ⚠)
     // is Warn; otherwise color by the row's quota fraction, Neutral when there's
     // no signal.
     let anth_stale = anthropic_display_windows(snapshot).is_some_and(|(_, _, stale)| stale);
@@ -758,8 +758,8 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     };
     let codex_bucket = if openai_quota.starts_with('✗') {
         Bucket::Critical
-    } else if codex_window_expired(snapshot) {
-        // Stale window: the used% describes an elapsed window; color Warn so
+    } else if codex_window_expired(snapshot) || snapshot.codex_quota_error.is_some() {
+        // Stale rollout or failed read: color Warn so
         // the ⚠ glyph in the cell and the bucket color agree. Without this
         // check a <50% stale window would be colored Ok (green), contradicting
         // the warning marker.
@@ -1645,6 +1645,37 @@ mod tests {
     /// used% is below the 50% Warn threshold. The old code only short-circuited
     /// on ✗; the ⚠ path fell through to `bucket_for_fraction`, coloring a
     /// <50%-stale window green - contradicting its own warning glyph.
+    #[test]
+    fn cached_codex_error_colors_warn_at_any_utilization() {
+        for percent in [17.5, 74.5, 95.0] {
+            let mut snap = fully_populated_snapshot();
+            let q = snap.codex_quota.as_mut().unwrap();
+            q.primary.used_percent = percent;
+            q.primary.resets_at = snap.fetched_at + Duration::hours(1);
+            q.secondary = None;
+            snap.codex_quota_error = Some("read failed".into());
+            assert!(!codex_window_expired(&snap));
+            let raw = String::from_utf8(render_compact_with_choice(
+                &snap,
+                anstream::ColorChoice::Always,
+            ))
+            .unwrap();
+            let row = raw
+                .lines()
+                .find(|line| line.starts_with("OpenAI "))
+                .unwrap();
+            assert!(row.contains("stale"), "{row}");
+            assert!(
+                row.contains("\x1b[33m"),
+                "cached error must use warning color: {row}"
+            );
+            assert!(
+                !row.contains("\x1b[32m") && !row.contains("\x1b[31m"),
+                "{row}"
+            );
+        }
+    }
+
     #[test]
     fn stale_codex_window_colors_warn_not_ok() {
         let now = fixture_fetched_at();
