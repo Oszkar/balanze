@@ -113,8 +113,15 @@ impl CodexQuotaSnapshot {
     pub fn weekly_or_other(&self) -> Option<&RateLimitWindow> {
         max_by_used_percent(self.windows().filter(|w| w.kind() != WindowKind::FiveHour))
     }
-    /// The highest-utilization window ("how close to a limit am I"). Always
-    /// `Some` because `primary` is always present.
+    /// Canonical single-headline selection for every Rust presentation surface:
+    /// the highest raw utilization across all durations, including unknown ones.
+    /// Exact ties keep the first window (`primary`), independent of duration or
+    /// expiry. Expired values remain visible with a separate staleness marker.
+    /// Select before rounding or converting to a lower-precision display value.
+    /// Always `Some` because `primary` is always present.
+    ///
+    /// Keep the TypeScript mirror in `src/lib/presentation/quota.ts` in lockstep;
+    /// both languages exercise `tests/fixtures/presentation-policy.json`.
     pub fn worst_window(&self) -> Option<&RateLimitWindow> {
         max_by_used_percent(self.windows())
     }
