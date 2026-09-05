@@ -479,7 +479,13 @@ fn compact_anthropic_quota(s: &Snapshot) -> String {
             } else {
                 let parts: Vec<String> = windows
                     .iter()
-                    .map(|w| format!("{:.0}% {}", w.percent, short_cadence(w.key)))
+                    .map(|w| {
+                        format!(
+                            "{:.0}% {}",
+                            w.percent.round(),
+                            crate::format::cadence_label(w.key, w.label)
+                        )
+                    })
                     .collect();
                 let marker = if stale { "⚠" } else { "✓" };
                 let stale_tag = if stale { ", stale" } else { "" };
@@ -501,7 +507,7 @@ fn compact_anthropic_cost(s: &Snapshot) -> String {
     // Measured-only matrix cell: real billed money or nothing. The list-price
     // estimate is NOT here - it renders on the separate "Subscription leverage"
     // line (see compact_subscription_leverage).
-    match s.claude_oauth.as_ref().and_then(|o| o.extra_usage.as_ref()) {
+    let value = match s.claude_oauth.as_ref().and_then(|o| o.extra_usage.as_ref()) {
         Some(eu) => match classify_overage(eu) {
             OverageState::Active => format!(
                 "{}/{} overage (real)",
@@ -516,6 +522,16 @@ fn compact_anthropic_cost(s: &Snapshot) -> String {
             OverageState::NotConfigured => "- not available".to_string(),
         },
         None => "- not available".to_string(),
+    };
+    if s.claude_oauth_error.is_some()
+        && s.claude_oauth
+            .as_ref()
+            .and_then(|o| o.extra_usage.as_ref())
+            .is_some()
+    {
+        format!("⚠ stale {value}")
+    } else {
+        value
     }
 }
 
@@ -530,8 +546,13 @@ fn compact_subscription_leverage(s: &Snapshot) -> Option<String> {
     if let Some(cost) = &s.anthropic_api_cost
         && cost.total_event_count > 0
     {
+        let stale = if s.anthropic_api_cost_error.is_some() || s.claude_jsonl_error.is_some() {
+            " (stale)"
+        } else {
+            ""
+        };
         return Some(format!(
-            "Subscription leverage: ~{} of this month's Claude Code usage at API list prices (leverage - NOT billed)",
+            "Subscription leverage: ~{}{stale} of this month's Claude Code usage at API list prices (leverage - NOT billed)",
             micro_usd_to_display_dollars(cost.total_micro_usd)
         ));
     }
@@ -586,7 +607,7 @@ fn compact_codex_quota(s: &Snapshot) -> String {
         (Some(q), _) => {
             let win = codex_display_window(q);
             let window = format_codex_window(win.window_duration_minutes);
-            // Honesty: a rollout whose displayed (worst) window has already
+            // Honesty: a rollout with any window that has already
             // reset is stale - the used% it carries describes an elapsed window.
             // Degrade the ✓ to a ⚠ + "stale" marker rather than show a confident
             // figure behind a green check. Compared against the snapshot's
@@ -602,14 +623,15 @@ fn compact_codex_quota(s: &Snapshot) -> String {
             let age_tag = format_codex_age(q.observed_at, s.fetched_at)
                 .map(|s| format!(", {s} old"))
                 .unwrap_or_default();
-            let (marker, stale_tag) = if expired {
+            let (marker, stale_tag) = if expired || s.codex_quota_error.is_some() {
                 ("⚠", ", stale")
             } else {
                 ("✓", "")
             };
             format!(
                 "{marker} {:.0}% {window} (codex {}{stale_tag}{age_tag})",
-                win.used_percent, q.plan_type
+                win.used_percent.round(),
+                q.plan_type
             )
         }
         (None, Some(_)) => "✗ codex_local error".to_string(),
@@ -622,7 +644,12 @@ fn compact_openai_cost(s: &Snapshot) -> String {
         (Some(costs), _) => {
             let partial = if costs.truncated { "* partial" } else { "" };
             format!(
-                "{}{} (admin costs)",
+                "{}{}{} (admin costs)",
+                if s.openai_error.is_some() {
+                    "⚠ stale "
+                } else {
+                    ""
+                },
                 micro_usd_to_display_dollars(costs.total_micro_usd),
                 partial
             )
@@ -715,7 +742,7 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     let openai_cost = compact_openai_cost(snapshot);
 
     // A failed-fetch cell (starts with ✗) is always Critical; a stale Codex
-    // window (fetched_at > the displayed worst window's resets_at, shown with ⚠)
+    // rollout (any expired window or a cached source error, shown with ⚠)
     // is Warn; otherwise color by the row's quota fraction, Neutral when there's
     // no signal.
     let anth_stale = anthropic_display_windows(snapshot).is_some_and(|(_, _, stale)| stale);
@@ -731,8 +758,8 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     };
     let codex_bucket = if openai_quota.starts_with('✗') {
         Bucket::Critical
-    } else if codex_window_expired(snapshot) {
-        // Stale window: the used% describes an elapsed window; color Warn so
+    } else if codex_window_expired(snapshot) || snapshot.codex_quota_error.is_some() {
+        // Stale rollout or failed read: color Warn so
         // the ⚠ glyph in the cell and the bucket color agree. Without this
         // check a <50% stale window would be colored Ok (green), contradicting
         // the warning marker.
@@ -1244,6 +1271,32 @@ mod tests {
     }
 
     #[test]
+    fn cached_values_and_rounding_remain_honest() {
+        let mut snap = fully_populated_snapshot();
+        snap.codex_quota.as_mut().unwrap().primary.used_percent = 74.5;
+        snap.codex_quota.as_mut().unwrap().secondary = None;
+        assert!(compact_codex_quota(&snap).contains("75%"));
+        snap.codex_quota_error = Some("read failed".into());
+        snap.openai_error = Some("fetch failed".into());
+        snap.claude_oauth_error = Some("fetch failed".into());
+        assert!(compact_codex_quota(&snap).contains("stale"));
+        assert!(compact_openai_cost(&snap).contains("stale"));
+        snap.codex_quota_error = None;
+        snap.openai_error = None;
+        snap.claude_oauth_error = None;
+        snap.codex_quota.as_mut().unwrap().primary.resets_at =
+            snap.fetched_at - Duration::seconds(1);
+        assert_eq!(
+            crate::exit::classify_snapshot(&snap, true),
+            crate::exit::ExitClass::Degraded
+        );
+        assert_eq!(
+            crate::exit::classify_snapshot(&snap, false),
+            crate::exit::ExitClass::Ok
+        );
+    }
+
+    #[test]
     fn compact_codex_quota_expired_window_marked_stale() {
         let now = fixture_fetched_at();
         let mut snap = fully_populated_snapshot();
@@ -1592,6 +1645,37 @@ mod tests {
     /// used% is below the 50% Warn threshold. The old code only short-circuited
     /// on ✗; the ⚠ path fell through to `bucket_for_fraction`, coloring a
     /// <50%-stale window green - contradicting its own warning glyph.
+    #[test]
+    fn cached_codex_error_colors_warn_at_any_utilization() {
+        for percent in [17.5, 74.5, 95.0] {
+            let mut snap = fully_populated_snapshot();
+            let q = snap.codex_quota.as_mut().unwrap();
+            q.primary.used_percent = percent;
+            q.primary.resets_at = snap.fetched_at + Duration::hours(1);
+            q.secondary = None;
+            snap.codex_quota_error = Some("read failed".into());
+            assert!(!codex_window_expired(&snap));
+            let raw = String::from_utf8(render_compact_with_choice(
+                &snap,
+                anstream::ColorChoice::Always,
+            ))
+            .unwrap();
+            let row = raw
+                .lines()
+                .find(|line| line.starts_with("OpenAI "))
+                .unwrap();
+            assert!(row.contains("stale"), "{row}");
+            assert!(
+                row.contains("\x1b[33m"),
+                "cached error must use warning color: {row}"
+            );
+            assert!(
+                !row.contains("\x1b[32m") && !row.contains("\x1b[31m"),
+                "{row}"
+            );
+        }
+    }
+
     #[test]
     fn stale_codex_window_colors_warn_not_ok() {
         let now = fixture_fetched_at();

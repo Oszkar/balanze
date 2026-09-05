@@ -146,7 +146,11 @@ pub fn classify_snapshot(snap: &Snapshot, strict: bool) -> ExitClass {
         snap.claude_oauth_error.as_deref(),
         snap.openai_error.as_deref(),
     ];
-    let mut any_error = snap.claude_statusline_error.is_some()
+    let mut any_error = snap
+        .codex_quota
+        .as_ref()
+        .is_some_and(|q| q.any_window_expired(snap.fetched_at))
+        || snap.claude_statusline_error.is_some()
         || snap.claude_jsonl_error.is_some()
         || snap.anthropic_api_cost_error.is_some()
         || snap.codex_quota_error.is_some();

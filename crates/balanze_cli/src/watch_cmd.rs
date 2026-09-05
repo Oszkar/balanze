@@ -17,6 +17,7 @@ use anyhow::Result;
 use state_coordinator::Sink;
 use watcher::Watcher;
 
+use crate::exit::{ExitClass, classify_snapshot};
 use crate::sinks::{JsonlSink, StdoutSink};
 use crate::tui::{ChannelSink, TuiExit, run_tui};
 
@@ -25,7 +26,13 @@ use crate::tui::{ChannelSink, TuiExit, run_tui};
 ///
 /// * `json` - if `true`, uses [`JsonlSink`]; otherwise uses [`StdoutSink`].
 /// * `verbose` - when `json=true`, controls identifier redaction in JSONL.
-pub(crate) fn run_watch_mode(json: bool, verbose: bool) -> Result<()> {
+pub(crate) fn run_watch_mode(
+    json: bool,
+    verbose: bool,
+    quiet: bool,
+    no_color: bool,
+    strict: bool,
+) -> Result<ExitClass> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -34,14 +41,14 @@ pub(crate) fn run_watch_mode(json: bool, verbose: bool) -> Result<()> {
     // JSON. Otherwise keep today's StdoutSink (separator-append) / JsonlSink
     // (one JSON doc per line) paths unchanged.
     use std::io::IsTerminal;
-    let tui = !json && std::io::stdout().is_terminal();
+    let tui = !json && !quiet && std::io::stdout().is_terminal();
 
     if tui {
-        rt.block_on(run_tui_mode())
+        rt.block_on(run_tui_mode(no_color, strict))
     } else if json {
-        rt.block_on(run_with_sink(JsonlSink::new(verbose)))
+        rt.block_on(run_with_sink(JsonlSink::new(verbose), quiet, strict))
     } else {
-        rt.block_on(run_with_sink(StdoutSink::new()))
+        rt.block_on(run_with_sink(StdoutSink::new(quiet), quiet, strict))
     }
 }
 
@@ -51,7 +58,7 @@ pub(crate) fn run_watch_mode(json: bool, verbose: bool) -> Result<()> {
 /// process exit. Without supervision the watch loop could go silently dead
 /// (sink mid-render, no further output, no exit) while the user sees a
 /// frozen TUI and assumes the watcher is just idle.
-async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
+async fn run_with_sink<S: Sink>(sink: S, quiet: bool, strict: bool) -> Result<ExitClass> {
     let settings = settings::load_or_default();
 
     let (handle, mut coord_join) = state_coordinator::spawn_with_optional_file(sink);
@@ -77,7 +84,7 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
             // on exotic platforms). Surface that as an explicit error
             // rather than silently treating it like a real Ctrl-C.
             match res {
-                Ok(()) => eprintln!("\nshutting down..."),
+                Ok(()) => { if !quiet { eprintln!("\nshutting down..."); } },
                 Err(e) => {
                     tracing::error!("ctrl_c handler install failed: {e}");
                     command_error = Some(anyhow::anyhow!("failed to install SIGINT handler: {e}"));
@@ -103,18 +110,26 @@ async fn run_with_sink<S: Sink>(sink: S) -> Result<()> {
         }
     }
     watched.shutdown().await;
+    let final_snapshot = if !coordinator_exited {
+        Some(handle.query().await)
+    } else {
+        None
+    };
     drop(handle);
     if !coordinator_exited {
         coord_join
             .await
             .map_err(|error| anyhow::anyhow!("coordinator shutdown failed: {error}"))?;
     }
-    finish_watch(command_error, fatal)
+    finish_watch(command_error, fatal)?;
+    let snapshot =
+        final_snapshot.ok_or_else(|| anyhow::anyhow!("coordinator unavailable at shutdown"))??;
+    Ok(classify_snapshot(&snapshot, strict))
 }
 
 /// Fold the supervisor outcome into the command result. Fatal task death must
 /// cross the CLI boundary as an error so `main` returns `ExitClass::Other` (1),
-/// while Ctrl-C and a user TUI quit remain successful exits.
+/// while user shutdown continues to final-snapshot classification.
 fn finish_watch(command_error: Option<anyhow::Error>, fatal: Option<String>) -> Result<()> {
     match (command_error, fatal) {
         (Some(error), _) => Err(error),
@@ -130,7 +145,7 @@ fn finish_watch(command_error: Option<anyhow::Error>, fatal: Option<String>) -> 
 /// restores the terminal, so any fatal hint we print AFTER the block lands on
 /// the normal screen, not a garbled alt screen. Both exit paths then join the
 /// live state tasks before returning.
-async fn run_tui_mode() -> Result<()> {
+async fn run_tui_mode(no_color: bool, strict: bool) -> Result<ExitClass> {
     let settings = settings::load_or_default();
 
     let (sink, rx) = ChannelSink::new();
@@ -150,7 +165,7 @@ async fn run_tui_mode() -> Result<()> {
     let mut command_error = None;
     let mut coordinator_exited = false;
     tokio::select! {
-        res = run_tui(rx, handle.clone()) => {
+        res = run_tui(rx, handle.clone(), no_color) => {
             // A coordinator-gone exit (the run_tui arm winning the race) is
             // surfaced as fatal too, so a coordinator death is never mistaken
             // for a clean user quit.
@@ -192,6 +207,11 @@ async fn run_tui_mode() -> Result<()> {
         }
     }
     watched.shutdown().await;
+    let final_snapshot = if !coordinator_exited {
+        Some(handle.query().await)
+    } else {
+        None
+    };
     drop(handle);
     if !coordinator_exited {
         coord_join
@@ -201,12 +221,44 @@ async fn run_tui_mode() -> Result<()> {
     // The select dropped run_tui's TerminalGuard on the way out, restoring the
     // terminal. Returning the fatal error now lets `main` print it on the normal
     // screen and classify the process exit as non-zero.
-    finish_watch(command_error, fatal)
+    finish_watch(command_error, fatal)?;
+    let snapshot =
+        final_snapshot.ok_or_else(|| anyhow::anyhow!("coordinator unavailable at shutdown"))??;
+    Ok(classify_snapshot(&snapshot, strict))
 }
 
 #[cfg(test)]
 mod tests {
     use super::finish_watch;
+
+    #[tokio::test]
+    async fn final_query_includes_errors_and_recovery_without_a_render() {
+        use crate::exit::{ExitClass, classify_snapshot};
+        use state_coordinator::{NullSink, Source, StateMsg};
+        let (handle, join) = state_coordinator::spawn(NullSink);
+        handle
+            .send(StateMsg::Update(state_coordinator::SourceUpdate {
+                generation: 0,
+                source: Source::OpenAiCosts,
+                result: Err("network unreachable".into()),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            classify_snapshot(&handle.query().await.unwrap(), true),
+            ExitClass::Network
+        );
+        handle
+            .transition_settings(settings::Settings::default(), 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            classify_snapshot(&handle.query().await.unwrap(), true),
+            ExitClass::Ok
+        );
+        drop(handle);
+        join.await.unwrap();
+    }
 
     #[test]
     fn clean_watch_shutdown_is_successful() {

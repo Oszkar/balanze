@@ -431,3 +431,17 @@ describe('extra-usage overage', () => {
     expect(none.badge).toBeUndefined();
   });
 });
+
+it('preserves Anthropic variant and unknown source labels', () => {
+  for (const [key, label, expected] of [
+    ['seven_day_sonnet', 'Sonnet weekly', '7d-son'],
+    ['seven_day_opus', 'Opus weekly', '7d-opus'],
+    ['monthly', 'Monthly limit', 'Monthly limit'],
+  ]) {
+    const s: Snapshot = { ...base, claude_oauth: {
+      cadences: [{ key, display_label: label, utilization_percent: 74.5, resets_at: base.fetched_at }],
+      extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: base.fetched_at,
+    } };
+    expect(anthropicQuota(s)?.headline.label).toBe(expected);
+  }
+});

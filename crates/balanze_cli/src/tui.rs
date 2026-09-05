@@ -35,7 +35,7 @@ use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 use state_coordinator::{Sink, Snapshot, Source, StateCoordinatorHandle, StateMsg};
 use tokio::sync::watch;
 
-use crate::format::{format_codex_window, micro_usd_to_display_dollars};
+use crate::format::{format_codex_window, micro_usd_to_display_dollars, short_cadence};
 use crate::present::{
     Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction, matching_anthropic_pace,
 };
@@ -64,6 +64,10 @@ impl ChannelSink {
 }
 
 impl Sink for ChannelSink {
+    fn on_snapshot_durable(&mut self, snapshot: &Snapshot) {
+        self.on_snapshot(snapshot);
+    }
+
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
         // `Snapshot` has no PartialEq (intentional - snapshot.rs), so we cannot
         // dedup here; `send_replace` overwrites unconditionally and the render
@@ -73,11 +77,7 @@ impl Sink for ChannelSink {
     }
 
     fn on_degraded(&mut self, _source: Source, _error: &str) {
-        // No-op: this carries no `Snapshot`, and the coordinator records the
-        // error in its snapshot WITHOUT a following `on_snapshot` (a pure-failure
-        // update fires only `on_degraded`). The degraded banner is instead pulled
-        // in by `run_tui`'s periodic `StateMsg::Refresh` tick, which re-notifies
-        // the current (error-bearing) snapshot into the channel within one tick.
+        // Error-bearing snapshots arrive through on_snapshot_durable.
     }
 }
 
@@ -190,19 +190,7 @@ fn quota_gauge(label: &str, percent: f32) -> Gauge<'static> {
     Gauge::default()
         .gauge_style(Style::default().fg(bucket_color(bucket)))
         .ratio(frac)
-        .label(format!("{label} {percent:.0}%"))
-}
-
-/// Short cadence label (`5h` / `7d`) from a raw cadence key. Mirrors render.rs
-/// `short_cadence` family-prefix logic so the two views agree.
-fn short_cadence_label(key: &str) -> &'static str {
-    if key.starts_with("five_hour") {
-        "5h"
-    } else if key.starts_with("seven_day") {
-        "7d"
-    } else {
-        "?"
-    }
+        .label(format!("{label} {:.0}%", percent.round()))
 }
 
 /// Collect the human names of every source currently carrying an error. Drives
@@ -262,6 +250,16 @@ pub fn draw_ui(frame: &mut Frame, s: &Snapshot) {
     draw_footer(frame, chunks[7]);
 }
 
+fn draw_with_color(frame: &mut Frame, snapshot: &Snapshot, no_color: bool) {
+    draw_ui(frame, snapshot);
+    if no_color {
+        for cell in &mut frame.buffer_mut().content {
+            cell.fg = Color::Reset;
+            cell.bg = Color::Reset;
+        }
+    }
+}
+
 fn draw_title(frame: &mut Frame, area: Rect, s: &Snapshot) {
     let line = Line::from(vec![
         Span::styled(
@@ -289,9 +287,19 @@ fn draw_anthropic(frame: &mut Frame, area: Rect, s: &Snapshot) {
         .split(inner);
 
     match anthropic_display_windows(s) {
-        Some((_, windows, _)) if !windows.is_empty() => {
+        Some((_, windows, stale)) if !windows.is_empty() => {
             for (i, w) in windows.iter().enumerate() {
-                frame.render_widget(quota_gauge(short_cadence_label(w.key), w.percent), rows[i]);
+                frame.render_widget(
+                    quota_gauge(
+                        &format!(
+                            "{}{}",
+                            crate::format::cadence_label(w.key, w.label),
+                            if stale { " (stale)" } else { "" }
+                        ),
+                        w.percent,
+                    ),
+                    rows[i],
+                );
             }
         }
         Some(_) => {
@@ -324,6 +332,11 @@ fn draw_anthropic(frame: &mut Frame, area: Rect, s: &Snapshot) {
         },
         None => "extra usage: not enabled".to_string(),
     };
+    let eu_line = if s.claude_oauth_error.is_some() && s.claude_oauth.is_some() {
+        format!("{eu_line} (stale)")
+    } else {
+        eu_line
+    };
     frame.render_widget(Paragraph::new(eu_line), rows[2]);
 }
 
@@ -342,7 +355,14 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
         .split(inner);
 
     match &s.codex_quota {
-        Some(q) => draw_codex_windows(frame, rows[0], rows[1], q, s.fetched_at),
+        Some(q) => draw_codex_windows(
+            frame,
+            rows[0],
+            rows[1],
+            q,
+            s.fetched_at,
+            s.codex_quota_error.is_some(),
+        ),
         None => {
             let msg = if s.codex_quota_error.is_some() {
                 "codex read error"
@@ -355,7 +375,12 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
 
     let admin_line = match &s.openai {
         Some(costs) => format!(
-            "admin costs {}{}",
+            "admin costs {}{}{}",
+            if s.openai_error.is_some() {
+                "(stale) "
+            } else {
+                ""
+            },
             micro_usd_to_display_dollars(costs.total_micro_usd),
             if costs.truncated { "* partial" } else { "" }
         ),
@@ -383,8 +408,8 @@ fn draw_openai(frame: &mut Frame, area: Rect, s: &Snapshot) {
 /// reports at most two windows (primary + optional secondary) into these two
 /// rows, so nothing is ever dropped - regardless of whether the `Other` window
 /// is the highest-utilization one or sits behind a known window.
-/// Gauge label for one Codex window, tagged `(stale)` once that window has
-/// reset. The rollout walker returns the newest-mtime session file however old
+/// Gauge label for one Codex window, tagged `(stale)` when any rollout window
+/// has reset or its source has failed. The rollout walker returns the newest-mtime session file however old
 /// it is, and re-polling never corrects it, so an untagged gauge would show a
 /// week-old figure as a live cap forever. The TUI has no separate marker
 /// column, so the tag rides the label - the same honesty rule the compact CLI
@@ -394,8 +419,9 @@ fn codex_gauge_label(
     name: &str,
     w: &codex_local::RateLimitWindow,
     fetched_at: chrono::DateTime<Utc>,
+    stale: bool,
 ) -> String {
-    if w.expired(fetched_at) {
+    if stale || w.expired(fetched_at) {
         format!("Codex {name} (stale)")
     } else {
         format!("Codex {name}")
@@ -408,13 +434,15 @@ fn draw_codex_windows(
     weekly_row: Rect,
     q: &CodexQuotaSnapshot,
     fetched_at: chrono::DateTime<Utc>,
+    source_error: bool,
 ) {
+    let stale = source_error || q.any_window_expired(fetched_at);
     let five = q.five_hour();
     let weekly = q.weekly();
     if let Some(w) = five {
         frame.render_widget(
             quota_gauge(
-                &codex_gauge_label("5h", w, fetched_at),
+                &codex_gauge_label("5h", w, fetched_at, stale),
                 w.used_percent as f32,
             ),
             five_row,
@@ -423,7 +451,7 @@ fn draw_codex_windows(
     if let Some(w) = weekly {
         frame.render_widget(
             quota_gauge(
-                &codex_gauge_label("7d", w, fetched_at),
+                &codex_gauge_label("7d", w, fetched_at, stale),
                 w.used_percent as f32,
             ),
             weekly_row,
@@ -457,6 +485,7 @@ fn draw_codex_windows(
             &format_codex_window(w.window_duration_minutes),
             w,
             fetched_at,
+            stale,
         );
         frame.render_widget(quota_gauge(&label, w.used_percent as f32), row);
     }
@@ -477,7 +506,7 @@ fn draw_pace(frame: &mut Frame, area: Rect, s: &Snapshot) {
             };
             format!(
                 "{} {:.0}% used / {:.0}% elapsed ({ratio})",
-                short_cadence_label(&p.key),
+                short_cadence(&p.key),
                 p.used_fraction * 100.0,
                 p.elapsed_fraction * 100.0,
             )
@@ -574,6 +603,7 @@ const REPAINT_INTERVAL_SECS: u64 = 2;
 pub async fn run_tui(
     mut rx: watch::Receiver<Option<Snapshot>>,
     handle: StateCoordinatorHandle,
+    no_color: bool,
 ) -> anyhow::Result<TuiExit> {
     let mut guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(guard.stdout());
@@ -586,7 +616,7 @@ pub async fn run_tui(
     {
         let snap = rx.borrow().clone();
         let snap = snap.unwrap_or_else(|| Snapshot::empty(Utc::now()));
-        terminal.draw(|f| draw_ui(f, &snap))?;
+        terminal.draw(|f| draw_with_color(f, &snap, no_color))?;
     }
 
     let outcome = loop {
@@ -601,7 +631,7 @@ pub async fn run_tui(
                 }
                 let snap = rx.borrow_and_update().clone();
                 let snap = snap.unwrap_or_else(|| Snapshot::empty(Utc::now()));
-                terminal.draw(|f| draw_ui(f, &snap))?;
+                terminal.draw(|f| draw_with_color(f, &snap, no_color))?;
             }
             // Periodic re-notify: pulls the coordinator's current snapshot (incl.
             // any error slots set via on_degraded-only failure updates) into the
@@ -623,7 +653,7 @@ pub async fn run_tui(
                     Some(Ok(Event::Resize(_, _))) => {
                         let snap = rx.borrow().clone();
                         let snap = snap.unwrap_or_else(|| Snapshot::empty(Utc::now()));
-                        terminal.draw(|f| draw_ui(f, &snap))?;
+                        terminal.draw(|f| draw_with_color(f, &snap, no_color))?;
                     }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => {
@@ -677,9 +707,12 @@ mod tests {
             window_duration_minutes: 300,
             resets_at: ts("2026-07-08T11:00:00Z"),
         };
-        assert_eq!(codex_gauge_label("5h", &live, fetched_at), "Codex 5h");
         assert_eq!(
-            codex_gauge_label("5h", &expired, fetched_at),
+            codex_gauge_label("5h", &live, fetched_at, false),
+            "Codex 5h"
+        );
+        assert_eq!(
+            codex_gauge_label("5h", &expired, fetched_at, false),
             "Codex 5h (stale)"
         );
     }
@@ -894,7 +927,7 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(text.contains("5h"), "missing 5h label in:\n{text}");
         assert!(text.contains("7d"), "missing 7d label in:\n{text}");
-        assert!(text.contains("42"), "missing 5h percent 42(.5) in:\n{text}");
+        assert!(text.contains("43%"), "42.5% must round up to 43%:\n{text}");
         assert!(text.contains("Codex"), "missing Codex block in:\n{text}");
         // Admin costs dollar formatting via micro_usd_to_display_dollars.
         assert!(text.contains("$4.24"), "missing admin $ in:\n{text}");
@@ -906,6 +939,26 @@ mod tests {
             text.contains("refresh"),
             "missing refresh keybind in:\n{text}"
         );
+    }
+
+    #[test]
+    fn tui_retains_stale_labels_rounding_and_monochrome() {
+        let mut snap = populated_snapshot();
+        let oauth = snap.claude_oauth.as_mut().unwrap();
+        oauth.cadences[0].utilization_percent = 74.5;
+        oauth.cadences[1].key = "seven_day_sonnet".into();
+        snap.claude_oauth_error = Some("failed".into());
+        snap.codex_quota_error = Some("failed".into());
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| draw_with_color(f, &snap, true)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("5h (stale) 75%"), "{text}");
+        assert!(text.contains("7d-son (stale)"), "{text}");
+        assert!(text.contains("Codex 7d (stale)"), "{text}");
+        for cell in &terminal.backend().buffer().content {
+            assert_eq!(cell.fg, Color::Reset);
+            assert_eq!(cell.bg, Color::Reset);
+        }
     }
 
     #[test]

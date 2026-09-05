@@ -84,6 +84,7 @@ pub struct StdoutSink {
     out: Box<dyn Write + Send>,
     err: Stderr,
     is_tty: bool,
+    quiet: bool,
     last_render: Option<Instant>,
     /// Set to true on the first write that returns `ErrorKind::BrokenPipe`.
     /// Subsequent `on_snapshot` calls become no-ops - see module doc.
@@ -93,13 +94,14 @@ pub struct StdoutSink {
 impl StdoutSink {
     /// Construct a `StdoutSink` wired to the real stdout + stderr. TTY status
     /// is detected via `std::io::IsTerminal`.
-    pub fn new() -> Self {
+    pub fn new(quiet: bool) -> Self {
         use std::io::IsTerminal;
         let is_tty = std::io::stdout().is_terminal();
         Self {
             out: Box::new(std::io::stdout()),
             err: stderr(),
             is_tty,
+            quiet,
             last_render: None,
             broken_pipe: false,
         }
@@ -114,6 +116,7 @@ impl StdoutSink {
             out,
             err: stderr(),
             is_tty,
+            quiet: false,
             last_render: None,
             broken_pipe: false,
         }
@@ -136,8 +139,14 @@ impl StdoutSink {
 }
 
 impl Sink for StdoutSink {
+    fn on_snapshot_durable(&mut self, snapshot: &Snapshot) {
+        // Error transitions must not be hidden by the normal frame debounce.
+        self.last_render = None;
+        self.on_snapshot(snapshot);
+    }
+
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
-        if self.broken_pipe {
+        if self.quiet || self.broken_pipe {
             return;
         }
         let now = Instant::now();
@@ -427,6 +436,21 @@ mod tests {
             calls_after_first, calls_after_second,
             "after broken-pipe latch, no further writes should be attempted"
         );
+    }
+
+    #[test]
+    fn quiet_suppresses_human_frames_and_errors_bypass_debounce() {
+        let (mut sink, buf) = make_sink_and_buf(false);
+        sink.quiet = true;
+        sink.on_snapshot(&fixture_snapshot());
+        assert!(buf.lock().unwrap().is_empty());
+        sink.quiet = false;
+        sink.on_snapshot(&fixture_snapshot());
+        let before = buf.lock().unwrap().len();
+        let mut snapshot = fixture_snapshot();
+        snapshot.openai_error = Some("failed".into());
+        sink.on_snapshot_durable(&snapshot);
+        assert!(buf.lock().unwrap().len() > before);
     }
 
     #[test]

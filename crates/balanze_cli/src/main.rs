@@ -94,7 +94,7 @@ fn main() -> ExitCode {
 /// logging and the TUI agree on when the screen is taken over.
 fn is_interactive_watch_tui(cli: &Cli) -> bool {
     use std::io::IsTerminal;
-    watch_without_json(cli) && std::io::stdout().is_terminal()
+    !cli.quiet && watch_without_json(cli) && std::io::stdout().is_terminal()
 }
 
 /// The command half of the TUI gate: `watch` without `--json`. Split from the
@@ -117,10 +117,13 @@ fn run(cli: &Cli) -> Result<ExitClass> {
             // taxonomy via probes::worst_exit_code), honoring --quiet/--strict.
             doctor::cmd_doctor(args, cli.quiet, cli.strict, cli.no_color)
         }
-        Some(Commands::Watch(args)) => {
-            watch_cmd::run_watch_mode(args.json, cli.verbose)?;
-            Ok(ExitClass::Ok)
-        }
+        Some(Commands::Watch(args)) => watch_cmd::run_watch_mode(
+            args.json,
+            cli.verbose,
+            cli.quiet,
+            cli.no_color || std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
+            cli.strict,
+        ),
         Some(Commands::Setup) => {
             setup::cmd_setup()?;
             Ok(ExitClass::Ok)
