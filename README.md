@@ -117,6 +117,8 @@ balanze-cli setup               interactive wizard - run this first
 balanze-cli statusline          Claude Code statusLine command
 ```
 
+Watch honors `--quiet` by suppressing the human display and shutdown message; explicit `--json` still streams data. `--no-color` and non-empty `NO_COLOR` disable TUI colors. Source failures do not stop watch: on Ctrl-C or `q`, its final snapshot uses the same exit classification as status (auth 3, network 4, other degraded state 5 only with `--strict`). Recovered errors do not affect the final exit code; fatal task failures exit 1. Any expired Codex window makes the rollout stale for display and strict classification. Cached values carry inline stale markers when their source fails.
+
 The `status --json` and `watch --json` document schema is version 2. It includes `claude_oauth_unavailable` so scripts can distinguish "Claude Code not installed" from cold start.
 
 Every command, flag, exit code, and environment variable is documented in the [CLI Reference](https://oszkar.github.io/balanze/cli.html). Scripting against it? See [Exit codes](https://oszkar.github.io/balanze/cli.html#exit-codes).

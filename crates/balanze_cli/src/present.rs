@@ -48,6 +48,7 @@ impl AnthropicSourceLabel {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AnthropicWindow<'a> {
     pub(crate) key: &'a str,
+    pub(crate) label: &'a str,
     pub(crate) percent: f32,
 }
 
@@ -79,6 +80,7 @@ pub(crate) fn anthropic_display_windows(
             AnthropicSourceLabel::Statusline,
             select(rl.windows.iter().map(|w| AnthropicWindow {
                 key: &w.key,
+                label: &w.label,
                 percent: w.used_percent,
             })),
             stale,
@@ -90,6 +92,7 @@ pub(crate) fn anthropic_display_windows(
             AnthropicSourceLabel::OAuth,
             select(oauth.cadences.iter().map(|c| AnthropicWindow {
                 key: &c.key,
+                label: &c.display_label,
                 percent: c.utilization_percent,
             })),
             stale,

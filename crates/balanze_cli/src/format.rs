@@ -63,8 +63,7 @@ pub(crate) fn format_codex_age(
 /// Each 7-day sub-variant gets a distinct suffix so a user on a
 /// Sonnet-only or Opus-only flow doesn't see two indistinguishable
 /// "7d" cells (e.g. "19% 7d, 84% 7d-son"). Unknown / internal-codename
-/// cadences render "?" here on purpose - the full label is visible in
-/// `--sections`; the compact row is a glance, not the source of truth.
+/// cadences return "?"; cadence_label replaces that sentinel with the source label.
 pub(crate) fn short_cadence(key: &str) -> &'static str {
     match key {
         "five_hour" => "5h",
@@ -106,6 +105,14 @@ pub(crate) fn fmt_int(n: u64) -> String {
         out.push(*b as char);
     }
     out
+}
+
+/// Preserve provider labels for cadence keys that have no known abbreviation.
+pub(crate) fn cadence_label<'a>(key: &str, label: &'a str) -> &'a str {
+    match short_cadence(key) {
+        "?" => label,
+        known => known,
+    }
 }
 
 #[cfg(test)]

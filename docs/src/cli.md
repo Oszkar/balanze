@@ -40,6 +40,8 @@ Every money cell is tagged `{ value_micro_usd, source, confidence, details }` in
 
 ## `watch`
 
+Watch honors `--quiet` by suppressing the human display and shutdown message; explicit `--json` still streams data. `--no-color` and non-empty `NO_COLOR` disable TUI colors. Source failures do not stop watch: on Ctrl-C or `q`, its final snapshot uses the same exit classification as status (auth 3, network 4, other degraded state 5 only with `--strict`). Recovered errors do not affect the final exit code; fatal task failures exit 1. Any expired Codex window makes the rollout stale for display and strict classification. Cached values carry inline stale markers when their source fails.
+
 A live view that keeps refreshing in place instead of printing once and exiting: a `ratatui` TUI when stdout is a TTY, or a streaming line-per-update format otherwise (for example when piped to a file or another process).
 
 | Flag | Effect |
@@ -142,7 +144,7 @@ A provider you simply have not configured is **not** an auth failure and does no
 
 `status` and `doctor` treat an absent credential differently under `--strict`, which matters if you script against them:
 
-- **`status`** classifies only populated error slots, and an unconfigured provider populates none. It exits **0**, with or without `--strict`. Nothing about a provider you never set up can produce exit 5.
+- **`status`** classifies populated error slots and expired Codex windows, and an unconfigured provider populates none. It exits **0**, with or without `--strict`. Nothing about a provider you never set up can produce exit 5.
 - **`doctor`** reports the same situation as a warning, and `--strict` folds warnings into exit **5**.
 
 So `doctor --strict` is the one to use if you want a missing credential to fail a script; `status --strict` will not do it.

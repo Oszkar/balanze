@@ -82,6 +82,15 @@ export function matchingAnthropicPace(s: Snapshot): WindowPace[] {
   return s.pace.filter((pace) => selectedKeys.has(pace.key));
 }
 
+function anthropicWindowLabel(w: AnthropicSourceWindow): string {
+  const labels: Record<string, string> = {
+    five_hour: '5h', seven_day: '7d', seven_day_sonnet: '7d-son',
+    seven_day_opus: '7d-opus', seven_day_oauth_apps: '7d-apps',
+    seven_day_cowork: '7d-cowork', seven_day_omelette: '7d-omel',
+  };
+  return labels[w.key] ?? w.label;
+}
+
 export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
   const selected = anthropicSourceView(s);
   if (!selected) return null;
@@ -92,8 +101,8 @@ export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
   const headline = five ?? seven;
   if (!headline) return null;
   return {
-    headline: { key: headline.key, pct: headline.pct, resetsAt: headline.resetsAt, label: five ? '5h' : '7-day' },
-    secondary: five && seven ? { key: seven.key, pct: seven.pct, resetsAt: seven.resetsAt, label: '7-day' } : null,
+    headline: { key: headline.key, pct: headline.pct, resetsAt: headline.resetsAt, label: anthropicWindowLabel(headline) },
+    secondary: five && seven ? { key: seven.key, pct: seven.pct, resetsAt: seven.resetsAt, label: anthropicWindowLabel(seven) } : null,
     source: selected.source,
     tone: quotaTone(Math.max(five?.pct ?? 0, seven?.pct ?? 0)),
   };
