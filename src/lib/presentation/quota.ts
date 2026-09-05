@@ -99,7 +99,9 @@ export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
   };
 }
 
-// A Codex rollout whose primary window has already reset is stale: the
+// Lockstep mirror of codex_local::RateLimitWindow::expired, pinned by
+// tests/fixtures/presentation-policy.json: strict fetched_at > resets_at.
+// A Codex rollout with any window that has already reset is stale: the
 // used_percent it carries describes an elapsed window, so the cell should be
 // flagged rather than shown as a confident figure. Evaluated against the
 // snapshot's `fetched_at` (NOT wall-clock now) so it matches the CLI's rule in
@@ -178,12 +180,15 @@ export function codexWindowsByKind(q: CodexQuotaSnapshot): { five: RateLimitWind
 
 // The grid tile shows ONE Codex window, so it must be the worst
 // (highest-utilization) one - "how close to a limit am I". This mirrors
-// `codex_local::worst_window` (whose doc names this very cell), the tray's
-// `codex_worst`, and the CLI's `codex_display_window`. Keying on the 5h slot
+// `codex_local::worst_window` (whose doc names this very cell), which also
+// supplies the tray and CLI headlines. Keying on the 5h slot
 // instead let a weekly window at 95% sit as grey secondary text under a green
 // 4% tile while the tray painted red - the two surfaces disagreed on the same
 // snapshot. Reduces over EVERY window rather than the known 300/10080 durations
 // so an unrecognized duration cannot hide a live cap.
+// Keep selection and any-window expiry in lockstep with the Rust contract,
+// pinned by tests/fixtures/presentation-policy.json: compare raw percentages,
+// keep primary on ties, and retain expired windows with a separate stale flag.
 export function codexQuota(s: Snapshot): CodexQuota | null {
   const q = s.codex_quota;
   if (!q) return null;

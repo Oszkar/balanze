@@ -95,6 +95,9 @@ struct TrayView {
     claude_7d: Option<f32>,
     codex_5h: Option<f32>,
     codex_weekly: Option<f32>,
+    // Selected by codex_local before conversion to display precision. Detailed
+    // slots must never re-select the Codex headline or its label.
+    codex_headline: Option<(&'static str, f32)>,
     codex_expired: bool,
 }
 
@@ -133,6 +136,14 @@ impl TrayView {
             // retain one stale bit so the tray uses its warning treatment rather
             // than presenting an expired rollout as confidently live.
             v.codex_expired = q.any_window_expired(s.fetched_at);
+            v.codex_headline = q.worst_window().map(|w| {
+                let label = match w.kind() {
+                    WindowKind::FiveHour => "Codex 5h",
+                    WindowKind::Weekly => "Codex 7d",
+                    WindowKind::Other => "Codex window",
+                };
+                (label, w.used_percent as f32)
+            });
             for w in q.windows() {
                 if w.kind() == WindowKind::FiveHour {
                     fold_max(&mut v.codex_5h, w.used_percent as f32);
@@ -164,28 +175,18 @@ impl TrayView {
         }
     }
 
-    /// Codex's worst window (max of 5h and weekly) - the single Codex figure
-    /// shown in the menu-bar title.
-    fn codex_worst(&self) -> Option<f32> {
-        match (self.codex_5h, self.codex_weekly) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        }
-    }
-
     /// The single worst window across providers, labeled - drives the ring color
     /// and the tooltip header. Compared on the raw value; callers round for
-    /// display. Because every cadence folds into 5h/7d/Codex, this is the same
-    /// maximum the ring paints, so color and shown number cannot disagree.
+    /// display. Codex contributes its canonical headline, preserving its window
+    /// identity on ties. Cross-provider ties retain the existing Codex priority.
     fn worst(&self) -> Option<(&'static str, f32)> {
         [
-            ("Claude 5h", self.claude_5h),
-            ("Claude 7d", self.claude_7d),
-            ("Codex 5h", self.codex_5h),
-            ("Codex 7d", self.codex_weekly),
+            self.claude_5h.map(|p| ("Claude 5h", p)),
+            self.claude_7d.map(|p| ("Claude 7d", p)),
+            self.codex_headline,
         ]
         .into_iter()
-        .filter_map(|(label, pct)| pct.map(|p| (label, p)))
+        .flatten()
         .max_by(|a, b| a.1.total_cmp(&b.1))
     }
 
@@ -219,8 +220,8 @@ fn tray_title(view: &TrayView) -> String {
         .claude_worst()
         .map(|p| format!("Claude {}%", p.round() as i64));
     let o = view
-        .codex_worst()
-        .map(|p| format!("Codex {}%", p.round() as i64));
+        .codex_headline
+        .map(|(_, p)| format!("Codex {}%", p.round() as i64));
     [c, o].into_iter().flatten().collect::<Vec<_>>().join(" · ")
 }
 
@@ -736,6 +737,32 @@ mod tests {
         assert!(tip.contains("worst: Codex 7d 80%"), "{tip}");
         assert!(tip.contains("5h 12%"), "{tip}");
         assert!(tip.contains("7d 80%"), "{tip}");
+    }
+
+    #[test]
+    fn codex_headline_preserves_primary_ties_and_unknown_labels() {
+        for (primary_minutes, secondary_minutes, primary_pct, secondary_pct, label) in [
+            (300, 10080, 90.0, 90.0, "Codex 5h"),
+            (10080, 300, 90.0, 90.0, "Codex 7d"),
+            (10080, 1440, 20.0, 95.0, "Codex window"),
+            // Selection must precede the lossy f32 display conversion.
+            (300, 10080, 90.0000002, 90.0000001, "Codex 5h"),
+        ] {
+            let mut s = Snapshot::empty(chrono::Utc::now());
+            let mut q = codex_5h_weekly(primary_pct, secondary_pct);
+            q.primary.window_duration_minutes = primary_minutes;
+            q.secondary.as_mut().unwrap().window_duration_minutes = secondary_minutes;
+            let pct = q.worst_window().unwrap().used_percent.round() as i64;
+            s.codex_quota = Some(q);
+            let view = TrayView::from_snapshot(&s);
+            assert_eq!(tray_title(&view), format!("Codex {pct}%"));
+            assert_eq!(bucket_for_view(&view, false), ColorBucket::Red);
+            let tip = tray_tooltip(&view, false);
+            assert!(
+                tip.starts_with(&format!("Balanze - worst: {label} {pct}%")),
+                "{tip}"
+            );
+        }
     }
 
     /// The original bug: the ring colored from the worst window (weekly 94%) but

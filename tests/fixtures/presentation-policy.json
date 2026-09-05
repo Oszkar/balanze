@@ -88,6 +88,32 @@
   ],
   "codex": [
     {
+      "name": "reversed slots select the worse weekly primary",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "windows": [
+        { "percent": 95, "durationMinutes": 10080, "resetsAt": "2026-07-14T12:00:00Z" },
+        { "percent": 30, "durationMinutes": 300, "resetsAt": "2026-07-08T09:00:00Z" }
+      ],
+      "expected": { "worstIndex": 0, "fiveIndex": 1, "weeklyIndex": 0, "expired": true, "labels": ["7d", "5h"] }
+    },
+    {
+      "name": "reversed ties keep weekly primary",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "windows": [
+        { "percent": 42, "durationMinutes": 10080, "resetsAt": "2026-07-14T12:00:00Z" },
+        { "percent": 42, "durationMinutes": 300, "resetsAt": "2026-07-08T10:00:00Z" }
+      ],
+      "expected": { "worstIndex": 0, "fiveIndex": 1, "weeklyIndex": 0, "expired": false, "labels": ["7d", "5h"] }
+    },
+    {
+      "name": "a single weekly window owns the headline",
+      "fetchedAt": "2026-07-08T10:00:00Z",
+      "windows": [
+        { "percent": 55, "durationMinutes": 10080, "resetsAt": "2026-07-14T12:00:00Z" }
+      ],
+      "expected": { "worstIndex": 0, "fiveIndex": null, "weeklyIndex": 0, "expired": false, "labels": ["7d"] }
+    },
+    {
       "name": "one reset window makes the whole rollout stale",
       "fetchedAt": "2026-07-08T10:00:00Z",
       "windows": [
