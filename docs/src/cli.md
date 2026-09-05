@@ -8,6 +8,10 @@ Every command accepts the [global flags](#global-flags). Run `balanze-cli help`,
 
 The 4-quadrant compact status: Anthropic quota, OpenAI quota, and each provider's real billed API dollars, on a single screen. This is also what runs when you invoke `balanze-cli` with no subcommand at all. OpenAI Costs is shared with every other Balanze process through an exact 300-second gate; a recent failed or in-flight attempt can therefore defer that source instead of starting another request.
 
+Status works without a running desktop app or watch process. It reads Claude's local statusline snapshot and prefers its quota when fresh (up to 15 minutes old and not future-dated), falling back to OAuth. Both compact and `--sections` output identify the selected quota source. OAuth is still fetched when enabled because it supplies billed extra usage; a usable quota fallback does not hide an OAuth failure. An absent Claude projects directory and missing OAuth credentials are neutral, and missing statusline files simply allow fallback. Actual statusline read/freshness failures are included in `--strict` classification.
+
+Status honors provider settings before I/O: the Anthropic toggle controls OAuth, the Codex toggle controls local Codex reads, and the OpenAI toggle controls billing unless a non-empty `BALANZE_OPENAI_KEY` overrides it. Local Claude JSONL and statusline reads remain enabled. JSONL parsing preserves valid complete records around malformed lines and invalid UTF-8; an unfinished trailing record is deferred until a later invocation. Skipped corrupt records are logged as warnings.
+
 | Flag | Effect |
 |---|---|
 | `--json` | Machine-readable JSON instead of the formatted view. Wins over `--sections` if both are given. |
@@ -52,7 +56,7 @@ Diagnoses each integration one at a time - Claude OAuth credential, Codex rollou
 
 ## `export`
 
-Exports usage history as CSV, re-derived statelessly on every run - nothing is persisted. The output carries two provenance-segregated sections: Claude usage from the local JSONL (one row per day and model, with token counts plus a list-price *leverage* figure that is never money billed) and OpenAI current-month real billed spend per line item from the Admin Costs API. The OpenAI section needs a configured OpenAI key and either a reusable current-month full result in the shared 300-second gate or permission from that gate to make one network request; the Claude section does not.
+Exports usage history as CSV, re-derived statelessly on every run - nothing is persisted. Export reuses the complete-record JSONL reader over full history; its explicitly requested reads are independent of the status provider toggles. The output carries two provenance-segregated sections: Claude usage from the local JSONL (one row per day and model, with token counts plus a list-price *leverage* figure that is never money billed) and OpenAI current-month real billed spend per line item from the Admin Costs API. The OpenAI section needs a configured OpenAI key and either a reusable current-month full result in the shared 300-second gate or permission from that gate to make one network request; the Claude section does not.
 
 | Flag | Effect |
 |---|---|

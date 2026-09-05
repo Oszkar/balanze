@@ -43,7 +43,8 @@ pub use messages::{
 pub use sink::{LogSink, NullSink, Sink};
 pub use snapshot::{
     AnthropicQuotaSource, JsonlSnapshot, SNAPSHOT_SCHEMA_VERSION, STATUSLINE_FRESHNESS_SECS,
-    Snapshot, WindowPace, pace_for_oauth, record_error,
+    Snapshot, WindowPace, pace_for_oauth, pace_for_snapshot_at, record_error,
+    statusline_freshness_error,
 };
 pub use snapshot_file::{
     SnapshotFileError, SnapshotFilePayload, atomic_write_snapshot_file, read_snapshot_file,

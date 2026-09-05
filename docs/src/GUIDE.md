@@ -31,7 +31,7 @@ The popover is one normalized snapshot of your AI usage. Everything in the grid 
 | **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
 | **OpenAI**    | Codex CLI rate-limit % (5h / weekly) | real billed spend (Admin Costs API)                 |
 
-- **Anthropic quota %** - live 5-hour / 7-day utilization from the same `/api/oauth/usage` endpoint Claude Code uses, with a reset clock on each bar.
+- **Anthropic quota %** - fresh local Claude Code statusline quota first, with `/api/oauth/usage` as fallback, with a reset clock on each bar. This selection is shared by the tray, watch, and one-shot status.
 - **OpenAI quota %** - the Codex CLI rate-limit % for both rolling windows (5-hour + weekly, classified by duration), read from your local Codex rollout files.
 - **OpenAI API $** - this-month billed spend from the Admin Costs API.
 - **Anthropic API $** - real or nothing. If you enabled pay-as-you-go "Extra usage" on claude.ai, this cell shows that real overage; otherwise it reads **not available** (Anthropic exposes no per-user API spend). It is never backfilled with an estimate.

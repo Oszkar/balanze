@@ -82,6 +82,52 @@ pub(crate) fn pace_for_statusline(rate_limits: &RateLimits, now: DateTime<Utc>) 
         .collect()
 }
 
+/// Derive pace from fresh statusline windows when a known family is present,
+/// otherwise from OAuth. Shared by one-shot and live composition.
+pub fn pace_for_snapshot_at(
+    snapshot: &Snapshot,
+    now: chrono::DateTime<Utc>,
+) -> Vec<crate::snapshot::WindowPace> {
+    if snapshot.statusline_eligible_at(now)
+        && let Some(rate_limits) = snapshot
+            .claude_statusline
+            .as_ref()
+            .and_then(|sl| sl.payload.rate_limits.as_ref())
+    {
+        let statusline_pace = pace_for_statusline(rate_limits, now);
+        if !statusline_pace.is_empty() {
+            return statusline_pace;
+        }
+    }
+
+    snapshot
+        .claude_oauth
+        .as_ref()
+        .map(|o| pace_for_oauth(o, now))
+        .unwrap_or_default()
+}
+
+/// Classify statusline timestamps identically in one-shot and live ingestion.
+pub fn statusline_freshness_error(
+    captured_at: chrono::DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
+) -> Option<String> {
+    let age = now.signed_duration_since(captured_at);
+    if age > Duration::seconds(crate::STATUSLINE_FRESHNESS_SECS) {
+        Some(format!(
+            "statusline payload is stale ({} min old)",
+            age.num_minutes()
+        ))
+    } else if age < Duration::zero() {
+        Some(format!(
+            "statusline payload is future-dated ({} min ahead; clock skew?)",
+            age.abs().num_minutes()
+        ))
+    } else {
+        None
+    }
+}
+
 /// Canonical Balanze state. `None` fields = "not yet observed"; `*_error`
 /// fields hold the most recent failure for that source. Successful data and
 /// an error can coexist: the data stays (stale) while the error explains
@@ -189,7 +235,7 @@ pub struct Snapshot {
     /// configured but the fetch failed.
     pub openai_error: Option<String>,
     /// Most recent successful Claude Code statusLine file payload. `None`
-    /// until the first successful read (populated by the live watcher).
+    /// until the first successful read (one-shot status or the live watcher).
     pub claude_statusline: Option<StatuslineFilePayload>,
     /// Most recent degradation of the statusline feed: reader failure (file
     /// missing, schema drift) OR a freshness violation (the on-disk payload's

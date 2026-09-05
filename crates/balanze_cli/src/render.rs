@@ -8,7 +8,7 @@ use anstream::ColorChoice;
 use anthropic_oauth::ExtraUsage;
 use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
 use owo_colors::{OwoColorize, Style};
-use state_coordinator::Snapshot;
+use state_coordinator::{AnthropicQuotaSource, Snapshot};
 
 use crate::format::{
     fmt_int, format_codex_age, format_codex_window, micro_usd_to_display_dollars, pretty_duration,
@@ -72,7 +72,10 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
     )?;
     writeln!(w)?;
 
-    // Claude OAuth (cadence bars)
+    write_selected_anthropic_quota(snapshot, w)?;
+    write_anthropic_source_errors(snapshot, w)?;
+
+    // Subscription metadata and billed extra usage always belong to OAuth.
     if let Some(oauth) = &snapshot.claude_oauth {
         writeln!(
             w,
@@ -87,20 +90,6 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             writeln!(w, "org uuid:     {uuid}")?;
         }
         writeln!(w)?;
-        writeln!(w, "CADENCE BARS (from Anthropic OAuth):")?;
-        if oauth.cadences.is_empty() {
-            writeln!(w, "  (none reported)")?;
-        }
-        for cad in &oauth.cadences {
-            let resets_in = cad.resets_at.signed_duration_since(snapshot.fetched_at);
-            writeln!(
-                w,
-                "  {:32}  {:>6.2}%   resets in {}",
-                cad.display_label,
-                cad.utilization_percent,
-                pretty_duration(resets_in)
-            )?;
-        }
         // Extra-usage = pay-as-you-go overage. The raw ints are cents; this is
         // the claude.ai "Extra usage" meter - REAL billed money, distinct from
         // the estimated API-rate figure below. Only meaningful when the user
@@ -151,8 +140,6 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
                 }
             }
         }
-    } else if let Some(err) = &snapshot.claude_oauth_error {
-        writeln!(w, "CADENCE BARS: unavailable - {err}")?;
     }
 
     // OpenAI monthly costs (from Admin API)
@@ -361,6 +348,68 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
     Ok(())
 }
 
+fn write_selected_anthropic_quota<W: Write>(s: &Snapshot, w: &mut W) -> io::Result<()> {
+    let (source, windows, stale): (&str, Vec<_>, bool) = match s.anthropic_quota_source() {
+        Some(AnthropicQuotaSource::Statusline { rate_limits, stale }) => (
+            "Claude statusline",
+            rate_limits
+                .windows
+                .iter()
+                .map(|w| (w.label.as_str(), w.used_percent, w.resets_at))
+                .collect(),
+            stale,
+        ),
+        Some(AnthropicQuotaSource::OAuth { snapshot, stale }) => (
+            "Anthropic OAuth",
+            snapshot
+                .cadences
+                .iter()
+                .map(|c| (c.display_label.as_str(), c.utilization_percent, c.resets_at))
+                .collect(),
+            stale,
+        ),
+        None => {
+            let reason = if s.claude_oauth_error.is_some() || s.claude_statusline_error.is_some() {
+                "unavailable"
+            } else {
+                s.claude_oauth_unavailable
+                    .as_deref()
+                    .unwrap_or("not configured")
+            };
+            return writeln!(w, "CADENCE BARS: {reason}");
+        }
+    };
+    writeln!(
+        w,
+        "CADENCE BARS (from {source}):{}",
+        if stale { " stale" } else { "" }
+    )?;
+    if windows.is_empty() {
+        writeln!(w, "  (none reported)")?;
+    }
+    for (label, percent, reset) in windows {
+        writeln!(
+            w,
+            "  {label:32}  {percent:>6.2}%   resets in {}",
+            pretty_duration(reset.signed_duration_since(s.fetched_at))
+        )?;
+    }
+    Ok(())
+}
+
+// A usable quota fallback must not hide a failed feed or missing billed data.
+fn write_anthropic_source_errors<W: Write>(s: &Snapshot, w: &mut W) -> io::Result<()> {
+    for (source, error) in [
+        ("Anthropic OAuth", &s.claude_oauth_error),
+        ("Claude statusline", &s.claude_statusline_error),
+    ] {
+        if let Some(error) = error {
+            writeln!(w, "{source}: unavailable - {error}")?;
+        }
+    }
+    Ok(())
+}
+
 /// Plain (uncolored) compact 4-quadrant matrix renderer, parameterized over the
 /// sink. Both the live `watch` path (`StdoutSink` in sinks.rs calls this) and
 /// the golden-string tests use this renderer. The colored one-shot `status` path
@@ -398,6 +447,7 @@ pub(crate) fn write_compact<W: Write>(snapshot: &Snapshot, w: &mut W) -> io::Res
     if let Some(lev) = compact_subscription_leverage(snapshot) {
         writeln!(w, "{lev}")?;
     }
+    write_anthropic_source_errors(snapshot, w)?;
     writeln!(w)?;
 
     // The matrix holds measured reality only - server-reported quota % and
@@ -733,6 +783,7 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
         };
         writeln!(w, "{}", lev.style(style))?;
     }
+    write_anthropic_source_errors(snapshot, w)?;
     writeln!(w)?;
 
     writeln!(
@@ -939,10 +990,43 @@ mod tests {
         assert!(cell.contains("(statusline)"), "{cell}");
         assert!(!cell.contains("42%"), "OAuth must not be folded in: {cell}");
 
+        let sections = render_sections(&snap, false);
+        assert!(
+            sections.contains("CADENCE BARS (from Claude statusline):"),
+            "{sections}"
+        );
+        assert!(
+            sections.contains("Opus weekly") && sections.contains("91.00%"),
+            "{sections}"
+        );
+        assert!(
+            !sections.contains("42.50%"),
+            "OAuth quota must not replace the selected source: {sections}"
+        );
+        assert!(
+            sections.contains("$20.92"),
+            "OAuth billing must survive statusline selection: {sections}"
+        );
+
         snap.claude_statusline_error = Some("reader failed".to_string());
         let stale_cell = compact_anthropic_quota(&snap);
         assert!(stale_cell.starts_with('⚠'), "{stale_cell}");
         assert!(stale_cell.contains("statusline, stale"), "{stale_cell}");
+
+        for output in [
+            render_sections(&snap, false),
+            render_compact(&snap),
+            String::from_utf8(render_compact_with_choice(
+                &snap,
+                anstream::ColorChoice::Never,
+            ))
+            .unwrap(),
+        ] {
+            assert!(
+                output.contains("Claude statusline: unavailable - reader failed"),
+                "{output}"
+            );
+        }
 
         snap.pace = vec![state_coordinator::WindowPace {
             key: "five_hour".to_string(),
@@ -980,6 +1064,9 @@ mod tests {
             oauth_stale_cell.contains("oauth, stale"),
             "{oauth_stale_cell}"
         );
+        let sections = render_sections(&snap, false);
+        assert!(sections.contains("CADENCE BARS (from Anthropic OAuth): stale"));
+        assert!(sections.contains("Anthropic OAuth: unavailable - refresh failed"));
     }
 
     /// Render the compact view through an AutoStream forced to a given choice,
