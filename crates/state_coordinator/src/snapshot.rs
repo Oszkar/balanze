@@ -119,9 +119,14 @@ pub fn statusline_freshness_error(
             age.num_minutes()
         ))
     } else if age < Duration::zero() {
+        let seconds = age.abs().num_seconds();
+        let ahead = if seconds == 0 {
+            "<1 sec".to_string()
+        } else {
+            format!("{seconds} sec")
+        };
         Some(format!(
-            "statusline payload is future-dated ({} min ahead; clock skew?)",
-            age.abs().num_minutes()
+            "statusline payload is future-dated ({ahead} ahead; clock skew?)"
         ))
     } else {
         None
@@ -414,6 +419,24 @@ pub fn clear_source(snapshot: &mut Snapshot, source: Source) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn future_statusline_message_reports_small_offsets_precisely() {
+        let now = Utc::now();
+        for (offset, display) in [
+            (Duration::milliseconds(1), "<1 sec"),
+            (Duration::seconds(5), "5 sec"),
+            (Duration::seconds(60), "60 sec"),
+        ] {
+            assert_eq!(
+                statusline_freshness_error(now + offset, now),
+                Some(format!(
+                    "statusline payload is future-dated ({display} ahead; clock skew?)"
+                ))
+            );
+        }
+        assert_eq!(statusline_freshness_error(now, now), None);
+    }
+
     use super::*;
     use crate::test_support::{fixture_now, oauth_snapshot};
     use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot};

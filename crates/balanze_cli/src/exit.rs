@@ -140,20 +140,18 @@ fn looks_like_auth(err: &str) -> bool {
 /// are NEUTRAL "not configured" markers (Claude Code / Codex not installed),
 /// NOT errors - they never move the exit code.
 pub fn classify_snapshot(snap: &Snapshot, strict: bool) -> ExitClass {
-    // The data-bearing error slots, in no significant order (the auth-vs-network
-    // precedence below is what matters, not position within a tier).
-    let errors: [Option<&str>; 6] = [
+    // Only provider responses can imply auth or transport failures. Local
+    // paths and OS messages may contain the same words without that meaning.
+    let provider_errors = [
         snap.claude_oauth_error.as_deref(),
-        snap.claude_jsonl_error.as_deref(),
-        snap.anthropic_api_cost_error.as_deref(),
-        snap.codex_quota_error.as_deref(),
         snap.openai_error.as_deref(),
-        snap.claude_statusline_error.as_deref(),
     ];
-
-    let mut any_error = false;
+    let mut any_error = snap.claude_statusline_error.is_some()
+        || snap.claude_jsonl_error.is_some()
+        || snap.anthropic_api_cost_error.is_some()
+        || snap.codex_quota_error.is_some();
     let mut any_network = false;
-    for slot in errors.into_iter().flatten() {
+    for slot in provider_errors.into_iter().flatten() {
         any_error = true;
         if looks_like_auth(slot) {
             // Auth is the strongest signal - return immediately.
@@ -296,6 +294,35 @@ mod tests {
         snap.claude_statusline_error = Some("schema drift v2 in statusline payload".to_string());
         assert_eq!(classify_snapshot(&snap, false), ExitClass::Ok);
         assert_eq!(classify_snapshot(&snap, true), ExitClass::Degraded);
+    }
+
+    #[test]
+    fn local_errors_never_trigger_provider_exit_codes() {
+        for message in [
+            "expired",
+            "rejected",
+            "connection",
+            "network",
+            "timeout",
+            "http 401",
+        ] {
+            for source in 0..4 {
+                let mut snap = empty();
+                let slot = match source {
+                    0 => &mut snap.claude_statusline_error,
+                    1 => &mut snap.claude_jsonl_error,
+                    2 => &mut snap.anthropic_api_cost_error,
+                    _ => &mut snap.codex_quota_error,
+                };
+                *slot = Some(format!("io error reading /{message}/payload.json"));
+                assert_eq!(classify_snapshot(&snap, false), ExitClass::Ok);
+                assert_eq!(classify_snapshot(&snap, true), ExitClass::Degraded);
+                snap.openai_error = Some("network unreachable".into());
+                assert_eq!(classify_snapshot(&snap, false), ExitClass::Network);
+                snap.claude_oauth_error = Some("token rejected".into());
+                assert_eq!(classify_snapshot(&snap, true), ExitClass::AuthMissing);
+            }
+        }
     }
 
     #[test]
