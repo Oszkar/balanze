@@ -91,8 +91,8 @@ impl Deref for IncrementalRead {
 /// after the first call.
 ///
 /// Per AGENTS.md §3.1, watcher / poller code uses this to keep parser CPU
-/// flat during active Claude Code sessions. The CLI is stateless and
-/// re-parses fully on each invocation, so it doesn't use this type.
+/// flat during active Claude Code sessions. The stateless CLI creates a fresh
+/// reader per invocation, sharing complete-record handling with the live path.
 #[derive(Debug, Default)]
 pub struct IncrementalParser {
     cursors: HashMap<PathBuf, FileCursor>,

@@ -4,26 +4,37 @@
 
 use anyhow::{Result, anyhow};
 use chrono::Utc;
-use std::fs;
 
 use anthropic_oauth::{
     ClaudeOAuthSnapshot, CredentialsClaudeAiOauth, DEFAULT_API_BASE as ANTHROPIC_API_BASE,
     OAuthError, fetch_usage, load_from_source, locate_credentials,
 };
 use claude_parser::{
-    UsageEvent, dedup_events, find_all_claude_projects_dirs, find_claude_projects_dir,
-    find_jsonl_files, parse_str,
+    IncrementalParser, UsageEvent, dedup_events, find_all_claude_projects_dirs,
+    find_claude_projects_dir, find_jsonl_files,
 };
 use openai_client::{OpenAiCosts, gated_costs_this_month};
 use state_coordinator::Snapshot;
 use tracing::{info, warn};
 
-// The source-orchestration policy now lives in `snapshot_composer::compose`
-// (AGENTS.md §4 #8): the CLI runs it via `LiveSources`, the future watcher
-// will run it via its own `SnapshotSources` impl, and `integration_4quadrant`
-// runs it via `FixtureSources` - one policy, no silent divergence.
+// One-shot status loads provider settings once, then shares source gates and
+// derivation policy with the live path without requiring a running tray host.
 pub(crate) async fn build_snapshot() -> Snapshot {
-    snapshot_composer::compose(&LiveSources, Utc::now()).await
+    let settings = tokio::task::spawn_blocking(settings::load_or_default)
+        .await
+        .unwrap_or_else(|error| {
+            warn!("settings load task failed: {error}; using defaults");
+            settings::Settings::default()
+        });
+    let openai_env_override =
+        std::env::var("BALANZE_OPENAI_KEY").is_ok_and(|v| !v.trim().is_empty());
+    snapshot_composer::compose(
+        &LiveSources,
+        Utc::now(),
+        &settings.providers,
+        openai_env_override,
+    )
+    .await
 }
 
 /// `export` reuses the exact JSONL walk + dedup `status` uses (DRY): one source
@@ -43,8 +54,21 @@ pub(crate) async fn export_fetch_openai() -> Result<Option<OpenAiCosts>> {
 struct LiveSources;
 
 impl snapshot_composer::SnapshotSources for LiveSources {
-    async fn fetch_oauth(&self) -> Result<ClaudeOAuthSnapshot> {
+    async fn fetch_oauth(&self) -> Result<Option<ClaudeOAuthSnapshot>> {
         live_fetch_oauth().await
+    }
+    async fn load_statusline(&self) -> Result<Option<claude_statusline::StatuslineFilePayload>> {
+        tokio::task::spawn_blocking(|| {
+            let Some(path) = settings::statusline_snapshot_path() else {
+                return Ok(None);
+            };
+            match claude_statusline::read_snapshot(&path) {
+                Ok(payload) => Ok(Some(payload)),
+                Err(claude_statusline::FileIoError::FileMissing { .. }) => Ok(None),
+                Err(error) => Err(error.into()),
+            }
+        })
+        .await?
     }
     async fn load_claude_events(&self) -> Result<(Vec<UsageEvent>, usize)> {
         // Sync filesystem walk + parse; keep it off the runtime worker, mirroring
@@ -63,9 +87,8 @@ impl snapshot_composer::SnapshotSources for LiveSources {
 /// for both the window summary and the claude_cost synthesis - we don't
 /// want to walk + parse 491 JSONL files twice per `balanze-cli` invocation.
 ///
-/// Returns `(events, files_scanned)`. Files that fail to read or parse
-/// are logged (warn level) but don't fail the whole call - matches the
-/// existing tolerant policy.
+/// Returns `(events, files_scanned)`. Unreadable files and malformed complete
+/// records are logged at WARN; valid complete records remain usable.
 fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
     // Union ALL existing project roots: a dual-install machine can have both
     // ~/.claude/projects and ~/.config/claude/projects, and reading only the
@@ -79,9 +102,13 @@ fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
         find_claude_projects_dir()?;
     }
 
+    load_claude_events_from_roots(&roots)
+}
+
+fn load_claude_events_from_roots(roots: &[std::path::PathBuf]) -> Result<(Vec<UsageEvent>, usize)> {
     let mut files = Vec::new();
     let mut walk_err = None;
-    for root in &roots {
+    for root in roots {
         match find_jsonl_files(root) {
             Ok(mut f) => files.append(&mut f),
             Err(e) => {
@@ -109,17 +136,13 @@ fn live_load_claude_events() -> Result<(Vec<UsageEvent>, usize)> {
     );
 
     let mut all_events: Vec<UsageEvent> = Vec::new();
+    // A fresh reader scans each file once but shares the live path's complete-
+    // record, UTF-8 and corruption handling. Nothing is persisted between runs.
+    let mut parser = IncrementalParser::new();
     for path in &files {
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("jsonl: skipping {} ({e})", path.display());
-                continue;
-            }
-        };
-        match parse_str(&content) {
-            Ok(events) => all_events.extend(events),
-            Err(e) => warn!("jsonl: parse error in {} ({e})", path.display()),
+        match parser.read_incremental(path) {
+            Ok(read) => all_events.extend(read.events().iter().cloned()),
+            Err(e) => warn!("jsonl: skipping {} ({e})", path.display()),
         }
     }
 
@@ -159,16 +182,23 @@ fn live_fetch_codex_quota() -> Result<Option<codex_local::CodexQuotaSnapshot>> {
     }
 }
 
-async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
+async fn live_fetch_oauth() -> Result<Option<ClaudeOAuthSnapshot>> {
     // locate+load is sync I/O (a file read, or a `security` subprocess on
     // macOS that can block on a Keychain access prompt), so run it on a
     // blocking worker rather than stalling a tokio runtime thread (AGENTS.md
     // §2.1).
-    let creds = tokio::task::spawn_blocking(|| {
+    let initial = tokio::task::spawn_blocking(|| {
         let source = locate_credentials()?;
         load_from_source(&source)
     })
-    .await??;
+    .await?;
+    // Only absence on the initial probe is neutral, matching watcher startup.
+    // A credential disappearing during a 401 re-read is still a poll failure.
+    let creds = match initial {
+        Ok(creds) => creds,
+        Err(OAuthError::CredentialsMissing { .. }) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     let oauth = creds.claude_ai_oauth;
     let client = reqwest::Client::builder()
         .user_agent("balanze-cli/0.1.0")
@@ -186,6 +216,7 @@ async fn live_fetch_oauth() -> Result<ClaudeOAuthSnapshot> {
         .map_err(Into::into)
     })
     .await
+    .map(Some)
 }
 
 /// Fetch once with Claude Code's current bearer. A 401 may race Claude Code
@@ -458,6 +489,62 @@ mod tests {
     /// each test in its own process, but plain `cargo test` shares one, so the
     /// lock keeps both runners honest.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn one_shot_jsonl_keeps_complete_records_across_corruption_and_partial_tails() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let fixture =
+            include_str!("../tests/fixtures/claude/projects/test-project/session-001.jsonl");
+        let mut bytes = fixture.as_bytes().to_vec();
+        bytes.extend_from_slice(b"\n{broken json}\n\xff\n{\"type\":\"assistant\",\"model\":\"");
+        bytes.extend_from_slice(&[0xe2, 0x82]);
+        std::fs::write(&path, bytes).unwrap();
+
+        let mut expected = claude_parser::parse_str(fixture).unwrap();
+        dedup_events(&mut expected);
+        let roots = vec![dir.path().to_path_buf()];
+        let (actual, files) = load_claude_events_from_roots(&roots).unwrap();
+        assert_eq!(files, 1);
+        assert_eq!(
+            actual, expected,
+            "one corrupt record must not discard valid usage"
+        );
+
+        let mut live = claude_parser::IncrementalParser::new();
+        let mut live_events = live.read_incremental(&path).unwrap().events().to_vec();
+        dedup_events(&mut live_events);
+        assert_eq!(actual, live_events);
+
+        // Finish the malformed tail, then append a valid, distinct usage event.
+        let record = fixture
+            .lines()
+            .find(|line| line.contains("\"assistant\""))
+            .unwrap();
+        let record = record
+            .replace("msg_", "new_msg_")
+            .replace("req_", "new_req_");
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(file, "\n{record}").unwrap();
+        live_events.extend(
+            live.read_incremental(&path)
+                .unwrap()
+                .events()
+                .iter()
+                .cloned(),
+        );
+        dedup_events(&mut live_events);
+        let (after, _) = load_claude_events_from_roots(&roots).unwrap();
+        assert_eq!(after, live_events);
+        assert!(
+            after.len() > actual.len(),
+            "valid appends must remain visible"
+        );
+    }
 
     /// The keychain read is gated on `want_openai`: with the OpenAI segment off,
     /// the key is left unread (`Ok(None)`) even when one is configured, so the

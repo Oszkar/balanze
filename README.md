@@ -41,12 +41,12 @@ Balanze surfaces one normalized snapshot two ways - the `balanze-cli` CLI and th
 
 |               | Quota %                              | API $ (real billed)                                 |
 |---------------|--------------------------------------|-----------------------------------------------------|
-| **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
+| **Anthropic** | Fresh statusline quota, OAuth fallback (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
 | **OpenAI**    | Codex CLI rate-limit % (5h / weekly) | real billed spend (Admin Costs API)                 |
 
 The Claude list-price figure is deliberately **not** a matrix cell - it sits outside the grid as a separate *Subscription leverage* insight, so a counterfactual estimate can never be mistaken for billed spend.
 
-- **Anthropic quota** - the same `/api/oauth/usage` endpoint Claude Code uses: live 5-hour / 7-day / per-model bars with `resets_at` clocks. No scraping.
+- **Anthropic quota** - fresh local Claude Code statusline quota takes precedence, with `/api/oauth/usage` as fallback: 5-hour / 7-day / per-model bars with reset clocks. OAuth also supplies billed extra usage.
 - **Anthropic API $ - real or nothing.** Anthropic exposes no per-user API spend, so this cell shows the real `extra_usage` overage *if* you enabled it on claude.ai, and otherwise reads **not available** - never backfilled with a substitute number.
 - **OpenAI Codex quota** - the server-computed rate-limit % for both rolling windows (5-hour and weekly), read from the local Codex CLI rollout files (`~/.codex/sessions/`).
 - **OpenAI API $** - this-month spend plus a per-line-item breakdown from `/v1/organization/costs`, using an `sk-admin-...` key. Real billing data.
@@ -162,7 +162,7 @@ The workspace is a set of small, single-responsibility crates under `crates/`: o
 
 - **Provider connectors** - `anthropic_oauth`, `openai_client`, `codex_local`, and `claude_parser` (the Claude JSONL wire format) each own one source. `openai_client` also owns the durable machine-wide 300-second Costs gate shared by every caller. Adding a provider means a new connector crate wired into the `SnapshotSources` fetches that `snapshot_composer::compose` orchestrates (plus the watcher/coordinator for live updates) - the normalized `Snapshot` and the actor stay put. That connector abstraction is the design's central bet.
 - **Domain math** - `window` (rolling-window + pace) and `claude_cost` (the pure list-price estimate). Pure functions, no I/O, tested first.
-- **Composition + glue** - `snapshot_composer` (one-shot) and `state_coordinator` (the live actor) both assemble the same `Snapshot`; `balanze_cli` and `src-tauri` are thin glue over them, never logic.
+- **Composition + glue** - `snapshot_composer` (one-shot) and `state_coordinator` (the live actor) both assemble the same `Snapshot`; `balanze_cli` and `src-tauri` are thin glue over them, never logic. Both paths share JSONL record handling, statusline freshness, quota selection, and pace. One-shot status honors provider toggles before I/O and works without a running tray/watch process. The Anthropic toggle controls OAuth; local Claude reads remain available. The existing OpenAI environment-key override still applies.
 - **Local mutation ownership** - `settings` serializes every Balanze settings mutation across processes with a stable sibling lock, reloads before applying field-level intent, and publishes atomically. `claude_statusline` owns the safely ordered backup/replace/restore workflow for Claude Code's separate settings file; the two files are recoverable on retry rather than falsely treated as one atomic transaction.
 
 Hitting a wall? [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) collects the non-obvious traps (double tray icons, JSONL CPU spikes, Tauri dep-version mismatches). Test discipline and the per-crate validation matrix live in `AGENTS.md` §6-§7.

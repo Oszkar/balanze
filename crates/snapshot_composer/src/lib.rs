@@ -1,43 +1,32 @@
-//! Shared source-orchestration policy. This is the SINGLE composition path
-//! (AGENTS.md §4 #8): `balanze_cli` runs it via `LiveSources`, the future
-//! watcher will run it via its own `SnapshotSources` impl, and the
-//! integration test runs it via `FixtureSources` - so the policy cannot
-//! silently diverge between entry-points. Pure orchestration: it does no
-//! network/filesystem I/O itself (that is the `SnapshotSources` impl's job)
-//! and never imports `reqwest`.
+//! One-shot source orchestration for CLI status. Provider gates run before I/O.
+//! The live actor remains in `state_coordinator`; both paths share JSONL
+//! summarization, statusline freshness, quota selection and pace derivation.
+//! Source adapters own filesystem/network access; this crate owns composition.
 
 use anthropic_oauth::ClaudeOAuthSnapshot;
 use chrono::{DateTime, Utc};
 use claude_parser::UsageEvent;
+use claude_statusline::StatuslineFilePayload;
 use codex_local::CodexQuotaSnapshot;
 use openai_client::OpenAiCosts;
-use state_coordinator::{JsonlSnapshot, Snapshot, pace_for_oauth, summarize_jsonl};
+use settings::ProviderSettings;
+use state_coordinator::{
+    JsonlSnapshot, Snapshot, pace_for_snapshot_at, statusline_freshness_error, summarize_jsonl,
+};
 use tracing::{info, warn};
 
-/// The four I/O-bound source fetches `compose` needs. CLI (`LiveSources`),
-/// the future watcher, and tests (`FixtureSources`) provide impls. The trait
-/// sits at the I/O boundary; the pure transforms (cost synthesis, window
-/// math) live in `compose` so the orchestration policy is testable without
-/// network/filesystem and is identical across entry-points.
-///
-/// `async fn` in a trait is stable since Rust 1.75, comfortably under the
-/// workspace MSRV (see AGENTS.md §2.1 - the row, not this comment, is the
-/// source of truth; this one drifted to a long-dead 1.77 for a while). We
-/// only ever use STATIC dispatch (`compose<S: SnapshotSources>`), never
-/// `dyn SnapshotSources`. With static dispatch the future's `Send`-ness is
-/// inferred at the concrete call site - e.g. the watcher's `tokio::spawn` on
-/// the multi-thread runtime resolves it automatically, since the watcher's own
-/// `SnapshotSources` impl returns `Send` futures and `compose` holds nothing
-/// non-`Send` across an `.await`. Note: a *generic* `tokio::spawn` helper over
-/// `S: SnapshotSources` cannot prove the future `Send` (the trait can't express
-/// it), so the watcher must spawn `compose()` with a concrete `SnapshotSources`
-/// type (Send inferred) or add `trait_variant`/boxed futures if a generic
-/// helper is ever needed.
+/// Source adapters for one-shot composition. Provider settings are checked
+/// before invoking optional provider methods. Local Claude JSONL and statusline
+/// reads remain enabled independently of the Anthropic OAuth toggle.
+// Static dispatch is sufficient for the CLI and fixture adapters; no spawned
+// generic future requires a Send bound on these trait methods.
 #[allow(async_fn_in_trait)]
 pub trait SnapshotSources {
-    /// Anthropic OAuth usage. The impl owns credential load + proactive
-    /// refresh + 401-retry (OAuth-fetch detail, not composition policy).
-    async fn fetch_oauth(&self) -> anyhow::Result<ClaudeOAuthSnapshot>;
+    /// Anthropic OAuth usage. `Ok(None)` means no Claude Code credential.
+    /// The impl owns read-only credential loading and rotated-bearer retry.
+    async fn fetch_oauth(&self) -> anyhow::Result<Option<ClaudeOAuthSnapshot>>;
+    /// Claude Code's local statusline snapshot. Missing/unwired is neutral.
+    async fn load_statusline(&self) -> anyhow::Result<Option<StatuslineFilePayload>>;
     /// All deduped Claude Code JSONL events + count of files scanned.
     async fn load_claude_events(&self) -> anyhow::Result<(Vec<UsageEvent>, usize)>;
     /// Codex rate-limit snapshot. `Ok(None)` = Codex not installed (NOT an error).
@@ -46,15 +35,42 @@ pub trait SnapshotSources {
     async fn fetch_openai(&self) -> anyhow::Result<Option<OpenAiCosts>>;
 }
 
-/// Compose one `Snapshot` from the four sources, applying the exact
-/// per-source error-mapping policy (AGENTS.md §4 #8). Moved verbatim from
-/// the former `balanze_cli::build_snapshot`; behavior is unchanged.
-pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Snapshot {
-    let (claude_oauth, claude_oauth_error) = match sources.fetch_oauth().await {
-        Ok(s) => (Some(s), None),
+/// Compose one snapshot using the live provider gates and shared derivation
+/// rules. The caller supplies the effective time and environment-key presence;
+/// disabled providers are never entered, including their credential resolution.
+pub async fn compose<S: SnapshotSources>(
+    sources: &S,
+    now: DateTime<Utc>,
+    providers: &ProviderSettings,
+    openai_env_override: bool,
+) -> Snapshot {
+    let (claude_statusline, claude_statusline_error) = match sources.load_statusline().await {
+        Ok(payload) => {
+            let error = payload
+                .as_ref()
+                .and_then(|p| statusline_freshness_error(p.captured_at, now));
+            (payload, error)
+        }
+        Err(e) => (None, Some(e.to_string())),
+    };
+    // Gate before entering the I/O adapter, including credential resolution.
+    let oauth = if providers.anthropic_enabled {
+        sources.fetch_oauth().await
+    } else {
+        Ok(None)
+    };
+    let (claude_oauth, claude_oauth_error, claude_oauth_unavailable) = match oauth {
+        Ok(Some(s)) => (Some(s), None, None),
+        Ok(None) => (
+            None,
+            None,
+            providers
+                .anthropic_enabled
+                .then(|| "Claude Code not detected".to_string()),
+        ),
         Err(e) => {
             warn!("OAuth source failed: {e}");
-            (None, Some(e.to_string()))
+            (None, Some(e.to_string()), None)
         }
     };
 
@@ -105,13 +121,23 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
                 }
             }
         }
+        Err(e)
+            if matches!(
+                e.downcast_ref::<claude_parser::ParseError>(),
+                Some(claude_parser::ParseError::FileMissing(_))
+            ) => {}
         Err(e) => {
             warn!("JSONL source failed: {e}");
             claude_jsonl_error = Some(e.to_string());
         }
     }
 
-    let (codex_quota, codex_quota_error) = match sources.fetch_codex_quota().await {
+    let codex = if providers.codex_enabled {
+        sources.fetch_codex_quota().await
+    } else {
+        Ok(None)
+    };
+    let (codex_quota, codex_quota_error) = match codex {
         Ok(snap) => (snap, None),
         Err(e) => {
             warn!("codex_quota source failed: {e}");
@@ -119,7 +145,12 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
         }
     };
 
-    let (openai, openai_error) = match sources.fetch_openai().await {
+    let costs = if providers.openai_enabled || openai_env_override {
+        sources.fetch_openai().await
+    } else {
+        Ok(None)
+    };
+    let (openai, openai_error) = match costs {
         Ok(Some(g)) => (Some(g), None),
         Ok(None) => (None, None),
         Err(e) => {
@@ -128,22 +159,12 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
         }
     };
 
-    // Compute pace before the struct literal so `claude_oauth` can be moved
-    // into the struct field while still borrowing it here.
-    let pace = claude_oauth
-        .as_ref()
-        .map(|o| pace_for_oauth(o, now))
-        .unwrap_or_default();
-
-    Snapshot {
+    let mut snapshot = Snapshot {
         schema_version: state_coordinator::SNAPSHOT_SCHEMA_VERSION,
         fetched_at: now,
         claude_oauth,
         claude_oauth_error,
-        // The "not configured" marker is set only by the watcher's oauth_poll
-        // (live path); the one-shot CLI leaves it None (no loading state to
-        // disambiguate).
-        claude_oauth_unavailable: None,
+        claude_oauth_unavailable,
         claude_jsonl,
         claude_jsonl_error,
         anthropic_api_cost,
@@ -152,14 +173,12 @@ pub async fn compose<S: SnapshotSources>(sources: &S, now: DateTime<Utc>) -> Sna
         codex_quota_error,
         openai,
         openai_error,
-        // statusline is populated by the coordinator actor (watcher-driven)
-        // and not by the single-shot CLI compose path.
-        claude_statusline: None,
-        claude_statusline_error: None,
-        // pace is computed before the struct literal so `claude_oauth` is not
-        // consumed before it can be moved into the `claude_oauth` field above.
-        pace,
-    }
+        claude_statusline,
+        claude_statusline_error,
+        pace: Vec::new(),
+    };
+    snapshot.pace = pace_for_snapshot_at(&snapshot, now);
+    snapshot
 }
 
 #[cfg(test)]
@@ -171,29 +190,59 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 5, 16, 12, 0, 0).unwrap()
     }
 
+    fn all_providers() -> ProviderSettings {
+        ProviderSettings {
+            anthropic_enabled: true,
+            codex_enabled: true,
+            openai_enabled: true,
+        }
+    }
+
     #[derive(Default)]
     struct Fake {
         oauth: Option<anyhow::Result<ClaudeOAuthSnapshot>>,
+        statusline: Option<anyhow::Result<Option<StatuslineFilePayload>>>,
+        calls: std::cell::RefCell<Vec<&'static str>>,
         events: Option<anyhow::Result<(Vec<UsageEvent>, usize)>>,
         codex: Option<anyhow::Result<Option<CodexQuotaSnapshot>>>,
         openai: Option<anyhow::Result<Option<OpenAiCosts>>>,
     }
     impl SnapshotSources for Fake {
-        async fn fetch_oauth(&self) -> anyhow::Result<ClaudeOAuthSnapshot> {
+        async fn fetch_oauth(&self) -> anyhow::Result<Option<ClaudeOAuthSnapshot>> {
+            self.calls.borrow_mut().push("oauth");
             match &self.oauth {
-                Some(Ok(s)) => Ok(s.clone()),
+                Some(Ok(s)) => Ok(Some(s.clone())),
                 Some(Err(e)) => Err(anyhow::anyhow!("{e}")),
-                None => Err(anyhow::anyhow!("oauth not configured in fake")),
+                None => Ok(None),
+            }
+        }
+        async fn load_statusline(&self) -> anyhow::Result<Option<StatuslineFilePayload>> {
+            self.calls.borrow_mut().push("statusline");
+            match &self.statusline {
+                Some(Ok(payload)) => Ok(payload.clone()),
+                Some(Err(error)) => Err(anyhow::anyhow!("{error}")),
+                None => Ok(None),
             }
         }
         async fn load_claude_events(&self) -> anyhow::Result<(Vec<UsageEvent>, usize)> {
+            self.calls.borrow_mut().push("jsonl");
             match &self.events {
                 Some(Ok(v)) => Ok(v.clone()),
+                // Preserve the classification the real filesystem adapter supplies.
+                Some(Err(e))
+                    if matches!(
+                        e.downcast_ref::<claude_parser::ParseError>(),
+                        Some(claude_parser::ParseError::FileMissing(_))
+                    ) =>
+                {
+                    Err(claude_parser::ParseError::FileMissing("absent-projects".into()).into())
+                }
                 Some(Err(e)) => Err(anyhow::anyhow!("{e}")),
                 None => Ok((Vec::new(), 0)),
             }
         }
         async fn fetch_codex_quota(&self) -> anyhow::Result<Option<CodexQuotaSnapshot>> {
+            self.calls.borrow_mut().push("codex");
             match &self.codex {
                 Some(Ok(v)) => Ok(v.clone()),
                 Some(Err(e)) => Err(anyhow::anyhow!("{e}")),
@@ -201,6 +250,7 @@ mod tests {
             }
         }
         async fn fetch_openai(&self) -> anyhow::Result<Option<OpenAiCosts>> {
+            self.calls.borrow_mut().push("openai");
             match &self.openai {
                 Some(Ok(v)) => Ok(v.clone()),
                 Some(Err(e)) => Err(anyhow::anyhow!("{e}")),
@@ -227,13 +277,246 @@ mod tests {
         }
     }
 
+    fn quota_sources(captured_at: DateTime<Utc>, key: &str) -> Fake {
+        let n = now();
+        Fake {
+            oauth: Some(Ok(ClaudeOAuthSnapshot {
+                cadences: vec![anthropic_oauth::CadenceBar {
+                    key: "five_hour".to_string(),
+                    display_label: "5-hour".to_string(),
+                    utilization_percent: 80.0,
+                    resets_at: n + chrono::Duration::hours(2),
+                }],
+                extra_usage: Some(anthropic_oauth::ExtraUsage {
+                    is_enabled: true,
+                    used_credits_micro_usd: 2_000_000,
+                    monthly_limit_micro_usd: 10_000_000,
+                    utilization_percent: 20.0,
+                    currency: "USD".to_string(),
+                }),
+                subscription_type: None,
+                rate_limit_tier: None,
+                org_uuid: None,
+                fetched_at: n,
+            })),
+            statusline: Some(Ok(Some(StatuslineFilePayload::new(
+                claude_statusline::StatuslineSnapshot {
+                    rate_limits: Some(claude_statusline::RateLimits {
+                        windows: vec![claude_statusline::RateWindow {
+                            key: key.to_string(),
+                            label: key.to_string(),
+                            used_percent: 20.0,
+                            resets_at: n + chrono::Duration::hours(3),
+                        }],
+                    }),
+                    session_cost_micro_usd: None,
+                    claude_code_version: None,
+                    model_display_name: None,
+                    context_used_percent: None,
+                },
+                captured_at,
+            )))),
+            events: Some(Ok((vec![one_event(n)], 1))),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_sources_are_never_called_but_local_claude_remains_available() {
+        for mask in 0..8 {
+            for env_override in [false, true] {
+                let providers = ProviderSettings {
+                    anthropic_enabled: mask & 1 != 0,
+                    codex_enabled: mask & 2 != 0,
+                    openai_enabled: mask & 4 != 0,
+                };
+                let f = quota_sources(now(), "five_hour");
+                let snap = compose(&f, now(), &providers, env_override).await;
+                let calls = f.calls.borrow();
+                assert_eq!(calls.contains(&"oauth"), providers.anthropic_enabled);
+                assert_eq!(calls.contains(&"codex"), providers.codex_enabled);
+                assert_eq!(
+                    calls.contains(&"openai"),
+                    providers.openai_enabled || env_override
+                );
+                assert!(calls.contains(&"jsonl") && calls.contains(&"statusline"));
+                assert!(snap.claude_statusline.is_some() && snap.claude_jsonl.is_some());
+                assert_eq!(snap.claude_oauth.is_some(), providers.anthropic_enabled);
+                assert!(snap.claude_oauth_unavailable.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn one_shot_quota_and_pace_use_the_live_freshness_boundaries() {
+        for (age_secs, fresh) in [(-1, false), (0, true), (900, true), (901, false)] {
+            let f = quota_sources(now() - chrono::Duration::seconds(age_secs), "five_hour");
+            let snap = compose(&f, now(), &all_providers(), false).await;
+            assert_eq!(snap.statusline_fresh(), fresh, "age={age_secs}");
+            assert_eq!(snap.claude_statusline_error.is_none(), fresh);
+            assert!(snap.claude_statusline.is_some(), "retain stale payloads");
+            assert_eq!(
+                matches!(
+                    snap.anthropic_quota_source(),
+                    Some(state_coordinator::AnthropicQuotaSource::Statusline { .. })
+                ),
+                fresh
+            );
+            assert_eq!(snap.pace.len(), 1);
+            assert_eq!(snap.pace[0].used_fraction, if fresh { 0.2 } else { 0.8 });
+            assert_eq!(
+                snap.claude_oauth
+                    .as_ref()
+                    .unwrap()
+                    .extra_usage
+                    .as_ref()
+                    .unwrap()
+                    .used_credits_micro_usd,
+                2_000_000
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_and_failed_sources_remain_distinct_with_statusline_fallback() {
+        let snap = compose(&Fake::default(), now(), &all_providers(), false).await;
+        assert_eq!(
+            snap.claude_oauth_unavailable.as_deref(),
+            Some("Claude Code not detected")
+        );
+        assert!(snap.claude_oauth_error.is_none() && snap.claude_statusline_error.is_none());
+
+        let mut f = quota_sources(now(), "five_hour");
+        f.oauth = Some(Err(anyhow::anyhow!("credential expired")));
+        let snap = compose(&f, now(), &all_providers(), false).await;
+        assert_eq!(
+            snap.claude_oauth_error.as_deref(),
+            Some("credential expired")
+        );
+        assert!(snap.claude_oauth_unavailable.is_none());
+        assert_eq!(snap.pace[0].used_fraction, 0.2);
+
+        let mut f = quota_sources(now(), "five_hour");
+        f.statusline = Some(Err(anyhow::anyhow!("statusline read failed")));
+        let snap = compose(&f, now(), &all_providers(), false).await;
+        assert_eq!(
+            snap.claude_statusline_error.as_deref(),
+            Some("statusline read failed")
+        );
+        assert_eq!(snap.pace[0].used_fraction, 0.8);
+    }
+
+    #[tokio::test]
+    async fn unknown_statusline_family_does_not_mix_pace_sources() {
+        let f = quota_sources(now(), "monthly");
+        let snap = compose(&f, now(), &all_providers(), false).await;
+        assert!(matches!(
+            snap.anthropic_quota_source(),
+            Some(state_coordinator::AnthropicQuotaSource::Statusline { .. })
+        ));
+        assert_eq!(snap.pace.len(), 1);
+        assert_eq!(snap.pace[0].key, "five_hour");
+        assert_eq!(snap.pace[0].used_fraction, 0.8);
+    }
+
+    #[tokio::test]
+    async fn one_shot_matches_live_actor_for_fresh_stale_and_unknown_statusline() {
+        use state_coordinator::{
+            ClaudeJsonlInput, NullSink, SourcePartial, SourceUpdate, StateMsg,
+        };
+        for (age, key) in [
+            (0, "five_hour"),
+            (960, "five_hour"),
+            (-60, "five_hour"),
+            (0, "monthly"),
+        ] {
+            let base = chrono::Utc::now();
+            let mut f = quota_sources(base - chrono::Duration::seconds(age), key);
+            let oauth = f.oauth.as_mut().unwrap().as_mut().unwrap();
+            oauth.fetched_at = base;
+            oauth.cadences[0].resets_at = base + chrono::Duration::hours(2);
+            f.events = Some(Ok((vec![one_event(base)], 1)));
+            let payload = f
+                .statusline
+                .as_mut()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .as_mut()
+                .unwrap();
+            payload.payload.rate_limits.as_mut().unwrap().windows[0].resets_at =
+                base + chrono::Duration::hours(3);
+
+            let (handle, task) = state_coordinator::spawn(NullSink);
+            let settings = settings::Settings {
+                providers: all_providers(),
+                ..Default::default()
+            };
+            handle.transition_settings(settings, 1).await.unwrap();
+            let partials = [
+                SourcePartial::ClaudeOAuth(f.oauth.as_ref().unwrap().as_ref().unwrap().clone()),
+                SourcePartial::ClaudeJsonl(ClaudeJsonlInput {
+                    events: std::sync::Arc::new(
+                        f.events.as_ref().unwrap().as_ref().unwrap().0.clone(),
+                    ),
+                    files_scanned: 1,
+                }),
+                SourcePartial::ClaudeStatusline(
+                    f.statusline
+                        .as_ref()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .clone(),
+                ),
+            ];
+            for partial in partials {
+                handle
+                    .send(StateMsg::Update(SourceUpdate {
+                        generation: 1,
+                        source: partial.source(),
+                        result: Ok(partial),
+                    }))
+                    .await
+                    .unwrap();
+            }
+            let live = handle.query().await.unwrap();
+            let once = compose(&f, live.fetched_at, &all_providers(), false).await;
+            assert_eq!(once.pace, live.pace, "age={age}, key={key}");
+            assert_eq!(once.claude_statusline_error, live.claude_statusline_error);
+            assert_eq!(
+                once.claude_jsonl.as_ref().unwrap().window,
+                live.claude_jsonl.as_ref().unwrap().window
+            );
+            assert_eq!(
+                once.claude_jsonl
+                    .as_ref()
+                    .unwrap()
+                    .window
+                    .total_events_in_window,
+                1
+            );
+            assert_eq!(
+                once.anthropic_api_cost.as_ref().unwrap().total_micro_usd,
+                live.anthropic_api_cost.as_ref().unwrap().total_micro_usd
+            );
+            assert!(once.anthropic_api_cost.as_ref().unwrap().total_micro_usd > 0);
+            assert_eq!(once.statusline_fresh(), live.statusline_fresh());
+            assert!(once.claude_oauth_error.is_none() && live.claude_oauth_error.is_none());
+            drop(handle);
+            task.await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn jsonl_error_keeps_both_anthropic_cells_none_with_single_error() {
         let f = Fake {
             events: Some(Err(anyhow::anyhow!("permission denied"))),
             ..Default::default()
         };
-        let snap = compose(&f, now()).await;
+        let snap = compose(&f, now(), &all_providers(), false).await;
         assert!(snap.claude_jsonl.is_none());
         assert_eq!(
             snap.claude_jsonl_error.as_deref(),
@@ -247,12 +530,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_jsonl_directory_is_neutral_like_the_waiting_live_watcher() {
+        let f = Fake {
+            events: Some(Err(claude_parser::ParseError::FileMissing(
+                "absent-projects".into(),
+            )
+            .into())),
+            ..Default::default()
+        };
+        let snap = compose(&f, now(), &all_providers(), false).await;
+        assert!(snap.claude_jsonl.is_none() && snap.claude_jsonl_error.is_none());
+        assert!(snap.anthropic_api_cost.is_none() && snap.anthropic_api_cost_error.is_none());
+    }
+
+    #[tokio::test]
     async fn codex_and_openai_none_set_no_error() {
         let f = Fake {
             events: Some(Ok((vec![one_event(now())], 1))),
             ..Default::default()
         };
-        let snap = compose(&f, now()).await;
+        let snap = compose(&f, now(), &all_providers(), false).await;
         assert!(snap.codex_quota.is_none() && snap.codex_quota_error.is_none());
         assert!(snap.openai.is_none() && snap.openai_error.is_none());
         assert!(snap.claude_jsonl.is_some());
@@ -266,7 +563,7 @@ mod tests {
             events: Some(Ok((vec![one_event(now())], 1))),
             ..Default::default()
         };
-        let snap = compose(&f, now()).await;
+        let snap = compose(&f, now(), &all_providers(), false).await;
         assert_eq!(snap.claude_oauth_error.as_deref(), Some("AuthExpired"));
         let w = snap.claude_jsonl.unwrap().window;
         assert_eq!(
@@ -287,7 +584,7 @@ mod tests {
             codex: Some(Err(anyhow::anyhow!("permission denied on ~/.codex"))),
             ..Default::default()
         };
-        let snap = compose(&f, now()).await;
+        let snap = compose(&f, now(), &all_providers(), false).await;
 
         assert!(snap.codex_quota.is_none());
         assert_eq!(
@@ -317,7 +614,7 @@ mod tests {
             openai: Some(Err(anyhow::anyhow!("HTTP 403 - admin scope required"))),
             ..Default::default()
         };
-        let snap = compose(&f, now()).await;
+        let snap = compose(&f, now(), &all_providers(), false).await;
 
         assert!(snap.openai.is_none());
         assert_eq!(
@@ -360,7 +657,7 @@ mod tests {
             events: Some(Ok((vec![one_event(n)], 1))),
             ..Default::default()
         };
-        let snap = compose(&f, n).await;
+        let snap = compose(&f, n, &all_providers(), false).await;
         assert!(snap.claude_oauth.is_some());
         assert!(snap.claude_oauth_error.is_none());
         let w = snap.claude_jsonl.expect("jsonl populated").window;

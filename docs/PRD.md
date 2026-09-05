@@ -156,6 +156,8 @@ The system should normalize data into a common schema:
 
 ### The usage matrix (presentation contract)
 
+One-shot CLI status and the live tray/watch surfaces share source-selection and derivation rules. Status honors existing provider toggles before reading credentials or calling providers, while local Claude JSONL/statusline reads remain available. Fresh statusline quota takes precedence over OAuth; OAuth still supplies extra-usage billing. Status and export preserve valid complete JSONL records around malformed lines and unfinished tails. Export remains an explicit full-history read. These paths remain independent observations, so their values can differ when their source inputs or evaluation times differ.
+
 The headline view is a 2×2 matrix - Anthropic / OpenAI × subscription **quota %** / real billed **$** - and it follows one rule that the whole honesty story rests on: **the matrix holds measured reality only.**
 
 A cell is filled only by a number that was actually measured or actually billed:

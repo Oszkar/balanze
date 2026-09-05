@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use anthropic_oauth::ClaudeOAuthSnapshot;
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use claude_cost::PriceTable;
 use claude_parser::UsageEvent;
 use settings::Settings;
@@ -17,8 +17,8 @@ use crate::messages::{Source, SourcePartial, SourceUpdate, StateMsg, WatcherGene
 use crate::sink::Sink;
 use crate::sink_file::{SnapshotPublisher, SnapshotWriter, spawn_snapshot_writer};
 use crate::snapshot::{
-    Snapshot, clear_source, pace_for_oauth, pace_for_statusline, record_error,
-    record_oauth_unavailable,
+    Snapshot, clear_source, pace_for_snapshot_at, record_error, record_oauth_unavailable,
+    statusline_freshness_error,
 };
 
 /// Mutable state owned by the coordinator's single tokio task. Grouped
@@ -525,29 +525,6 @@ fn recompute_pace_at(state: &mut CoordinatorState, now: chrono::DateTime<Utc>) {
     state.snapshot.pace = pace_for_snapshot_at(&state.snapshot, now);
 }
 
-fn pace_for_snapshot_at(
-    snapshot: &Snapshot,
-    now: chrono::DateTime<Utc>,
-) -> Vec<crate::snapshot::WindowPace> {
-    if snapshot.statusline_eligible_at(now)
-        && let Some(rate_limits) = snapshot
-            .claude_statusline
-            .as_ref()
-            .and_then(|sl| sl.payload.rate_limits.as_ref())
-    {
-        let statusline_pace = pace_for_statusline(rate_limits, now);
-        if !statusline_pace.is_empty() {
-            return statusline_pace;
-        }
-    }
-
-    snapshot
-        .claude_oauth
-        .as_ref()
-        .map(|o| pace_for_oauth(o, now))
-        .unwrap_or_default()
-}
-
 fn record_new_statusline_freshness_error(
     state: &mut CoordinatorState,
     now: chrono::DateTime<Utc>,
@@ -559,26 +536,6 @@ fn record_new_statusline_freshness_error(
     let error = statusline_freshness_error(statusline.captured_at, now)?;
     state.snapshot.claude_statusline_error = Some(error.clone());
     Some(error)
-}
-
-fn statusline_freshness_error(
-    captured_at: chrono::DateTime<Utc>,
-    now: chrono::DateTime<Utc>,
-) -> Option<String> {
-    let age = now.signed_duration_since(captured_at);
-    if age > Duration::seconds(crate::STATUSLINE_FRESHNESS_SECS) {
-        Some(format!(
-            "statusline payload is stale ({} min old)",
-            age.num_minutes()
-        ))
-    } else if age < Duration::zero() {
-        Some(format!(
-            "statusline payload is future-dated ({} min ahead; clock skew?)",
-            age.abs().num_minutes()
-        ))
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

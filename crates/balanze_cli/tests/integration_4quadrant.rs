@@ -32,6 +32,129 @@ fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+#[test]
+fn standalone_status_reads_local_sources_with_all_provider_fetches_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let projects = dir.path().join(".claude/projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let now = chrono::Utc::now();
+    let fixture = include_str!("fixtures/claude/projects/test-project/session-001.jsonl");
+    let mut bytes = Vec::new();
+    for line in fixture.lines().filter(|line| !line.is_empty()) {
+        let mut record: serde_json::Value = serde_json::from_str(line).unwrap();
+        record["timestamp"] = serde_json::json!((now - chrono::Duration::minutes(1)).to_rfc3339());
+        bytes.extend(serde_json::to_vec(&record).unwrap());
+        bytes.push(b'\n');
+    }
+    bytes.extend_from_slice(b"{broken}\n\xff\n{unfinished");
+    std::fs::write(projects.join("session.jsonl"), bytes).unwrap();
+    let settings = settings::Settings {
+        providers: settings::ProviderSettings {
+            anthropic_enabled: false,
+            codex_enabled: false,
+            openai_enabled: false,
+        },
+        ..Default::default()
+    };
+    std::fs::write(
+        dir.path().join("settings.json"),
+        serde_json::to_vec(&settings).unwrap(),
+    )
+    .unwrap();
+    let mut payload = claude_statusline::StatuslineFilePayload::new(
+        claude_statusline::StatuslineSnapshot {
+            rate_limits: Some(claude_statusline::RateLimits {
+                windows: vec![claude_statusline::RateWindow {
+                    key: "five_hour".to_string(),
+                    label: "5-hour".to_string(),
+                    used_percent: 20.0,
+                    resets_at: now + chrono::Duration::hours(3),
+                }],
+            }),
+            session_cost_micro_usd: None,
+            claude_code_version: None,
+            model_display_name: None,
+            context_used_percent: None,
+        },
+        now - chrono::Duration::seconds(1),
+    );
+    let snapshot_path = dir.path().join("statusline.snapshot.json");
+    claude_statusline::atomic_write_snapshot(&snapshot_path, &payload).unwrap();
+    let run = |args: &[&str]| {
+        assert_cmd::Command::cargo_bin("balanze-cli")
+            .unwrap()
+            .args(args)
+            .env("USERPROFILE", dir.path())
+            .env("XDG_CONFIG_HOME", dir.path().join("xdg"))
+            .env("BALANZE_CONFIG_DIR_OVERRIDE", dir.path())
+            .env("BALANZE_DATA_DIR_OVERRIDE", dir.path())
+            .env("BALANZE_CACHE_DIR_OVERRIDE", dir.path().join("cache"))
+            .env("CODEX_CONFIG_DIR", dir.path().join("codex"))
+            .env_remove("BALANZE_OPENAI_KEY")
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap()
+    };
+    let output = run(&["status", "--json", "--strict"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!doc["claude_statusline"].is_null());
+    assert_eq!(doc["pace"][0]["used_fraction"], 0.2);
+    assert_eq!(doc["claude_jsonl"]["total_events_in_window"], 3);
+    for field in [
+        "claude_oauth",
+        "claude_oauth_error",
+        "claude_oauth_unavailable",
+        "codex_quota",
+        "openai",
+    ] {
+        assert!(doc[field].is_null(), "{field}: {}", doc[field]);
+    }
+    let output = run(&["status", "--sections"]);
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("CADENCE BARS (from Claude statusline):")
+    );
+
+    payload.captured_at = now - chrono::Duration::minutes(16);
+    claude_statusline::atomic_write_snapshot(&snapshot_path, &payload).unwrap();
+    let output = run(&["status", "--json", "--strict"]);
+    assert_eq!(output.status.code(), Some(5));
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        doc["claude_statusline_error"]
+            .as_str()
+            .unwrap()
+            .contains("stale")
+    );
+    assert_eq!(doc["pace"], serde_json::json!([]));
+
+    // A first-run machine has neither bridge data nor a projects directory.
+    // Exercise the real adapter's typed FileMissing result, not a string mock.
+    std::fs::remove_file(snapshot_path).unwrap();
+    std::fs::remove_file(projects.join("session.jsonl")).unwrap();
+    std::fs::remove_dir(projects).unwrap();
+    let output = run(&["status", "--json", "--strict"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    for field in [
+        "claude_jsonl",
+        "claude_jsonl_error",
+        "anthropic_api_cost",
+        "claude_statusline_error",
+    ] {
+        assert!(doc[field].is_null(), "{field}: {}", doc[field]);
+    }
+}
+
 fn load_fixture_events() -> Vec<UsageEvent> {
     let claude_dir = fixture_root().join("claude/projects");
     let files = find_jsonl_files(&claude_dir).expect("fixture JSONL dir must exist");
@@ -265,10 +388,15 @@ fn window_anchors_to_supplied_reset() {
 struct FixtureSources;
 
 impl SnapshotSources for FixtureSources {
-    async fn fetch_oauth(&self) -> anyhow::Result<anthropic_oauth::ClaudeOAuthSnapshot> {
+    async fn fetch_oauth(&self) -> anyhow::Result<Option<anthropic_oauth::ClaudeOAuthSnapshot>> {
         // No network in the integration test: oauth deliberately fails so
         // we also exercise compose()'s now-relative window fallback.
         anyhow::bail!("fixture: no oauth")
+    }
+    async fn load_statusline(
+        &self,
+    ) -> anyhow::Result<Option<claude_statusline::StatuslineFilePayload>> {
+        Ok(None)
     }
     async fn load_claude_events(&self) -> anyhow::Result<(Vec<UsageEvent>, usize)> {
         Ok((load_fixture_events(), 1))
@@ -296,7 +424,13 @@ async fn compose_parity_against_fixtures() {
         .unwrap()
         .with_timezone(&chrono::Utc);
 
-    let snap = compose(&FixtureSources, now).await;
+    let snap = compose(
+        &FixtureSources,
+        now,
+        &settings::ProviderSettings::default(),
+        false,
+    )
+    .await;
 
     // OAuth deliberately errored ⇒ error slot set, data None, window
     // falls back to now-relative.

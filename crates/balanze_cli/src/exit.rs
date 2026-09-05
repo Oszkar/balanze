@@ -135,27 +135,23 @@ fn looks_like_auth(err: &str) -> bool {
 /// auth nor network) only escalates to `Degraded` (5) under `strict`; otherwise
 /// the status still rendered, so we exit `Ok` (0).
 ///
-/// Only the five data-bearing error slots are consulted (the slots feeding the
-/// 4-quadrant matrix). `claude_statusline_error` is deliberately excluded: the
-/// statusLine is a separate frozen-contract surface populated by the live
-/// watcher, never by the one-shot CLI snapshot, and it is not one of the status
-/// view's data cells. `claude_oauth_unavailable` and `None` quota/value slots
+/// All six source error slots are consulted, including the statusline feed
+/// that can now supply one-shot quota and pace. `claude_oauth_unavailable` and `None` quota/value slots
 /// are NEUTRAL "not configured" markers (Claude Code / Codex not installed),
 /// NOT errors - they never move the exit code.
 pub fn classify_snapshot(snap: &Snapshot, strict: bool) -> ExitClass {
-    // The data-bearing error slots, in no significant order (the auth-vs-network
-    // precedence below is what matters, not position within a tier).
-    let errors: [Option<&str>; 5] = [
+    // Only provider responses can imply auth or transport failures. Local
+    // paths and OS messages may contain the same words without that meaning.
+    let provider_errors = [
         snap.claude_oauth_error.as_deref(),
-        snap.claude_jsonl_error.as_deref(),
-        snap.anthropic_api_cost_error.as_deref(),
-        snap.codex_quota_error.as_deref(),
         snap.openai_error.as_deref(),
     ];
-
-    let mut any_error = false;
+    let mut any_error = snap.claude_statusline_error.is_some()
+        || snap.claude_jsonl_error.is_some()
+        || snap.anthropic_api_cost_error.is_some()
+        || snap.codex_quota_error.is_some();
     let mut any_network = false;
-    for slot in errors.into_iter().flatten() {
+    for slot in provider_errors.into_iter().flatten() {
         any_error = true;
         if looks_like_auth(slot) {
             // Auth is the strongest signal - return immediately.
@@ -291,14 +287,42 @@ mod tests {
     }
 
     #[test]
-    fn statusline_error_does_not_move_the_exit_class() {
-        // claude_statusline_error is intentionally excluded from the status
-        // exit-code decision (it is not a data cell, and the one-shot CLI never
-        // populates it). Setting it must NOT flip the class, even under strict.
+    fn statusline_error_is_degraded_under_strict() {
+        // Statusline is now a one-shot quota source, so its failure follows
+        // the same degraded contract as the other input sources.
         let mut snap = empty();
         snap.claude_statusline_error = Some("schema drift v2 in statusline payload".to_string());
         assert_eq!(classify_snapshot(&snap, false), ExitClass::Ok);
-        assert_eq!(classify_snapshot(&snap, true), ExitClass::Ok);
+        assert_eq!(classify_snapshot(&snap, true), ExitClass::Degraded);
+    }
+
+    #[test]
+    fn local_errors_never_trigger_provider_exit_codes() {
+        for message in [
+            "expired",
+            "rejected",
+            "connection",
+            "network",
+            "timeout",
+            "http 401",
+        ] {
+            for source in 0..4 {
+                let mut snap = empty();
+                let slot = match source {
+                    0 => &mut snap.claude_statusline_error,
+                    1 => &mut snap.claude_jsonl_error,
+                    2 => &mut snap.anthropic_api_cost_error,
+                    _ => &mut snap.codex_quota_error,
+                };
+                *slot = Some(format!("io error reading /{message}/payload.json"));
+                assert_eq!(classify_snapshot(&snap, false), ExitClass::Ok);
+                assert_eq!(classify_snapshot(&snap, true), ExitClass::Degraded);
+                snap.openai_error = Some("network unreachable".into());
+                assert_eq!(classify_snapshot(&snap, false), ExitClass::Network);
+                snap.claude_oauth_error = Some("token rejected".into());
+                assert_eq!(classify_snapshot(&snap, true), ExitClass::AuthMissing);
+            }
+        }
     }
 
     #[test]
