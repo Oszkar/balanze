@@ -8,11 +8,12 @@
 //! If the file does not exist (`FileIoError::FileMissing`) no event is emitted;
 //! this is the normal state for users who haven't wired the statusLine yet.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use claude_statusline::{FileIoError, read_snapshot};
-use notify::{RecursiveMode, Watcher as _};
+use notify::{Event, EventKind, RecursiveMode, Watcher as _};
 use settings::statusline_snapshot_path;
 use state_coordinator::{
     Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg, WatcherGeneration,
@@ -45,8 +46,16 @@ pub(crate) fn spawn(
     coord: StateCoordinatorHandle,
     generation: WatcherGeneration,
 ) -> JoinHandle<Result<(), WatcherError>> {
+    spawn_at(coord, generation, statusline_snapshot_path())
+}
+
+fn spawn_at(
+    coord: StateCoordinatorHandle,
+    generation: WatcherGeneration,
+    snapshot_path: Option<PathBuf>,
+) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
-        let snapshot_path = match statusline_snapshot_path() {
+        let snapshot_path = match snapshot_path {
             Some(p) => p,
             None => {
                 tracing::warn!("watcher/statusline: cannot resolve data dir; task exits clean");
@@ -88,12 +97,15 @@ pub(crate) fn spawn(
 
         let signal = Arc::new(Notify::new());
         let signal_cb = signal.clone();
+        let watched_path = snapshot_path.clone();
         let mut watcher =
-            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-                if let Err(e) = &res {
+            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+                Ok(event) if affects_snapshot(&event, &watched_path) => signal_cb.notify_one(),
+                Ok(_) => {}
+                Err(e) => {
                     tracing::warn!("watcher/statusline: notify error: {e}");
+                    signal_cb.notify_one();
                 }
-                signal_cb.notify_one();
             }) {
                 Ok(w) => w,
                 Err(e) => {
@@ -129,6 +141,18 @@ pub(crate) fn spawn(
             emit_statusline_snapshot(&coord, &snapshot_path, generation).await;
         }
     })
+}
+
+fn affects_snapshot(event: &Event, snapshot_path: &Path) -> bool {
+    // Rescan notices carry no reliable paths. Otherwise this non-recursive
+    // watch only needs the bridge filename, including either side of a rename.
+    // Comparing filenames also tolerates canonicalized parent paths on macOS.
+    // Ignore access events: our own read must not trigger another read.
+    event.need_rescan()
+        || (!matches!(event.kind, EventKind::Access(_))
+            && event.paths.iter().any(|path| {
+                path.file_name().is_some() && path.file_name() == snapshot_path.file_name()
+            }))
 }
 
 /// Read the statusline snapshot from disk (sync) and emit an update to the
@@ -180,5 +204,96 @@ async fn emit_statusline_snapshot(
                 }))
                 .await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{AccessKind, CreateKind, Flag, ModifyKind, RenameMode};
+    use state_coordinator::{Sink, Snapshot, SnapshotFilePayload, atomic_write_snapshot_file};
+
+    #[test]
+    fn filters_reads_and_unrelated_files_but_keeps_rename_and_rescan() {
+        let path = PathBuf::from("data/statusline.snapshot.json");
+        for event in [
+            Event::new(EventKind::Access(AccessKind::Read)).add_path(path.clone()),
+            Event::new(EventKind::Create(CreateKind::File))
+                .add_path(PathBuf::from("data/snapshot.json")),
+            Event::new(EventKind::Create(CreateKind::File))
+                .add_path(PathBuf::from("data/statusline.snapshot.json.123.tmp")),
+        ] {
+            assert!(!affects_snapshot(&event, &path), "{event:?}");
+        }
+        for event in [
+            Event::new(EventKind::Create(CreateKind::File)).add_path(path.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+                .add_path(PathBuf::from("data/statusline.snapshot.json.123.tmp"))
+                .add_path(path.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+                .add_path(path.clone()),
+            Event::new(EventKind::Other).set_flag(Flag::Rescan),
+        ] {
+            assert!(affects_snapshot(&event, &path), "{event:?}");
+        }
+    }
+
+    struct SnapshotSink(tokio::sync::mpsc::UnboundedSender<Snapshot>);
+
+    impl Sink for SnapshotSink {
+        fn on_snapshot(&mut self, snapshot: &Snapshot) {
+            let _ = self.0.send(snapshot.clone());
+        }
+
+        fn on_degraded(&mut self, _: Source, error: &str) {
+            panic!("unexpected degradation: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_publication_does_not_retrigger_bridge_but_replacement_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("statusline.snapshot.json");
+        let mut payload = claude_statusline::StatuslineFilePayload::new(
+            claude_statusline::parse(r#"{"cost":{"total_cost_usd":1}}"#).unwrap(),
+            chrono::Utc::now(),
+        );
+        claude_statusline::atomic_write_snapshot(&path, &payload).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (coord, coord_join) = state_coordinator::spawn(SnapshotSink(tx));
+        let watcher = spawn_at(coord.clone(), 0, Some(path.clone()));
+        let initial = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(initial.claude_statusline.as_ref(), Some(&payload));
+
+        // Reproduce the other half of the bridge with its real atomic writer.
+        // These temp/create/rename events previously re-ingested the unchanged
+        // statusline and would trigger another publication indefinitely.
+        atomic_write_snapshot_file(
+            &dir.path().join("snapshot.json"),
+            &SnapshotFilePayload::new(initial, chrono::Utc::now()),
+        )
+        .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(700), rx.recv())
+                .await
+                .is_err()
+        );
+
+        payload.payload.session_cost_micro_usd = Some(2_000_000);
+        payload.captured_at = chrono::Utc::now();
+        claude_statusline::atomic_write_snapshot(&path, &payload).unwrap();
+        let updated = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.claude_statusline.as_ref(), Some(&payload));
+
+        watcher.abort();
+        assert!(watcher.await.unwrap_err().is_cancelled());
+        drop(coord);
+        coord_join.await.unwrap();
     }
 }
