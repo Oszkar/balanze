@@ -268,6 +268,19 @@ mod tests {
             .unwrap();
         assert_eq!(initial.claude_statusline.as_ref(), Some(&payload));
 
+        // FSEvents can deliver the buffered seed write after the explicit
+        // initial read. Establish a quiet stream before measuring whether
+        // snapshot publication causes a new bridge update.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(snapshot) =
+                tokio::time::timeout(Duration::from_millis(700), rx.recv()).await
+            {
+                assert_eq!(snapshot.unwrap().claude_statusline.as_ref(), Some(&payload));
+            }
+        })
+        .await
+        .expect("statusline watcher did not settle after startup");
+
         // Reproduce the other half of the bridge with its real atomic writer.
         // These temp/create/rename events previously re-ingested the unchanged
         // statusline and would trigger another publication indefinitely.
