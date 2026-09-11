@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
-use std::io::{Seek as _, Write as _};
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
@@ -21,6 +21,7 @@ pub const MAX_GATE_IDENTITIES: usize = 8;
 const STORE_SCHEMA_VERSION: u32 = 2;
 const OPERATION_TAG: &str = "organization-costs-this-month-v1";
 const FILE_NAME: &str = "openai-cost.json";
+const LOCK_FILE_NAME: &str = "openai-cost.store.lock";
 const LEASE_FILE_PREFIX: &str = "openai-cost.refresh.";
 const LEASE_FILE_SUFFIX: &str = ".lease";
 const LEGACY_LEASE_FILE_NAME: &str = "openai-cost.refresh.lease";
@@ -145,6 +146,9 @@ enum LeaseAttempt {
 struct StoreLease {
     path: PathBuf,
     token: String,
+    // The stable file is never removed or replaced. Drop removes our legacy
+    // marker before this handle releases the native cross-process lock.
+    _lock_file: File,
 }
 
 impl Drop for StoreLease {
@@ -687,43 +691,44 @@ fn fnv1a<'a>(parts: impl IntoIterator<Item = &'a [u8]>) -> String {
 
 fn try_acquire_store_lease(cache_dir: &Path) -> std::io::Result<LeaseAttempt> {
     std::fs::create_dir_all(cache_dir)?;
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(cache_dir.join(LOCK_FILE_NAME))?;
+    match lock_file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(LeaseAttempt::Busy),
+        Err(TryLockError::Error(error)) => return Err(error),
+    }
+
+    // The native lock serializes upgraded binaries even before a marker is
+    // visible and never expires while held. Publish an owner marker before
+    // checking legacy contenders, which do not know about the native lock.
     for _ in 0..4 {
         let token = unique_token();
         let path = cache_dir.join(format!("{LEASE_FILE_PREFIX}{token}{LEASE_FILE_SUFFIX}"));
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
-                let candidate = candidate_marker(&token);
-                if let Err(error) = file
-                    .write_all(candidate.as_bytes())
-                    .and_then(|()| file.sync_all())
-                {
-                    drop(file);
-                    let _ = std::fs::remove_file(&path);
-                    return Err(error);
-                }
-                if has_live_owner_or_preceding_candidate(
-                    cache_dir,
-                    &path,
-                    &token,
-                    SystemTime::now(),
-                )? {
-                    drop(file);
-                    remove_candidate(&path, &candidate);
-                    return Ok(LeaseAttempt::Busy);
-                }
-
                 let owner = owner_marker(&token);
                 if let Err(error) = file
-                    .set_len(0)
-                    .and_then(|()| file.seek(std::io::SeekFrom::Start(0)).map(|_| ()))
-                    .and_then(|()| file.write_all(owner.as_bytes()))
+                    .write_all(owner.as_bytes())
                     .and_then(|()| file.sync_all())
                 {
                     drop(file);
                     let _ = std::fs::remove_file(&path);
                     return Err(error);
                 }
-                let lease = StoreLease { path, token };
+                drop(file);
+                let lease = StoreLease {
+                    path,
+                    token,
+                    _lock_file: lock_file,
+                };
+                if has_live_legacy_lease(cache_dir, &lease.path, SystemTime::now())? {
+                    return Ok(LeaseAttempt::Busy);
+                }
                 return Ok(LeaseAttempt::Acquired(lease));
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -733,10 +738,9 @@ fn try_acquire_store_lease(cache_dir: &Path) -> std::io::Result<LeaseAttempt> {
     Ok(LeaseAttempt::Busy)
 }
 
-fn has_live_owner_or_preceding_candidate(
+fn has_live_legacy_lease(
     cache_dir: &Path,
     own_path: &Path,
-    own_token: &str,
     now: SystemTime,
 ) -> std::io::Result<bool> {
     for entry in std::fs::read_dir(cache_dir)? {
@@ -748,35 +752,15 @@ fn has_live_owner_or_preceding_candidate(
         if lease_is_stale(&path, now) {
             continue;
         }
-        let name = entry.file_name();
-        if name == LEGACY_LEASE_FILE_NAME {
-            return Ok(true);
-        }
-        let marker = match std::fs::read_to_string(&path) {
-            Ok(marker) => marker,
-            Err(_) => return Ok(true),
-        };
-        match marker.strip_prefix("candidate:") {
-            Some(other_token) if other_token < own_token => return Ok(true),
-            Some(_) => {}
-            None => return Ok(true),
-        }
+        // Every live legacy contender blocks us, regardless of token order
+        // or marker contents. Candidate ordering is not mutual exclusion.
+        return Ok(true);
     }
     Ok(false)
 }
 
-fn candidate_marker(token: &str) -> String {
-    format!("candidate:{token}")
-}
-
 fn owner_marker(token: &str) -> String {
     format!("owner:{token}")
-}
-
-fn remove_candidate(path: &Path, expected: &str) {
-    if std::fs::read_to_string(path).is_ok_and(|current| current == expected) {
-        let _ = std::fs::remove_file(path);
-    }
 }
 
 fn is_lease_candidate(name: &std::ffi::OsStr) -> bool {
@@ -825,9 +809,8 @@ fn unique_token() -> String {
         .unwrap_or_default()
         .as_nanos();
     let sequence = TOKEN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    // Fixed-width tokens give simultaneous candidate files a deterministic
-    // order. Once a candidate promotes itself to owner, all later contenders
-    // yield regardless of token ordering.
+    // Retain the historical token format for legacy marker compatibility;
+    // uniqueness, not ordering, is used by the native-lock protocol.
     format!("{nanos:039}-{:010}-{sequence:020}", std::process::id())
 }
 
@@ -1206,7 +1189,7 @@ mod tests {
     }
 
     #[test]
-    fn abandoned_lease_recovers_and_old_owner_cannot_remove_successor() {
+    fn active_native_lock_never_expires_with_its_compatibility_marker() {
         let dir = tempdir().unwrap();
         let old = match try_acquire_store_lease(dir.path()).unwrap() {
             LeaseAttempt::Acquired(lease) => lease,
@@ -1217,17 +1200,143 @@ mod tests {
         file.set_modified(SystemTime::now() - LEASE_STALE_AFTER - StdDuration::from_secs(1))
             .unwrap();
 
+        assert!(matches!(
+            try_acquire_store_lease(dir.path()).unwrap(),
+            LeaseAttempt::Busy
+        ));
+        drop(old);
+        assert!(!old_path.exists());
+        assert!(dir.path().join(LOCK_FILE_NAME).exists());
+
         let successor = match try_acquire_store_lease(dir.path()).unwrap() {
             LeaseAttempt::Acquired(lease) => lease,
-            LeaseAttempt::Busy => panic!("stale lease must be recoverable"),
+            LeaseAttempt::Busy => panic!("released native lock must be available"),
         };
         let successor_path = successor.path.clone();
         assert_ne!(old_path, successor_path);
-        assert!(old_path.exists());
-        drop(old);
         assert!(successor_path.exists());
         drop(successor);
         assert!(!successor_path.exists());
+        assert!(dir.path().join(LOCK_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn every_live_legacy_marker_blocks_regardless_of_candidate_order() {
+        for marker in ["legacy", "candidate:000", "candidate:zzz", "owner:zzz", ""] {
+            let dir = tempdir().unwrap();
+            let path = dir
+                .path()
+                .join(format!("{LEASE_FILE_PREFIX}legacy{LEASE_FILE_SUFFIX}"));
+            std::fs::write(&path, marker).unwrap();
+            assert!(matches!(
+                try_acquire_store_lease(dir.path()).unwrap(),
+                LeaseAttempt::Busy
+            ));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), marker);
+            let markers = std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter(|entry| is_lease_candidate(&entry.as_ref().unwrap().file_name()))
+                .count();
+            assert_eq!(markers, 1, "busy acquisition must remove its own marker");
+        }
+    }
+
+    #[test]
+    fn native_lock_before_marker_blocks_another_process() {
+        let dir = tempdir().unwrap();
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.path().join(LOCK_FILE_NAME))
+            .unwrap();
+        lock.try_lock().unwrap();
+        // Pause the first owner before its compatibility marker exists. The
+        // former candidate election admitted another owner in this interval.
+        let mut child = lease_test_child(dir.path(), "0");
+        wait_for_test_file(&dir.path().join("ready-0"));
+        std::fs::write(dir.path().join("start"), b"go").unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("result-0")).unwrap(),
+            "busy"
+        );
+        drop(lock);
+        assert!(matches!(
+            try_acquire_store_lease(dir.path()).unwrap(),
+            LeaseAttempt::Acquired(_)
+        ));
+    }
+
+    #[test]
+    fn process_death_releases_native_lock_and_stale_marker_recovers() {
+        let dir = tempdir().unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "gate::tests::store_lease_process_helper",
+                "--nocapture",
+            ])
+            .env("BALANZE_GATE_TEST_DIR", dir.path())
+            .env("BALANZE_GATE_TEST_CHILD", "0")
+            .env("BALANZE_GATE_TEST_HOLD", "1")
+            .spawn()
+            .unwrap();
+        wait_for_test_file(&dir.path().join("ready-0"));
+        std::fs::write(dir.path().join("start"), b"go").unwrap();
+        let result_path = dir.path().join("result-0");
+        let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+        while !std::fs::read_to_string(&result_path).is_ok_and(|result| result == "acquired") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child did not acquire lock"
+            );
+            std::thread::sleep(StdDuration::from_millis(10));
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dir.path().join(LOCK_FILE_NAME))
+            .unwrap();
+        lock.try_lock()
+            .expect("the OS must release a dead process's lock");
+        drop(lock);
+        assert!(matches!(
+            try_acquire_store_lease(dir.path()).unwrap(),
+            LeaseAttempt::Busy
+        ));
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            if is_lease_candidate(&entry.file_name()) {
+                File::options()
+                    .write(true)
+                    .open(entry.path())
+                    .unwrap()
+                    .set_modified(SystemTime::now() - LEASE_STALE_AFTER - StdDuration::from_secs(1))
+                    .unwrap();
+            }
+        }
+        assert!(matches!(
+            try_acquire_store_lease(dir.path()).unwrap(),
+            LeaseAttempt::Acquired(_)
+        ));
+    }
+
+    fn lease_test_child(dir: &Path, child_id: &str) -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "gate::tests::store_lease_process_helper",
+                "--nocapture",
+            ])
+            .env("BALANZE_GATE_TEST_DIR", dir)
+            .env("BALANZE_GATE_TEST_CHILD", child_id)
+            .spawn()
+            .unwrap()
     }
 
     #[test]
@@ -1301,21 +1410,9 @@ mod tests {
         file.set_modified(SystemTime::now() - LEASE_STALE_AFTER - StdDuration::from_secs(1))
             .unwrap();
 
-        let executable = std::env::current_exe().unwrap();
         let mut children = Vec::new();
         for child_id in 0..2 {
-            children.push(
-                std::process::Command::new(&executable)
-                    .args([
-                        "--exact",
-                        "gate::tests::store_lease_process_helper",
-                        "--nocapture",
-                    ])
-                    .env("BALANZE_GATE_TEST_DIR", dir.path())
-                    .env("BALANZE_GATE_TEST_CHILD", child_id.to_string())
-                    .spawn()
-                    .unwrap(),
-            );
+            children.push(lease_test_child(dir.path(), &child_id.to_string()));
         }
 
         wait_for_test_file(&dir.path().join("ready-0"));
@@ -1356,7 +1453,14 @@ mod tests {
         match try_acquire_store_lease(&dir).unwrap() {
             LeaseAttempt::Acquired(_lease) => {
                 std::fs::write(dir.join(format!("result-{child_id}")), b"acquired").unwrap();
-                std::thread::sleep(StdDuration::from_millis(500));
+                if std::env::var_os("BALANZE_GATE_TEST_HOLD").is_some() {
+                    wait_for_test_file(&dir.join("release"));
+                } else {
+                    // Keep the lock until both contenders have reported, so
+                    // scheduling cannot turn the exclusion test sequential.
+                    wait_for_test_file(&dir.join("result-0"));
+                    wait_for_test_file(&dir.join("result-1"));
+                }
             }
             LeaseAttempt::Busy => {
                 std::fs::write(dir.join(format!("result-{child_id}")), b"busy").unwrap();

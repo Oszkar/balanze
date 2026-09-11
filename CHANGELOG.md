@@ -17,6 +17,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Fixed
 
+- **OpenAI reservations now use an OS lock instead of candidate election.** Concurrent upgraded processes cannot both reserve the same request, including when a contender pauses before publishing its lease marker. Live ownership does not expire, and process exit releases the lock; legacy statusline handoff remains best-effort, so upgrade all running copies for the full guarantee.
+
 - **Claude settings wiring now respects dotfile-managed configuration.** Existing JSON key order is preserved, symlinks remain symlinks, dangling links are rejected, and a link retarget cannot redirect a read-modify-write transaction to a different file.
 - **Settings and tray updates no longer stall behind failed background work.** Watcher restarts remain interruptible, settings acknowledgments time out cleanly, tray repainting runs off the coordinator task, and transient operating-system paint failures are retried instead of cached as success.
 - **Live usage state now stays ordered and supervised.** Older snapshot replies cannot overwrite newer events or refreshes, listener setup cannot leak across a closed popover, dropped refreshes are visible in logs, and an exhausted watcher generation remains supervised instead of silently leaving every source stopped.
