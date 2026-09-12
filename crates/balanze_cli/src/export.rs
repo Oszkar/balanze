@@ -33,6 +33,7 @@ use claude_parser::{ParseError, UsageEvent};
 use openai_client::OpenAiCosts;
 
 use crate::cli::ExportArgs;
+use crate::exit::{self, ExitClass};
 
 /// Provenance tag for the Claude leverage column. Matches the `--json`
 /// `source` vocabulary (`json_output.rs`) so every surface agrees.
@@ -64,6 +65,10 @@ struct OpenAiRow {
     period_end: String,   // YYYY-MM-DD (UTC) - month window end (now)
     line_item: String,
     billed_micro_usd: i64,
+    /// The Costs response was paginated and we did not follow it, so this
+    /// row's month is understated. Carried per row because that is the grain
+    /// a spreadsheet can filter on.
+    partial: bool,
 }
 
 /// Format a UTC timestamp as `YYYY-MM-DD` (the day-bucket key).
@@ -170,6 +175,7 @@ fn openai_rows(costs: &OpenAiCosts) -> Vec<OpenAiRow> {
             period_end: period_end.clone(),
             line_item: li.line_item.clone(),
             billed_micro_usd: li.amount_micro_usd,
+            partial: costs.truncated,
         })
         .collect()
 }
@@ -198,6 +204,11 @@ fn micro_to_usd_csv(micro: i64) -> String {
 /// covers a single UTC day, so both equal that day; an OpenAI row covers the
 /// current-month window. An empty `leverage_list_price_usd` cell means the model
 /// is unpriced (price unknown), distinct from a priced `0.000000`.
+///
+/// `partial` is `true` on an OpenAI row whose Costs response was paginated and
+/// not followed, so the month it reports is understated. Without it an
+/// incomplete export is byte-identical to a complete one. It is empty on Claude
+/// rows: the JSONL walk reads full history, so it is never partial.
 fn write_csv<W: Write>(w: &mut W, claude: &[ClaudeRow], openai: &[OpenAiRow]) -> Result<()> {
     let mut wtr = csv::Writer::from_writer(w);
     wtr.write_record([
@@ -213,6 +224,7 @@ fn write_csv<W: Write>(w: &mut W, claude: &[ClaudeRow], openai: &[OpenAiRow]) ->
         "tokens_cache_read",
         "leverage_list_price_usd",
         "billed_usd",
+        "partial",
     ])
     .context("write csv header")?;
 
@@ -237,6 +249,7 @@ fn write_csv<W: Write>(w: &mut W, claude: &[ClaudeRow], openai: &[OpenAiRow]) ->
             r.tokens_cache_read.to_string().as_str(),
             leverage.as_str(),
             "", // billed_usd: never set on a Claude (leverage) row
+            "", // partial: an OpenAI-only concern; the JSONL walk is complete
         ])
         .context("write claude csv row")?;
     }
@@ -255,6 +268,7 @@ fn write_csv<W: Write>(w: &mut W, claude: &[ClaudeRow], openai: &[OpenAiRow]) ->
             "",
             "", // leverage_list_price_usd: never set on a billed row
             micro_to_usd_csv(r.billed_micro_usd).as_str(),
+            if r.partial { "true" } else { "false" },
         ])
         .context("write openai csv row")?;
     }
@@ -268,9 +282,12 @@ fn write_csv<W: Write>(w: &mut W, claude: &[ClaudeRow], openai: &[OpenAiRow]) ->
 /// Re-derives everything live (no persistence). Claude history comes from the
 /// same JSONL walk `status` uses; OpenAI is the current-month billed spend. A
 /// missing source degrades to an empty section rather than failing the export
-/// (an absent provider is normal). A real fetch error propagates as `anyhow`
-/// and is classified into an exit code by `main` (PR5).
-pub(crate) fn cmd_export(args: &ExportArgs) -> Result<()> {
+/// (an absent provider is normal). A real OpenAI fetch error is wrapped in
+/// [`exit::ProviderFailure`] so `main` classifies it into the advertised auth
+/// (3) / network (4) codes instead of the generic 1; a Claude read error stays
+/// unwrapped, because a local path or OS message can read like a provider
+/// failure without being one.
+pub(crate) fn cmd_export(args: &ExportArgs, strict: bool) -> Result<ExitClass> {
     let prices = load_bundled_prices().context("loading bundled price table")?;
 
     // Claude: re-derive the full (day, model) series from ALL events. An absent
@@ -286,10 +303,12 @@ pub(crate) fn cmd_export(args: &ExportArgs) -> Result<()> {
 
     // OpenAI: current-month billed spend. None (not configured) -> empty
     // section; a fetch error propagates for exit-code classification.
-    let openai = match export_fetch_openai()? {
-        Some(costs) => openai_rows(&costs),
-        None => Vec::new(),
+    let openai = match export_fetch_openai() {
+        Ok(Some(costs)) => openai_rows(&costs),
+        Ok(None) => Vec::new(),
+        Err(error) => return Err(openai_fetch_failure(error)),
     };
+    let partial = openai.iter().any(|row| row.partial);
 
     match &args.output {
         Some(path) => {
@@ -312,7 +331,31 @@ pub(crate) fn cmd_export(args: &ExportArgs) -> Result<()> {
             }
         }
     }
-    Ok(())
+
+    if partial {
+        // Always stderr, even under --quiet: this is a data-integrity notice,
+        // not chatter. The CSV carries the same fact in its `partial` column,
+        // so a redirected export stays self-describing.
+        eprintln!(
+            "warning: OpenAI returned a paginated Costs response, so the billed              section understates this month; the affected rows are marked in the              `partial` column"
+        );
+        return Ok(if strict {
+            ExitClass::Degraded
+        } else {
+            ExitClass::Ok
+        });
+    }
+    Ok(ExitClass::Ok)
+}
+
+/// Wrap an OpenAI fetch failure as a provider response, so `main` classifies
+/// it into the advertised auth (3) / network (4) codes. Only the OpenAI leg
+/// gets this: the Claude leg reads local files, whose messages can mention
+/// connections or permissions without meaning a provider failure.
+fn openai_fetch_failure(error: anyhow::Error) -> anyhow::Error {
+    anyhow::Error::new(exit::ProviderFailure(
+        error.context("fetching OpenAI costs for export"),
+    ))
 }
 
 /// True if a Claude-events load error just means the provider is absent (no
@@ -454,6 +497,105 @@ mod tests {
         assert_eq!(rows[1].line_item, "o1-mini");
         assert_eq!(rows[0].period_start, "2026-05-01");
         assert_eq!(rows[0].period_end, "2026-05-15");
+    }
+
+    #[test]
+    fn csv_marks_a_truncated_openai_month_as_partial() {
+        let now = fixed_now();
+        let mut costs = sample_openai(now);
+        costs.truncated = true;
+        let rows = openai_rows(&costs);
+        assert!(
+            rows.iter().all(|r| r.partial),
+            "every row of a truncated month is understated"
+        );
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_csv(&mut buf, &[], &rows).expect("write_csv ok");
+        let out = String::from_utf8(buf).expect("utf8");
+
+        let mut reader = csv::Reader::from_reader(out.as_bytes());
+        let header = reader.headers().expect("header").clone();
+        let partial_at = header
+            .iter()
+            .position(|h| h == "partial")
+            .expect("a partial column");
+        for record in reader.records() {
+            let record = record.expect("row");
+            assert_eq!(
+                &record[partial_at], "true",
+                "an incomplete month must not be indistinguishable from a complete one:
+{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn csv_marks_a_complete_openai_month_as_not_partial() {
+        let now = fixed_now();
+        let mut buf: Vec<u8> = Vec::new();
+        write_csv(&mut buf, &[], &openai_rows(&sample_openai(now))).expect("write_csv ok");
+        let out = String::from_utf8(buf).expect("utf8");
+
+        let mut reader = csv::Reader::from_reader(out.as_bytes());
+        let partial_at = reader
+            .headers()
+            .expect("header")
+            .iter()
+            .position(|h| h == "partial")
+            .expect("a partial column");
+        for record in reader.records() {
+            assert_eq!(&record.expect("row")[partial_at], "false");
+        }
+    }
+
+    #[test]
+    fn csv_rows_all_match_the_header_width() {
+        // Guards the header and the two row writers against drifting apart -
+        // the failure mode a hand-written record list invites.
+        let events = load_fixture_events();
+        let prices = load_bundled_prices().expect("bundled prices");
+        let now = fixed_now();
+        let mut buf: Vec<u8> = Vec::new();
+        write_csv(
+            &mut buf,
+            &claude_rows(&events, &prices),
+            &openai_rows(&sample_openai(now)),
+        )
+        .expect("write_csv ok");
+        let out = String::from_utf8(buf).expect("utf8");
+
+        let mut reader = csv::Reader::from_reader(out.as_bytes());
+        let width = reader.headers().expect("header").len();
+        let mut rows = 0;
+        for record in reader.records() {
+            assert_eq!(record.expect("row").len(), width);
+            rows += 1;
+        }
+        assert!(rows > 0, "the fixture must produce rows");
+    }
+
+    #[test]
+    fn a_rejected_openai_key_exits_with_the_auth_code() {
+        // The exact copy `sources::live_fetch_openai` surfaces for a 401.
+        let failure = openai_fetch_failure(anyhow::anyhow!(
+            "OpenAI admin key rejected (HTTP 401). Run `balanze-cli set-openai-key` with a fresh `sk-admin-...` key."
+        ));
+        assert_eq!(exit::classify_error(&failure), ExitClass::AuthMissing);
+    }
+
+    #[test]
+    fn an_unreachable_openai_exits_with_the_network_code() {
+        let failure = openai_fetch_failure(anyhow::anyhow!("network error: error sending request"));
+        assert_eq!(exit::classify_error(&failure), ExitClass::Network);
+    }
+
+    #[test]
+    fn an_unclassifiable_openai_failure_still_exits_other() {
+        let failure = openai_fetch_failure(anyhow::anyhow!(
+            "organization/costs response shape unexpected: missing `data`"
+        ));
+        assert_eq!(exit::classify_error(&failure), ExitClass::Other);
     }
 
     #[test]

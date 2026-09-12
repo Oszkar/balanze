@@ -64,6 +64,25 @@ Exports usage history as CSV, re-derived statelessly on every run - nothing is p
 |---|---|
 | `-o`, `--output <OUTPUT>` | Write to a file instead of stdout. |
 
+### Columns
+
+| Column | Claude row | OpenAI row |
+|---|---|---|
+| `section` | `claude` | `openai` |
+| `provenance` | `jsonl_list_price` | `openai_admin_costs` |
+| `period_start` / `period_end` | the same single UTC day | the current-month window |
+| `model_or_line_item` | the model | the billed line item |
+| `event_count`, `tokens_*` | per day and model | empty |
+| `leverage_list_price_usd` | list-price estimate, never money billed; empty means the model is unpriced, distinct from a priced `0.000000` | empty |
+| `billed_usd` | empty | real billed spend |
+| `partial` | empty - the JSONL walk reads full history | `true` when OpenAI returned a paginated Costs response and this month is understated, otherwise `false` |
+
+A `partial` of `true` also prints a warning on stderr, and makes `export --strict` exit 5. Without `--strict` the export still succeeds with exit 0: the CSV carries the fact in the column, so a redirected export stays self-describing.
+
+### Exit codes
+
+Export shares the [taxonomy below](#exit-codes). An OpenAI Costs failure is a provider response, so a rejected key exits **3** and an unreachable provider exits **4**. A Claude JSONL read failure is local I/O and exits **1**, even when its message mentions something connection-shaped.
+
 ## `completions`
 
 Prints a shell completion script to stdout for the named shell. See [Shell completions](#shell-completions) below for how to install the output.
@@ -129,7 +148,7 @@ These apply to every subcommand, including the bare default (`balanze-cli` with 
 
 ## Exit codes
 
-`main` classifies the outcome once, and `doctor` shares the same taxonomy.
+`main` classifies the outcome once, and `doctor` shares the same taxonomy. Codes 3 and 4 are reserved for failures a provider actually returned; a local file or OS error stays at 1 even when its wording resembles one.
 
 | Code | Meaning |
 |------|---------|

@@ -128,6 +128,56 @@ fn looks_like_auth(err: &str) -> bool {
         || e.contains("rejected")
 }
 
+/// Classify a PROVIDER error string into the auth (3) / network (4) classes.
+/// `None` when it reads as neither, so the caller keeps its own default.
+///
+/// Only ever call this on text a provider produced. Local paths and OS
+/// messages can contain the same words without the same meaning - see the
+/// note in [`classify_snapshot`].
+pub fn classify_provider_error(err: &str) -> Option<ExitClass> {
+    if looks_like_auth(err) {
+        // Auth is the strongest signal and outranks network.
+        Some(ExitClass::AuthMissing)
+    } else if looks_like_network(err) {
+        Some(ExitClass::Network)
+    } else {
+        None
+    }
+}
+
+/// Marks an error as having come from a PROVIDER RESPONSE, so `main`'s anyhow
+/// boundary can classify it into the advertised auth (3) / network (4) codes
+/// instead of the generic 1. Commands that fetch from a provider wrap the
+/// failure in this; a local I/O failure must NOT be wrapped, because its
+/// message can contain provider-sounding words without the meaning.
+///
+/// Display and `source` pass straight through, so the printed cause chain is
+/// exactly what it would have been without the wrapper.
+#[derive(Debug)]
+pub struct ProviderFailure(pub anyhow::Error);
+
+impl std::fmt::Display for ProviderFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for ProviderFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+/// Classify an error that reached `main`'s anyhow boundary. A
+/// [`ProviderFailure`] anywhere in the chain classifies by its text; anything
+/// else is an unexpected failure (1).
+pub fn classify_error(err: &anyhow::Error) -> ExitClass {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<ProviderFailure>())
+        .and_then(|provider| classify_provider_error(&format!("{:#}", provider.0)))
+        .unwrap_or(ExitClass::Other)
+}
+
 /// Classify a built `Snapshot` into an `ExitClass`.
 ///
 /// Precedence (highest first): auth-missing (3) over network (4) over
@@ -157,12 +207,11 @@ pub fn classify_snapshot(snap: &Snapshot, strict: bool) -> ExitClass {
     let mut any_network = false;
     for slot in provider_errors.into_iter().flatten() {
         any_error = true;
-        if looks_like_auth(slot) {
+        match classify_provider_error(slot) {
             // Auth is the strongest signal - return immediately.
-            return ExitClass::AuthMissing;
-        }
-        if looks_like_network(slot) {
-            any_network = true;
+            Some(ExitClass::AuthMissing) => return ExitClass::AuthMissing,
+            Some(ExitClass::Network) => any_network = true,
+            _ => {}
         }
     }
 
@@ -186,6 +235,50 @@ mod tests {
 
     fn empty() -> Snapshot {
         Snapshot::empty(Utc::now())
+    }
+
+    #[test]
+    fn a_provider_failure_carries_the_auth_and_network_codes_to_main() {
+        let auth = anyhow::Error::new(ProviderFailure(anyhow::anyhow!(
+            "OpenAI admin key rejected (HTTP 401)."
+        )));
+        assert_eq!(classify_error(&auth), ExitClass::AuthMissing);
+
+        let network = anyhow::Error::new(ProviderFailure(anyhow::anyhow!(
+            "network error: error sending request"
+        )));
+        assert_eq!(classify_error(&network), ExitClass::Network);
+    }
+
+    #[test]
+    fn a_provider_failure_classifies_through_its_context_chain() {
+        // Commands add context before wrapping; the inner cause must still be
+        // visible to the classifier.
+        let wrapped = anyhow::Error::new(ProviderFailure(
+            anyhow::anyhow!("network error: error sending request")
+                .context("fetching OpenAI costs for export"),
+        ));
+        assert_eq!(classify_error(&wrapped), ExitClass::Network);
+    }
+
+    #[test]
+    fn an_unwrapped_local_error_never_reaches_the_provider_codes() {
+        // The deliberate asymmetry: a local path or OS message can contain the
+        // same words without meaning a provider refused or was unreachable.
+        let local = anyhow::anyhow!("io error reading C:/Users/x/.claude/connection.jsonl");
+        assert_eq!(classify_error(&local), ExitClass::Other);
+
+        let also_local = anyhow::anyhow!("permission denied; the request timed out");
+        assert_eq!(classify_error(&also_local), ExitClass::Other);
+    }
+
+    #[test]
+    fn provider_failure_display_is_transparent() {
+        // `main` prints the chain; the wrapper must not add a layer to it.
+        let inner = anyhow::anyhow!("rate limited by OpenAI (HTTP 429)");
+        let inner_text = format!("{inner:#}");
+        let wrapped = anyhow::Error::new(ProviderFailure(inner));
+        assert_eq!(format!("{wrapped:#}"), inner_text);
     }
 
     #[test]
