@@ -148,9 +148,9 @@ fn spawn_at(
 /// Target resolution runs on notify's callback thread, not a Tokio worker, and
 /// is repeated so retargeting a symlink does not leave a cached destination stale.
 fn affects_snapshot(event: &Event, snapshot_path: &Path) -> bool {
-    // Rescan notices carry no reliable paths. Otherwise this non-recursive
-    // watch only needs the bridge filename, including either side of a rename.
-    // Comparing filenames also tolerates canonicalized parent paths on macOS.
+    // Rescan notices carry no reliable paths. Match the bridge filename first,
+    // including either side of a rename in this non-recursive watch. This also
+    // tolerates canonicalized parent paths on macOS.
     // Ignore access events: our own read must not trigger another read.
     if event.need_rescan() {
         return true;

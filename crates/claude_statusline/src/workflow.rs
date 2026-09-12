@@ -2,8 +2,9 @@
 //!
 //! The two files cannot be committed atomically. This module therefore owns the
 //! safe ordering: persist a displaced command before wiring Claude, roll that
-//! backup back on a reported wire failure, and clear it only after restore has
-//! succeeded. The Balanze settings lock stays held across the full workflow so
+//! backup back only when a failed write leaves the original command installed,
+//! and retain it when publication is uncertain. Clear it after restore succeeds.
+//! The Balanze settings lock stays held across the full workflow so
 //! two cooperating Balanze processes cannot interleave these steps.
 
 use std::path::Path;
@@ -83,7 +84,13 @@ fn replace_statusline_with_backup_at(
     };
 
     if let Err(write) = write_claude(claude_settings_path, invocation) {
-        if displaced.is_some() {
+        // Atomic publication can return an error after rename (parent fsync).
+        // Only discard the new backup when a reread proves the displaced
+        // command is still installed. An unreadable or changed file leaves
+        // publication uncertain, so keeping the backup is the safe outcome.
+        if displaced.as_ref().is_some_and(|command| {
+            matches!(read_wire_status(claude_settings_path), Ok(WireStatus::OccupiedBy(current)) if current == *command)
+        }) {
             transaction.settings_mut().statusline.replaced_command = prior_backup;
             if let Err(rollback) = rollback_balanze(&transaction) {
                 return Err(StatuslineWorkflowError::Rollback { write, rollback });
@@ -212,6 +219,95 @@ mod tests {
             read_wire_status(&claude).unwrap(),
             WireStatus::OccupiedBy("foreign-command".to_string())
         );
+    }
+
+    #[test]
+    fn replace_keeps_backup_after_publication_error_and_restore_recovers() {
+        for prior_backup in [None, Some("older-command")] {
+            let dir = tempfile::tempdir().unwrap();
+            let balanze = dir.path().join("balanze.json");
+            let claude = dir.path().join("claude.json");
+            save_balanze_settings(&balanze, prior_backup);
+            write_claude_settings(&claude, "foreign-command");
+
+            let error = replace_statusline_with_backup_at(
+                &balanze,
+                &claude,
+                "balanze-cli statusline",
+                |path, invocation| {
+                    // Model atomic_file's post-rename parent-sync failure:
+                    // the replacement is visible even though the write fails.
+                    wire_statusline(path, invocation)?;
+                    Err(StatuslineError::SettingsIo {
+                        path: path.to_path_buf(),
+                        source: std::io::Error::other("injected parent sync failure"),
+                    })
+                },
+                |_| panic!("must not roll back after publication"),
+            )
+            .unwrap_err();
+
+            assert!(matches!(error, StatuslineWorkflowError::Statusline(_)));
+            assert_eq!(
+                read_wire_status(&claude).unwrap(),
+                WireStatus::WiredToBalanze
+            );
+            assert_eq!(
+                settings::load_from(&balanze)
+                    .unwrap()
+                    .statusline
+                    .replaced_command
+                    .as_deref(),
+                Some("foreign-command")
+            );
+            assert_eq!(
+                restore_statusline_from_backup_at(&balanze, &claude).unwrap(),
+                RestoreOutcome::Restored("foreign-command".to_string())
+            );
+            assert_eq!(
+                read_wire_status(&claude).unwrap(),
+                WireStatus::OccupiedBy("foreign-command".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn replace_keeps_backup_when_reconciliation_cannot_prove_original_remains() {
+        for contents in [
+            "invalid json",
+            r#"{"statusLine":{"type":"command","command":"another-command"}}"#,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let balanze = dir.path().join("balanze.json");
+            let claude = dir.path().join("claude.json");
+            save_balanze_settings(&balanze, None);
+            write_claude_settings(&claude, "foreign-command");
+
+            let error = replace_statusline_with_backup_at(
+                &balanze,
+                &claude,
+                "balanze-cli statusline",
+                |path, _| {
+                    std::fs::write(path, contents).unwrap();
+                    Err(StatuslineError::SettingsIo {
+                        path: path.to_path_buf(),
+                        source: std::io::Error::other("injected write failure"),
+                    })
+                },
+                |_| panic!("must retain backup when reconciliation is uncertain"),
+            )
+            .unwrap_err();
+
+            assert!(matches!(error, StatuslineWorkflowError::Statusline(_)));
+            assert_eq!(
+                settings::load_from(&balanze)
+                    .unwrap()
+                    .statusline
+                    .replaced_command
+                    .as_deref(),
+                Some("foreign-command")
+            );
+        }
     }
 
     #[test]
