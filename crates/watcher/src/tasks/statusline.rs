@@ -49,6 +49,7 @@ pub(crate) fn spawn(
     spawn_at(coord, generation, statusline_snapshot_path())
 }
 
+/// Start the same watcher against an explicit bridge path, including test fixtures.
 fn spawn_at(
     coord: StateCoordinatorHandle,
     generation: WatcherGeneration,
@@ -143,16 +144,38 @@ fn spawn_at(
     })
 }
 
+/// Match the bridge name or its current resolved target, ignoring read feedback.
+/// Target resolution runs on notify's callback thread, not a Tokio worker, and
+/// is repeated so retargeting a symlink does not leave a cached destination stale.
 fn affects_snapshot(event: &Event, snapshot_path: &Path) -> bool {
     // Rescan notices carry no reliable paths. Otherwise this non-recursive
     // watch only needs the bridge filename, including either side of a rename.
     // Comparing filenames also tolerates canonicalized parent paths on macOS.
     // Ignore access events: our own read must not trigger another read.
-    event.need_rescan()
-        || (!matches!(event.kind, EventKind::Access(_))
-            && event.paths.iter().any(|path| {
-                path.file_name().is_some() && path.file_name() == snapshot_path.file_name()
-            }))
+    if event.need_rescan() {
+        return true;
+    }
+    if matches!(event.kind, EventKind::Access(_)) {
+        return false;
+    }
+    if event
+        .paths
+        .iter()
+        .any(|path| path.file_name().is_some() && path.file_name() == snapshot_path.file_name())
+    {
+        return true;
+    }
+
+    // atomic_file preserves a bridge symlink and publishes over its resolved
+    // target. Compare complete resolved paths so an unrelated file with the
+    // same basename cannot turn snapshot publication back into a feedback loop.
+    let Ok(target) = snapshot_path.canonicalize() else {
+        return false;
+    };
+    event
+        .paths
+        .iter()
+        .any(|path| path.canonicalize().is_ok_and(|path| path == target))
 }
 
 /// Read the statusline snapshot from disk (sync) and emit an update to the
@@ -240,6 +263,36 @@ mod tests {
 
     struct SnapshotSink(tokio::sync::mpsc::UnboundedSender<Snapshot>);
 
+    #[test]
+    fn symlink_filter_tracks_retargets_and_rejects_same_named_unrelated_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("statusline.snapshot.json");
+        let first = dir.path().join("bridge-data.json");
+        let second = dir.path().join("new-bridge-data.json");
+        let other = tempfile::tempdir().unwrap();
+        let unrelated = other.path().join("bridge-data.json");
+        for target in [&first, &second, &unrelated] {
+            std::fs::write(target, b"fixture").unwrap();
+        }
+        if !create_symlink_or_skip(&first, &path) {
+            return;
+        }
+        let event = |target: &Path| {
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::To)))
+                .add_path(target.to_path_buf())
+        };
+        assert!(affects_snapshot(&event(&first), &path));
+        assert!(!affects_snapshot(&event(&unrelated), &path));
+        assert!(!affects_snapshot(
+            &Event::new(EventKind::Access(AccessKind::Read)).add_path(first.clone()),
+            &path
+        ));
+        std::fs::remove_file(&path).unwrap();
+        assert!(create_symlink_or_skip(&second, &path));
+        assert!(!affects_snapshot(&event(&first), &path));
+        assert!(affects_snapshot(&event(&second), &path));
+    }
+
     impl Sink for SnapshotSink {
         fn on_snapshot(&mut self, snapshot: &Snapshot) {
             let _ = self.0.send(snapshot.clone());
@@ -252,13 +305,33 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_publication_does_not_retrigger_bridge_but_replacement_does() {
+        exercise_snapshot_publication(false).await;
+    }
+
+    #[tokio::test]
+    async fn symlink_target_replacement_updates_bridge_without_snapshot_feedback() {
+        exercise_snapshot_publication(true).await;
+    }
+
+    async fn exercise_snapshot_publication(symlink: bool) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("statusline.snapshot.json");
         let mut payload = claude_statusline::StatuslineFilePayload::new(
             claude_statusline::parse(r#"{"cost":{"total_cost_usd":1}}"#).unwrap(),
             chrono::Utc::now(),
         );
-        claude_statusline::atomic_write_snapshot(&path, &payload).unwrap();
+        if symlink {
+            let target = dir.path().join("bridge-data.json");
+            claude_statusline::atomic_write_snapshot(&target, &payload).unwrap();
+            if !create_symlink_or_skip(Path::new("bridge-data.json"), &path) {
+                return;
+            }
+            let event =
+                Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::To))).add_path(target);
+            assert!(affects_snapshot(&event, &path));
+        } else {
+            claude_statusline::atomic_write_snapshot(&path, &payload).unwrap();
+        }
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let (coord, coord_join) = state_coordinator::spawn(SnapshotSink(tx));
         let watcher = spawn_at(coord.clone(), 0, Some(path.clone()));
@@ -303,10 +376,31 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(updated.claude_statusline.as_ref(), Some(&payload));
+        if symlink {
+            assert!(std::fs::symlink_metadata(&path).unwrap().is_symlink());
+        }
 
         watcher.abort();
         assert!(watcher.await.unwrap_err().is_cancelled());
         drop(coord);
         coord_join.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(1314) => {
+                eprintln!("skipping symlink test: Windows symlink privilege is unavailable");
+                false
+            }
+            Err(error) => panic!("failed to create symlink fixture: {error}"),
+        }
     }
 }
