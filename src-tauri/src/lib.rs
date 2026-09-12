@@ -411,7 +411,7 @@ fn boot_backend(app: &App, rt: &tokio::runtime::Handle) {
     // take effect without an app restart (the coordinator clears disabled
     // cells; this starts/stops the actual polling).
     let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<commands::SettingsTransition>(8);
-    app.manage(commands::WatcherReload(reload_tx));
+    app.manage(commands::WatcherReload::new(reload_tx));
 
     // The watcher supervisor is itself a long-running task (AGENTS.md §3.2). If it
     // panics, the reload + self-heal machinery is gone and the surviving watcher

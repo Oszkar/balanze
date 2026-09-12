@@ -19,9 +19,10 @@ pub(crate) struct PaintTarget {
     pub(crate) tooltip: String,
 }
 
-/// Tray properties that the operating system has accepted. A target is cached
-/// as fully painted only when every property matches, but a partial success is
-/// retained so retries do not churn setters that already succeeded.
+/// Tray properties that the operating system has accepted. This is the
+/// worker's only dedupe cache: a partial success is retained so retries do not
+/// churn setters that already succeeded, and a target counts as painted only
+/// when every property in here matches it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct AppliedPaint {
     bucket: Option<ColorBucket>,
@@ -50,6 +51,18 @@ impl AppliedPaint {
     #[cfg(target_os = "macos")]
     fn needs_title(&self, target: &PaintTarget) -> bool {
         self.title.as_deref() != Some(target.title.as_str())
+    }
+
+    /// True when every operating-system property already holds `target`, so a
+    /// repaint would be a no-op. This - not "the last target we finished
+    /// painting" - is what the worker must dedupe against: after a partial
+    /// paint the two disagree, and trusting the latter leaves the properties
+    /// that DID land showing a target the worker believes it abandoned.
+    fn matches(&self, target: &PaintTarget) -> bool {
+        let matched = !self.needs_icon(target) && !self.needs_tooltip(target);
+        #[cfg(target_os = "macos")]
+        let matched = matched && !self.needs_title(target);
+        matched
     }
 }
 
@@ -145,7 +158,6 @@ pub(crate) fn spawn_painter(
 ) {
     let (tx, mut rx) = tokio::sync::watch::channel::<Option<PaintTarget>>(None);
     let join = tokio::spawn(async move {
-        let mut last_painted = None;
         let mut applied = AppliedPaint::default();
         let mut last_warn: Option<std::time::Instant> = None;
         loop {
@@ -155,7 +167,7 @@ pub(crate) fn spawn_painter(
             let Some(mut target) = rx.borrow_and_update().clone() else {
                 continue;
             };
-            if last_painted.as_ref() == Some(&target) {
+            if applied.matches(&target) {
                 continue;
             }
             loop {
@@ -170,10 +182,7 @@ pub(crate) fn spawn_painter(
                 .map_err(|error| format!("tray repaint worker failed: {error}"))?;
                 applied = next_applied;
                 match result {
-                    Ok(()) => {
-                        last_painted = Some(target.clone());
-                        break;
-                    }
+                    Ok(()) => break,
                     Err(error)
                         if last_warn
                             .is_none_or(|last_warn| last_warn.elapsed() >= WARN_INTERVAL) =>
@@ -191,7 +200,11 @@ pub(crate) fn spawn_painter(
                         }
                         if let Some(next) = rx.borrow_and_update().clone() {
                             target = next;
-                            if last_painted.as_ref() == Some(&target) {
+                            // Only stop retrying when the operating system is
+                            // ALREADY showing the new target. Reverting to the
+                            // last fully painted target after a partial paint
+                            // still needs a repaint of whatever landed since.
+                            if applied.matches(&target) {
                                 break;
                             }
                         }
@@ -218,6 +231,50 @@ mod tests {
             opaque < (SIZE * SIZE) as usize,
             "ring must not be fully filled"
         );
+    }
+
+    /// Set every property the current platform paints, i.e. a fully
+    /// successful paint of `target`.
+    fn fully_applied(target: &PaintTarget) -> AppliedPaint {
+        AppliedPaint {
+            bucket: Some(target.bucket),
+            tooltip: Some(AppliedPaint::effective_tooltip(target).to_string()),
+            #[cfg(target_os = "macos")]
+            title: Some(target.title.clone()),
+        }
+    }
+
+    #[test]
+    fn reverting_to_the_last_target_after_a_partial_paint_still_repaints() {
+        let a = PaintTarget {
+            bucket: ColorBucket::Green,
+            title: "Claude 10%".to_string(),
+            tooltip: "Claude 10%".to_string(),
+        };
+        let b = PaintTarget {
+            bucket: ColorBucket::Red,
+            title: "Claude 95%".to_string(),
+            tooltip: "Claude 95%".to_string(),
+        };
+
+        // A painted fully.
+        let mut applied = fully_applied(&a);
+        assert!(applied.matches(&a));
+
+        // B painted partially: the icon landed, the tooltip setter failed.
+        applied.bucket = Some(b.bucket);
+        assert!(!applied.matches(&b), "B is not fully applied");
+
+        // Back to A: the operating system is still showing B's icon, so this
+        // must NOT be deduped away - the bug was caching A as "last painted"
+        // and skipping the repaint that reverts the icon.
+        assert!(!applied.matches(&a));
+        assert!(applied.needs_icon(&a));
+        assert!(!applied.needs_tooltip(&a), "A's tooltip never changed");
+
+        // Once the icon is repainted, A is genuinely applied again.
+        applied.bucket = Some(a.bucket);
+        assert!(applied.matches(&a));
     }
 
     #[test]
