@@ -119,6 +119,22 @@ fn statusline_cross_provider(
     pick_cross(self_compose_cross(now, want_openai), snapshot_cross)
 }
 
+/// Staleness of one merged window: it belongs to whichever side actually
+/// supplied the retained value, NOT to whichever side happened to contribute
+/// something to the merge. Pure - unit-tested through [`pick_cross`].
+fn window_stale<T>(
+    composed: Option<T>,
+    composed_stale: bool,
+    snapshot: Option<T>,
+    snapshot_stale: bool,
+) -> bool {
+    if composed.is_some() {
+        composed_stale
+    } else {
+        snapshot.is_some() && snapshot_stale
+    }
+}
+
 /// Merge the self-composed result with a (possibly stale) snapshot, once the
 /// fresh-snapshot short-circuit has been ruled out. Each cell is taken from
 /// self-compose when present (current) and otherwise from the stale snapshot
@@ -146,16 +162,31 @@ fn pick_cross(
             } else {
                 s.openai_partial
             },
-            codex_stale: if c.codex_five_hour.is_some() || c.codex_weekly.is_some() {
-                c.codex_stale
-            } else {
-                s.codex_stale
-            },
-            openai_stale: if c.openai_cost_micro_usd.is_some() {
-                c.openai_stale
-            } else {
-                s.openai_stale
-            },
+            // Per RETAINED window, not per contributing source. The two Codex
+            // windows are independent `Option`s - a Codex quota can report its
+            // primary window and no weekly one - so a fresh five-hour value
+            // merged over a stale weekly one would otherwise render BOTH
+            // without the `⚠` marker. One flag covers both Codex segments, so
+            // any retained stale window marks the pair: over-marking a fresh
+            // window is the safe direction, printing a week-old figure as
+            // current is not.
+            codex_stale: window_stale(
+                c.codex_five_hour,
+                c.codex_stale,
+                s.codex_five_hour,
+                s.codex_stale,
+            ) || window_stale(
+                c.codex_weekly,
+                c.codex_stale,
+                s.codex_weekly,
+                s.codex_stale,
+            ),
+            openai_stale: window_stale(
+                c.openai_cost_micro_usd,
+                c.openai_stale,
+                s.openai_cost_micro_usd,
+                s.openai_stale,
+            ),
         },
         (Some(c), None) => c,
         (None, Some(s)) => s,
@@ -726,6 +757,62 @@ mod statusline_tests {
         let got = super::pick_cross(None, Some(cp_stale(Some(1.0), None))).unwrap();
         assert_eq!(got.codex_five_hour, Some(1.0));
         assert!(got.codex_stale);
+    }
+
+    /// Both Codex windows plus their shared staleness, for the merges that
+    /// exercise one window falling back while the other does not.
+    fn cp_codex(
+        five_hour: Option<f32>,
+        weekly: Option<f32>,
+        stale: bool,
+    ) -> statusline_render::CrossProvider {
+        statusline_render::CrossProvider {
+            codex_five_hour: five_hour,
+            codex_weekly: weekly,
+            openai_cost_micro_usd: None,
+            openai_partial: false,
+            codex_stale: stale,
+            openai_stale: false,
+        }
+    }
+
+    #[test]
+    fn pick_cross_marks_codex_stale_when_only_the_weekly_window_falls_back() {
+        // `five_hour()` and `weekly_or_other()` are independent, so a Codex
+        // read can return the primary window alone. The merge then keeps a
+        // fresh 5h next to a week-old weekly - and the single Codex marker has
+        // to warn about the pair, or the stale figure prints as current.
+        let got = super::pick_cross(
+            Some(cp_codex(Some(12.0), None, false)),
+            Some(cp_codex(Some(80.0), Some(64.0), true)),
+        )
+        .unwrap();
+
+        assert_eq!(got.codex_five_hour, Some(12.0), "the fresh 5h value wins");
+        assert_eq!(
+            got.codex_weekly,
+            Some(64.0),
+            "the stale weekly value is retained, not blanked"
+        );
+        assert!(
+            got.codex_stale,
+            "a retained stale window must mark the Codex segments"
+        );
+    }
+
+    #[test]
+    fn pick_cross_keeps_codex_fresh_when_every_window_is_composed() {
+        // The other direction: nothing was retained from the stale snapshot,
+        // so the marker must stay off.
+        let got = super::pick_cross(
+            Some(cp_codex(Some(12.0), Some(7.0), false)),
+            Some(cp_codex(Some(80.0), Some(64.0), true)),
+        )
+        .unwrap();
+
+        assert_eq!(got.codex_five_hour, Some(12.0));
+        assert_eq!(got.codex_weekly, Some(7.0));
+        assert!(!got.codex_stale, "no stale window was retained");
     }
 
     #[test]

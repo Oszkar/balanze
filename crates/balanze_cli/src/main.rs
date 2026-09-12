@@ -76,9 +76,11 @@ fn main() -> ExitCode {
     let class = match run(&cli) {
         Ok(class) => class,
         Err(e) => {
-            // anyhow boundary: print the full cause chain, then Other (1).
+            // anyhow boundary: print the full cause chain, then classify. A
+            // provider response carries the advertised auth (3) / network (4)
+            // codes through `exit::ProviderFailure`; anything else is Other (1).
             eprintln!("error: {e:#}");
-            ExitClass::Other
+            exit::classify_error(&e)
         }
     };
 
@@ -147,10 +149,7 @@ fn run(cli: &Cli) -> Result<ExitClass> {
             }
             Ok(ExitClass::Ok)
         }
-        Some(Commands::Export(args)) => {
-            export::cmd_export(args)?;
-            Ok(ExitClass::Ok)
-        }
+        Some(Commands::Export(args)) => export::cmd_export(args, cli.strict),
         Some(Commands::Completions(args)) => {
             completions::cmd_completions(args.shell)?;
             Ok(ExitClass::Ok)
