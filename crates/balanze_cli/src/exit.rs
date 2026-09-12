@@ -168,13 +168,46 @@ impl std::error::Error for ProviderFailure {
     }
 }
 
+/// Classify a provider failure by the gate's TYPED classification, when the
+/// concrete error survived into the chain.
+///
+/// This has to come before the substring matchers. `CostsGateError::Deferred`
+/// retains the `failure` kind of the request that reserved the 300-second
+/// window (AGENTS.md §3.1), but its Display says only that the request was
+/// deferred - so every caller inside that window would otherwise fall through
+/// to the text matchers and land on 1, hiding the transport failure the
+/// reservation is standing in for.
+///
+/// `None` means "no typed opinion", which includes the kinds that are neither
+/// an auth refusal nor unreachability; those fall through to the text.
+fn typed_provider_class(err: &anyhow::Error) -> Option<ExitClass> {
+    let kind = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<openai_client::CostsGateError>())?
+        .failure_kind()?;
+    match kind {
+        openai_client::StoredFailureKind::AuthInvalid
+        | openai_client::StoredFailureKind::InsufficientScope => Some(ExitClass::AuthMissing),
+        openai_client::StoredFailureKind::Network => Some(ExitClass::Network),
+        openai_client::StoredFailureKind::RateLimited
+        | openai_client::StoredFailureKind::UnexpectedStatus(_)
+        | openai_client::StoredFailureKind::ResponseShape => None,
+    }
+}
+
 /// Classify an error that reached `main`'s anyhow boundary. A
-/// [`ProviderFailure`] anywhere in the chain classifies by its text; anything
-/// else is an unexpected failure (1).
+/// [`ProviderFailure`] anywhere in the chain classifies by its typed gate
+/// failure first and its text second; anything else is an unexpected
+/// failure (1).
 pub fn classify_error(err: &anyhow::Error) -> ExitClass {
-    err.chain()
+    let Some(provider) = err
+        .chain()
         .find_map(|cause| cause.downcast_ref::<ProviderFailure>())
-        .and_then(|provider| classify_provider_error(&format!("{:#}", provider.0)))
+    else {
+        return ExitClass::Other;
+    };
+    typed_provider_class(&provider.0)
+        .or_else(|| classify_provider_error(&format!("{:#}", provider.0)))
         .unwrap_or(ExitClass::Other)
 }
 
@@ -248,6 +281,54 @@ mod tests {
             "network error: error sending request"
         )));
         assert_eq!(classify_error(&network), ExitClass::Network);
+    }
+
+    #[test]
+    fn a_deferred_gate_keeps_the_network_code_of_the_failure_it_stands_in_for() {
+        // Within the 300-second reservation the gate returns Deferred, whose
+        // display text says nothing about the transport failure that opened
+        // the window. Classification has to read the retained failure kind.
+        let deferred = openai_client::CostsGateError::Deferred {
+            reason: openai_client::GateDeferredReason::RecentAttempt,
+            retry_after_secs: 240,
+            failure: Some(openai_client::StoredFailureKind::Network),
+            cached: None,
+        };
+        assert!(
+            classify_provider_error(&deferred.to_string()).is_none(),
+            "precondition: the display text carries no network signal"
+        );
+
+        let wrapped = anyhow::Error::new(ProviderFailure(
+            anyhow::Error::new(deferred).context("fetching OpenAI costs for export"),
+        ));
+        assert_eq!(classify_error(&wrapped), ExitClass::Network);
+    }
+
+    #[test]
+    fn a_deferred_gate_keeps_the_auth_code_of_the_failure_it_stands_in_for() {
+        let deferred = openai_client::CostsGateError::Deferred {
+            reason: openai_client::GateDeferredReason::RecentAttempt,
+            retry_after_secs: 240,
+            failure: Some(openai_client::StoredFailureKind::AuthInvalid),
+            cached: None,
+        };
+        let wrapped = anyhow::Error::new(ProviderFailure(anyhow::Error::new(deferred)));
+        assert_eq!(classify_error(&wrapped), ExitClass::AuthMissing);
+    }
+
+    #[test]
+    fn a_deferral_with_no_retained_failure_is_not_invented_into_a_provider_code() {
+        // A plain "you called too soon" deferral is not an auth or transport
+        // failure, and must not be dressed up as one.
+        let deferred = openai_client::CostsGateError::Deferred {
+            reason: openai_client::GateDeferredReason::RecentAttempt,
+            retry_after_secs: 240,
+            failure: None,
+            cached: None,
+        };
+        let wrapped = anyhow::Error::new(ProviderFailure(anyhow::Error::new(deferred)));
+        assert_eq!(classify_error(&wrapped), ExitClass::Other);
     }
 
     #[test]

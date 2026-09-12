@@ -303,12 +303,12 @@ pub(crate) fn cmd_export(args: &ExportArgs, strict: bool) -> Result<ExitClass> {
 
     // OpenAI: current-month billed spend. None (not configured) -> empty
     // section; a fetch error propagates for exit-code classification.
-    let openai = match export_fetch_openai() {
-        Ok(Some(costs)) => openai_rows(&costs),
-        Ok(None) => Vec::new(),
+    let costs = match export_fetch_openai() {
+        Ok(costs) => costs,
         Err(error) => return Err(openai_fetch_failure(error)),
     };
-    let partial = openai.iter().any(|row| row.partial);
+    let partial = export_is_partial(costs.as_ref());
+    let openai = costs.as_ref().map(openai_rows).unwrap_or_default();
 
     match &args.output {
         Some(path) => {
@@ -337,7 +337,7 @@ pub(crate) fn cmd_export(args: &ExportArgs, strict: bool) -> Result<ExitClass> {
         // not chatter. The CSV carries the same fact in its `partial` column,
         // so a redirected export stays self-describing.
         eprintln!(
-            "warning: OpenAI returned a paginated Costs response, so the billed              section understates this month; the affected rows are marked in the              `partial` column"
+            "warning: OpenAI returned a paginated Costs response, so the billed section understates this month; any rows it did return are marked in the `partial` column"
         );
         return Ok(if strict {
             ExitClass::Degraded
@@ -346,6 +346,14 @@ pub(crate) fn cmd_export(args: &ExportArgs, strict: bool) -> Result<ExitClass> {
         });
     }
     Ok(ExitClass::Ok)
+}
+
+/// Whether this export must be reported as partial. Reads the RESPONSE flag,
+/// never the projected rows: a truncated page can carry no billable line items
+/// at all, and the pages it omitted still make the month understated. Deriving
+/// this from `openai_rows` would report such a month as complete.
+fn export_is_partial(costs: Option<&OpenAiCosts>) -> bool {
+    costs.is_some_and(|costs| costs.truncated)
 }
 
 /// Wrap an OpenAI fetch failure as a provider response, so `main` classifies
@@ -528,6 +536,35 @@ mod tests {
 {out}"
             );
         }
+    }
+
+    #[test]
+    fn a_truncated_month_with_no_line_items_is_still_partial() {
+        // A paginated response whose current page carries no billable line
+        // items projects to zero rows, so nothing row-derived can report it.
+        // The omitted pages still make the month understated.
+        let mut costs = sample_openai(fixed_now());
+        costs.by_line_item.clear();
+        costs.truncated = true;
+
+        assert!(
+            openai_rows(&costs).is_empty(),
+            "precondition: no rows to carry the flag"
+        );
+        assert!(
+            export_is_partial(Some(&costs)),
+            "the response says later pages were omitted"
+        );
+    }
+
+    #[test]
+    fn a_complete_month_and_an_absent_provider_are_not_partial() {
+        let costs = sample_openai(fixed_now());
+        assert!(!export_is_partial(Some(&costs)));
+        assert!(
+            !export_is_partial(None),
+            "no OpenAI key is not a partial export"
+        );
     }
 
     #[test]
