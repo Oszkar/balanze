@@ -8,11 +8,12 @@
 //! If the file does not exist (`FileIoError::FileMissing`) no event is emitted;
 //! this is the normal state for users who haven't wired the statusLine yet.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use claude_statusline::{FileIoError, read_snapshot};
-use notify::{RecursiveMode, Watcher as _};
+use notify::{Event, EventKind, RecursiveMode, Watcher as _};
 use settings::statusline_snapshot_path;
 use state_coordinator::{
     Source, SourcePartial, SourceUpdate, StateCoordinatorHandle, StateMsg, WatcherGeneration,
@@ -45,8 +46,17 @@ pub(crate) fn spawn(
     coord: StateCoordinatorHandle,
     generation: WatcherGeneration,
 ) -> JoinHandle<Result<(), WatcherError>> {
+    spawn_at(coord, generation, statusline_snapshot_path())
+}
+
+/// Start the same watcher against an explicit bridge path, including test fixtures.
+fn spawn_at(
+    coord: StateCoordinatorHandle,
+    generation: WatcherGeneration,
+    snapshot_path: Option<PathBuf>,
+) -> JoinHandle<Result<(), WatcherError>> {
     tokio::spawn(async move {
-        let snapshot_path = match statusline_snapshot_path() {
+        let snapshot_path = match snapshot_path {
             Some(p) => p,
             None => {
                 tracing::warn!("watcher/statusline: cannot resolve data dir; task exits clean");
@@ -88,12 +98,15 @@ pub(crate) fn spawn(
 
         let signal = Arc::new(Notify::new());
         let signal_cb = signal.clone();
+        let watched_path = snapshot_path.clone();
         let mut watcher =
-            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-                if let Err(e) = &res {
+            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+                Ok(event) if affects_snapshot(&event, &watched_path) => signal_cb.notify_one(),
+                Ok(_) => {}
+                Err(e) => {
                     tracing::warn!("watcher/statusline: notify error: {e}");
+                    signal_cb.notify_one();
                 }
-                signal_cb.notify_one();
             }) {
                 Ok(w) => w,
                 Err(e) => {
@@ -129,6 +142,40 @@ pub(crate) fn spawn(
             emit_statusline_snapshot(&coord, &snapshot_path, generation).await;
         }
     })
+}
+
+/// Match the bridge name or its current resolved target, ignoring read feedback.
+/// Target resolution runs on notify's callback thread, not a Tokio worker, and
+/// is repeated so retargeting a symlink does not leave a cached destination stale.
+fn affects_snapshot(event: &Event, snapshot_path: &Path) -> bool {
+    // Rescan notices carry no reliable paths. Match the bridge filename first,
+    // including either side of a rename in this non-recursive watch. This also
+    // tolerates canonicalized parent paths on macOS.
+    // Ignore access events: our own read must not trigger another read.
+    if event.need_rescan() {
+        return true;
+    }
+    if matches!(event.kind, EventKind::Access(_)) {
+        return false;
+    }
+    if event
+        .paths
+        .iter()
+        .any(|path| path.file_name().is_some() && path.file_name() == snapshot_path.file_name())
+    {
+        return true;
+    }
+
+    // atomic_file preserves a bridge symlink and publishes over its resolved
+    // target. Compare complete resolved paths so an unrelated file with the
+    // same basename cannot turn snapshot publication back into a feedback loop.
+    let Ok(target) = snapshot_path.canonicalize() else {
+        return false;
+    };
+    event
+        .paths
+        .iter()
+        .any(|path| path.canonicalize().is_ok_and(|path| path == target))
 }
 
 /// Read the statusline snapshot from disk (sync) and emit an update to the
@@ -179,6 +226,181 @@ async fn emit_statusline_snapshot(
                     result: Err(format!("{e}")),
                 }))
                 .await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{AccessKind, CreateKind, Flag, ModifyKind, RenameMode};
+    use state_coordinator::{Sink, Snapshot, SnapshotFilePayload, atomic_write_snapshot_file};
+
+    #[test]
+    fn filters_reads_and_unrelated_files_but_keeps_rename_and_rescan() {
+        let path = PathBuf::from("data/statusline.snapshot.json");
+        for event in [
+            Event::new(EventKind::Access(AccessKind::Read)).add_path(path.clone()),
+            Event::new(EventKind::Create(CreateKind::File))
+                .add_path(PathBuf::from("data/snapshot.json")),
+            Event::new(EventKind::Create(CreateKind::File))
+                .add_path(PathBuf::from("data/statusline.snapshot.json.123.tmp")),
+        ] {
+            assert!(!affects_snapshot(&event, &path), "{event:?}");
+        }
+        for event in [
+            Event::new(EventKind::Create(CreateKind::File)).add_path(path.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+                .add_path(PathBuf::from("data/statusline.snapshot.json.123.tmp"))
+                .add_path(path.clone()),
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+                .add_path(path.clone()),
+            Event::new(EventKind::Other).set_flag(Flag::Rescan),
+        ] {
+            assert!(affects_snapshot(&event, &path), "{event:?}");
+        }
+    }
+
+    struct SnapshotSink(tokio::sync::mpsc::UnboundedSender<Snapshot>);
+
+    #[test]
+    fn symlink_filter_tracks_retargets_and_rejects_same_named_unrelated_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("statusline.snapshot.json");
+        let first = dir.path().join("bridge-data.json");
+        let second = dir.path().join("new-bridge-data.json");
+        let other = tempfile::tempdir().unwrap();
+        let unrelated = other.path().join("bridge-data.json");
+        for target in [&first, &second, &unrelated] {
+            std::fs::write(target, b"fixture").unwrap();
+        }
+        if !create_symlink_or_skip(&first, &path) {
+            return;
+        }
+        let event = |target: &Path| {
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::To)))
+                .add_path(target.to_path_buf())
+        };
+        assert!(affects_snapshot(&event(&first), &path));
+        assert!(!affects_snapshot(&event(&unrelated), &path));
+        assert!(!affects_snapshot(
+            &Event::new(EventKind::Access(AccessKind::Read)).add_path(first.clone()),
+            &path
+        ));
+        std::fs::remove_file(&path).unwrap();
+        assert!(create_symlink_or_skip(&second, &path));
+        assert!(!affects_snapshot(&event(&first), &path));
+        assert!(affects_snapshot(&event(&second), &path));
+    }
+
+    impl Sink for SnapshotSink {
+        fn on_snapshot(&mut self, snapshot: &Snapshot) {
+            let _ = self.0.send(snapshot.clone());
+        }
+
+        fn on_degraded(&mut self, _: Source, error: &str) {
+            panic!("unexpected degradation: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_publication_does_not_retrigger_bridge_but_replacement_does() {
+        exercise_snapshot_publication(false).await;
+    }
+
+    #[tokio::test]
+    async fn symlink_target_replacement_updates_bridge_without_snapshot_feedback() {
+        exercise_snapshot_publication(true).await;
+    }
+
+    async fn exercise_snapshot_publication(symlink: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("statusline.snapshot.json");
+        let mut payload = claude_statusline::StatuslineFilePayload::new(
+            claude_statusline::parse(r#"{"cost":{"total_cost_usd":1}}"#).unwrap(),
+            chrono::Utc::now(),
+        );
+        if symlink {
+            let target = dir.path().join("bridge-data.json");
+            claude_statusline::atomic_write_snapshot(&target, &payload).unwrap();
+            if !create_symlink_or_skip(Path::new("bridge-data.json"), &path) {
+                return;
+            }
+            let event =
+                Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::To))).add_path(target);
+            assert!(affects_snapshot(&event, &path));
+        } else {
+            claude_statusline::atomic_write_snapshot(&path, &payload).unwrap();
+        }
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (coord, coord_join) = state_coordinator::spawn(SnapshotSink(tx));
+        let watcher = spawn_at(coord.clone(), 0, Some(path.clone()));
+        let initial = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(initial.claude_statusline.as_ref(), Some(&payload));
+
+        // FSEvents can deliver the buffered seed write after the explicit
+        // initial read. Establish a quiet stream before measuring whether
+        // snapshot publication causes a new bridge update.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Ok(snapshot) =
+                tokio::time::timeout(Duration::from_millis(700), rx.recv()).await
+            {
+                assert_eq!(snapshot.unwrap().claude_statusline.as_ref(), Some(&payload));
+            }
+        })
+        .await
+        .expect("statusline watcher did not settle after startup");
+
+        // Reproduce the other half of the bridge with its real atomic writer.
+        // These temp/create/rename events previously re-ingested the unchanged
+        // statusline and would trigger another publication indefinitely.
+        atomic_write_snapshot_file(
+            &dir.path().join("snapshot.json"),
+            &SnapshotFilePayload::new(initial, chrono::Utc::now()),
+        )
+        .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(700), rx.recv())
+                .await
+                .is_err()
+        );
+
+        payload.payload.session_cost_micro_usd = Some(2_000_000);
+        payload.captured_at = chrono::Utc::now();
+        claude_statusline::atomic_write_snapshot(&path, &payload).unwrap();
+        let updated = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.claude_statusline.as_ref(), Some(&payload));
+        if symlink {
+            assert!(std::fs::symlink_metadata(&path).unwrap().is_symlink());
+        }
+
+        watcher.abort();
+        assert!(watcher.await.unwrap_err().is_cancelled());
+        drop(coord);
+        coord_join.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn create_symlink_or_skip(target: &Path, link: &Path) -> bool {
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(1314) => {
+                eprintln!("skipping symlink test: Windows symlink privilege is unavailable");
+                false
+            }
+            Err(error) => panic!("failed to create symlink fixture: {error}"),
         }
     }
 }
