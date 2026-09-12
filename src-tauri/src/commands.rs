@@ -303,6 +303,15 @@ impl WatcherReload {
 
 const SETTINGS_TRANSITION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// How long a settings command waits for the command ahead of it. Covers the
+/// longest LEGITIMATE holder: the `settings` crate's own 5-second lock wait
+/// plus [`SETTINGS_TRANSITION_TIMEOUT`]. Past that the holder is stuck on
+/// something unbounded - on macOS, a keychain ACL prompt nobody has answered -
+/// and the contender must say so instead of hanging. This preserves the
+/// bounded wait contenders had before the sequencer existed, when they queued
+/// on the settings file lock and surfaced its timeout.
+const SETTINGS_SEQUENCER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Persist a settings mutation and live-apply the exact committed value as ONE
 /// serialized unit, returning the committed settings.
 ///
@@ -317,16 +326,42 @@ const SETTINGS_TRANSITION_TIMEOUT: std::time::Duration = std::time::Duration::fr
 /// same order by construction.
 ///
 /// The await it spans is the critical section itself, not unrelated work
-/// (AGENTS.md §2.1), and the wait is bounded: the live-apply half already times
-/// out after [`SETTINGS_TRANSITION_TIMEOUT`], and contenders would have queued
-/// on the settings file lock anyway.
+/// (AGENTS.md §2.1). Every wait inside it is bounded - the sequencer by
+/// [`SETTINGS_SEQUENCER_TIMEOUT`] and the live-apply half by
+/// [`SETTINGS_TRANSITION_TIMEOUT`] - so a command that is stuck holding the
+/// sequencer fails its contenders explicitly rather than hanging them.
 async fn commit_settings_live<F>(reload: &WatcherReload, persist: F) -> Result<Settings, String>
 where
     F: FnOnce() -> Result<Settings, String> + Send + 'static,
 {
-    let _ordered = reload.sequencer.lock().await;
+    commit_settings_live_with_timeouts(
+        reload,
+        persist,
+        SETTINGS_SEQUENCER_TIMEOUT,
+        SETTINGS_TRANSITION_TIMEOUT,
+    )
+    .await
+}
+
+async fn commit_settings_live_with_timeouts<F>(
+    reload: &WatcherReload,
+    persist: F,
+    sequencer_timeout: std::time::Duration,
+    transition_timeout: std::time::Duration,
+) -> Result<Settings, String>
+where
+    F: FnOnce() -> Result<Settings, String> + Send + 'static,
+{
+    // Give up BEFORE the persist step: a contender that timed out here has
+    // written nothing, so the disk order it would have joined is unaffected.
+    let _ordered = tokio::time::timeout(sequencer_timeout, reload.sequencer.lock())
+        .await
+        .map_err(|_| {
+            "another settings change is still in progress (on macOS, an unanswered keychain prompt can hold one open); try again"
+                .to_string()
+        })?;
     let settings = run_blocking(persist).await?;
-    apply_settings_live(reload, settings.clone()).await?;
+    apply_settings_live_with_timeout(reload, settings.clone(), transition_timeout).await?;
     Ok(settings)
 }
 
@@ -334,10 +369,6 @@ where
 /// pollers, advances the coordinator generation, starts the replacement task
 /// set, and only then completes the reply. A closed supervisor is an explicit
 /// command error, never a silently dropped live update.
-async fn apply_settings_live(reload: &WatcherReload, settings: Settings) -> Result<(), String> {
-    apply_settings_live_with_timeout(reload, settings, SETTINGS_TRANSITION_TIMEOUT).await
-}
-
 async fn apply_settings_live_with_timeout(
     reload: &WatcherReload,
     settings: Settings,
@@ -574,6 +605,45 @@ mod tests {
         assert_eq!(result.unwrap_err(), "watcher settings transition timed out");
         assert_eq!(SETTINGS_TRANSITION_TIMEOUT.as_secs(), 15);
         transition.abort();
+    }
+
+    #[tokio::test]
+    async fn a_stuck_settings_command_fails_contenders_instead_of_hanging_them() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let reload = super::WatcherReload::new(tx);
+        // Stands in for a command wedged inside its persist step - on macOS, an
+        // unanswered keychain ACL prompt while it holds the settings lock.
+        let wedged = reload.sequencer.lock().await;
+
+        let persisted = Arc::new(AtomicBool::new(false));
+        let persisted_in_contender = Arc::clone(&persisted);
+        let error = super::commit_settings_live_with_timeouts(
+            &reload,
+            move || {
+                persisted_in_contender.store(true, Ordering::SeqCst);
+                Ok(settings::Settings::default())
+            },
+            std::time::Duration::from_millis(10),
+            SETTINGS_TRANSITION_TIMEOUT,
+        )
+        .await
+        .expect_err("the contender cannot acquire the sequencer");
+
+        assert!(
+            error.contains("another settings change is still in progress"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !persisted.load(Ordering::SeqCst),
+            "a contender that gave up must not have written to settings.json"
+        );
+        // Before the sequencer existed this wait was bounded by the settings
+        // crate's own 5s lock timeout; it must stay bounded.
+        assert_eq!(super::SETTINGS_SEQUENCER_TIMEOUT.as_secs(), 20);
+        drop(wedged);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
