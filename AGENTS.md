@@ -115,6 +115,8 @@ Secrets in scope: user-supplied OpenAI API keys, plus read access to Claude Code
 
 One-shot `status` applies the live provider gates before source I/O: `anthropic_enabled` gates OAuth only, `codex_enabled` gates Codex reads, and `openai_enabled` or a non-empty `BALANZE_OPENAI_KEY` gates OpenAI billing. Local Claude JSONL and statusline reads remain enabled. The composer shares statusline freshness, quota selection, and pace derivation with `state_coordinator`; missing OAuth credentials use the existing neutral unavailable marker. Export's explicit historical reads remain independent of status gates.
 
+Statusline replacement preserves the displaced-command backup when a failed write may have published. Rollback is allowed only after rereading Claude settings confirms the original command is still installed; a reread failure retains the backup and surfaces the write error.
+
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - data-flow diagram, crate map, the twelve numbered boundaries, IPC contract, error/degraded-state discipline.
 
 When the architecture changes, update both files in lockstep along with `README.md` and `docs/PRD.md`. They share the boundary list and the IPC contract; drift between them is the most common doc bug.
