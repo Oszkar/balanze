@@ -406,9 +406,10 @@ fn tone_money(micro: i64, warn: i64, critical: i64) -> Tone {
     }
 }
 
-/// micro-USD -> "$X.XX". f64 only at this display boundary (AGENTS.md §2.1).
+/// micro-USD -> "$X.XX", through the shared cent-rounding policy in the
+/// `money` crate so the statusline and every other surface agree to the cent.
 fn fmt_money(micro: i64) -> String {
-    format!("${:.2}", micro as f64 / 1_000_000.0)
+    money::micro_usd_to_display(micro)
 }
 
 /// ASCII utilization bar of `width` cells, e.g. "[####------]".

@@ -5,11 +5,11 @@
 use chrono::{DateTime, Duration, Utc};
 use codex_local::WINDOW_DURATION_TOLERANCE_MINUTES;
 
-/// Format an `i64` micro-USD value as a human-readable USD string. Pure
-/// display path per AGENTS.md §2.1: integer math everywhere internally;
-/// f64 only at the boundary.
+/// Format an `i64` micro-USD value as a human-readable USD string. Delegates
+/// to the `money` crate, which owns the one cent-rounding policy every Rust
+/// and TypeScript surface shares - money never reaches f64 on this path.
 pub(crate) fn micro_usd_to_display_dollars(micro: i64) -> String {
-    format!("${:.2}", micro as f64 / 1_000_000.0)
+    money::micro_usd_to_display(micro)
 }
 
 /// Render a Codex window duration in human units. Codex windows are commonly

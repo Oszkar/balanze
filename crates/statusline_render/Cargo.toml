@@ -10,6 +10,7 @@ description = "Renders the Balanze statusline: segment model, line layout, thres
 
 [dependencies]
 claude_statusline = { path = "../claude_statusline" }
+money = { path = "../money" }
 settings = { path = "../settings" }
 window = { path = "../window" }
 chrono = { workspace = true }

@@ -428,6 +428,7 @@ dependencies = [
  "futures-util",
  "keychain",
  "logging",
+ "money",
  "openai_client",
  "owo-colors",
  "ratatui",
@@ -3038,6 +3039,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "money"
+version = "0.5.2"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "muda"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5023,6 +5032,7 @@ version = "0.5.2"
 dependencies = [
  "chrono",
  "claude_statusline",
+ "money",
  "settings",
  "tokio",
  "window",

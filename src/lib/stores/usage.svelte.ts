@@ -19,6 +19,25 @@ function degradedFromSnapshot(s: Snapshot): Record<string, string> {
   return d;
 }
 
+// Inverse of `degradedFromSnapshot`: which Snapshot error slot a
+// `degraded_state` source key belongs to. An error-only transition publishes
+// the snapshot to durable storage and emits `degraded_state` WITHOUT a
+// `usage_updated` (the coordinator's `on_snapshot_durable` path), so the
+// frontend's copy of the snapshot keeps a null error slot. Every cell derives
+// its error/stale presentation from those slots, not from `degraded`, so
+// without reconciling the event back into the snapshot the quota keeps its
+// fresh appearance through repeated failures while only the banner warns.
+const SNAPSHOT_ERROR_SLOT = {
+  claude_oauth: 'claude_oauth_error',
+  claude_jsonl: 'claude_jsonl_error',
+  anthropic_api_cost: 'anthropic_api_cost_error',
+  codex_quota: 'codex_quota_error',
+  openai_costs: 'openai_error',
+  claude_statusline: 'claude_statusline_error',
+} as const satisfies Record<string, keyof Snapshot>;
+
+type DegradedSource = keyof typeof SNAPSHOT_ERROR_SLOT;
+
 class UsageStore {
   snapshot = $state<Snapshot | null>(null);
   degraded = $state<Record<string, string>>({});
@@ -38,6 +57,17 @@ class UsageStore {
     if (this.#frontendEventError) degraded.frontend_events = this.#frontendEventError;
     this.degraded = degraded;
     if (fromEvent) this.#eventRevision += 1;
+  }
+
+  // Reconcile an error-only `degraded_state` into the snapshot's error slot so
+  // the cells react, not just the banner. `frontend_events` has no slot (it is
+  // not a backend source) and is skipped. A later `usage_updated` replaces the
+  // snapshot wholesale from the backend, which is what clears the slot once
+  // the source recovers - this never becomes a sticky client-side marker.
+  #applyDegradedToSnapshot(source: string, error: string) {
+    const slot = SNAPSHOT_ERROR_SLOT[source as DegradedSource];
+    if (!slot || !this.snapshot || this.snapshot[slot] === error) return;
+    this.snapshot = { ...this.snapshot, [slot]: error };
   }
 
   #recordFrontendEventError(e: unknown) {
@@ -84,6 +114,7 @@ class UsageStore {
         // Immediate marker for a failure that didn't ride a snapshot (the
         // coordinator emits degraded_state without a usage_updated on error).
         this.degraded = { ...this.degraded, [d.source]: d.error };
+        this.#applyDegradedToSnapshot(d.source, d.error);
         this.#eventRevision += 1;
       }));
       if (this.#destroyed || lifecycle !== this.#lifecycle) {

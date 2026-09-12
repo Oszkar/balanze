@@ -158,5 +158,25 @@
     { "percent": 89.4, "expected": "orange" },
     { "percent": 89.5, "expected": "red" },
     { "percent": 125, "expected": "red" }
+  ],
+  "money": [
+    { "microUsd": 0, "cents": 0 },
+    { "microUsd": 1, "cents": 0 },
+    { "microUsd": 4999, "cents": 0 },
+    { "microUsd": 5000, "cents": 1 },
+    { "microUsd": 5001, "cents": 1 },
+    { "microUsd": 9999, "cents": 1 },
+    { "microUsd": 10000, "cents": 1 },
+    { "microUsd": 14999, "cents": 1 },
+    { "microUsd": 15000, "cents": 2 },
+    { "microUsd": 1005000, "cents": 101 },
+    { "microUsd": 1004999, "cents": 100 },
+    { "microUsd": 1015000, "cents": 102 },
+    { "microUsd": 1025000, "cents": 103 },
+    { "microUsd": 98239, "cents": 10 },
+    { "microUsd": 1730000, "cents": 173 },
+    { "microUsd": -5000, "cents": -1 },
+    { "microUsd": -4999, "cents": 0 },
+    { "microUsd": -1005000, "cents": -101 }
   ]
 }
