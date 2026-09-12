@@ -154,16 +154,14 @@ pub async fn set_settings(
     patch: SettingsPatch,
     reload: State<'_, WatcherReload>,
 ) -> Result<Settings, String> {
-    let settings = run_blocking(move || {
+    commit_settings_live(&reload, move || {
         settings::update(|current| {
             patch.apply(current);
             Ok::<(), settings::SettingsError>(())
         })
         .map_err(|e| e.to_string())
     })
-    .await?;
-    apply_settings_live(&reload, settings.clone()).await?;
-    Ok(settings)
+    .await
 }
 
 /// Store a user-supplied API key in the OS keychain and mark its provider
@@ -186,7 +184,7 @@ pub async fn set_api_key(
     // blocking ACL prompt while the lock is held. That tradeoff is intentional:
     // contenders time out explicitly instead of reordering the keychain and
     // provider-flag effects.
-    let s = run_blocking(move || {
+    commit_settings_live(&reload, move || {
         let mut transaction = settings::begin_update().map_err(|e| e.to_string())?;
         keychain::set(keychain::keys::OPENAI_API_KEY, &key).map_err(|e| e.to_string())?;
         transaction.settings_mut().providers.openai_enabled = true;
@@ -196,8 +194,8 @@ pub async fn set_api_key(
             )
         })
     })
-    .await?;
-    apply_settings_live(&reload, s).await
+    .await
+    .map(|_| ())
 }
 
 /// Outcome of probing a user-supplied API key against the provider WITHOUT
@@ -263,7 +261,7 @@ pub async fn clear_api_key(
     if provider != "openai" {
         return Err(format!("unsupported provider: {provider}"));
     }
-    let s = run_blocking(|| {
+    commit_settings_live(&reload, || {
         // See set_api_key: a macOS prompt may hold the settings lock, but
         // releasing it here would let keychain and provider-flag order diverge.
         let mut transaction = settings::begin_update().map_err(|e| e.to_string())?;
@@ -275,8 +273,8 @@ pub async fn clear_api_key(
             )
         })
     })
-    .await?;
-    apply_settings_live(&reload, s).await
+    .await
+    .map(|_| ())
 }
 
 /// Sender that asks the host's watcher supervisor to re-spawn its tasks with
@@ -286,9 +284,51 @@ pub struct SettingsTransition {
     pub applied: tokio::sync::oneshot::Sender<Result<(), String>>,
 }
 
-pub struct WatcherReload(pub tokio::sync::mpsc::Sender<SettingsTransition>);
+pub struct WatcherReload {
+    tx: tokio::sync::mpsc::Sender<SettingsTransition>,
+    /// Serializes persist-then-live-apply across concurrent settings commands.
+    /// See [`commit_settings_live`] for why the ordering cannot be left to the
+    /// settings file lock alone.
+    sequencer: tokio::sync::Mutex<()>,
+}
+
+impl WatcherReload {
+    pub fn new(tx: tokio::sync::mpsc::Sender<SettingsTransition>) -> Self {
+        Self {
+            tx,
+            sequencer: tokio::sync::Mutex::new(()),
+        }
+    }
+}
 
 const SETTINGS_TRANSITION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Persist a settings mutation and live-apply the exact committed value as ONE
+/// serialized unit, returning the committed settings.
+///
+/// The settings file lock orders the writes to `settings.json`, but it is
+/// released the moment a commit lands - so with two concurrent commands the
+/// live-apply sends can still reach the supervisor in the opposite order, and
+/// the supervisor accepts whichever arrives last as the newest generation.
+/// Live settings would then be older than disk settings (a provider the user
+/// just disabled gets re-enabled by the stale transition) and generation gating
+/// cannot catch it, because the stale value genuinely carries the newer
+/// generation. Holding this mutex across both halves makes the two orders the
+/// same order by construction.
+///
+/// The await it spans is the critical section itself, not unrelated work
+/// (AGENTS.md §2.1), and the wait is bounded: the live-apply half already times
+/// out after [`SETTINGS_TRANSITION_TIMEOUT`], and contenders would have queued
+/// on the settings file lock anyway.
+async fn commit_settings_live<F>(reload: &WatcherReload, persist: F) -> Result<Settings, String>
+where
+    F: FnOnce() -> Result<Settings, String> + Send + 'static,
+{
+    let _ordered = reload.sequencer.lock().await;
+    let settings = run_blocking(persist).await?;
+    apply_settings_live(reload, settings.clone()).await?;
+    Ok(settings)
+}
 
 /// Await one supervised settings transition. The supervisor joins the old
 /// pollers, advances the coordinator generation, starts the replacement task
@@ -306,7 +346,7 @@ async fn apply_settings_live_with_timeout(
     let (applied, completed) = tokio::sync::oneshot::channel();
     tokio::time::timeout(timeout, async {
         reload
-            .0
+            .tx
             .send(SettingsTransition { settings, applied })
             .await
             .map_err(|_| "watcher settings supervisor has shut down".to_string())?;
@@ -517,7 +557,7 @@ mod tests {
     #[tokio::test]
     async fn settings_transition_ack_has_a_bounded_wait() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let reload = WatcherReload(tx);
+        let reload = WatcherReload::new(tx);
         let transition = tokio::spawn(async move {
             let pending = rx.recv().await.expect("transition sent");
             let _keep_ack_open = pending.applied;
@@ -534,6 +574,107 @@ mod tests {
         assert_eq!(result.unwrap_err(), "watcher settings transition timed out");
         assert_eq!(SETTINGS_TRANSITION_TIMEOUT.as_secs(), 15);
         transition.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_settings_commands_persist_and_apply_in_one_order() {
+        use std::sync::{Arc, Mutex};
+
+        // Each command is identified by the value it commits, so the log proves
+        // WHICH command persisted and applied, not merely how many did.
+        fn settings_with(interval: u32) -> settings::Settings {
+            settings::Settings {
+                oauth_poll_interval_secs: interval,
+                ..Default::default()
+            }
+        }
+
+        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let reload = Arc::new(super::WatcherReload::new(tx));
+
+        // Supervisor stand-in. It withholds the first acknowledgment until the
+        // test releases it, which is exactly the window in which a second
+        // command could otherwise commit to disk and overtake the first.
+        let (first_seen_tx, first_seen) = tokio::sync::oneshot::channel();
+        let (release_tx, release) = tokio::sync::oneshot::channel();
+        let supervisor_log = Arc::clone(&log);
+        let supervisor = tokio::spawn(async move {
+            let first = rx.recv().await.expect("first transition");
+            supervisor_log
+                .lock()
+                .unwrap()
+                .push(format!("apply-{}", first.settings.oauth_poll_interval_secs));
+            first_seen_tx.send(()).expect("test still waiting");
+            release.await.expect("test releases the first ack");
+            first.applied.send(Ok(())).expect("first caller waiting");
+            while let Some(next) = rx.recv().await {
+                supervisor_log
+                    .lock()
+                    .unwrap()
+                    .push(format!("apply-{}", next.settings.oauth_poll_interval_secs));
+                let _ = next.applied.send(Ok(()));
+            }
+        });
+
+        let first_reload = Arc::clone(&reload);
+        let first_log = Arc::clone(&log);
+        let first_command = tokio::spawn(async move {
+            super::commit_settings_live(&first_reload, move || {
+                first_log.lock().unwrap().push("persist-1".to_string());
+                Ok(settings_with(1))
+            })
+            .await
+        });
+        first_seen
+            .await
+            .expect("supervisor received the first transition");
+
+        let second_reload = Arc::clone(&reload);
+        let second_log = Arc::clone(&log);
+        let second_command = tokio::spawn(async move {
+            super::commit_settings_live(&second_reload, move || {
+                second_log.lock().unwrap().push("persist-2".to_string());
+                Ok(settings_with(2))
+            })
+            .await
+        });
+
+        // The second command must not even reach its persist step while the
+        // first transition is unacknowledged: persisting there is what lets
+        // disk order and live-apply order diverge.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["persist-1".to_string(), "apply-1".to_string()],
+            "the second command persisted before the first finished applying"
+        );
+
+        release_tx.send(()).expect("supervisor waiting for release");
+        assert_eq!(
+            first_command
+                .await
+                .unwrap()
+                .unwrap()
+                .oauth_poll_interval_secs,
+            1
+        );
+        assert_eq!(
+            second_command
+                .await
+                .unwrap()
+                .unwrap()
+                .oauth_poll_interval_secs,
+            2
+        );
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["persist-1", "apply-1", "persist-2", "apply-2"],
+            "live settings must never be older than the last committed settings"
+        );
+        drop(reload);
+        supervisor.await.unwrap();
     }
 
     #[test]

@@ -33,6 +33,41 @@ use crate::tasks::get_or_build_client;
 // five minutes. File credentials are never put in this cache.
 const KEYCHAIN_RECHECK_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
+/// Poll cadence measured from the END of one poll to the start of the next.
+///
+/// A bare `tokio::time::Interval` cannot express that. Even with
+/// `MissedTickBehavior::Delay`, an already-overdue deadline still resolves
+/// immediately; only the tick *after* it is pushed out (tokio computes
+/// `now + period` only once the overdue tick has fired). So a poll whose
+/// `BackoffPolicy::standard()` retries outran the interval would be followed at
+/// once by another poll - breaking the §3.1 politeness floor in exactly the
+/// conditions that caused the overrun. Resetting after every completed poll
+/// keeps at least `interval` between the end of one request sequence and the
+/// start of the next.
+struct PollSchedule(tokio::time::Interval);
+
+impl PollSchedule {
+    /// The first `wait()` returns immediately, so the task polls once at
+    /// startup. `Delay` still guards the case where a tick is missed without a
+    /// completed poll behind it (no burst of caught-up ticks).
+    fn new(interval: Duration) -> Self {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        Self(ticker)
+    }
+
+    /// Wait for the next poll slot.
+    async fn wait(&mut self) {
+        self.0.tick().await;
+    }
+
+    /// Record that a poll (including all of its retries) just finished, so the
+    /// next slot is a full interval from now.
+    fn poll_completed(&mut self) {
+        self.0.reset();
+    }
+}
+
 #[derive(Default)]
 enum KeychainCache {
     #[default]
@@ -145,18 +180,11 @@ pub(crate) fn spawn(
             _ => {}
         }
 
-        // First tick fires immediately (interval fires on first `.tick()` call).
-        // `Delay` (not the default `Burst`) so a slow tick - `fetch_usage`
-        // backing off for up to 10 minutes under `BackoffPolicy::standard()` -
-        // can't queue up multiple missed 5-min ticks and fire them
-        // back-to-back when the network recovers. That would violate the
-        // §3.1 API-politeness floor in exactly the worst conditions.
-        let mut ticker = tokio::time::interval(interval);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut schedule = PollSchedule::new(interval);
         let mut client: Option<reqwest::Client> = None;
 
         loop {
-            ticker.tick().await;
+            schedule.wait().await;
 
             let client = match get_or_build_client(&mut client) {
                 Ok(c) => c,
@@ -197,6 +225,9 @@ pub(crate) fn spawn(
                 }
             };
             let _ = coord.send(StateMsg::Update(update)).await;
+            // Measure the next gap from HERE, not from this poll's own tick:
+            // `poll_once` may have spent longer than `interval` backing off.
+            schedule.poll_completed();
         }
     })
 }
@@ -353,6 +384,45 @@ mod tests {
             rate_limit_tier: None,
             scopes: Vec::new(),
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn schedule_polls_once_immediately_at_startup() {
+        let mut schedule = PollSchedule::new(Duration::from_secs(300));
+        let started = tokio::time::Instant::now();
+        schedule.wait().await;
+        assert_eq!(started.elapsed(), Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn schedule_waits_a_full_interval_after_a_poll_that_outran_it() {
+        let interval = Duration::from_secs(300);
+        let mut schedule = PollSchedule::new(interval);
+        schedule.wait().await;
+        // `fetch_usage` backing off past the interval (the cap is 10 minutes).
+        tokio::time::sleep(Duration::from_secs(400)).await;
+        schedule.poll_completed();
+
+        let finished_at = tokio::time::Instant::now();
+        schedule.wait().await;
+        assert_eq!(
+            finished_at.elapsed(),
+            interval,
+            "a slow poll must not be followed immediately by another request"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_overdue_tick_alone_fires_immediately() {
+        // Pins the tokio behavior `PollSchedule` exists to correct: without
+        // `poll_completed`, the overdue deadline resolves with no wait at all.
+        let mut schedule = PollSchedule::new(Duration::from_secs(300));
+        schedule.wait().await;
+        tokio::time::sleep(Duration::from_secs(400)).await;
+
+        let finished_at = tokio::time::Instant::now();
+        schedule.wait().await;
+        assert_eq!(finished_at.elapsed(), Duration::ZERO);
     }
 
     #[test]

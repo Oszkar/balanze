@@ -28,4 +28,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+# `test-util` gives the paused-clock runtime the poll-cadence tests need to
+# assert the gap between polls without sleeping in real time.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "test-util", "time"] }
