@@ -123,6 +123,88 @@ describe('UsageStore.refresh', () => {
     expect(unlistenUsage).toHaveBeenCalledOnce();
   });
 
+  it('reconciles an error-only degraded event into the snapshot error slot', async () => {
+    // The coordinator publishes an error-only transition durably and emits
+    // degraded_state WITHOUT a usage_updated, so the snapshot the frontend
+    // holds never learns about the failure on its own. Both layouts derive
+    // the Anthropic cell's error/stale presentation from the snapshot slots,
+    // so the quota would keep its fresh appearance through repeated OAuth
+    // failures while only the banner warned.
+    let degradedCallback: ((d: { source: string; error: string }) => void) | null = null;
+    onDegraded.mockImplementation(async (cb: (d: { source: string; error: string }) => void) => {
+      degradedCallback = cb;
+      return () => {};
+    });
+    getSnapshot.mockResolvedValue(snapshotWith(null));
+    await usage.init();
+    expect(usage.snapshot?.claude_oauth_error).toBeNull();
+
+    degradedCallback!({ source: 'claude_oauth', error: 'AuthExpired' });
+
+    expect(usage.snapshot?.claude_oauth_error).toBe('AuthExpired');
+    expect(usage.degraded.claude_oauth).toBe('AuthExpired');
+  });
+
+  it('maps every degraded source key onto its snapshot slot', async () => {
+    let degradedCallback: ((d: { source: string; error: string }) => void) | null = null;
+    onDegraded.mockImplementation(async (cb: (d: { source: string; error: string }) => void) => {
+      degradedCallback = cb;
+      return () => {};
+    });
+    getSnapshot.mockResolvedValue(snapshotWith(null));
+    await usage.init();
+
+    // The keys are `tauri_sink::source_key`; the slots are the Snapshot
+    // fields `degradedFromSnapshot` reads back.
+    const pairs: [string, keyof Snapshot][] = [
+      ['claude_oauth', 'claude_oauth_error'],
+      ['claude_jsonl', 'claude_jsonl_error'],
+      ['anthropic_api_cost', 'anthropic_api_cost_error'],
+      ['codex_quota', 'codex_quota_error'],
+      ['openai_costs', 'openai_error'],
+      ['claude_statusline', 'claude_statusline_error'],
+    ];
+    for (const [source, slot] of pairs) {
+      degradedCallback!({ source, error: `${source} failed` });
+      expect(usage.snapshot?.[slot]).toBe(`${source} failed`);
+    }
+  });
+
+  it('leaves the snapshot alone for a degraded source with no backend slot', async () => {
+    let degradedCallback: ((d: { source: string; error: string }) => void) | null = null;
+    onDegraded.mockImplementation(async (cb: (d: { source: string; error: string }) => void) => {
+      degradedCallback = cb;
+      return () => {};
+    });
+    const seeded = snapshotWith(null);
+    getSnapshot.mockResolvedValue(seeded);
+    await usage.init();
+
+    degradedCallback!({ source: 'frontend_events', error: 'listen down' });
+
+    expect(usage.snapshot).toBe(seeded);
+    expect(usage.degraded.frontend_events).toBe('listen down');
+  });
+
+  it('lets a recovered snapshot clear an error reconciled from an event', async () => {
+    let degradedCallback: ((d: { source: string; error: string }) => void) | null = null;
+    onDegraded.mockImplementation(async (cb: (d: { source: string; error: string }) => void) => {
+      degradedCallback = cb;
+      return () => {};
+    });
+    getSnapshot.mockResolvedValue(snapshotWith(null));
+    await usage.init();
+    degradedCallback!({ source: 'claude_oauth', error: 'AuthExpired' });
+    expect(usage.snapshot?.claude_oauth_error).toBe('AuthExpired');
+
+    // The backend's next success carries a cleared slot; the reconciled
+    // marker must not outlive it.
+    usageUpdatedCallback!(snapshotWith(null));
+
+    expect(usage.snapshot?.claude_oauth_error).toBeNull();
+    expect(usage.degraded.claude_oauth).toBeUndefined();
+  });
+
   it('does not let the initial getSnapshot response overwrite a newer live event', async () => {
     let resolveSnapshot!: (snapshot: Snapshot) => void;
     getSnapshot.mockImplementation(

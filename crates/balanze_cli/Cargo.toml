@@ -25,6 +25,7 @@ claude_statusline = { path = "../claude_statusline" }
 codex_local = { path = "../codex_local" }
 keychain = { path = "../keychain" }
 logging = { path = "../logging" }
+money = { path = "../money" }
 openai_client = { path = "../openai_client" }
 settings = { path = "../settings" }
 snapshot_composer = { path = "../snapshot_composer" }
