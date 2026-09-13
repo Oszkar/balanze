@@ -11,8 +11,8 @@ use owo_colors::{OwoColorize, Style};
 use state_coordinator::{AnthropicQuotaSource, Snapshot};
 
 use crate::format::{
-    fmt_int, format_codex_age, format_codex_window, micro_usd_to_display_dollars, pretty_duration,
-    short_cadence,
+    fmt_int, format_codex_age, format_codex_window, micro_usd_to_display_dollars,
+    micro_usd_to_display_precise, pretty_duration, short_cadence,
 };
 use crate::present::{
     Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction, bucket_for_pace_ratio,
@@ -165,11 +165,13 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             writeln!(w)?;
             writeln!(w, "  By line item:")?;
             for item in costs.by_line_item.iter().take(10) {
+                // The finer grain, not the cent one: these rows are routinely
+                // sub-cent, and cent rounding would flatten them all to $0.00.
                 writeln!(
                     w,
-                    "    {:36}  ${:>10.4}",
+                    "    {:36}  {:>11}",
                     item.line_item,
-                    item.amount_micro_usd as f64 / 1_000_000.0
+                    micro_usd_to_display_precise(item.amount_micro_usd)
                 )?;
             }
             if costs.by_line_item.len() > 10 {
