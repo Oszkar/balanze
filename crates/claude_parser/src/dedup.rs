@@ -1,46 +1,58 @@
 //! De-duplicate `UsageEvent`s by their `(message_id, request_id)` pair.
 //!
-//! Claude Code's JSONL writer occasionally emits the same assistant message
-//! multiple times in the same file (observed: ~37% of unique keys in a real
-//! session were duplicated, all with byte-identical usage payloads). Without
-//! dedup, token totals over-count by the duplication factor.
+//! Claude Code emits partial and completed usage for the same assistant
+//! message. Output counts are cumulative, so keep the most complete record
+//! instead of summing duplicates or retaining an early partial count.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, hash_map::Entry};
 
 use crate::types::UsageEvent;
 
-/// Collapse duplicate events in place, keeping the first occurrence of each
-/// `(message_id, request_id)` pair and discarding subsequent ones.
+/// Collapse each `(message_id, request_id)` pair to the record with the largest
+/// cumulative output count. Equal counts prefer the later timestamp; exact
+/// ties keep the first record. Select a whole record, never sum duplicates or
+/// combine counters from different records. File traversal order must not let
+/// a copied partial record replace completed usage.
 ///
 /// Events where either `message_id` or `request_id` is `None` are never
 /// deduped - without a complete key we can't safely identify duplicates, so
 /// they pass through unchanged.
 ///
-/// Stable: original ordering of retained events is preserved. O(n) time,
-/// O(unique-keys) space.
+/// Keys (and unkeyed events) retain their first-appearance order. O(n) time,
+/// O(retained-events) space, with no cloned events or identifier strings.
 pub fn dedup_events(events: &mut Vec<UsageEvent>) {
-    // First decide against borrowed keys, then compact after `seen` is dropped.
-    // Holding references while mutating the vector would be invalid, while
-    // cloning both strings for every event made each debounce O(history) in
-    // allocations as well as comparisons.
-    let keep = {
-        let mut seen: HashSet<(&str, &str)> = HashSet::new();
-        events
-            .iter()
-            .map(
-                |event| match (event.message_id.as_deref(), event.request_id.as_deref()) {
-                    (Some(message), Some(request)) => seen.insert((message, request)),
-                    _ => true,
+    // Decide against borrowed keys before mutating the vector.
+    let winners = {
+        let mut seen = HashMap::new();
+        let mut winners: Vec<usize> = Vec::new();
+        for (index, event) in events.iter().enumerate() {
+            match (event.message_id.as_deref(), event.request_id.as_deref()) {
+                (Some(message), Some(request)) => match seen.entry((message, request)) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(winners.len());
+                        winners.push(index);
+                    }
+                    Entry::Occupied(entry) => {
+                        let winner = &mut winners[*entry.get()];
+                        let previous = &events[*winner];
+                        if (event.output_tokens, event.ts) > (previous.output_tokens, previous.ts) {
+                            *winner = index;
+                        }
+                    }
                 },
-            )
-            .collect::<Vec<_>>()
+                _ => winners.push(index),
+            }
+        }
+        winners
     };
-    let mut index = 0;
-    events.retain(|_| {
-        let retain = keep[index];
-        index += 1;
-        retain
-    });
+    // Each winner is at or after its first appearance, hence at or after its
+    // destination. Earlier swaps cannot touch a later winner's source index:
+    // their destinations precede it and their sources belong to distinct keys.
+    let retained = winners.len();
+    for (destination, source) in winners.into_iter().enumerate() {
+        events.swap(destination, source);
+    }
+    events.truncate(retained);
 }
 
 #[cfg(test)]
@@ -87,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicates_collapsed_keeping_first_occurrence() {
+    fn duplicates_keep_greatest_cumulative_output_not_first_or_last() {
         let mut events = vec![
             ev(Some("msg_a"), Some("req_1"), 100),
             ev(Some("msg_a"), Some("req_1"), 999), // dup of #0
@@ -95,7 +107,7 @@ mod tests {
         ];
         dedup_events(&mut events);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].output_tokens, 100); // the first one wins
+        assert_eq!(events[0].output_tokens, 999);
     }
 
     #[test]
@@ -103,13 +115,13 @@ mod tests {
         let mut events = vec![
             ev(Some("msg_a"), Some("req_1"), 1),
             ev(Some("msg_b"), Some("req_2"), 2),
-            ev(Some("msg_a"), Some("req_1"), 999), // dup; removed
+            ev(Some("msg_a"), Some("req_1"), 999), // updated usage
             ev(Some("msg_c"), Some("req_3"), 3),
-            ev(Some("msg_b"), Some("req_2"), 998), // dup; removed
+            ev(Some("msg_b"), Some("req_2"), 998), // updated usage
         ];
         dedup_events(&mut events);
         let outputs: Vec<u64> = events.iter().map(|e| e.output_tokens).collect();
-        assert_eq!(outputs, vec![1, 2, 3]);
+        assert_eq!(outputs, vec![999, 998, 3]);
     }
 
     #[test]
@@ -148,11 +160,48 @@ mod tests {
         let mut events = vec![
             ev(Some("msg_a"), Some("req_1"), 100),
             ev(None, None, 200),
-            ev(Some("msg_a"), Some("req_1"), 300), // dup; removed
+            ev(Some("msg_a"), Some("req_1"), 300), // updated usage
             ev(None, None, 400),                   // kept (no key)
         ];
         dedup_events(&mut events);
         let outputs: Vec<u64> = events.iter().map(|e| e.output_tokens).collect();
-        assert_eq!(outputs, vec![100, 200, 400]);
+        assert_eq!(outputs, vec![300, 200, 400]);
+    }
+
+    #[test]
+    fn completed_record_wins_in_either_file_order_without_summing_counters() {
+        let mut partial = ev(Some("msg"), Some("req"), 7);
+        partial.input_tokens = 2;
+        partial.cache_creation_input_tokens = 55_379;
+        let mut complete = partial.clone();
+        complete.output_tokens = 206;
+        complete.ts += chrono::Duration::seconds(1);
+        // Even a later copy of the partial record cannot replace completed usage.
+        partial.ts += chrono::Duration::seconds(2);
+        for mut events in [
+            vec![partial.clone(), complete.clone(), partial.clone()],
+            vec![complete.clone(), partial.clone(), complete.clone()],
+        ] {
+            dedup_events(&mut events);
+            assert_eq!(events, vec![complete.clone()]);
+            dedup_events(&mut events);
+            assert_eq!(events, vec![complete.clone()], "dedup is idempotent");
+        }
+    }
+
+    #[test]
+    fn equal_output_uses_latest_record_as_a_whole() {
+        let older = ev(Some("msg"), Some("req"), 100);
+        let mut newer = older.clone();
+        newer.ts += chrono::Duration::seconds(1);
+        newer.input_tokens = 2;
+        newer.cache_read_input_tokens = 80;
+        for mut events in [
+            vec![older.clone(), newer.clone()],
+            vec![newer.clone(), older],
+        ] {
+            dedup_events(&mut events);
+            assert_eq!(events, vec![newer.clone()]);
+        }
     }
 }

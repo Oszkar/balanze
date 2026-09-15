@@ -53,8 +53,7 @@
       <BurnIndicator tokensPerMin={snapshot.claude_jsonl?.recent_burn_tokens_per_min ?? null} withLeverage={activeView === 'cards'} />
       {#if activeView === 'cards'}
         <LeverageBox
-          totalMicroUsd={snapshot.anthropic_api_cost?.total_micro_usd ?? 0}
-          eventCount={snapshot.anthropic_api_cost?.total_event_count ?? 0}
+          cost={snapshot.anthropic_api_cost}
           error={snapshot.anthropic_api_cost_error ?? snapshot.claude_jsonl_error}
         />
       {/if}
