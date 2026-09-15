@@ -470,7 +470,7 @@ fn scan_incremental(roots: &[PathBuf], state: &mut ScanState) -> ScanResult {
     state.dirty |= files_changed;
     if state.dirty {
         // Preserve the walker's newest-first order for the normal path so the
-        // existing first-wins dedup behavior stays stable. Contributions retained
+        // first-appearance ordering stays stable after dedup. Contributions retained
         // from a temporarily unreadable root follow in deterministic path order.
         let mut emitted = HashSet::new();
         let mut events = Vec::new();
@@ -746,6 +746,41 @@ mod tests {
                 .iter()
                 .all(|event| event.message_id.as_deref() != Some("msg_old"))
         );
+    }
+
+    #[test]
+    fn appended_completion_replaces_partial_usage_even_with_cross_file_copies() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let copy = dir.path().join("copy.jsonl");
+        let partial = assistant_line("msg_shared", "req_shared", 7);
+        std::fs::write(&path, &partial).unwrap();
+        std::fs::write(&copy, &partial).unwrap();
+        let mut state = ScanState::new();
+        assert_eq!(scanned_events(dir.path(), &mut state)[0].output_tokens, 7);
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(assistant_line("msg_shared", "req_shared", 206).as_bytes())
+            .unwrap();
+        // The copied partial record is in the newest file in walker order.
+        advance_mtime(&copy);
+        let updated = scanned_events(dir.path(), &mut state);
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].input_tokens, 1);
+        assert_eq!(updated[0].output_tokens, 206);
+        assert_eq!(updated, scanned_events(dir.path(), &mut ScanState::new()));
+
+        // Removing the file that owned the completion must also remove its
+        // contribution; dedup cannot hold onto an unowned historical maximum.
+        std::fs::remove_file(&path).unwrap();
+        let remaining = scanned_events(dir.path(), &mut state);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].output_tokens, 7);
     }
 
     #[test]

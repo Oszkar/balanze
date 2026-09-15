@@ -209,17 +209,16 @@ fn full_pipeline_populates_anthropic_api_cost_in_snapshot() {
 
     // Spot-check structure: the fixture has 4 raw JSONL lines - 3 distinct
     // assistant messages (sonnet-4-6 ×2, haiku-4-5 ×1) plus 1 line that
-    // duplicates msg_fixture_001's (message_id, request_id) with inflated
-    // tokens. `load_fixture_events` runs `dedup_events`, so the pipeline
-    // must see exactly 3: a `== 3` here now genuinely exercises dedup (a
-    // regression that skipped it would yield 4 and the huge dup tokens
-    // would also blow up total_micro_usd). Both surviving models are in
-    // the bundled price table → 2 per_model rows, zero skipped.
+    // completes msg_fixture_001's partial usage (7 -> 100 output tokens).
+    // The pipeline must price the completed record once: keeping the partial
+    // record loses output, while summing both duplicates input and output.
+    // Both surviving models are in the bundled price table.
     assert_eq!(
         saved.total_event_count, 3,
         "dedup must collapse the 4 raw lines (1 duplicate) to 3 events"
     );
     assert_eq!(saved.unparsed_event_count, 0, "no empty-model events");
+    assert_eq!(saved.total_micro_usd, 20_390, "completed usage priced once");
     assert_eq!(saved.per_model.len(), 2, "2 distinct known models");
     assert!(
         saved.skipped_models.is_empty(),

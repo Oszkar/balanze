@@ -1,11 +1,13 @@
 {
   "_meta": {
     "source": "https://github.com/BerriAI/litellm",
-    "commit": "88e03e548716a45284597edf2b7f47a7e6a66d5f",
-    "fetched_at": "2026-07-01",
+    "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+    "fetched_at": "2026-09-16",
     "source_file": "model_prices_and_context_window.json",
     "filter": "bare claude-* keys, anthropic provider only (no vendor prefix, no slashes, no Bedrock -v1:0 variants)",
-    "license": "MIT (see LICENSE-LITELLM)"
+    "license": "MIT (see LICENSE-LITELLM)",
+    "verified_against": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "verification_note": "Current Opus, Sonnet, Haiku, Fable and Mythos rates checked against Anthropic; cache creation uses the 5-minute rate."
   },
   "claude-3-7-sonnet-20250219": {
     "input_cost_per_token": 3E-06,
@@ -61,6 +63,15 @@
     "max_output_tokens": 128000,
     "litellm_provider": "anthropic"
   },
+  "claude-fable-5-1": {
+    "input_cost_per_token": 1E-05,
+    "output_cost_per_token": 5E-05,
+    "cache_creation_input_token_cost": 1.25E-05,
+    "cache_read_input_token_cost": 2.5E-07,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "litellm_provider": "anthropic"
+  },
   "claude-haiku-4-5": {
     "input_cost_per_token": 1E-06,
     "output_cost_per_token": 5E-06,
@@ -77,6 +88,33 @@
     "cache_read_input_token_cost": 1E-07,
     "max_input_tokens": 200000,
     "max_output_tokens": 64000,
+    "litellm_provider": "anthropic"
+  },
+  "claude-mythos-5": {
+    "input_cost_per_token": 1E-05,
+    "output_cost_per_token": 5E-05,
+    "cache_creation_input_token_cost": 1.25E-05,
+    "cache_read_input_token_cost": 1E-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "litellm_provider": "anthropic"
+  },
+  "claude-mythos-5-1": {
+    "input_cost_per_token": 1E-05,
+    "output_cost_per_token": 5E-05,
+    "cache_creation_input_token_cost": 1.25E-05,
+    "cache_read_input_token_cost": 2.5E-07,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "litellm_provider": "anthropic"
+  },
+  "claude-mythos-preview": {
+    "input_cost_per_token": 1E-05,
+    "output_cost_per_token": 5E-05,
+    "cache_creation_input_token_cost": 1.25E-05,
+    "cache_read_input_token_cost": 1E-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
     "litellm_provider": "anthropic"
   },
   "claude-opus-4-1": {
@@ -169,6 +207,15 @@
     "max_output_tokens": 128000,
     "litellm_provider": "anthropic"
   },
+  "claude-opus-5": {
+    "input_cost_per_token": 5E-06,
+    "output_cost_per_token": 2.5E-05,
+    "cache_creation_input_token_cost": 6.25E-06,
+    "cache_read_input_token_cost": 5E-07,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "litellm_provider": "anthropic"
+  },
   "claude-sonnet-4-20250514": {
     "input_cost_per_token": 3E-06,
     "output_cost_per_token": 1.5E-05,
@@ -202,14 +249,14 @@
     "cache_creation_input_token_cost": 3.75E-06,
     "cache_read_input_token_cost": 3E-07,
     "max_input_tokens": 1000000,
-    "max_output_tokens": 64000,
+    "max_output_tokens": 128000,
     "litellm_provider": "anthropic"
   },
   "claude-sonnet-5": {
-    "input_cost_per_token": 3E-06,
-    "output_cost_per_token": 1.5E-05,
-    "cache_creation_input_token_cost": 3.75E-06,
-    "cache_read_input_token_cost": 3E-07,
+    "input_cost_per_token": 2E-06,
+    "output_cost_per_token": 1E-05,
+    "cache_creation_input_token_cost": 2.5E-06,
+    "cache_read_input_token_cost": 2E-07,
     "max_input_tokens": 1000000,
     "max_output_tokens": 128000,
     "litellm_provider": "anthropic"

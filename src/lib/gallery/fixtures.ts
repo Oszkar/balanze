@@ -41,7 +41,11 @@ export function baseSnapshot(): Snapshot {
     },
     claude_jsonl_error: null,
     anthropic_api_cost: {
-      per_model: [],
+      per_model: [{
+        model: 'claude-sonnet-5', event_count: 340,
+        input_micro_usd: 20_000_000, output_micro_usd: 27_300_000,
+        cache_creation_micro_usd: 0, cache_read_micro_usd: 0, total_micro_usd: 47_300_000,
+      }],
       total_micro_usd: 47_300_000, // ~$47.30 of subscription leverage
       skipped_models: [],
       total_event_count: 340,
@@ -250,6 +254,29 @@ export interface GalleryState {
   };
 }
 
+/** Coverage examples use real Cost invariants, including a priced zero. */
+function leverageCoverage(kind: 'partial' | 'unknown' | 'missing' | 'zero'): Snapshot {
+  const s = baseSnapshot();
+  const cost = s.anthropic_api_cost!;
+  if (kind === 'partial') {
+    cost.total_event_count = 400;
+    cost.skipped_models = ['claude-future-model'];
+    cost.unparsed_event_count = 2;
+  } else if (kind === 'unknown' || kind === 'missing') {
+    cost.per_model = [];
+    cost.total_micro_usd = 0;
+    cost.total_event_count = 10;
+    cost.skipped_models = kind === 'unknown' ? ['claude-future-model'] : [];
+    cost.unparsed_event_count = kind === 'missing' ? 10 : 0;
+  } else {
+    cost.total_micro_usd = 0;
+    cost.per_model[0].input_micro_usd = 0;
+    cost.per_model[0].output_micro_usd = 0;
+    cost.per_model[0].total_micro_usd = 0;
+  }
+  return s;
+}
+
 export const GALLERY_STATES: GalleryState[] = [
   { label: 'Grid - two providers', view: 'grid', openaiEnabled: true, snapshot: baseSnapshot() },
   { label: 'Grid - cold start (quota loading)', view: 'grid', openaiEnabled: true, snapshot: coldStart() },
@@ -270,6 +297,10 @@ export const GALLERY_STATES: GalleryState[] = [
   { label: 'Grid - statusline pace', view: 'grid', openaiEnabled: true, snapshot: statuslineThreeWindows() },
 
   { label: 'Cards - two providers', view: 'cards', openaiEnabled: true, snapshot: baseSnapshot() },
+  { label: 'Cards - partial pricing', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('partial') },
+  { label: 'Cards - unknown model pricing', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('unknown') },
+  { label: 'Cards - missing model names', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('missing') },
+  { label: 'Cards - priced zero', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('zero') },
   { label: 'Cards - Anthropic only', view: 'cards', openaiEnabled: false, snapshot: singleProvider() },
   { label: 'Cards - Codex stale window', view: 'cards', openaiEnabled: true, snapshot: codexStale() },
   { label: 'Cards - overage over limit', view: 'cards', openaiEnabled: true, snapshot: overageOverLimit() },

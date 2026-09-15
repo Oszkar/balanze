@@ -7,6 +7,34 @@ import { test, expect } from '@playwright/test';
 // skeleton's pulse does not flap the baseline.
 const FIXED = new Date('2026-01-01T12:00:00Z');
 
+test('leverage distinguishes partial, unpriced, and zero-cost usage', async ({ page }) => {
+  await page.clock.setFixedTime(FIXED);
+  await page.goto('/gallery.html?theme=light', { waitUntil: 'domcontentloaded' });
+  const leverage = (label: string) => page.locator('figure.frame').filter({
+    has: page.getByText(label, { exact: true }),
+  }).locator('.lev');
+
+  const full = leverage('Cards - two providers');
+  await expect(full.locator('.val')).toHaveText('~$47.30');
+  await expect(full.locator('.coverage')).toHaveCount(0);
+  const partial = leverage('Cards - partial pricing');
+  await expect(partial.locator('.val')).toHaveText('~$47.30');
+  await expect(partial).toContainText('Partial estimate · 340 of 400 events priced');
+  await expect(partial).toContainText('Missing prices: claude-future-model');
+  await expect(partial).toContainText('Missing model name: 2 events');
+  const unknown = leverage('Cards - unknown model pricing');
+  await expect(unknown.locator('.val')).toHaveText('Unavailable');
+  await expect(unknown).toContainText('No priced usage · 0 of 10 events priced');
+  await expect(unknown).toContainText('Missing prices: claude-future-model');
+  const missing = leverage('Cards - missing model names');
+  await expect(missing.locator('.val')).toHaveText('Unavailable');
+  await expect(missing).toContainText('Missing model name: 10 events');
+  await expect(missing).not.toContainText('Missing prices:');
+  const zero = leverage('Cards - priced zero');
+  await expect(zero.locator('.val')).toHaveText('~$0.00');
+  await expect(zero.locator('.coverage')).toHaveCount(0);
+});
+
 for (const theme of ['light', 'dark'] as const) {
   test(`gallery frames - ${theme}`, async ({ page }) => {
     // Pin Date (for the fixtures' module-load `now` and the "Xs ago" text)

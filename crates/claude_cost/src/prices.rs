@@ -54,7 +54,7 @@ pub struct ModelPrices {
 /// table, update both the data filename and this line. The build script
 /// validates the filename pattern but cannot rewrite this `include_str!`
 /// because `include_str!` requires a string literal at parse time.
-const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-88e03e5-20260701.json");
+const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-c8114ba-20260916.json");
 
 /// Load the compile-time-embedded vendored price table.
 ///
@@ -216,17 +216,39 @@ mod tests {
 
     #[test]
     fn load_bundled_prices_has_expected_values_for_sonnet_5() {
-        // Sourced from litellm's bare `claude-sonnet-5` entry (added 2026-06-30,
-        // commit a126cdf5b793) - standard post-introductory pricing, matching
-        // claude-sonnet-4-6's rate. Does not reflect Anthropic's $2/$10-per-M
-        // introductory price in effect through 2026-08-31: neither litellm's
-        // table nor `ModelPrices` has a time-boundary concept.
+        // Anthropic made the introductory rate permanent; the scheduled
+        // September increase was cancelled. Cache writes here use the 5m rate.
         let table = load_bundled_prices().unwrap();
         let prices = table.models.get("claude-sonnet-5").unwrap();
-        assert_eq!(prices.input_nano_per_token, 3000);
-        assert_eq!(prices.output_nano_per_token, 15000);
-        assert_eq!(prices.cache_creation_nano_per_token, Some(3750));
-        assert_eq!(prices.cache_read_nano_per_token, Some(300));
+        assert_eq!(prices.input_nano_per_token, 2000);
+        assert_eq!(prices.output_nano_per_token, 10000);
+        assert_eq!(prices.cache_creation_nano_per_token, Some(2500));
+        assert_eq!(prices.cache_read_nano_per_token, Some(200));
+    }
+
+    #[test]
+    fn bundled_prices_cover_current_opus_fable_and_mythos_rates() {
+        // USD per million tokens from Anthropic's published pricing, expressed
+        // as nano-USD/token. In particular, 5.1 cache reads are 0.025x input.
+        let table = load_bundled_prices().unwrap();
+        for (model, input, output, write, read) in [
+            ("claude-opus-5", 5000, 25000, 6250, 500),
+            ("claude-fable-5", 10000, 50000, 12500, 1000),
+            ("claude-mythos-5", 10000, 50000, 12500, 1000),
+            ("claude-fable-5-1", 10000, 50000, 12500, 250),
+            ("claude-mythos-5-1", 10000, 50000, 12500, 250),
+        ] {
+            assert_eq!(
+                table.models.get(model),
+                Some(&ModelPrices {
+                    input_nano_per_token: input,
+                    output_nano_per_token: output,
+                    cache_creation_nano_per_token: Some(write),
+                    cache_read_nano_per_token: Some(read),
+                }),
+                "{model}"
+            );
+        }
     }
 
     #[test]
