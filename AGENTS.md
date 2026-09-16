@@ -113,6 +113,10 @@ Secrets in scope: user-supplied OpenAI API keys, plus read access to Claude Code
 
 ## 4. Architecture
 
+Claude cache-write accounting retains the aggregate token count plus an optional 5-minute/1-hour breakdown in `UsageEvent`. The parser validates their sum; token-cap math counts the aggregate once. Cost math uses the bundled 5-minute price and the documented 2x base-input price for 1-hour writes, falling back to 5-minute pricing for legacy records.
+
+Anthropic quota freshness uses source timestamps (900-second inclusive age ceiling, no future timestamps), passed resets (`now > resets_at`), and source errors. Prefer fresh statusline, then fresh OAuth; retain stale OAuth when available, otherwise stale statusline, with a stale label and no pace. Idle refresh records degradation through the existing error slots without advancing source timestamps. Rust and TypeScript presentation policies must agree.
+
 One-shot `status` applies the live provider gates before source I/O: `anthropic_enabled` gates OAuth only, `codex_enabled` gates Codex reads, and `openai_enabled` or a non-empty `BALANZE_OPENAI_KEY` gates OpenAI billing. Local Claude JSONL and statusline reads remain enabled. The composer shares statusline freshness, quota selection, and pace derivation with `state_coordinator`; missing OAuth credentials use the existing neutral unavailable marker. Export's explicit historical reads remain independent of status gates.
 
 Statusline replacement preserves the displaced-command backup when a failed write may have published. Rollback is allowed only after rereading Claude settings confirms the original command is still installed; a reread failure retains the backup and surfaces the write error.

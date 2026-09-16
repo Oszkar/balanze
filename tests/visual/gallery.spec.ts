@@ -7,6 +7,39 @@ import { test, expect } from '@playwright/test';
 // skeleton's pulse does not flap the baseline.
 const FIXED = new Date('2026-01-01T12:00:00Z');
 
+for (const theme of ['light', 'dark'] as const) {
+  test(`Anthropic quota freshness - ${theme}`, async ({ page }) => {
+    await page.clock.setFixedTime(FIXED);
+    await page.goto(`/gallery.html?theme=${theme}`, { waitUntil: 'domcontentloaded' });
+    const frame = (label: string) => page.locator('figure.frame').filter({ has: page.getByText(label, { exact: true }) });
+    for (const scenario of ['aged quota', 'passed reset']) {
+      const grid = frame(`Grid - Anthropic ${scenario}`).locator('.qcell').first();
+      await expect(grid).toContainText('stale');
+      await expect(grid.locator('.tick')).toHaveCount(0);
+      const cards = frame(`Cards - Anthropic ${scenario}`).locator('.pcard').first();
+      const bars = await cards.locator('.brow').count();
+      expect(bars).toBeGreaterThan(0);
+      await expect(cards.locator('.sfb')).toHaveCount(bars);
+      await expect(cards.locator('.tick')).toHaveCount(0);
+    }
+    const fallback = frame('Grid - Anthropic statusline fallback').locator('.qcell').first();
+    await expect(fallback).not.toContainText('stale');
+    await expect(fallback.locator('.tick')).toHaveCount(1);
+    await expect(fallback).toContainText('62%');
+    await page.evaluate(() => document.fonts.ready);
+    // The SVG logo's intrinsic width changes the adjacent wordmark position
+    // once decoded; font readiness alone does not stabilize the header.
+    await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
+    for (const view of ['Grid', 'Cards']) {
+      for (const scenario of ['aged quota', 'passed reset', 'statusline fallback']) {
+        const label = `${view} - Anthropic ${scenario}`;
+        const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        await expect(frame(label)).toHaveScreenshot(`${slug}-${theme}.png`);
+      }
+    }
+  });
+}
+
 test('leverage distinguishes partial, unpriced, and zero-cost usage', async ({ page }) => {
   await page.clock.setFixedTime(FIXED);
   await page.goto('/gallery.html?theme=light', { waitUntil: 'domcontentloaded' });

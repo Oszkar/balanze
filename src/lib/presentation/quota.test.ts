@@ -16,6 +16,22 @@ const base: Snapshot = {
 };
 
 describe('quota', () => {
+  it('checks OAuth age, reset expiry and errors and suppresses stale pace', () => {
+    for (const [stamp, reset, error, stale] of [
+      ['2026-06-03T11:45:00Z', '2026-06-03T12:00:00Z', null, false],
+      ['2026-06-03T11:44:59.999Z', '2026-06-03T14:00:00Z', null, true],
+      ['2026-06-03T12:00:00.001Z', '2026-06-03T14:00:00Z', null, true],
+      ['2026-06-03T12:00:00Z', '2026-06-03T11:59:59.999Z', null, true],
+      ['2026-06-03T12:00:00Z', '2026-06-03T14:00:00Z', 'fetch failed', true],
+    ] as const) {
+      const s: Snapshot = { ...base, claude_oauth_error: error,
+        claude_oauth: { cadences: [{ key: 'five_hour', display_label: '5h', utilization_percent: 10, resets_at: reset }], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: stamp },
+        pace: [{ key: 'five_hour', used_fraction: 0.1, elapsed_fraction: 0.4, ratio: 0.25 }],
+      };
+      expect(anthropicSourceView(s)?.stale, stamp).toBe(stale);
+      expect(matchingAnthropicPace(s).length).toBe(stale ? 0 : 1);
+    }
+  });
   it('keeps Grid and Cards on the cross-surface rounded threshold table', () => {
     // Both frontend views receive their tone from quotaTone. These cases match
     // the tray, CLI, TUI, and statusline parity tables at every rounded cutoff.
@@ -150,9 +166,8 @@ describe('quota', () => {
     expect(q.source).toBe('oauth');
     expect(q.headline.pct).toBe(10);
   });
-  it('returns null when statusline is stale and no oauth is present', () => {
-    // Frozen statusline, OAuth absent (the 429 cold-start case): show nothing
-    // live rather than a stale reading. The caller renders the stale/error state.
+  it('retains labeled stale statusline when no oauth is present', () => {
+    // Retain the last known value, explicitly stale, with no derived pace.
     const s: Snapshot = { ...base,
       fetched_at: '2026-06-03T12:00:00Z',
       claude_statusline: { schema_version: 2, captured_at: '2026-06-01T12:00:00Z', // 48h stale
@@ -160,7 +175,9 @@ describe('quota', () => {
           { key: 'five_hour', label: '5-hour', used_percent: 62, resets_at: '2026-06-03T14:41:00Z' },
         ] }, session_cost_micro_usd: null, claude_code_version: null } },
     };
-    expect(anthropicQuota(s)).toBeNull();
+    expect(anthropicQuota(s)?.headline.pct).toBe(62);
+    expect(anthropicSourceView(s)?.stale).toBe(true);
+    expect(matchingAnthropicPace(s)).toEqual([]);
   });
   it('codex elapsed fraction', () => {
     const f = codexElapsedFraction({ resets_at: '2026-06-03T13:00:00Z', window_duration_minutes: 120 }, '2026-06-03T12:00:00Z');
@@ -304,7 +321,7 @@ describe('quota', () => {
               key: w.key,
               label: w.key,
               used_percent: w.percent,
-              resets_at: resetsAt,
+              resets_at: 'resetsAt' in w ? w.resetsAt : resetsAt,
             })) },
             session_cost_micro_usd: null,
             claude_code_version: null,
@@ -316,13 +333,13 @@ describe('quota', () => {
             key: w.key,
             display_label: w.key,
             utilization_percent: w.percent,
-            resets_at: resetsAt,
+            resets_at: 'resetsAt' in w ? w.resetsAt : resetsAt,
           })),
           extra_usage: null,
           subscription_type: null,
           rate_limit_tier: null,
           org_uuid: null,
-          fetched_at: c.fetchedAt,
+          fetched_at: c.oauth.fetchedAt ?? c.fetchedAt,
         } : null,
         claude_oauth_error: c.oauth?.error ? 'refresh failed' : null,
       };

@@ -131,10 +131,23 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
             event.output_tokens,
             Some(model_prices.output_nano_per_token),
         );
-        let cache_creation_micro = component_micro(
-            event.cache_creation_input_tokens,
-            model_prices.cache_creation_nano_per_token,
-        );
+        let cache_creation_micro = if let Some(split) = event.cache_creation {
+            // Anthropic's standard 1-hour write price is 2x base input.
+            // Sum both durations in nano-USD before rounding the component,
+            // preserving precision for sub-micro writes and using i128 so
+            // neither the multiplier nor large token counts can overflow.
+            let five_rate = model_prices.cache_creation_nano_per_token.unwrap_or(0) as i128;
+            let hour_rate = model_prices.input_nano_per_token as i128 * 2;
+            nano_to_micro(
+                split.ephemeral_5m_input_tokens as i128 * five_rate
+                    + split.ephemeral_1h_input_tokens as i128 * hour_rate,
+            )
+        } else {
+            component_micro(
+                event.cache_creation_input_tokens,
+                model_prices.cache_creation_nano_per_token,
+            )
+        };
         let cache_read_micro = component_micro(
             event.cache_read_input_tokens,
             model_prices.cache_read_nano_per_token,
@@ -196,6 +209,10 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
 fn component_micro(tokens: u64, nano_per_token: Option<i64>) -> i64 {
     let nano = nano_per_token.unwrap_or(0);
     let product: i128 = (tokens as i128).saturating_mul(nano as i128);
+    nano_to_micro(product)
+}
+
+fn nano_to_micro(product: i128) -> i64 {
     let micro_i128 = product.saturating_add(500) / 1000;
     if micro_i128 > i64::MAX as i128 {
         i64::MAX
@@ -214,6 +231,85 @@ mod tests {
 
     use crate::prices::ModelPrices;
 
+    #[test]
+    fn cache_writes_use_each_duration_rate_and_preserve_legacy_fallback() {
+        for (five, hour, expected) in [
+            (1_000_000, 0, 3_750_000),
+            (0, 1_000_000, 6_000_000),
+            (1_000_000, 1_000_000, 9_750_000),
+        ] {
+            let legacy = event("claude-sonnet-4-6", 0, 0, five + hour, 0);
+            let mut serialized = serde_json::to_value(&legacy).unwrap();
+            serialized["cache_creation"] = serde_json::json!({"ephemeral_5m_input_tokens": five, "ephemeral_1h_input_tokens": hour});
+            let detailed: UsageEvent = serde_json::from_value(serialized).unwrap();
+            let cost = compute_cost(&[detailed], &fixture_prices());
+            assert_eq!(cost.total_micro_usd, expected);
+            assert_eq!(cost.per_model[0].cache_creation_micro_usd, expected);
+            assert_eq!(
+                compute_cost(&[legacy], &fixture_prices()).total_micro_usd,
+                ((five + hour) * 3750 / 1000) as i64
+            );
+        }
+    }
+
+    #[test]
+    fn one_hour_writes_do_not_require_a_five_minute_price() {
+        let mut e = event("claude-3-haiku-no-cache", 0, 0, 1_000_000, 0);
+        e.cache_creation = Some(claude_parser::CacheCreation {
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 1_000_000,
+        });
+        let cost = compute_cost(&[e], &fixture_prices());
+        assert_eq!(cost.per_model[0].cache_creation_micro_usd, 500_000);
+        assert_eq!(cost.total_micro_usd, 500_000);
+    }
+
+    #[test]
+    fn cache_duration_math_rounds_once_and_saturates() {
+        let mut prices = fixture_prices();
+        let price = prices.models.get_mut("claude-sonnet-4-6").unwrap();
+        price.input_nano_per_token = 125;
+        price.cache_creation_nano_per_token = Some(156);
+        let mut e = event("claude-sonnet-4-6", 0, 0, 3, 0);
+        e.cache_creation = Some(claude_parser::CacheCreation {
+            ephemeral_5m_input_tokens: 2,
+            ephemeral_1h_input_tokens: 1,
+        });
+        assert_eq!(
+            compute_cost(&[e.clone()], &prices).total_micro_usd,
+            1,
+            "312 + 250 nano rounds once to 1 micro"
+        );
+        e.cache_creation_input_tokens = u64::MAX;
+        e.cache_creation = Some(claude_parser::CacheCreation {
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: u64::MAX,
+        });
+        assert_eq!(
+            compute_cost(&[e], &fixture_prices()).total_micro_usd,
+            i64::MAX
+        );
+    }
+
+    #[test]
+    fn parsed_completed_record_carries_cache_duration_through_dedup_and_cost() {
+        let partial = r#"{"type":"assistant","timestamp":"2026-09-16T00:00:00Z","requestId":"r","message":{"id":"m","model":"claude-sonnet-4-6","usage":{"output_tokens":1,"cache_creation_input_tokens":1000}}}"#;
+        let complete = r#"{"type":"assistant","timestamp":"2026-09-16T00:00:01Z","requestId":"r","message":{"id":"m","model":"claude-sonnet-4-6","usage":{"output_tokens":10,"cache_creation_input_tokens":1000,"cache_creation":{"ephemeral_5m_input_tokens":400,"ephemeral_1h_input_tokens":600}}}}"#;
+        for doc in [
+            format!("{partial}\n{complete}"),
+            format!("{complete}\n{partial}"),
+        ] {
+            let mut events = claude_parser::parse_str(&doc).unwrap();
+            claude_parser::dedup_events(&mut events);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].total_tokens(), 1010);
+            assert_eq!(
+                compute_cost(&events, &fixture_prices()).total_micro_usd,
+                5250
+            );
+        }
+    }
+
     fn event(
         model: &str,
         input: u64,
@@ -229,6 +325,7 @@ mod tests {
             input_tokens: input,
             output_tokens: output,
             cache_creation_input_tokens: cache_creation,
+            cache_creation: None,
             cache_read_input_tokens: cache_read,
             cost_micro_usd: None,
             source: DataSource::Jsonl,

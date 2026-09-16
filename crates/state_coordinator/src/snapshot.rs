@@ -82,29 +82,23 @@ pub(crate) fn pace_for_statusline(rate_limits: &RateLimits, now: DateTime<Utc>) 
         .collect()
 }
 
-/// Derive pace from fresh statusline windows when a known family is present,
-/// otherwise from OAuth. Shared by one-shot and live composition.
+/// Derive pace only from the selected fresh quota source. Unknown window
+/// families produce no pace, rather than borrowing it from another source.
 pub fn pace_for_snapshot_at(
     snapshot: &Snapshot,
     now: chrono::DateTime<Utc>,
 ) -> Vec<crate::snapshot::WindowPace> {
-    if snapshot.statusline_eligible_at(now)
-        && let Some(rate_limits) = snapshot
-            .claude_statusline
-            .as_ref()
-            .and_then(|sl| sl.payload.rate_limits.as_ref())
-    {
-        let statusline_pace = pace_for_statusline(rate_limits, now);
-        if !statusline_pace.is_empty() {
-            return statusline_pace;
-        }
+    match snapshot.anthropic_quota_source_at(now) {
+        Some(AnthropicQuotaSource::Statusline {
+            rate_limits,
+            stale: false,
+        }) => pace_for_statusline(rate_limits, now),
+        Some(AnthropicQuotaSource::OAuth {
+            snapshot,
+            stale: false,
+        }) => pace_for_oauth(snapshot, now),
+        _ => Vec::new(),
     }
-
-    snapshot
-        .claude_oauth
-        .as_ref()
-        .map(|o| pace_for_oauth(o, now))
-        .unwrap_or_default()
 }
 
 /// Classify statusline timestamps identically in one-shot and live ingestion.
@@ -160,7 +154,8 @@ pub fn statusline_freshness_error(
 /// persistence work, where the on-disk format is actually designed.
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 3;
 
-/// Staleness ceiling for the statusLine snapshot, in seconds. Producer writes
+/// Inclusive source-age ceiling for both Anthropic quota feeds, in seconds.
+/// The statusLine producer writes
 /// `captured_at` on every `balanze-cli statusline` invocation; when the elapsed
 /// time since that stamp exceeds this bound the payload is no longer trustworthy
 /// as live (e.g. another tool owns the single `statusLine` slot so Balanze's
@@ -249,15 +244,14 @@ pub struct Snapshot {
     /// The payload is retained (stale-with-indicator, AGENTS.md §3.2) so consumers
     /// can render it with a marker rather than have it vanish.
     pub claude_statusline_error: Option<String>,
-    /// Per-window pace (used vs elapsed) derived from a fresh statusline source
-    /// when it has a known cadence family, otherwise from OAuth. Entries from
-    /// the two sources are never merged.
+    /// Per-window pace (used vs elapsed) from the selected fresh quota source.
+    /// Unknown families and stale sources yield no pace; sources are never merged.
     pub pace: Vec<WindowPace>,
 }
 
 impl Snapshot {
-    /// Whether the retained statusline payload is safe to present as current.
-    /// Future-dated payloads are rejected along with old ones.
+    /// Whether the retained statusline timestamp is eligible. Quota consumers
+    /// must use `anthropic_quota_source` to also check resets and reader errors.
     pub fn statusline_fresh(&self) -> bool {
         self.statusline_eligible_at(self.fetched_at)
     }
@@ -292,24 +286,68 @@ impl Snapshot {
     /// should render. An empty/missing statusline rate-limit block is not a
     /// quota source, so OAuth remains visible in that case.
     pub fn anthropic_quota_source(&self) -> Option<AnthropicQuotaSource<'_>> {
-        if self.statusline_fresh()
-            && let Some(rate_limits) = self
-                .claude_statusline
-                .as_ref()
-                .and_then(|sl| sl.payload.rate_limits.as_ref())
-            && !rate_limits.windows.is_empty()
-        {
-            return Some(AnthropicQuotaSource::Statusline {
-                rate_limits,
-                stale: self.claude_statusline_error.is_some(),
-            });
-        }
-        self.claude_oauth
+        self.anthropic_quota_source_at(self.fetched_at)
+    }
+
+    /// Source selection at an explicit clock anchor, shared with pace derivation.
+    pub fn anthropic_quota_source_at(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Option<AnthropicQuotaSource<'_>> {
+        let statusline = self
+            .claude_statusline
             .as_ref()
+            .and_then(|sl| sl.payload.rate_limits.as_ref())
+            .filter(|rl| !rl.windows.is_empty())
+            .map(|rate_limits| AnthropicQuotaSource::Statusline {
+                rate_limits,
+                stale: self.claude_statusline_error.is_some()
+                    || self.statusline_quota_freshness_error(now).is_some(),
+            });
+        let oauth = self
+            .claude_oauth
+            .as_ref()
+            .filter(|o| !o.cadences.is_empty())
             .map(|snapshot| AnthropicQuotaSource::OAuth {
                 snapshot,
-                stale: self.claude_oauth_error.is_some(),
-            })
+                stale: self.claude_oauth_error.is_some()
+                    || self.oauth_quota_freshness_error(now).is_some(),
+            });
+        match (statusline, oauth) {
+            (Some(source @ AnthropicQuotaSource::Statusline { stale: false, .. }), _) => {
+                Some(source)
+            }
+            (_, Some(source)) => Some(source),
+            (source, None) => source,
+        }
+    }
+
+    pub(crate) fn statusline_quota_freshness_error(&self, now: DateTime<Utc>) -> Option<String> {
+        let sl = self.claude_statusline.as_ref()?;
+        statusline_freshness_error(sl.captured_at, now).or_else(|| {
+            sl.payload
+                .rate_limits
+                .as_ref()
+                .filter(|rl| rl.windows.iter().any(|w| now > w.resets_at))
+                .map(|_| "statusline quota window has reset; awaiting fresh usage".into())
+        })
+    }
+
+    pub(crate) fn oauth_quota_freshness_error(&self, now: DateTime<Utc>) -> Option<String> {
+        let oauth = self.claude_oauth.as_ref()?;
+        let age = now.signed_duration_since(oauth.fetched_at);
+        if age < Duration::zero() {
+            Some("OAuth quota is future-dated (clock skew?)".into())
+        } else if age > Duration::seconds(STATUSLINE_FRESHNESS_SECS) {
+            Some(format!(
+                "OAuth quota is stale ({} min old)",
+                age.num_minutes()
+            ))
+        } else if oauth.cadences.iter().any(|c| now > c.resets_at) {
+            Some("OAuth quota window has reset; awaiting fresh usage".into())
+        } else {
+            None
+        }
     }
 
     /// An empty snapshot stamped with `fetched_at = now`. Used at coordinator
@@ -556,7 +594,7 @@ mod tests {
         s.claude_statusline_error = Some("reader failed".to_string());
         assert!(matches!(
             s.anthropic_quota_source(),
-            Some(AnthropicQuotaSource::Statusline { stale: true, .. })
+            Some(AnthropicQuotaSource::OAuth { stale: false, .. })
         ));
         s.claude_statusline_error = Some("statusline payload is stale (16 min old)".to_string());
         assert!(matches!(
@@ -619,6 +657,62 @@ mod tests {
     }
 
     // --- pace_for_oauth ---
+
+    #[test]
+    fn oauth_freshness_uses_source_age_reset_and_errors() {
+        let now = fixture_now();
+        for (age_ms, reset_ms, error, stale) in [
+            (900_000, 1, false, false),
+            (900_001, 1, false, true),
+            (-1, 1, false, true),
+            (0, 0, false, false),
+            (0, -1, false, true),
+            (0, 1, true, true),
+        ] {
+            let mut s = Snapshot::empty(now);
+            let mut oauth = oauth_snapshot();
+            oauth.fetched_at = now - Duration::milliseconds(age_ms);
+            oauth.cadences[0].resets_at = now + Duration::milliseconds(reset_ms);
+            s.claude_oauth = Some(oauth);
+            s.claude_oauth_error = error.then(|| "fetch failed".into());
+            assert!(
+                matches!(s.anthropic_quota_source(), Some(AnthropicQuotaSource::OAuth { stale: actual, .. }) if actual == stale),
+                "age={age_ms}, reset={reset_ms}, error={error}"
+            );
+            assert_eq!(pace_for_snapshot_at(&s, now).is_empty(), stale);
+        }
+    }
+
+    #[test]
+    fn expired_statusline_yields_to_fresh_oauth_and_is_retained_without_it() {
+        let now = fixture_now();
+        let mut s = Snapshot::empty(now);
+        s.claude_statusline = Some(StatuslineFilePayload::new(
+            claude_statusline::StatuslineSnapshot {
+                rate_limits: Some(make_rate_limits(&[(
+                    "five_hour",
+                    62.0,
+                    now - Duration::milliseconds(1),
+                )])),
+                session_cost_micro_usd: None,
+                claude_code_version: None,
+                model_display_name: None,
+                context_used_percent: None,
+            },
+            now,
+        ));
+        s.claude_oauth = Some(oauth_snapshot());
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::OAuth { stale: false, .. })
+        ));
+        s.claude_oauth = None;
+        assert!(matches!(
+            s.anthropic_quota_source(),
+            Some(AnthropicQuotaSource::Statusline { stale: true, .. })
+        ));
+        assert!(pace_for_snapshot_at(&s, now).is_empty());
+    }
 
     /// Build a `ClaudeOAuthSnapshot` from a compact `(key, util_pct, resets_at)`
     /// tuple list. Keeps test bodies short; non-cadence fields are filled with

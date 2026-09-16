@@ -150,9 +150,28 @@ function codexStale(): Snapshot {
   return s;
 }
 
-/** OAuth quota with a stale statusline degrade -> the "fallback" stale label. */
+/** A stale statusline yields to fresh OAuth; the selected quota stays current. */
 function anthFallback(): Snapshot {
-  return clone(baseSnapshot()); // degrade is supplied via the frame's `degraded` map
+  const s = statuslineThreeWindows();
+  s.claude_oauth = baseSnapshot().claude_oauth;
+  if (s.claude_statusline) s.claude_statusline.captured_at = iso(-H);
+  s.claude_statusline_error = 'statusline payload is stale (60 min old)';
+  s.pace = baseSnapshot().pace;
+  return s;
+}
+
+function anthropicStale(kind: 'oauth-age' | 'statusline-reset'): Snapshot {
+  if (kind === 'oauth-age') {
+    const s = baseSnapshot();
+    if (s.claude_oauth) s.claude_oauth.fetched_at = iso(-H);
+    return s;
+  }
+  const s = statuslineThreeWindows();
+  s.claude_oauth = null;
+  if (s.claude_statusline?.payload.rate_limits) {
+    s.claude_statusline.payload.rate_limits.windows[0].resets_at = iso(-1);
+  }
+  return s;
 }
 
 /** Per-user API overage enabled -> the Anthropic billed cell shows spend. */
@@ -278,6 +297,8 @@ function leverageCoverage(kind: 'partial' | 'unknown' | 'missing' | 'zero'): Sna
 }
 
 export const GALLERY_STATES: GalleryState[] = [
+  { label: 'Grid - Anthropic aged quota', view: 'grid', openaiEnabled: true, snapshot: anthropicStale('oauth-age') },
+  { label: 'Grid - Anthropic passed reset', view: 'grid', openaiEnabled: true, snapshot: anthropicStale('statusline-reset') },
   { label: 'Grid - two providers', view: 'grid', openaiEnabled: true, snapshot: baseSnapshot() },
   { label: 'Grid - cold start (quota loading)', view: 'grid', openaiEnabled: true, snapshot: coldStart() },
   { label: 'Grid - Claude Code not detected', view: 'grid', openaiEnabled: false, snapshot: claudeNotDetected() },
@@ -296,6 +317,8 @@ export const GALLERY_STATES: GalleryState[] = [
   { label: 'Grid - overage over limit', view: 'grid', openaiEnabled: true, snapshot: overageOverLimit() },
   { label: 'Grid - statusline pace', view: 'grid', openaiEnabled: true, snapshot: statuslineThreeWindows() },
 
+  { label: 'Cards - Anthropic aged quota', view: 'cards', openaiEnabled: true, snapshot: anthropicStale('oauth-age') },
+  { label: 'Cards - Anthropic passed reset', view: 'cards', openaiEnabled: true, snapshot: anthropicStale('statusline-reset') },
   { label: 'Cards - two providers', view: 'cards', openaiEnabled: true, snapshot: baseSnapshot() },
   { label: 'Cards - partial pricing', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('partial') },
   { label: 'Cards - unknown model pricing', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('unknown') },

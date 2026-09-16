@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::types::{AccountType, DataSource, ParseError, Provider, UsageEvent};
+use crate::types::{AccountType, CacheCreation, DataSource, ParseError, Provider, UsageEvent};
 
 /// Raw deserialization target. Only the subset we care about is declared;
 /// everything else stays implicit so unrelated line types don't fail parsing.
@@ -29,7 +29,8 @@ struct RawUsage {
     #[serde(default)]
     output_tokens: u64,
     #[serde(default)]
-    cache_creation_input_tokens: u64,
+    cache_creation_input_tokens: Option<u64>,
+    cache_creation: Option<CacheCreation>,
     #[serde(default)]
     cache_read_input_tokens: u64,
 }
@@ -69,6 +70,29 @@ pub fn parse_line(line: &str, line_no: usize) -> Result<Option<UsageEvent>, Pars
         message: "assistant line missing top-level timestamp".into(),
     })?;
 
+    let cache_creation_input_tokens = match usage.cache_creation {
+        Some(split) => {
+            let total = split
+                .ephemeral_5m_input_tokens
+                .checked_add(split.ephemeral_1h_input_tokens)
+                .ok_or_else(|| ParseError::SchemaDrift {
+                    line: line_no,
+                    message: "cache-write breakdown overflows total".into(),
+                })?;
+            if usage
+                .cache_creation_input_tokens
+                .is_some_and(|aggregate| aggregate != total)
+            {
+                return Err(ParseError::SchemaDrift {
+                    line: line_no,
+                    message: "cache-write breakdown does not match total".into(),
+                });
+            }
+            total
+        }
+        None => usage.cache_creation_input_tokens.unwrap_or(0),
+    };
+
     Ok(Some(UsageEvent {
         ts,
         provider: Provider::Claude,
@@ -76,7 +100,8 @@ pub fn parse_line(line: &str, line_no: usize) -> Result<Option<UsageEvent>, Pars
         model: message.model.unwrap_or_default(),
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
-        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        cache_creation_input_tokens,
+        cache_creation: usage.cache_creation,
         cache_read_input_tokens: usage.cache_read_input_tokens,
         cost_micro_usd: None,
         source: DataSource::Jsonl,
@@ -140,6 +165,65 @@ pub fn parse_str_lossy(input: &str) -> LossyParse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preserves_cache_duration_breakdown_without_double_counting() {
+        let line = r#"{"type":"assistant","timestamp":"2026-09-16T00:00:00Z","message":{"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":300,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}}}}"#;
+        let event = parse_line(line, 1).unwrap().unwrap();
+        assert_eq!(event.total_tokens(), 330);
+        let serialized = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            serialized["cache_creation"]["ephemeral_5m_input_tokens"],
+            100
+        );
+        assert_eq!(
+            serialized["cache_creation"]["ephemeral_1h_input_tokens"],
+            200
+        );
+        assert_eq!(
+            serde_json::from_value::<UsageEvent>(serialized).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn inconsistent_cache_breakdown_is_schema_drift() {
+        let line = r#"{"type":"assistant","timestamp":"2026-09-16T00:00:00Z","message":{"usage":{"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}}}}"#;
+        assert!(matches!(
+            parse_line(line, 42),
+            Err(ParseError::SchemaDrift { line: 42, .. })
+        ));
+    }
+
+    #[test]
+    fn cache_breakdown_requires_complete_counts_and_checked_sum() {
+        for split in [
+            r#"{"ephemeral_5m_input_tokens":1}"#,
+            r#"{"ephemeral_5m_input_tokens":-1,"ephemeral_1h_input_tokens":2}"#,
+            r#"{"ephemeral_5m_input_tokens":18446744073709551615,"ephemeral_1h_input_tokens":1}"#,
+        ] {
+            let line = format!(
+                r#"{{"type":"assistant","timestamp":"2026-09-16T00:00:00Z","message":{{"usage":{{"cache_creation":{split}}}}}}}"#
+            );
+            assert!(matches!(
+                parse_line(&line, 1),
+                Err(ParseError::SchemaDrift { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn cache_breakdown_can_supply_total_and_legacy_events_still_deserialize() {
+        let line = r#"{"type":"assistant","timestamp":"2026-09-16T00:00:00Z","message":{"usage":{"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}}}}"#;
+        let event = parse_line(line, 1).unwrap().unwrap();
+        assert_eq!(event.cache_creation_input_tokens, 300);
+        assert_eq!(event.total_tokens(), 300);
+        let mut legacy = serde_json::to_value(&event).unwrap();
+        legacy.as_object_mut().unwrap().remove("cache_creation");
+        let legacy: UsageEvent = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.cache_creation.is_none());
+        assert_eq!(legacy.total_tokens(), 300);
+    }
 
     #[test]
     fn skips_non_assistant_lines() {

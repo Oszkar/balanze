@@ -277,7 +277,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 let now = Utc::now();
                 let derived_cost_error = apply_partial(state, partial, now);
                 state.snapshot.fetched_at = now;
-                let statusline_freshness_error = record_new_statusline_freshness_error(state, now);
+                let freshness_errors = record_new_quota_freshness_errors(state, now);
                 recompute_pace_at(state, now);
                 sink.on_snapshot(&state.snapshot);
                 // The JSONL-derived cost can fail (no price table) inside an
@@ -287,17 +287,28 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 if let Some(err) = derived_cost_error {
                     sink.on_degraded(Source::AnthropicApiCost, &err);
                 }
-                if let Some(err) = statusline_freshness_error {
-                    sink.on_degraded(Source::ClaudeStatusline, &err);
+                for (source, err) in freshness_errors {
+                    sink.on_degraded(source, &err);
                 }
             }
             Err(err) => {
+                let now = Utc::now();
+                // Age retained feeds at the same clock anchor as pace. The
+                // incoming failure takes precedence over a freshness diagnosis
+                // for that source, including its degraded notification.
+                let freshness_errors = record_new_quota_freshness_errors(state, now);
                 record_error(&mut state.snapshot, source, &err);
+                recompute_pace_at(state, now);
                 // Error slots are part of the durable Snapshot contract, but
-                // the data cells did not change. Publish only to durability;
+                // source values did not change; stale pace is removed. Publish to durability;
                 // presentation sinks receive the dedicated degraded event.
                 sink.on_snapshot_durable(&state.snapshot);
                 sink.on_degraded(source, &err);
+                for (other_source, freshness_error) in freshness_errors {
+                    if other_source != source {
+                        sink.on_degraded(other_source, &freshness_error);
+                    }
+                }
             }
         },
         StateMsg::Query(reply) => {
@@ -308,11 +319,14 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             // Re-notify with current state. Sinks that need to repaint will
             // do so; sinks that dedup against `last_painted` will no-op.
             let now = Utc::now();
-            let freshness_error = record_new_statusline_freshness_error(state, now);
+            let freshness_errors = record_new_quota_freshness_errors(state, now);
             recompute_pace_at(state, now);
+            if !freshness_errors.is_empty() {
+                sink.on_snapshot_durable(&state.snapshot);
+            }
             sink.on_refresh(&state.snapshot);
-            if let Some(err) = freshness_error {
-                sink.on_degraded(Source::ClaudeStatusline, &err);
+            for (source, err) in freshness_errors {
+                sink.on_degraded(source, &err);
             }
         }
         StateMsg::SettingsChanged {
@@ -341,11 +355,11 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             state.last_settings = Some(*s);
             state.active_generation = generation;
             let now = Utc::now();
-            let freshness_error = record_new_statusline_freshness_error(state, now);
+            let freshness_errors = record_new_quota_freshness_errors(state, now);
             recompute_pace_at(state, now);
             sink.on_snapshot(&state.snapshot);
-            if let Some(err) = freshness_error {
-                sink.on_degraded(Source::ClaudeStatusline, &err);
+            for (source, err) in freshness_errors {
+                sink.on_degraded(source, &err);
             }
             // The supervisor waits for this before it spawns the new pollers.
             // A dropped receiver means the caller went away after the state was
@@ -375,11 +389,11 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 // still emits its own degradation below.
                 record_oauth_unavailable(&mut state.snapshot, &reason);
                 let now = Utc::now();
-                let freshness_error = record_new_statusline_freshness_error(state, now);
+                let freshness_errors = record_new_quota_freshness_errors(state, now);
                 recompute_pace_at(state, now);
                 sink.on_snapshot(&state.snapshot);
-                if let Some(err) = freshness_error {
-                    sink.on_degraded(Source::ClaudeStatusline, &err);
+                for (source, err) in freshness_errors {
+                    sink.on_degraded(source, &err);
                 }
             }
             other => {
@@ -525,17 +539,25 @@ fn recompute_pace_at(state: &mut CoordinatorState, now: chrono::DateTime<Utc>) {
     state.snapshot.pace = pace_for_snapshot_at(&state.snapshot, now);
 }
 
-fn record_new_statusline_freshness_error(
+fn record_new_quota_freshness_errors(
     state: &mut CoordinatorState,
     now: chrono::DateTime<Utc>,
-) -> Option<String> {
-    if state.snapshot.statusline_timestamp_ineligible() {
-        return None;
+) -> Vec<(Source, String)> {
+    let mut errors = Vec::new();
+    if !state.snapshot.statusline_timestamp_ineligible()
+        && let Some(error) = state.snapshot.statusline_quota_freshness_error(now)
+        && state.snapshot.claude_statusline_error.as_ref() != Some(&error)
+    {
+        state.snapshot.claude_statusline_error = Some(error.clone());
+        errors.push((Source::ClaudeStatusline, error));
     }
-    let statusline = state.snapshot.claude_statusline.as_ref()?;
-    let error = statusline_freshness_error(statusline.captured_at, now)?;
-    state.snapshot.claude_statusline_error = Some(error.clone());
-    Some(error)
+    if state.snapshot.claude_oauth_error.is_none()
+        && let Some(error) = state.snapshot.oauth_quota_freshness_error(now)
+    {
+        state.snapshot.claude_oauth_error = Some(error.clone());
+        errors.push((Source::ClaudeOAuth, error));
+    }
+    errors
 }
 
 #[cfg(test)]
@@ -551,6 +573,51 @@ mod tests {
     use std::path::Path;
     use std::sync::{Arc, Condvar, Mutex};
 
+    #[test]
+    fn idle_refresh_marks_oauth_stale_once_without_advancing_source_timestamps() {
+        for expired_reset in [false, true] {
+            let now = Utc::now();
+            let mut state = test_state(now - Duration::minutes(1));
+            let mut oauth = live_oauth_snapshot();
+            oauth.fetched_at = now - Duration::minutes(if expired_reset { 1 } else { 16 });
+            if expired_reset {
+                oauth.cadences[0].resets_at = now - Duration::seconds(1);
+            }
+            let source_time = oauth.fetched_at;
+            state.snapshot.claude_oauth = Some(oauth);
+            let merge_time = state.snapshot.fetched_at;
+            let mut sink = RecordingSink::default();
+            handle_msg(&mut state, &mut sink, StateMsg::Refresh);
+            let snap = sink.last_snapshot().unwrap();
+            assert_eq!(snap.fetched_at, merge_time);
+            assert_eq!(snap.claude_oauth.as_ref().unwrap().fetched_at, source_time);
+            assert!(snap.claude_oauth_error.is_some());
+            assert!(snap.pace.is_empty());
+            assert!(matches!(
+                snap.anthropic_quota_source(),
+                Some(crate::AnthropicQuotaSource::OAuth { stale: true, .. })
+            ));
+            assert_eq!(sink.error_count(), 1);
+            handle_msg(&mut state, &mut sink, StateMsg::Refresh);
+            assert_eq!(
+                sink.error_count(),
+                1,
+                "unchanged degradation is not re-emitted"
+            );
+            handle_msg(
+                &mut state,
+                &mut sink,
+                StateMsg::Update(SourceUpdate {
+                    generation: 0,
+                    source: Source::ClaudeOAuth,
+                    result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
+                }),
+            );
+            assert!(state.snapshot.claude_oauth_error.is_none());
+            assert!(!state.snapshot.pace.is_empty());
+        }
+    }
+
     /// Test sink: records every event so the test can assert on them.
     #[derive(Debug, Default, Clone)]
     struct RecordingSink {
@@ -559,6 +626,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct RecordingInner {
         snapshots: Vec<Snapshot>,
+        durable_snapshots: Vec<Snapshot>,
         errors: Vec<(Source, String)>,
     }
     impl RecordingSink {
@@ -576,6 +644,13 @@ mod tests {
         }
     }
     impl Sink for RecordingSink {
+        fn on_snapshot_durable(&mut self, snapshot: &Snapshot) {
+            self.inner
+                .lock()
+                .unwrap()
+                .durable_snapshots
+                .push(snapshot.clone());
+        }
         fn on_snapshot(&mut self, snapshot: &Snapshot) {
             self.inner.lock().unwrap().snapshots.push(snapshot.clone());
         }
@@ -608,7 +683,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 0,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
             }))
             .await
             .unwrap();
@@ -675,6 +750,22 @@ mod tests {
         }
     }
 
+    // Actor tests use the real clock; fixed-date fixtures now correctly age out.
+    fn live_oauth_snapshot() -> ClaudeOAuthSnapshot {
+        let now = Utc::now();
+        let mut oauth = oauth_snapshot();
+        oauth.fetched_at = now - Duration::seconds(1);
+        oauth.cadences[0].resets_at = now + Duration::hours(3);
+        oauth
+    }
+
+    fn live_oauth_snapshot_with_reset(reset: chrono::DateTime<Utc>) -> ClaudeOAuthSnapshot {
+        let mut oauth = live_oauth_snapshot();
+        oauth.cadences[0].resets_at = reset;
+        oauth.cadences[0].utilization_percent = 10.0;
+        oauth
+    }
+
     fn test_state(now: chrono::DateTime<Utc>) -> CoordinatorState {
         CoordinatorState {
             snapshot: Snapshot::empty(now),
@@ -716,10 +807,13 @@ mod tests {
     }
 
     fn statusline_that_ages_out_with_oauth_fallback() -> CoordinatorState {
-        let captured_at = Utc::now() - Duration::seconds(crate::STATUSLINE_FRESHNESS_SECS + 1);
-        let mut state = test_state(captured_at);
-        state.snapshot.claude_oauth =
-            Some(oauth_snapshot_with_reset(Utc::now() + Duration::hours(3)));
+        let now = Utc::now();
+        let captured_at = now - Duration::seconds(crate::STATUSLINE_FRESHNESS_SECS + 1);
+        let mut state = test_state(now - Duration::seconds(2));
+        state.snapshot.claude_oauth = Some(live_oauth_snapshot_with_reset(
+            Utc::now() + Duration::hours(3),
+        ));
+        state.snapshot.claude_oauth.as_mut().unwrap().fetched_at = state.snapshot.fetched_at;
         state.snapshot.claude_statusline = Some(statusline_payload(
             captured_at,
             Some(vec![rate_window(
@@ -1063,7 +1157,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 0,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
             }))
             .await
             .unwrap();
@@ -1121,6 +1215,139 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_persists_new_quota_freshness_errors_once() {
+        for statusline in [false, true] {
+            for reset_passed in [false, true] {
+                let now = Utc::now();
+                let merge_time = now - Duration::minutes(2);
+                let source_time = now - Duration::minutes(if reset_passed { 2 } else { 16 });
+                let reset = if reset_passed {
+                    now - Duration::seconds(1)
+                } else {
+                    now + Duration::hours(1)
+                };
+                let mut state = test_state(merge_time);
+                if statusline {
+                    state.snapshot.claude_statusline = Some(statusline_payload(
+                        source_time,
+                        Some(vec![rate_window("five_hour", 20.0, reset)]),
+                    ));
+                } else {
+                    let mut oauth = live_oauth_snapshot_with_reset(reset);
+                    oauth.fetched_at = source_time;
+                    state.snapshot.claude_oauth = Some(oauth);
+                }
+                recompute_pace_at(&mut state, merge_time);
+                assert!(
+                    !state.snapshot.pace.is_empty(),
+                    "source was current at the last merge"
+                );
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("snapshot.json");
+                let (publisher, writer) = crate::sink_file::spawn_snapshot_writer(path.clone());
+                let inner = RecordingSink::default();
+                let mut sink = PublishingSink {
+                    inner: inner.clone(),
+                    publisher: Some(publisher),
+                };
+                handle_msg(&mut state, &mut sink, StateMsg::Refresh);
+                handle_msg(&mut state, &mut sink, StateMsg::Refresh);
+                assert_eq!(
+                    inner.snapshot_count(),
+                    2,
+                    "presentation still refreshes each time"
+                );
+                assert_eq!(
+                    inner.inner.lock().unwrap().durable_snapshots.len(),
+                    1,
+                    "unchanged refresh must not republish"
+                );
+                drop(sink);
+                writer.shutdown().await;
+                let persisted = crate::snapshot_file::read_snapshot_file(&path)
+                    .unwrap()
+                    .snapshot;
+                assert_eq!(persisted.fetched_at, merge_time);
+                assert!(persisted.pace.is_empty());
+                if statusline {
+                    assert!(persisted.claude_statusline_error.is_some());
+                    assert_eq!(
+                        persisted.claude_statusline.unwrap().captured_at,
+                        source_time
+                    );
+                } else {
+                    assert!(persisted.claude_oauth_error.is_some());
+                    assert_eq!(persisted.claude_oauth.unwrap().fetched_at, source_time);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_update_ages_alternate_quota_and_preserves_incoming_error() {
+        for source in [
+            Source::ClaudeOAuth,
+            Source::ClaudeStatusline,
+            Source::OpenAiCosts,
+        ] {
+            let now = Utc::now();
+            let merge_time = now - Duration::minutes(2);
+            let captured_at = now - Duration::minutes(16);
+            let mut state = test_state(merge_time);
+            let mut oauth = live_oauth_snapshot();
+            oauth.fetched_at = captured_at;
+            state.snapshot.claude_oauth = Some(oauth);
+            state.snapshot.claude_statusline = Some(statusline_payload(
+                captured_at,
+                Some(vec![rate_window(
+                    "five_hour",
+                    20.0,
+                    now + Duration::hours(1),
+                )]),
+            ));
+            recompute_pace_at(&mut state, merge_time);
+            assert!(!state.snapshot.pace.is_empty());
+            let mut sink = RecordingSink::default();
+            handle_msg(
+                &mut state,
+                &mut sink,
+                StateMsg::Update(SourceUpdate {
+                    generation: 0,
+                    source,
+                    result: Err("incoming failure".into()),
+                }),
+            );
+            let observed = sink.inner.lock().unwrap();
+            assert_eq!(observed.durable_snapshots.len(), 1);
+            let durable = &observed.durable_snapshots[0];
+            assert_eq!(durable.fetched_at, merge_time);
+            assert!(durable.claude_statusline_error.is_some());
+            assert!(durable.claude_oauth_error.is_some());
+            assert!(durable.pace.is_empty());
+            assert!(matches!(
+                durable.anthropic_quota_source(),
+                Some(crate::AnthropicQuotaSource::OAuth { stale: true, .. })
+            ));
+            let incoming = match source {
+                Source::ClaudeOAuth => &durable.claude_oauth_error,
+                Source::ClaudeStatusline => &durable.claude_statusline_error,
+                _ => &durable.openai_error,
+            };
+            assert_eq!(incoming.as_deref(), Some("incoming failure"));
+            assert_eq!(
+                observed.errors.iter().filter(|(s, _)| *s == source).count(),
+                1
+            );
+            assert!(
+                observed
+                    .errors
+                    .iter()
+                    .any(|(s, error)| *s == source && error == "incoming failure")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn refresh_repaints_without_publishing_snapshot_file() {
         let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = Arc::clone(&writes);
@@ -1136,7 +1363,7 @@ mod tests {
             publisher: Some(publisher),
         };
 
-        sink.on_refresh(&Snapshot::empty(Utc::now()));
+        handle_msg(&mut test_state(Utc::now()), &mut sink, StateMsg::Refresh);
         drop(sink);
         writer.shutdown().await;
 
@@ -1165,7 +1392,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 0,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
             }))
             .await
             .unwrap();
@@ -1216,7 +1443,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 0,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
             }))
             .await
             .unwrap();
@@ -1226,7 +1453,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 1,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
             }))
             .await
             .unwrap();
@@ -1241,7 +1468,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 1,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
             }))
             .await
             .unwrap();
@@ -1259,7 +1486,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 1,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
             }))
             .await
             .unwrap();
@@ -1375,7 +1602,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 0,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot_with_reset(
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot_with_reset(
                     future_reset,
                 ))),
             }))
@@ -1463,7 +1690,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 0,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
             }))
             .await
             .unwrap();
@@ -1485,7 +1712,7 @@ mod tests {
             .send(StateMsg::Update(SourceUpdate {
                 generation: 0,
                 source: Source::ClaudeOAuth,
-                result: Ok(SourcePartial::ClaudeOAuth(oauth_snapshot())),
+                result: Ok(SourcePartial::ClaudeOAuth(live_oauth_snapshot())),
             }))
             .await
             .unwrap();
@@ -1535,7 +1762,7 @@ mod tests {
             .expect("five_hour pace after first recompute")
             .elapsed_fraction;
 
-        recompute_pace_at(&mut state, now + Duration::hours(1));
+        recompute_pace_at(&mut state, now + Duration::minutes(10));
         let second_elapsed = state
             .snapshot
             .pace
@@ -1580,7 +1807,7 @@ mod tests {
     }
 
     #[test]
-    fn recompute_pace_at_uses_inclusive_freshness_boundary_and_retained_error_data() {
+    fn recompute_pace_at_uses_inclusive_boundary_and_falls_back_after_error() {
         let now = fixture_now();
         let captured_at = now - Duration::seconds(crate::STATUSLINE_FRESHNESS_SECS);
         let mut state = test_state(now);
@@ -1593,11 +1820,11 @@ mod tests {
                 now + Duration::hours(2),
             )]),
         ));
-        state.snapshot.claude_statusline_error = Some("reader failed".to_string());
-
         recompute_pace_at(&mut state, now);
-
         assert!((state.snapshot.pace[0].used_fraction - 0.62).abs() < 1e-9);
+        state.snapshot.claude_statusline_error = Some("reader failed".to_string());
+        recompute_pace_at(&mut state, now);
+        assert!((state.snapshot.pace[0].used_fraction - 0.10).abs() < 1e-9);
     }
 
     #[test]
@@ -1637,6 +1864,13 @@ mod tests {
 
             recompute_pace_at(&mut state, now);
 
+            if name == "unknown only" {
+                assert!(
+                    state.snapshot.pace.is_empty(),
+                    "unknown selected windows cannot borrow OAuth pace"
+                );
+                continue;
+            }
             assert_eq!(state.snapshot.pace.len(), 1, "{name}");
             assert_eq!(state.snapshot.pace[0].key, "five_hour", "{name}");
             assert!(
@@ -1668,7 +1902,7 @@ mod tests {
             &mut state,
             captured_at + Duration::seconds(crate::STATUSLINE_FRESHNESS_SECS + 1),
         );
-        assert!((state.snapshot.pace[0].used_fraction - 0.10).abs() < 1e-9);
+        assert!(state.snapshot.pace.is_empty(), "both sources aged out");
     }
 
     #[test]
@@ -1681,8 +1915,9 @@ mod tests {
             files_scanned: 0,
             prices: None,
         };
-        state.snapshot.claude_oauth =
-            Some(oauth_snapshot_with_reset(Utc::now() + Duration::hours(3)));
+        state.snapshot.claude_oauth = Some(live_oauth_snapshot_with_reset(
+            Utc::now() + Duration::hours(3),
+        ));
         state.snapshot.pace = vec![WindowPace {
             key: "five_hour".to_string(),
             used_fraction: 0.99,
@@ -1727,8 +1962,9 @@ mod tests {
             files_scanned: 0,
             prices: None,
         };
-        state.snapshot.claude_oauth =
-            Some(oauth_snapshot_with_reset(Utc::now() + Duration::hours(3)));
+        state.snapshot.claude_oauth = Some(live_oauth_snapshot_with_reset(
+            Utc::now() + Duration::hours(3),
+        ));
         state.snapshot.pace = vec![WindowPace {
             key: "five_hour".to_string(),
             used_fraction: 0.99,

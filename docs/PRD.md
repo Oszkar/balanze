@@ -171,6 +171,13 @@ A cell is filled only by a number that was actually measured or actually billed:
 
 Rationale: a grid asserts that cells in the same column are the same kind of number. Putting a counterfactual list-price estimate in the same column as real billed spend claims a comparability that does not exist - which reads as misleading even when the text is honest. Keeping the matrix measured-only makes the honesty **structural** rather than dependent on labels. This contract governs both the CLI compact view and the v0.3 popover; the `--json` schema is unaffected (every money cell already carries `source`/`confidence`, so machine consumers disambiguate from the wire shape).
 
+### Measurement quality
+
+Claude API-rate estimates use separate 5-minute and 1-hour cache-write counts when present in local logs; legacy logs use the 5-minute estimate. Cache duration never changes the aggregate token count. These are current list-rate estimates, not reconstructed invoices.
+
+Anthropic quota is current only when its source timestamp is no more than 15 minutes old and not future-dated, no reported window has passed its reset, and the source has no error. Fresh statusline takes precedence over fresh OAuth. When neither is fresh, the last known quota remains visible with a stale label and no pace. The existing refresh cadence updates this status without pretending a new provider fetch occurred.
+
+
 ### Integrations
 
 #### OpenAI
