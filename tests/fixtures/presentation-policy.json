@@ -84,7 +84,14 @@
         "stale": true,
         "windows": [{ "key": "five_hour", "percent": 55 }]
       }
-    }
+    },
+    {"name": "oauth exactly fifteen minutes old","fetchedAt": "2026-07-08T10:00:00Z","statusline": null,"oauth": {"fetchedAt": "2026-07-08T09:45:00Z","error": false,"windows": [{"key": "five_hour","percent": 40,"resetsAt": "2026-07-08T10:00:00Z"}]},"expected": {"source": "oauth","stale": false,"windows": [{"key": "five_hour","percent": 40}]}},
+    {"name": "oauth age exceeds fifteen minutes","fetchedAt": "2026-07-08T10:00:00Z","statusline": null,"oauth": {"fetchedAt": "2026-07-08T09:44:59.999Z","error": false,"windows": [{"key": "five_hour","percent": 40,"resetsAt": "2026-07-08T12:00:00Z"}]},"expected": {"source": "oauth","stale": true,"windows": [{"key": "five_hour","percent": 40}]}},
+    {"name": "oauth future timestamp","fetchedAt": "2026-07-08T10:00:00Z","statusline": null,"oauth": {"fetchedAt": "2026-07-08T10:00:00.001Z","error": false,"windows": [{"key": "five_hour","percent": 40,"resetsAt": "2026-07-08T12:00:00Z"}]},"expected": {"source": "oauth","stale": true,"windows": [{"key": "five_hour","percent": 40}]}},
+    {"name": "oauth passed reset","fetchedAt": "2026-07-08T10:00:00Z","statusline": null,"oauth": {"fetchedAt": "2026-07-08T10:00:00Z","error": false,"windows": [{"key": "five_hour","percent": 40,"resetsAt": "2026-07-08T09:59:59.999Z"}]},"expected": {"source": "oauth","stale": true,"windows": [{"key": "five_hour","percent": 40}]}},
+    {"name": "statusline reader error yields to fresh oauth","fetchedAt": "2026-07-08T10:00:00Z","statusline": {"capturedAt": "2026-07-08T10:00:00Z","error": true,"windows": [{"key": "five_hour","percent": 80,"resetsAt": "2026-07-08T12:00:00Z"}]},"oauth": {"error": false,"windows": [{"key": "five_hour","percent": 40}]},"expected": {"source": "oauth","stale": false,"windows": [{"key": "five_hour","percent": 40}]}},
+    {"name": "statusline passed reset yields to fresh oauth","fetchedAt": "2026-07-08T10:00:00Z","statusline": {"capturedAt": "2026-07-08T10:00:00Z","error": false,"windows": [{"key": "five_hour","percent": 80,"resetsAt": "2026-07-08T09:59:59.999Z"}]},"oauth": {"error": false,"windows": [{"key": "five_hour","percent": 40}]},"expected": {"source": "oauth","stale": false,"windows": [{"key": "five_hour","percent": 40}]}},
+    {"name": "stale statusline retained without oauth","fetchedAt": "2026-07-08T10:00:00Z","statusline": {"capturedAt": "2026-07-08T09:44:59Z","error": false,"windows": [{"key": "five_hour","percent": 80}]},"oauth": null,"expected": {"source": "statusline","stale": true,"windows": [{"key": "five_hour","percent": 80}]}}
   ],
   "codex": [
     {

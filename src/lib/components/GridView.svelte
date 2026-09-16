@@ -57,7 +57,7 @@
     <QuotaCell pct={aq.headline.pct} used={(anthPace?.used_fraction ?? aq.headline.pct / 100) * 100}
       elapsed={anthPace ? anthPace.elapsed_fraction * 100 : null} tone={aq.tone}
       resetsAt={aq.headline.resetsAt} secondary={aq.secondary ? `7d ${aq.secondary.pct.toFixed(0)}%` : ''}
-      stale={anthStale}
+      stale={anthStale} staleLabel="stale"
       title={aq.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title} />
   {:else if anthState.kind === 'error'}
     <BilledCell hatch placeholder="unavailable" note={ANTH_QUOTA_COPY.error.note}

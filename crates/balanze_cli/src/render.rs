@@ -1038,9 +1038,9 @@ mod tests {
         );
 
         snap.claude_statusline_error = Some("reader failed".to_string());
-        let stale_cell = compact_anthropic_quota(&snap);
-        assert!(stale_cell.starts_with('⚠'), "{stale_cell}");
-        assert!(stale_cell.contains("statusline, stale"), "{stale_cell}");
+        let fallback_cell = compact_anthropic_quota(&snap);
+        assert!(fallback_cell.contains("(oauth)"), "{fallback_cell}");
+        assert!(!fallback_cell.contains("stale"), "{fallback_cell}");
 
         for output in [
             render_sections(&snap, false),
@@ -1057,6 +1057,8 @@ mod tests {
             );
         }
 
+        // A successful statusline read restores its precedence and pace.
+        snap.claude_statusline_error = None;
         snap.pace = vec![state_coordinator::WindowPace {
             key: "five_hour".to_string(),
             used_fraction: 0.10,
@@ -1096,6 +1098,10 @@ mod tests {
         let sections = render_sections(&snap, false);
         assert!(sections.contains("CADENCE BARS (from Anthropic OAuth): stale"));
         assert!(sections.contains("Anthropic OAuth: unavailable - refresh failed"));
+        assert!(
+            !render_compact(&snap).contains("Pace:"),
+            "retained stale pace must be suppressed"
+        );
     }
 
     /// Render the compact view through an AutoStream forced to a given choice,

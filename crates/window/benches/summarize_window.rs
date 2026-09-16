@@ -43,6 +43,7 @@ fn synthetic_events(n: usize, base: chrono::DateTime<Utc>) -> Vec<UsageEvent> {
             input_tokens: 500,
             output_tokens: 200,
             cache_creation_input_tokens: 50,
+            cache_creation: None,
             cache_read_input_tokens: 100,
             cost_micro_usd: None,
             source: DataSource::Jsonl,

@@ -93,6 +93,7 @@ fn degraded_tooltip(source: Source) -> String {
 struct TrayView {
     claude_5h: Option<f32>,
     claude_7d: Option<f32>,
+    claude_stale: bool,
     codex_5h: Option<f32>,
     codex_weekly: Option<f32>,
     // Selected by codex_local before conversion to display precision. Detailed
@@ -109,7 +110,8 @@ impl TrayView {
     fn from_snapshot(s: &Snapshot) -> Self {
         let mut v = TrayView::default();
         match s.anthropic_quota_source() {
-            Some(AnthropicQuotaSource::OAuth { snapshot: o, .. }) => {
+            Some(AnthropicQuotaSource::OAuth { snapshot: o, stale }) => {
+                v.claude_stale = stale;
                 for c in &o.cadences {
                     if c.key == "five_hour" {
                         fold_max(&mut v.claude_5h, c.utilization_percent);
@@ -119,8 +121,10 @@ impl TrayView {
                 }
             }
             Some(AnthropicQuotaSource::Statusline {
-                rate_limits: rl, ..
+                rate_limits: rl,
+                stale,
             }) => {
+                v.claude_stale = stale;
                 for w in &rl.windows {
                     if w.key == "five_hour" {
                         fold_max(&mut v.claude_5h, w.used_percent);
@@ -288,7 +292,7 @@ impl TauriSink {
 
     fn paint_target(&self, s: &Snapshot, degraded: bool) -> (ColorBucket, String, String) {
         let view = TrayView::from_snapshot(s);
-        let stale = degraded || view.codex_expired;
+        let stale = degraded || view.codex_expired || view.claude_stale;
         (
             bucket_for_view(&view, stale),
             tray_title(&view),
@@ -498,11 +502,10 @@ mod tests {
     }
 
     /// A stale statusLine payload (frozen file - another tool owns the slot)
-    /// must NOT heat the tray or count as a live quota signal, even at 95%.
-    /// The tray's own freshness guard, independent of the coordinator's error
-    /// slot (belt-and-suspenders).
+    /// retains the last-known number with a warning, even when no source error
+    /// was recorded. It must not paint the normal utilization heat color.
     #[test]
-    fn stale_statusline_does_not_drive_worst_utilization() {
+    fn stale_statusline_is_retained_with_warning() {
         use chrono::{Duration, Utc};
         let now = Utc::now();
         let mut s = Snapshot::empty(now);
@@ -524,22 +527,18 @@ mod tests {
             // Captured 100h before this snapshot's fetched_at -> stale.
             now - Duration::hours(100),
         ));
-        assert_eq!(
-            worst_utilization(&s),
-            0.0,
-            "stale statusline must not heat the tray"
-        );
-        assert!(
-            !has_quota_data(&s),
-            "stale statusline is not a live quota signal"
-        );
+        let view = TrayView::from_snapshot(&s);
+        assert_eq!(view.claude_5h, Some(95.0));
+        assert!(view.claude_stale);
+        assert_eq!(bucket_for_view(&view, view.claude_stale), ColorBucket::Warn);
+        assert!(tray_tooltip(&view, view.claude_stale).contains("stale"));
     }
 
     /// A future-dated payload (captured_at ahead of fetched_at - the clock moved
     /// backward after the write) is equally untrusted: an upper-bound-only check
     /// would treat it as fresh and let it heat the tray.
     #[test]
-    fn future_dated_statusline_does_not_drive_worst_utilization() {
+    fn future_dated_statusline_is_retained_with_warning() {
         use chrono::{Duration, Utc};
         let now = Utc::now();
         let mut s = Snapshot::empty(now);
@@ -561,8 +560,10 @@ mod tests {
             // Captured 100h AFTER this snapshot's fetched_at -> negative age.
             now + Duration::hours(100),
         ));
-        assert_eq!(worst_utilization(&s), 0.0, "future-dated must not heat");
-        assert!(!has_quota_data(&s), "future-dated is not a live signal");
+        let view = TrayView::from_snapshot(&s);
+        assert_eq!(view.claude_5h, Some(95.0));
+        assert!(view.claude_stale);
+        assert_eq!(bucket_for_view(&view, view.claude_stale), ColorBucket::Warn);
     }
 
     #[test]

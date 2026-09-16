@@ -269,6 +269,7 @@ mod tests {
             input_tokens: 100,
             output_tokens: 50,
             cache_creation_input_tokens: 0,
+            cache_creation: None,
             cache_read_input_tokens: 0,
             cost_micro_usd: None,
             source: DataSource::Jsonl,
@@ -414,9 +415,10 @@ mod tests {
             snap.anthropic_quota_source(),
             Some(state_coordinator::AnthropicQuotaSource::Statusline { .. })
         ));
-        assert_eq!(snap.pace.len(), 1);
-        assert_eq!(snap.pace[0].key, "five_hour");
-        assert_eq!(snap.pace[0].used_fraction, 0.8);
+        assert!(
+            snap.pace.is_empty(),
+            "unknown selected windows cannot borrow OAuth pace"
+        );
     }
 
     #[tokio::test]

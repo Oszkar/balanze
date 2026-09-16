@@ -710,6 +710,7 @@ mod tests {
             input_tokens: input,
             output_tokens: output,
             cache_creation_input_tokens: cc,
+            cache_creation: None,
             cache_read_input_tokens: cr,
             cost_micro_usd: None,
             source: claude_parser::DataSource::Jsonl,

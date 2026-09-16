@@ -105,17 +105,23 @@ pub(crate) fn anthropic_display_windows(
 /// statusline-only window family that did not produce pace.
 pub(crate) fn matching_anthropic_pace(s: &Snapshot) -> Vec<&WindowPace> {
     match s.anthropic_quota_source() {
-        Some(AnthropicQuotaSource::Statusline { rate_limits, .. }) => s
+        Some(AnthropicQuotaSource::Statusline {
+            rate_limits,
+            stale: false,
+        }) => s
             .pace
             .iter()
             .filter(|pace| rate_limits.windows.iter().any(|w| w.key == pace.key))
             .collect(),
-        Some(AnthropicQuotaSource::OAuth { snapshot, .. }) => s
+        Some(AnthropicQuotaSource::OAuth {
+            snapshot,
+            stale: false,
+        }) => s
             .pace
             .iter()
             .filter(|pace| snapshot.cadences.iter().any(|c| c.key == pace.key))
             .collect(),
-        None => Vec::new(),
+        _ => Vec::new(),
     }
 }
 
@@ -180,13 +186,17 @@ mod tests {
     }
 
     #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct OAuthInput {
+        fetched_at: Option<String>,
         error: bool,
         windows: Vec<PolicyWindow>,
     }
 
     #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct PolicyWindow {
+        resets_at: Option<String>,
         key: String,
         percent: f32,
     }
@@ -297,7 +307,11 @@ mod tests {
                                     label: w.key.clone(),
                                     key: w.key,
                                     used_percent: w.percent,
-                                    resets_at,
+                                    resets_at: w
+                                        .resets_at
+                                        .as_deref()
+                                        .map(timestamp)
+                                        .unwrap_or(resets_at),
                                 })
                                 .collect(),
                         }),
@@ -321,14 +335,18 @@ mod tests {
                             display_label: w.key.clone(),
                             key: w.key,
                             utilization_percent: w.percent,
-                            resets_at,
+                            resets_at: w.resets_at.as_deref().map(timestamp).unwrap_or(resets_at),
                         })
                         .collect(),
                     extra_usage: None,
                     subscription_type: None,
                     rate_limit_tier: None,
                     org_uuid: None,
-                    fetched_at,
+                    fetched_at: oauth
+                        .fetched_at
+                        .as_deref()
+                        .map(timestamp)
+                        .unwrap_or(fetched_at),
                 });
                 if oauth.error {
                     snapshot.claude_oauth_error = Some("refresh failed".to_string());

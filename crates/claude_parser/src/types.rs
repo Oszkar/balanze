@@ -47,6 +47,11 @@ pub struct UsageEvent {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_input_tokens: u64,
+    /// Optional duration split of the cache-write total. Missing on legacy
+    /// records; cost estimation then assumes the 5-minute rate. Not additional
+    /// tokens: `total_tokens` counts only `cache_creation_input_tokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation: Option<CacheCreation>,
     pub cache_read_input_tokens: u64,
     /// Per-event cost in micro-USD (1e-6 USD). `None` for subscription events
     /// (Claude Code JSONL never carries cost; cost is derived for API events
@@ -59,6 +64,14 @@ pub struct UsageEvent {
     /// Top-level `requestId` from the JSONL line ("req_…"). Second half of
     /// the dedup key. `None` if absent.
     pub request_id: Option<String>,
+}
+
+/// Cache-write token counts by lifetime. The parser validates that their sum
+/// equals the aggregate cache-write count before producing a usage event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheCreation {
+    pub ephemeral_5m_input_tokens: u64,
+    pub ephemeral_1h_input_tokens: u64,
 }
 
 impl UsageEvent {

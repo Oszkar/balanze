@@ -12,15 +12,10 @@ export const QUOTA_WARN_PCT = 50;
 export const QUOTA_ORANGE_PCT = 75;
 export const QUOTA_BAD_PCT = 90;
 
-// Staleness ceiling for the statusLine payload, in milliseconds. Kept in
-// lockstep with STATUSLINE_FRESHNESS_SECS (900) in
-// crates/state_coordinator/src/snapshot.rs. When the payload's captured_at is
-// older than this relative to the snapshot's fetched_at, the statusLine file has
-// frozen (e.g. another tool owns the single statusLine slot so Balanze's writer
-// never refreshes it) and must not be presented as the live Anthropic source.
-// This is the render-time guard, independent of the coordinator's error slot
-// (belt-and-suspenders): even if the backend marker regressed, the popover still
-// refuses to show a stale statusline as live and falls back to OAuth.
+// Inclusive 15-minute source-age ceiling for Anthropic quota, mirrored by
+// STATUSLINE_FRESHNESS_SECS in state_coordinator. Uses each source timestamp,
+// not the last unrelated provider update. Idle refresh also records source
+// errors so the snapshot-anchored UI ages even without a successful merge.
 export const STATUSLINE_FRESHNESS_MS = 900_000;
 
 export function quotaTone(pct: number): Tone {
@@ -52,32 +47,34 @@ export interface AnthropicSourceView {
 /** Fresh statusline-first Anthropic quota selection, mirroring
  * `Snapshot::anthropic_quota_source` on the Rust side. */
 export function anthropicSourceView(s: Snapshot): AnthropicSourceView | null {
-  const sl = s.claude_statusline;
-  const slAgeMs = sl ? Date.parse(s.fetched_at) - Date.parse(sl.captured_at) : Infinity;
-  const timestampError = s.claude_statusline_error?.startsWith('statusline payload is stale (')
-    || s.claude_statusline_error?.startsWith('statusline payload is future-dated (');
-  const slFresh = !timestampError && Number.isFinite(slAgeMs) && slAgeMs >= 0 && slAgeMs <= STATUSLINE_FRESHNESS_MS;
-  const slWindows = slFresh && sl ? (sl.payload.rate_limits?.windows ?? []) : [];
-  if (slWindows.length > 0) {
-    return {
-      source: 'statusline',
-      windows: slWindows.map((w) => ({ key: w.key, label: w.label, pct: w.used_percent, resetsAt: w.resets_at })),
-      stale: s.claude_statusline_error !== null,
-    };
-  }
-  const cadences = s.claude_oauth?.cadences ?? [];
-  if (cadences.length === 0) return null;
-  return {
-    source: 'oauth',
-    windows: cadences.map((c) => ({ key: c.key, label: c.display_label, pct: c.utilization_percent, resetsAt: c.resets_at })),
-    stale: s.claude_oauth_error !== null,
+  const now = Date.parse(s.fetched_at);
+  const staleAt = (stamp: string, windows: AnthropicSourceWindow[], error: string | null): boolean => {
+    const age = now - Date.parse(stamp);
+    return error !== null || !Number.isFinite(age) || age < 0 || age > STATUSLINE_FRESHNESS_MS
+      || windows.some((w) => !Number.isFinite(Date.parse(w.resetsAt)) || now > Date.parse(w.resetsAt));
   };
+  const sl = s.claude_statusline;
+  const slWindows = (sl?.payload.rate_limits?.windows ?? [])
+    .map((w) => ({ key: w.key, label: w.label, pct: w.used_percent, resetsAt: w.resets_at }));
+  const statusline: AnthropicSourceView | null = sl && slWindows.length > 0 ? {
+    source: 'statusline', windows: slWindows,
+    stale: staleAt(sl.captured_at, slWindows, s.claude_statusline_error),
+  } : null;
+  const oauth = s.claude_oauth;
+  const oauthWindows = (oauth?.cadences ?? [])
+    .map((c) => ({ key: c.key, label: c.display_label, pct: c.utilization_percent, resetsAt: c.resets_at }));
+  const fallback: AnthropicSourceView | null = oauth && oauthWindows.length > 0 ? {
+    source: 'oauth', windows: oauthWindows,
+    stale: staleAt(oauth.fetched_at, oauthWindows, s.claude_oauth_error),
+  } : null;
+  if (statusline && !statusline.stale) return statusline;
+  return fallback ?? statusline;
 }
 
 /** Pace entries whose keys belong to the selected Anthropic quota source. */
 export function matchingAnthropicPace(s: Snapshot): WindowPace[] {
   const selected = anthropicSourceView(s);
-  if (!selected) return [];
+  if (!selected || selected.stale) return [];
   const selectedKeys = new Set(selected.windows.map((w) => w.key));
   return s.pace.filter((pace) => selectedKeys.has(pace.key));
 }

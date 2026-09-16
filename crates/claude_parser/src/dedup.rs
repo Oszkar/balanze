@@ -70,6 +70,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: output,
             cache_creation_input_tokens: 0,
+            cache_creation: None,
             cache_read_input_tokens: 0,
             cost_micro_usd: None,
             source: DataSource::Jsonl,

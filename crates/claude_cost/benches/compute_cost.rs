@@ -44,6 +44,7 @@ fn synthetic_events(n: usize) -> Vec<UsageEvent> {
             input_tokens: 1000 + (i as u64 % 500),
             output_tokens: 500 + (i as u64 % 300),
             cache_creation_input_tokens: 100,
+            cache_creation: None,
             cache_read_input_tokens: 200,
             cost_micro_usd: None,
             source: DataSource::Jsonl,

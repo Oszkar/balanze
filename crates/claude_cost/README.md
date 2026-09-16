@@ -80,7 +80,7 @@ the vendored price snapshot came from. The build script `build.rs` parses
 the data filename and emits both at compile time, so the const values and
 the data file can never drift.
 
-The bundled snapshot was fetched on 2026-09-16 from [LiteLLM commit c8114ba](https://github.com/BerriAI/litellm/blob/c8114ba41ff76365e3fb065dd3c7ca387598fd98/model_prices_and_context_window.json). Current model rates were cross-checked against [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing). It includes Opus 5, Fable 5.1 and Mythos models, and Sonnet 5's permanent $2/$10 per million input/output tokens. Historical entries remain available for exports. Estimates use this snapshot's list rates for all events, with the 5-minute cache-write rate; they do not reconstruct historical invoices.
+The bundled snapshot was fetched on 2026-09-16 from [LiteLLM commit c8114ba](https://github.com/BerriAI/litellm/blob/c8114ba41ff76365e3fb065dd3c7ca387598fd98/model_prices_and_context_window.json). Current model rates were cross-checked against [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing). It includes Opus 5, Fable 5.1 and Mythos models, and Sonnet 5's permanent $2/$10 per million input/output tokens. Historical entries remain available for exports. Estimates use this snapshot's list rates for all events, using each event's 5-minute/1-hour cache-write breakdown when available; they do not reconstruct historical invoices. The 1-hour write rate is derived from Anthropic's published 2x base-input multiplier. Legacy events without a breakdown retain the 5-minute estimate. Duration components are summed in nano-USD before rounding once to micro-USD.
 
 ## Refresh procedure (manual, v0.1)
 
@@ -100,7 +100,7 @@ A script to automate this refresh is planned - see the v0.4 "Price-table refresh
    - `max_input_tokens`, `max_output_tokens`, `litellm_provider` (kept
      for forward-compat / debugging; not consumed by code today)
 
-   Cross-check current model rates against Anthropic's pricing page, including cache reads and the 5-minute cache-write rate. Check that historical model keys are not silently removed. Record the verification URL in `_meta` and keep assertions for newly supported or changed rates in `src/prices.rs`.
+   Cross-check current model rates against Anthropic's pricing page, including cache reads, the 5-minute cache-write rate, and the 2x base-input multiplier used for 1-hour writes. Check that historical model keys are not silently removed. Record the verification URL in `_meta` and keep assertions for newly supported or changed rates in `src/prices.rs`.
 3. Save to `data/litellm-prices-<commit-short>-<YYYYMMDD>.json` with a
    `_meta` block at the top describing `source`, `commit`, `fetched_at`,
    `filter`, and `license`.
