@@ -292,13 +292,23 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
                 }
             }
             Err(err) => {
+                let now = Utc::now();
+                // Age retained feeds at the same clock anchor as pace. The
+                // incoming failure takes precedence over a freshness diagnosis
+                // for that source, including its degraded notification.
+                let freshness_errors = record_new_quota_freshness_errors(state, now);
                 record_error(&mut state.snapshot, source, &err);
-                recompute_pace_at(state, Utc::now());
+                recompute_pace_at(state, now);
                 // Error slots are part of the durable Snapshot contract, but
                 // source values did not change; stale pace is removed. Publish to durability;
                 // presentation sinks receive the dedicated degraded event.
                 sink.on_snapshot_durable(&state.snapshot);
                 sink.on_degraded(source, &err);
+                for (other_source, freshness_error) in freshness_errors {
+                    if other_source != source {
+                        sink.on_degraded(other_source, &freshness_error);
+                    }
+                }
             }
         },
         StateMsg::Query(reply) => {
@@ -311,6 +321,9 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             let now = Utc::now();
             let freshness_errors = record_new_quota_freshness_errors(state, now);
             recompute_pace_at(state, now);
+            if !freshness_errors.is_empty() {
+                sink.on_snapshot_durable(&state.snapshot);
+            }
             sink.on_refresh(&state.snapshot);
             for (source, err) in freshness_errors {
                 sink.on_degraded(source, &err);
@@ -613,6 +626,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct RecordingInner {
         snapshots: Vec<Snapshot>,
+        durable_snapshots: Vec<Snapshot>,
         errors: Vec<(Source, String)>,
     }
     impl RecordingSink {
@@ -630,6 +644,13 @@ mod tests {
         }
     }
     impl Sink for RecordingSink {
+        fn on_snapshot_durable(&mut self, snapshot: &Snapshot) {
+            self.inner
+                .lock()
+                .unwrap()
+                .durable_snapshots
+                .push(snapshot.clone());
+        }
         fn on_snapshot(&mut self, snapshot: &Snapshot) {
             self.inner.lock().unwrap().snapshots.push(snapshot.clone());
         }
@@ -1194,6 +1215,139 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_persists_new_quota_freshness_errors_once() {
+        for statusline in [false, true] {
+            for reset_passed in [false, true] {
+                let now = Utc::now();
+                let merge_time = now - Duration::minutes(2);
+                let source_time = now - Duration::minutes(if reset_passed { 2 } else { 16 });
+                let reset = if reset_passed {
+                    now - Duration::seconds(1)
+                } else {
+                    now + Duration::hours(1)
+                };
+                let mut state = test_state(merge_time);
+                if statusline {
+                    state.snapshot.claude_statusline = Some(statusline_payload(
+                        source_time,
+                        Some(vec![rate_window("five_hour", 20.0, reset)]),
+                    ));
+                } else {
+                    let mut oauth = live_oauth_snapshot_with_reset(reset);
+                    oauth.fetched_at = source_time;
+                    state.snapshot.claude_oauth = Some(oauth);
+                }
+                recompute_pace_at(&mut state, merge_time);
+                assert!(
+                    !state.snapshot.pace.is_empty(),
+                    "source was current at the last merge"
+                );
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("snapshot.json");
+                let (publisher, writer) = crate::sink_file::spawn_snapshot_writer(path.clone());
+                let inner = RecordingSink::default();
+                let mut sink = PublishingSink {
+                    inner: inner.clone(),
+                    publisher: Some(publisher),
+                };
+                handle_msg(&mut state, &mut sink, StateMsg::Refresh);
+                handle_msg(&mut state, &mut sink, StateMsg::Refresh);
+                assert_eq!(
+                    inner.snapshot_count(),
+                    2,
+                    "presentation still refreshes each time"
+                );
+                assert_eq!(
+                    inner.inner.lock().unwrap().durable_snapshots.len(),
+                    1,
+                    "unchanged refresh must not republish"
+                );
+                drop(sink);
+                writer.shutdown().await;
+                let persisted = crate::snapshot_file::read_snapshot_file(&path)
+                    .unwrap()
+                    .snapshot;
+                assert_eq!(persisted.fetched_at, merge_time);
+                assert!(persisted.pace.is_empty());
+                if statusline {
+                    assert!(persisted.claude_statusline_error.is_some());
+                    assert_eq!(
+                        persisted.claude_statusline.unwrap().captured_at,
+                        source_time
+                    );
+                } else {
+                    assert!(persisted.claude_oauth_error.is_some());
+                    assert_eq!(persisted.claude_oauth.unwrap().fetched_at, source_time);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_update_ages_alternate_quota_and_preserves_incoming_error() {
+        for source in [
+            Source::ClaudeOAuth,
+            Source::ClaudeStatusline,
+            Source::OpenAiCosts,
+        ] {
+            let now = Utc::now();
+            let merge_time = now - Duration::minutes(2);
+            let captured_at = now - Duration::minutes(16);
+            let mut state = test_state(merge_time);
+            let mut oauth = live_oauth_snapshot();
+            oauth.fetched_at = captured_at;
+            state.snapshot.claude_oauth = Some(oauth);
+            state.snapshot.claude_statusline = Some(statusline_payload(
+                captured_at,
+                Some(vec![rate_window(
+                    "five_hour",
+                    20.0,
+                    now + Duration::hours(1),
+                )]),
+            ));
+            recompute_pace_at(&mut state, merge_time);
+            assert!(!state.snapshot.pace.is_empty());
+            let mut sink = RecordingSink::default();
+            handle_msg(
+                &mut state,
+                &mut sink,
+                StateMsg::Update(SourceUpdate {
+                    generation: 0,
+                    source,
+                    result: Err("incoming failure".into()),
+                }),
+            );
+            let observed = sink.inner.lock().unwrap();
+            assert_eq!(observed.durable_snapshots.len(), 1);
+            let durable = &observed.durable_snapshots[0];
+            assert_eq!(durable.fetched_at, merge_time);
+            assert!(durable.claude_statusline_error.is_some());
+            assert!(durable.claude_oauth_error.is_some());
+            assert!(durable.pace.is_empty());
+            assert!(matches!(
+                durable.anthropic_quota_source(),
+                Some(crate::AnthropicQuotaSource::OAuth { stale: true, .. })
+            ));
+            let incoming = match source {
+                Source::ClaudeOAuth => &durable.claude_oauth_error,
+                Source::ClaudeStatusline => &durable.claude_statusline_error,
+                _ => &durable.openai_error,
+            };
+            assert_eq!(incoming.as_deref(), Some("incoming failure"));
+            assert_eq!(
+                observed.errors.iter().filter(|(s, _)| *s == source).count(),
+                1
+            );
+            assert!(
+                observed
+                    .errors
+                    .iter()
+                    .any(|(s, error)| *s == source && error == "incoming failure")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn refresh_repaints_without_publishing_snapshot_file() {
         let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = Arc::clone(&writes);
@@ -1209,7 +1363,7 @@ mod tests {
             publisher: Some(publisher),
         };
 
-        sink.on_refresh(&Snapshot::empty(Utc::now()));
+        handle_msg(&mut test_state(Utc::now()), &mut sink, StateMsg::Refresh);
         drop(sink);
         writer.shutdown().await;
 

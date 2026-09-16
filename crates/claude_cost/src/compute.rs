@@ -137,11 +137,7 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
             // preserving precision for sub-micro writes and using i128 so
             // neither the multiplier nor large token counts can overflow.
             let five_rate = model_prices.cache_creation_nano_per_token.unwrap_or(0) as i128;
-            let hour_rate = if model_prices.cache_creation_nano_per_token.is_some() {
-                model_prices.input_nano_per_token as i128 * 2
-            } else {
-                0
-            };
+            let hour_rate = model_prices.input_nano_per_token as i128 * 2;
             nano_to_micro(
                 split.ephemeral_5m_input_tokens as i128 * five_rate
                     + split.ephemeral_1h_input_tokens as i128 * hour_rate,
@@ -254,6 +250,18 @@ mod tests {
                 ((five + hour) * 3750 / 1000) as i64
             );
         }
+    }
+
+    #[test]
+    fn one_hour_writes_do_not_require_a_five_minute_price() {
+        let mut e = event("claude-3-haiku-no-cache", 0, 0, 1_000_000, 0);
+        e.cache_creation = Some(claude_parser::CacheCreation {
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 1_000_000,
+        });
+        let cost = compute_cost(&[e], &fixture_prices());
+        assert_eq!(cost.per_model[0].cache_creation_micro_usd, 500_000);
+        assert_eq!(cost.total_micro_usd, 500_000);
     }
 
     #[test]
