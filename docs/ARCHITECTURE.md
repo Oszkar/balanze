@@ -130,5 +130,39 @@ When no fresh `snapshot.json` exists, `balanze-cli statusline` still self-compos
 - There is no `DegradedState` type. Degraded state is carried by the `Snapshot`'s per-source `*_error: Option<String>` slots plus the `degraded_state` IPC event; the coordinator's boundary is string-erased (see boundary #7). A typed error category on the Snapshot - so `status` and `doctor` share real types rather than substring sniffing - is a known open item (`balanze_cli::exit::looks_like_auth`) and needs a Snapshot schema change.
 - Long-running tasks (file watcher, polling, the coordinator itself) are supervised with a retained `JoinHandle` + `tokio::select!`. A coordinator exit/panic is fatal on both hosts (the CLI returns; the Tauri host calls `AppHandle::exit` on a genuine panic, but not on a shutdown abort). A watcher-task `Ok(Err)` / panic is fatal in the CLI (`watch` exits with a restart hint); the Tauri host surfaces a `degraded_state` for the affected source and re-spawns the set with bounded backoff (self-heal, not silent freeze).
 - External I/O retries via `backoff` (`standard` = 30 s × 2ⁿ cap 10 min; `fail_fast` = 0). Idempotent GETs retry on 429 + 5xx + transport. Balanze never calls Anthropic's token-refresh endpoint.
-- IPC errors surface to the UI as a `degraded_state` event; the tray icon shows a warning dot.
-- "Unavailable / not configured" is a **neutral** state, distinct from degraded: a source whose prerequisite is absent (Claude Code not installed, so no OAuth credential) reports `StateMsg::SourceUnavailable`, which sets `Snapshot::claude_oauth_unavailable` and repaints without an error - the tray shows the neutral bucket (not the warning dot) and the cell reads "not configured" rather than spinning on a loading state. Only `ClaudeOAuth` carries this marker today.
+- IPC errors surface to the UI as a `degraded_state` event; the tray ring takes the warning color (see [Alert presentation by surface](#alert-presentation-by-surface)).
+- "Unavailable / not configured" is a **neutral** state, distinct from degraded: a source whose prerequisite is absent (Claude Code not installed, so no OAuth credential) reports `StateMsg::SourceUnavailable`, which sets `Snapshot::claude_oauth_unavailable` and repaints without an error - the tray shows the neutral bucket (not the warning color) and the cell reads "not configured" rather than spinning on a loading state. Only `ClaudeOAuth` carries this marker today.
+
+## Alert presentation by surface
+
+The tray, the popover, and the CLI's `status` and `watch` read the same `state_coordinator::Snapshot`. The statusline is a **mixed-input** surface: its Claude segments render the live `claude_statusline::StatuslineSnapshot` that Claude Code pipes in on stdin, while its cross-provider segments (`codex`, `openai_cost`) come from `snapshot.json`, or are self-composed when that file is stale or missing. All of them share the same **meaning** for each signal. What differs is the paint, and in two places the precedence. This section records what ships, so that "shared" claims elsewhere stay honest and so the alerts work has a baseline to change deliberately.
+
+**Shared by construction** (one Rust implementation; the Svelte side mirrors it and `tests/fixtures/presentation-policy.json` pins the two together):
+
+- **Utilization severity**: `window::Severity`, green / yellow / orange / red at 50 / 75 / 90, inclusive lower bounds, classified on the **rounded** percent so the color always agrees with the number displayed.
+- **Anthropic source and freshness**: `Snapshot::anthropic_quota_source` - fresh statusline, then fresh OAuth, then stale OAuth, then stale statusline.
+- **Codex staleness**: `CodexQuotaSnapshot::any_window_expired` - one expired window marks the rollout.
+- **Pace**: `window::pace` yields no ratio before 4% of the window has elapsed, and `window::PaceVerdict` is the only classifier (under at 0.85 or less, warn at 1.12, critical at 1.5). Pace is derived only from the selected **fresh** Anthropic source, so a stale source has no pace on any snapshot-driven surface.
+
+**Surface-specific presentation:**
+
+| Signal | Tray | Popover (Grid / Cards) | CLI `status` (compact) | `watch` TUI | Statusline |
+|---|---|---|---|---|---|
+| Healthy utilization | One ring, colored by the single worst window across both providers | Grid: one tone per provider, from its worst window. Cards: each window toned on its own | One color per provider cell, from its worst window | Each gauge colored on its own | Each window colored on its own |
+| Stale or errored source | **Replaces** the utilization color with the warning color; tooltip adds "(some data may be stale)" | **Retains** the utilization tone in both layouts, with a warning glyph and "stale" in place of the reset countdown; the degraded banner names the source. Grid additionally adds a warn dot and a ring on the cell; Cards adds nothing further | **Replaces** the cell color: yellow for stale, red for a failed fetch; the cell text carries the marker and "stale" | **Retains** the gauge color; label gains "(stale)" and a yellow banner names the degraded sources | Cross-provider segments (`codex`, `openai_cost`) **retain** the utilization color and append a warning glyph. Claude segments have no stale state |
+| Pace | Not shown | Elapsed tick on the usage bar, with "N% used, M% elapsed" for screen readers. No verdict, no pace color | "N% used / M% elapsed (ratio)" line, colored by `PaceVerdict`: dim too early, green under or on pace, yellow warn, red critical | Same line, uncolored | Arrow from `PaceVerdict` (down under, level on pace, up warn or critical) plus the ratio, in the window's utilization color |
+
+**Threshold notifications** exist on no surface. The only OS notification is the first-run "Balanze is running" toast. Everything in the table is a passive indicator; threshold alerts are a later phase (see `docs/PRD.md`) and get their own contract when they land.
+
+`status --sections` and the non-TTY `watch` stream are plain text: no color, the same markers. `--sections` prints unrounded two-decimal percentages, since it is the detail view.
+
+**Intentional differences.** The tray has one ring and no room for a marker, so "something needs attention" must take the color; a surface with room for both keeps the utilization color and adds a marker. The statusline's Claude segment renders the live payload Claude Code just handed it, so it has no stale state and computes its own pace from that payload.
+
+**Known inconsistencies, not yet decided** (tracked in [#263](https://github.com/Oszkar/balanze/issues/263); recorded rather than defended):
+
+- The tray warning color is byte-identical to severity red, so a healthy-but-degraded tray is indistinguishable from one at 90%.
+- Any source error turns the tray to the warning color, including sources that do not feed the ring (JSONL, OpenAI spend). The compact CLI and the popover recolor only the affected cell.
+- "Stale" is yellow in compact `status` and red-equivalent in the tray.
+- Pace urgency has a color only in compact `status`. The `watch` TUI prints the same ratio uncolored.
+- The popover draws an elapsed tick for Codex, and keeps it when the rollout is stale; the Rust surfaces show no Codex pace, and Anthropic's tick is removed when stale.
+- The Grid applies the provider's worst-window tone to the headline 5-hour figure, so a 5-hour number can take its color from the 7-day window.

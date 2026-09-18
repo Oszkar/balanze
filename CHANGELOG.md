@@ -9,18 +9,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 ### Added
 
 - **Pace now follows the active Anthropic quota source.** Fresh Claude statusline limits provide elapsed-window pace across the tray popover, compact CLI, and TUI, with OAuth used as a whole-source fallback when statusline data is unavailable or ineligible.
+- **The desktop leverage box shows how much of your usage was priced.** Priced-event coverage and any model names missing from the bundled price table are listed; a partial total is labeled as partial, all-unpriced usage reads as unavailable, and a priced zero still shows $0.00.
+- **`watch` honors the global flags it already accepted.** `--quiet` suppresses the display and the shutdown message (explicit `--json` still streams), `--no-color` and a non-empty `NO_COLOR` disable TUI colors, and on exit the final snapshot gets the same exit classification as `status`, including `--strict`.
 
 ### Changed
 
 - **CLI JSON output advances to schema version 2.** The new nullable `claude_oauth_unavailable` field distinguishes "Claude Code not installed" from cold start. Consumers that reject unknown schema versions must add version 2 before upgrading; all version 1 fields keep their existing names and types.
 - **Atomic-write guarantees now match each supported platform.** Unix publishes remain crash-durable through the parent-directory sync, while Windows is documented as atomic old-or-new publication with the newest successful write still at risk during power loss.
+- **CSV export gains a 13th `partial` column.** `true` or `false` on OpenAI rows, empty on Claude rows. A truncated OpenAI month also warns on stderr, even under `--quiet`, and exits 5 under `--strict`. Consumers that index columns by position are unaffected; ones that assert the exact header need the new name.
+- **The bundled Claude price table is refreshed to the 2026-09-16 LiteLLM snapshot.** Opus 5, Fable 5.1, and the Mythos models are added, historical entries are retained, and Sonnet 5 is corrected to its permanent $2 / $10 per million input / output rates.
+- **One-hour cache writes are priced at their own rate.** Claude JSONL separates 5-minute and 1-hour cache writes; the leverage estimate previously charged both at the 5-minute rate. One-hour writes now use the documented 2x base-input price, older records without the breakdown keep the 5-minute estimate, and token totals still count cache writes once.
+- **Money rounds the same way on every surface.** Amounts round to whole cents, half away from zero, from the integer micro-dollar value. The popover previously showed $1.01 where the CLI and statusline showed $1.00 for the same half-cent amount. Thousands separators remain surface-specific.
+- **The popover pace tooltip is gone.** The elapsed tick on the usage bar already says whether you are ahead of or behind linear pace; screen readers now get the measured used and elapsed percentages instead of the tooltip text.
 
 ### Fixed
 
+- **Completed Claude usage replaces an earlier partial record.** Claude Code can append a final usage record after a partial one with the same message and request IDs. Keeping the first record discarded output tokens; the record with the greatest cumulative output now wins, and duplicates are never summed.
+- **Anthropic quota is marked stale when it is no longer trustworthy.** A source older than 15 minutes, carrying a future timestamp, past its reported reset, or in error no longer reads as current. Fresh statusline wins, then fresh OAuth; when neither is fresh the last values stay visible with a stale label and no pace. The CLI, tray, and both popover layouts apply the same rule.
+- **Popover quota cells react to a failing source.** An OAuth failure that arrived without new usage data updated the warning banner but left the quota cell looking fresh. The cell now shows the error until the next successful update clears it.
+- **The statusline marks a retained stale Codex window.** A fresh 5-hour value merged over a week-old weekly value rendered both without the warning marker. One stale window now marks the pair.
+- **`export` uses the documented auth and network exit codes.** A rejected OpenAI key exits 3 and an unreachable provider exits 4, as the exit-code table already promised; both previously exited 1. A local Claude JSONL read failure still exits 1.
+- **One-shot `status` and `export` keep the valid records of a damaged JSONL file.** A malformed or unfinished record could make them discard the whole file while the tray and `watch` kept the rest. `status` also now respects the provider toggles before any I/O and uses fresh statusline quota, naming the selected source in its output.
+- **Settings changes from the desktop app and the CLI no longer overwrite each other.** Every change takes a shared lock with a bounded wait, reloads the latest file, and applies only the fields it meant to change. Two desktop settings commands in flight also reach the live watchers in the order they were saved, so an older value can no longer win. Manual edits and other programs are outside the lock.
+- **A partial tray repaint cannot leave the wrong icon behind.** After the operating system accepted only some properties of a repaint, a change back to the previous state was treated as already painted. Repaints now compare against what the OS actually holds.
+- **A slow Anthropic poll is followed by a full quiet interval.** A poll whose retries outlasted the cadence was followed immediately by the next request. The interval now restarts when a poll finishes.
+- **Provider and parser boundaries are stricter.** `Retry-After` can no longer shorten the configured backoff floor, malformed Codex windows are reported as schema drift rather than shown, Claude project roots added or removed at runtime are picked up, and directory discovery does not follow Windows junctions out of the tree or into cycles.
+- **An oversized popover scrolls instead of clipping.**
 - **OpenAI reservations now use an OS lock instead of candidate election.** Concurrent upgraded processes cannot both reserve the same request, including when a contender pauses before publishing its lease marker. Live ownership does not expire, and process exit releases the lock; legacy statusline handoff remains best-effort, so upgrade all running copies for the full guarantee.
 - **Statusline watching no longer reacts to its own snapshot output.** Only bridge-file changes and rescan notices trigger ingestion; atomic replacements, including writes through a symlink to another file in the watched directory, remain live without a continuous disk-write and UI-update loop.
 - **Failed statusline replacement keeps its restore backup when publication is uncertain.** A post-rename sync failure can no longer erase the displaced command; rollback happens only after rereading Claude settings confirms the original command is still installed.
-
 - **Claude settings wiring now respects dotfile-managed configuration.** Existing JSON key order is preserved, symlinks remain symlinks, dangling links are rejected, and a link retarget cannot redirect a read-modify-write transaction to a different file.
 - **Settings and tray updates no longer stall behind failed background work.** Watcher restarts remain interruptible, settings acknowledgments time out cleanly, tray repainting runs off the coordinator task, and transient operating-system paint failures are retried instead of cached as success.
 - **Live usage state now stays ordered and supervised.** Older snapshot replies cannot overwrite newer events or refreshes, listener setup cannot leak across a closed popover, dropped refreshes are visible in logs, and an exhausted watcher generation remains supervised instead of silently leaving every source stopped.
@@ -31,6 +48,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 - **OpenAI Costs requests now share one machine-wide gate.** `status`, `export`, the watcher, setup/doctor/Tauri validation, and statusline self-compose can no longer bypass one another and multiply requests. A granted attempt reserves its key and API-base identity for exactly 300 seconds on success, failure, cancellation, or crash, and performs no in-call retry.
 - **OpenAI cache handoff is safe across old and new binaries.** The provider client migrates the prior statusline-only entry into a bounded 8-identity store, keeps a derived legacy headline projection for rolling upgrades, never persists keys or API base URLs, and serves stale headlines only to statusline while full-data callers defer.
 - **Concurrent OpenAI refreshes no longer hold coordination across HTTP.** One short store-wide lease protects reservation and completion transactions, and token-checked completion prevents a late request from overwriting its successor.
+
+### Security
+
+- **rustls is updated for RUSTSEC-2026-0285**, which allowed TLS 1.3 handshake messages at the wrong encryption level.
+- **The desktop webview runs under a restrictive Content Security Policy,** and the OpenAI admin-key link opens through an exact-URL allowlist rather than a general opener.
 
 ## [0.5.2] - Legibility - 2026-08-07
 
