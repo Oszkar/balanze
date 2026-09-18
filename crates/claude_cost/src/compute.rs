@@ -38,6 +38,9 @@ pub struct Cost {
     /// "subscription leverage" or similar; presenting it as "total spend"
     /// to a Max-plan user is misleading.
     pub total_micro_usd: i64,
+    /// Models that carried usage but are absent from the price table, so the
+    /// total understates. A model seen only on zero-usage events is not listed:
+    /// nothing was left unpriced. Non-empty means the estimate is partial.
     pub skipped_models: Vec<String>,
     /// Total events the function saw, regardless of whether their model was
     /// found in the price table, was an unknown model, or had an empty model
@@ -85,6 +88,13 @@ impl ModelCost {
     }
 }
 
+fn has_usage(event: &UsageEvent) -> bool {
+    event.input_tokens != 0
+        || event.output_tokens != 0
+        || event.cache_creation_input_tokens != 0
+        || event.cache_read_input_tokens != 0
+}
+
 /// Compute cost from event slice + price table.
 ///
 /// Pure function: no I/O, no logging above debug, no async. Same input
@@ -115,7 +125,12 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
         }
 
         let Some(model_prices) = prices.models.get(model) else {
-            skipped.insert(model.clone(), ());
+            // A zero-usage event costs nothing at any price, so an unknown
+            // model on it (Claude Code's `<synthetic>` placeholder turns) is
+            // not a gap in the estimate and must not be reported as one.
+            if has_usage(event) {
+                skipped.insert(model.clone(), ());
+            }
             continue;
         };
 
@@ -477,6 +492,40 @@ mod tests {
         assert_eq!(m.event_count, 1);
         assert_eq!(m.total_micro_usd, 0);
         assert!(cost.skipped_models.is_empty());
+    }
+
+    #[test]
+    fn zero_usage_unknown_model_is_not_a_missing_price() {
+        // Claude Code writes `<synthetic>` placeholder turns with zero tokens.
+        // A zero-usage event costs nothing at any price, so its model being
+        // absent from the table is not a gap in the estimate.
+        let cost = compute_cost(
+            &[
+                event("claude-sonnet-4-6", 1_000, 0, 0, 0),
+                event("<synthetic>", 0, 0, 0, 0),
+            ],
+            &fixture_prices(),
+        );
+        assert!(
+            cost.skipped_models.is_empty(),
+            "zero-usage unknown model reported as a missing price: {:?}",
+            cost.skipped_models
+        );
+        // Still an event the function saw.
+        assert_eq!(cost.total_event_count, 2);
+        assert_eq!(cost.per_model.len(), 1);
+    }
+
+    #[test]
+    fn unknown_model_with_usage_is_still_skipped_beside_a_zero_usage_one() {
+        let cost = compute_cost(
+            &[
+                event("claude-future-model", 1_000, 0, 0, 0),
+                event("<synthetic>", 0, 0, 0, 0),
+            ],
+            &fixture_prices(),
+        );
+        assert_eq!(cost.skipped_models, vec!["claude-future-model".to_string()]);
     }
 
     #[test]

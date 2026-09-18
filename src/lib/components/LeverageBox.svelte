@@ -4,11 +4,14 @@
   import type { Cost } from '$lib/types/snapshot';
   let { cost, error = null }: { cost: Cost | null; error?: string | null } = $props();
   const pricedCount = $derived(cost?.per_model.reduce((sum, row) => sum + row.event_count, 0) ?? 0);
-  const partial = $derived(cost !== null && pricedCount < cost.total_event_count);
+  // Partial means usage went unpriced: a model missing from the price table, or an
+  // event with no model name. Counting events instead would trip on Claude Code's
+  // zero-token `<synthetic>` turns, which are never priced and never cost anything.
+  const partial = $derived(cost !== null && (cost.skipped_models.length > 0 || cost.unparsed_event_count > 0));
 </script>
 {#if cost && cost.total_event_count > 0}
   <div class="lev" title={PROV.leverageEstimate.title}>
-    <div class="row"><span class="cap">Subscription leverage</span><span class="val">{pricedCount > 0 ? `~${microUsdToDollars(cost.total_micro_usd)}` : 'Unavailable'}</span></div>
+    <div class="row"><span class="cap">Subscription leverage</span><span class="val">{pricedCount > 0 || !partial ? `~${microUsdToDollars(cost.total_micro_usd)}` : 'Unavailable'}</span></div>
     <div class="note">This month at API list prices · not billed</div>
     {#if partial}
       <div class="coverage">{pricedCount > 0 ? 'Partial estimate' : 'No priced usage'} · {pricedCount} of {cost.total_event_count} events priced</div>
