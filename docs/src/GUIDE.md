@@ -63,7 +63,7 @@ A density toggle switches between the default **Details** view and a **Compact**
 
 ## The tray icon
 
-The tray gauge is a color-shifting ring on one shared scale - **green / yellow / orange / red at 50 / 75 / 90** - used identically across the tray, popover, CLI, and statusline. The ring colors on your **worst** window, and the title and tooltip name which window that is, so the color is always explained by a number you can see. Before there is any data the gauge is neutral, and the tooltip reads "connecting..." while a source warms up or "... unavailable" when one is not configured.
+The tray gauge is a color-shifting ring on one shared scale - **green / yellow / orange / red at 50 / 75 / 90** - and those cutoffs mean the same thing in the tray, popover, CLI, and statusline. What each surface does with a **stale or failing** source differs: the tray has only its ring, so trouble takes over the ring color, while the popover, `watch`, and the statusline keep the usage color and add a stale marker. The ring colors on your **worst** window, and the title and tooltip name which window that is, so the color is always explained by a number you can see. If the ring is red while every number is low, a source is stale or failing - the tooltip says so, and the popover names which one. Before there is any data the gauge is neutral, and the tooltip reads "connecting..." while a source warms up or "... unavailable" when one is not configured.
 
 ## Connecting OpenAI
 
