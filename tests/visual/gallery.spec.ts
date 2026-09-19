@@ -50,6 +50,10 @@ test('leverage distinguishes partial, unpriced, and zero-cost usage', async ({ p
   const full = leverage('Cards - two providers');
   await expect(full.locator('.val')).toHaveText('~$47.30');
   await expect(full.locator('.coverage')).toHaveCount(0);
+  // Zero-token placeholder turns are events nothing was left unpriced for.
+  const placeholder = leverage('Cards - zero-usage placeholder turns');
+  await expect(placeholder.locator('.val')).toHaveText('~$47.30');
+  await expect(placeholder.locator('.coverage')).toHaveCount(0);
   const partial = leverage('Cards - partial pricing');
   await expect(partial.locator('.val')).toHaveText('~$47.30');
   await expect(partial).toContainText('Partial estimate · 340 of 400 events priced');

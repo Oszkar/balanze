@@ -39,8 +39,10 @@ println!(
 );
 ```
 
-- `compute_cost` is infallible. Unknown models go into
-  `Cost.skipped_models`, never into an error.
+- `compute_cost` is infallible. Unknown models that carried usage go into
+  `Cost.skipped_models`, never into an error. An unknown model seen only on
+  zero-usage events (Claude Code's `<synthetic>` turns) is not listed, since
+  nothing was left unpriced.
 - `load_bundled_prices` fails only if the compile-time-embedded JSON is
   malformed, contains a non-finite / negative / wildly-large price, or
   has zero model entries. Compile-time impossible for the data shipped

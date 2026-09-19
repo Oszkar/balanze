@@ -24,6 +24,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ### Fixed
 
+- **Zero-token placeholder turns no longer make the leverage estimate look partial.** Claude Code writes `<synthetic>` turns with no tokens. They cost nothing at any price, but the new coverage display counted them as unpriced and reported `<synthetic>` as a missing price on the desktop and in `status --sections`. A model is now reported as missing only when it carried usage.
 - **Completed Claude usage replaces an earlier partial record.** Claude Code can append a final usage record after a partial one with the same message and request IDs. Keeping the first record discarded output tokens; the record with the greatest cumulative output now wins, and duplicates are never summed.
 - **Anthropic quota is marked stale when it is no longer trustworthy.** A source older than 15 minutes, carrying a future timestamp, past its reported reset, or in error no longer reads as current. Fresh statusline wins, then fresh OAuth; when neither is fresh the last values stay visible with a stale label and no pace. The CLI, tray, and both popover layouts apply the same rule.
 - **Popover quota cells react to a failing source.** An OAuth failure that arrived without new usage data updated the warning banner but left the quota cell looking fresh. The cell now shows the error until the next successful update clears it.

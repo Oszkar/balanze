@@ -274,10 +274,13 @@ export interface GalleryState {
 }
 
 /** Coverage examples use real Cost invariants, including a priced zero. */
-function leverageCoverage(kind: 'partial' | 'unknown' | 'missing' | 'zero'): Snapshot {
+function leverageCoverage(kind: 'partial' | 'unknown' | 'missing' | 'zero' | 'placeholder'): Snapshot {
   const s = baseSnapshot();
   const cost = s.anthropic_api_cost!;
-  if (kind === 'partial') {
+  if (kind === 'placeholder') {
+    // Zero-token `<synthetic>` turns: counted as events, never priced, not a gap.
+    cost.total_event_count += 8;
+  } else if (kind === 'partial') {
     cost.total_event_count = 400;
     cost.skipped_models = ['claude-future-model'];
     cost.unparsed_event_count = 2;
@@ -324,6 +327,7 @@ export const GALLERY_STATES: GalleryState[] = [
   { label: 'Cards - unknown model pricing', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('unknown') },
   { label: 'Cards - missing model names', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('missing') },
   { label: 'Cards - priced zero', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('zero') },
+  { label: 'Cards - zero-usage placeholder turns', view: 'cards', openaiEnabled: true, snapshot: leverageCoverage('placeholder') },
   { label: 'Cards - Anthropic only', view: 'cards', openaiEnabled: false, snapshot: singleProvider() },
   { label: 'Cards - Codex stale window', view: 'cards', openaiEnabled: true, snapshot: codexStale() },
   { label: 'Cards - overage over limit', view: 'cards', openaiEnabled: true, snapshot: overageOverLimit() },
