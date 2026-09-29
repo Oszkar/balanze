@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+## [0.5.3] - Hardening - 2026-09-19
+
+No new surface: the same numbers, made trustworthy. Every surface now agrees on which quota source wins, when it is stale, and how money rounds; the leverage estimate stops dropping output tokens and mispricing one-hour cache writes; concurrent Balanze processes can no longer multiply OpenAI requests or overwrite each other's settings; and the CLI's exit codes and CSV now say what the documentation says they do. Upgrade every running copy - the desktop app and any CLI on your PATH - to get the machine-wide guarantees.
+
 ### Added
 
 - **Pace now follows the active Anthropic quota source.** Fresh Claude statusline limits provide elapsed-window pace across the tray popover, compact CLI, and TUI, with OAuth used as a whole-source fallback when statusline data is unavailable or ineligible.
@@ -312,7 +316,8 @@ v0.1 - **"Data"**: a complete, honest four-quadrant data layer as a CLI. Distrib
 - Anthropic API $ is an *estimate*, not real spend (official Usage & Cost API is org-admin-gated - Phase-0 NO-GO).
 
 
-[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/Oszkar/balanze/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/Oszkar/balanze/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/Oszkar/balanze/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Oszkar/balanze/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Oszkar/balanze/compare/v0.4.4...v0.5.0
