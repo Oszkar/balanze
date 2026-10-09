@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
-## [0.5.3] - Hardening - 2026-09-19
+## [0.5.3] - Hardening - 2026-10-09
 
 No new surface: the same numbers, made trustworthy. Every surface now agrees on which quota source wins, when it is stale, and how money rounds; the leverage estimate stops dropping output tokens and mispricing one-hour cache writes; concurrent Balanze processes can no longer multiply OpenAI requests or overwrite each other's settings; and the CLI's exit codes and CSV now say what the documentation says they do. Upgrade every running copy - the desktop app and any CLI on your PATH - to get the machine-wide guarantees.
 
