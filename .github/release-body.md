@@ -1,4 +1,13 @@
-Auto-generated release.
+Balanze v0.5.3 - Hardening
+
+This release fixes usage undercounting, one-hour cache-write pricing, stale quota displays, concurrent settings updates, and duplicate OpenAI Costs requests. See the [full changelog](https://github.com/Oszkar/balanze/blob/v0.5.3/CHANGELOG.md#053---hardening---2026-10-09) for details.
+
+**Before upgrading**
+
+- Upgrade every running copy, including the desktop app and any `balanze-cli` on your PATH. The machine-wide OpenAI request and settings-write guarantees require cooperating upgraded processes.
+- CLI JSON output now uses **schema version 2**, adding the nullable `claude_oauth_unavailable` field. All version 1 fields retain their names and types, but consumers that reject unknown schema versions must accept version 2 before upgrading.
+- CSV export adds a 13th **`partial`** column: `true` or `false` for OpenAI rows, empty for Claude rows. Update consumers that require an exact header or column count. Existing column positions are unchanged.
+- A partial OpenAI export warns on stderr even with `--quiet` and exits 5 with `--strict`. Authentication and network failures now use the documented exit codes 3 and 4.
 
 **Desktop app**
 
