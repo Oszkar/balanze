@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use claude_parser::UsageEvent;
 
-use crate::prices::PriceTable;
+use crate::prices::{LONG_PROMPT_THRESHOLD_TOKENS, PriceTable};
 
 /// Aggregated cost result.
 ///
@@ -140,33 +140,45 @@ pub fn compute_cost(events: &[UsageEvent], prices: &PriceTable) -> Cost {
 
         entry.event_count += 1;
 
-        let input_micro =
-            component_micro(event.input_tokens, Some(model_prices.input_nano_per_token));
-        let output_micro = component_micro(
-            event.output_tokens,
-            Some(model_prices.output_nano_per_token),
-        );
+        // Anthropic bills a request at the higher tier when its whole prompt
+        // (fresh input + cache writes + cache reads) exceeds the threshold.
+        let prompt_tokens = event
+            .input_tokens
+            .saturating_add(event.cache_creation_input_tokens)
+            .saturating_add(event.cache_read_input_tokens);
+        let (input_rate, output_rate, cache_creation_rate, cache_read_rate) =
+            match model_prices.long_prompt.as_ref() {
+                Some(long) if prompt_tokens > LONG_PROMPT_THRESHOLD_TOKENS => (
+                    long.input_nano_per_token,
+                    long.output_nano_per_token,
+                    long.cache_creation_nano_per_token,
+                    long.cache_read_nano_per_token,
+                ),
+                _ => (
+                    model_prices.input_nano_per_token,
+                    model_prices.output_nano_per_token,
+                    model_prices.cache_creation_nano_per_token,
+                    model_prices.cache_read_nano_per_token,
+                ),
+            };
+
+        let input_micro = component_micro(event.input_tokens, Some(input_rate));
+        let output_micro = component_micro(event.output_tokens, Some(output_rate));
         let cache_creation_micro = if let Some(split) = event.cache_creation {
             // Anthropic's standard 1-hour write price is 2x base input.
             // Sum both durations in nano-USD before rounding the component,
             // preserving precision for sub-micro writes and using i128 so
             // neither the multiplier nor large token counts can overflow.
-            let five_rate = model_prices.cache_creation_nano_per_token.unwrap_or(0) as i128;
-            let hour_rate = model_prices.input_nano_per_token as i128 * 2;
+            let five_rate = cache_creation_rate.unwrap_or(0) as i128;
+            let hour_rate = input_rate as i128 * 2;
             nano_to_micro(
                 split.ephemeral_5m_input_tokens as i128 * five_rate
                     + split.ephemeral_1h_input_tokens as i128 * hour_rate,
             )
         } else {
-            component_micro(
-                event.cache_creation_input_tokens,
-                model_prices.cache_creation_nano_per_token,
-            )
+            component_micro(event.cache_creation_input_tokens, cache_creation_rate)
         };
-        let cache_read_micro = component_micro(
-            event.cache_read_input_tokens,
-            model_prices.cache_read_nano_per_token,
-        );
+        let cache_read_micro = component_micro(event.cache_read_input_tokens, cache_read_rate);
 
         entry.input_micro_usd = entry.input_micro_usd.saturating_add(input_micro);
         entry.output_micro_usd = entry.output_micro_usd.saturating_add(output_micro);
@@ -349,6 +361,65 @@ mod tests {
         }
     }
 
+    fn tiered_prices() -> PriceTable {
+        let mut models = BTreeMap::new();
+        models.insert(
+            "claude-tiered".to_string(),
+            ModelPrices {
+                input_nano_per_token: 100,
+                output_nano_per_token: 500,
+                cache_creation_nano_per_token: Some(125),
+                cache_read_nano_per_token: Some(10),
+                long_prompt: Some(crate::prices::LongPromptPrices {
+                    input_nano_per_token: 500,
+                    output_nano_per_token: 2500,
+                    cache_creation_nano_per_token: Some(625),
+                    cache_read_nano_per_token: Some(50),
+                }),
+            },
+        );
+        PriceTable {
+            models,
+            commit: "test",
+            fetched_at: "2026-10-15",
+        }
+    }
+
+    #[test]
+    fn prompt_at_threshold_is_base_rate_and_one_over_is_long_rate() {
+        // Prompt size is fresh input + cache reads here: 100_000 vs 100_001.
+        let at = event("claude-tiered", 50_000, 1_000, 0, 50_000);
+        let over = event("claude-tiered", 50_000, 1_000, 0, 50_001);
+        let c_at = compute_cost(&[at], &tiered_prices());
+        let c_over = compute_cost(&[over], &tiered_prices());
+        // 50_000*100 + 1_000*500 + 50_000*10 = 6_000_000 nano = 6_000 micro
+        assert_eq!(c_at.total_micro_usd, 6_000);
+        // 25_000 + 2_500 + 2_500 micro (50_001*50 = 2_500_050 nano rounds to 2_500)
+        assert_eq!(c_over.total_micro_usd, 30_000);
+    }
+
+    #[test]
+    fn long_prompt_counts_cache_writes_and_applies_tier_to_one_hour_writes() {
+        let mut e = event("claude-tiered", 0, 0, 100_001, 0);
+        e.cache_creation = Some(claude_parser::CacheCreation {
+            ephemeral_5m_input_tokens: 1,
+            ephemeral_1h_input_tokens: 100_000,
+        });
+        // 1*625 + 100_000*(2*500) = 100_000_625 nano -> 100_001 micro
+        let cost = compute_cost(&[e], &tiered_prices());
+        assert_eq!(cost.per_model[0].cache_creation_micro_usd, 100_001);
+    }
+
+    #[test]
+    fn tier_is_chosen_per_event_not_per_model() {
+        let small = event("claude-tiered", 1_000, 0, 0, 0);
+        let big = event("claude-tiered", 200_000, 0, 0, 0);
+        let cost = compute_cost(&[small, big], &tiered_prices());
+        // 1_000*100 + 200_000*500 = 100_100_000 nano
+        assert_eq!(cost.total_micro_usd, 100_100);
+        assert_eq!(cost.per_model[0].event_count, 2);
+    }
+
     fn fixture_prices() -> PriceTable {
         let mut models = BTreeMap::new();
         // Same shape as the real claude-sonnet-4-6 entry.
@@ -359,6 +430,7 @@ mod tests {
                 output_nano_per_token: 15000,              // $15.00 / M
                 cache_creation_nano_per_token: Some(3750), // $3.75 / M
                 cache_read_nano_per_token: Some(300),      // $0.30 / M
+                long_prompt: None,
             },
         );
         // Older-style entry without caching.
@@ -369,6 +441,7 @@ mod tests {
                 output_nano_per_token: 1250,
                 cache_creation_nano_per_token: None,
                 cache_read_nano_per_token: None,
+                long_prompt: None,
             },
         );
         // Cheaper-than-sonnet entry for sort tests.
@@ -379,6 +452,7 @@ mod tests {
                 output_nano_per_token: 5000,
                 cache_creation_nano_per_token: None,
                 cache_read_nano_per_token: None,
+                long_prompt: None,
             },
         );
         PriceTable {
@@ -462,6 +536,7 @@ mod tests {
             output_nano_per_token: 0,
             cache_creation_nano_per_token: None,
             cache_read_nano_per_token: None,
+            long_prompt: None,
         };
         models.insert("claude-alpha".to_string(), row.clone());
         models.insert("claude-beta".to_string(), row);
@@ -759,6 +834,7 @@ mod tests {
                 output_nano_per_token: 0,
                 cache_creation_nano_per_token: None,
                 cache_read_nano_per_token: None,
+                long_prompt: None,
             },
         );
         let prices = PriceTable {
@@ -778,6 +854,7 @@ mod tests {
                 output_nano_per_token: 0,
                 cache_creation_nano_per_token: None,
                 cache_read_nano_per_token: None,
+                long_prompt: None,
             },
         );
         let prices = PriceTable {
@@ -805,6 +882,7 @@ mod tests {
                 output_nano_per_token: 0,
                 cache_creation_nano_per_token: None,
                 cache_read_nano_per_token: None,
+                long_prompt: None,
             },
         );
         models.insert(
@@ -814,6 +892,7 @@ mod tests {
                 output_nano_per_token: 0,
                 cache_creation_nano_per_token: None,
                 cache_read_nano_per_token: None,
+                long_prompt: None,
             },
         );
         let prices = PriceTable {

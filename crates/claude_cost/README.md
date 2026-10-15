@@ -82,7 +82,7 @@ the vendored price snapshot came from. The build script `build.rs` parses
 the data filename and emits both at compile time, so the const values and
 the data file can never drift.
 
-The bundled snapshot was fetched on 2026-09-16 from [LiteLLM commit c8114ba](https://github.com/BerriAI/litellm/blob/c8114ba41ff76365e3fb065dd3c7ca387598fd98/model_prices_and_context_window.json). Current model rates were cross-checked against [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing). It includes Opus 5, Fable 5.1 and Mythos models, and Sonnet 5's permanent $2/$10 per million input/output tokens. Historical entries remain available for exports. Estimates use this snapshot's list rates for all events, using each event's 5-minute/1-hour cache-write breakdown when available; they do not reconstruct historical invoices. The 1-hour write rate is derived from Anthropic's published 2x base-input multiplier. Legacy events without a breakdown retain the 5-minute estimate. Duration components are summed in nano-USD before rounding once to micro-USD.
+The bundled snapshot was fetched on 2026-10-15 from [LiteLLM commit 8302f00](https://github.com/BerriAI/litellm/blob/8302f006ddf5b44b13baf17e2673c0fceb826725/model_prices_and_context_window.json). Current model rates were cross-checked against [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing). It includes Opus 5 and 5.5, Sonnet 5 and 5.5, Fable 5.1 and Mythos models, and Sonnet 5's permanent $2/$10 per million input/output tokens. Opus 5.5 and Sonnet 5.5 cache reads are 0.05x base input. Haiku 5.5 is priced in two tiers split at 100,000 prompt tokens: a request whose prompt (input + cache writes + cache reads) exceeds that is billed entirely at the higher rates, chosen per event (`ModelPrices::long_prompt`, `LONG_PROMPT_THRESHOLD_TOKENS`). Historical entries remain available for exports, including ones upstream has dropped (carried forward unchanged). Estimates use this snapshot's list rates for all events, using each event's 5-minute/1-hour cache-write breakdown when available; they do not reconstruct historical invoices. The 1-hour write rate is derived from Anthropic's published 2x base-input multiplier. Legacy events without a breakdown retain the 5-minute estimate. Duration components are summed in nano-USD before rounding once to micro-USD.
 
 ## Refresh procedure (manual)
 
@@ -98,6 +98,8 @@ A script to mechanize the file handling below is tracked in [#277](https://githu
 2. Filter to bare `claude-*` keys (no vendor prefix, no slashes). Keep
    only the fields `claude_cost` reads:
    - `input_cost_per_token`, `output_cost_per_token`
+   - the non-batch `*_above_100k_tokens` variants of those four rates,
+     where present (a tier needs at least input and output)
    - `cache_creation_input_token_cost`, `cache_read_input_token_cost`
    - `max_input_tokens`, `max_output_tokens`, `litellm_provider` (kept
      for forward-compat / debugging; not consumed by code today)

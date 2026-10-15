@@ -54,7 +54,9 @@ pub mod prices;
 
 pub use compute::{Cost, ModelCost, compute_cost};
 pub use errors::CostError;
-pub use prices::{ModelPrices, PriceTable, load_bundled_prices};
+pub use prices::{
+    LONG_PROMPT_THRESHOLD_TOKENS, LongPromptPrices, ModelPrices, PriceTable, load_bundled_prices,
+};
 
 /// Short commit hash of the LiteLLM source the vendored price table was
 /// taken from. Emitted by `build.rs` from the `data/litellm-prices-*.json`
