@@ -48,13 +48,33 @@ pub struct ModelPrices {
     pub cache_creation_nano_per_token: Option<i64>,
     /// `None` for older Claude models that lack prompt-caching pricing.
     pub cache_read_nano_per_token: Option<i64>,
+    /// Replacement rates for requests whose prompt exceeds
+    /// [`LONG_PROMPT_THRESHOLD_TOKENS`]. `None` for models billed at one
+    /// rate regardless of prompt size.
+    pub long_prompt: Option<LongPromptPrices>,
+}
+
+/// Prompt size (input + cache writes + cache reads) above which a model's
+/// [`LongPromptPrices`] apply. A prompt of exactly this size is still billed
+/// at the base rates.
+pub const LONG_PROMPT_THRESHOLD_TOKENS: u64 = 100_000;
+
+/// Rates for a request whose prompt exceeds [`LONG_PROMPT_THRESHOLD_TOKENS`].
+/// Replaces the model's base rates wholesale for that request; the 1-hour
+/// cache-write rate is still derived as 2x this tier's input rate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LongPromptPrices {
+    pub input_nano_per_token: i64,
+    pub output_nano_per_token: i64,
+    pub cache_creation_nano_per_token: Option<i64>,
+    pub cache_read_nano_per_token: Option<i64>,
 }
 
 /// Embedded JSON snapshot. **Hardcoded path** - when refreshing the price
 /// table, update both the data filename and this line. The build script
 /// validates the filename pattern but cannot rewrite this `include_str!`
 /// because `include_str!` requires a string literal at parse time.
-const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-c8114ba-20260916.json");
+const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-8302f00-20261015.json");
 
 /// Load the compile-time-embedded vendored price table.
 ///
@@ -98,6 +118,8 @@ pub(crate) fn parse_prices(json: &str) -> Result<PriceTable, CostError> {
         let cache_creation = optional_f64(entry, "cache_creation_input_token_cost", key)?;
         let cache_read = optional_f64(entry, "cache_read_input_token_cost", key)?;
 
+        let long_prompt = parse_long_prompt(entry, key)?;
+
         models.insert(
             key.clone(),
             ModelPrices {
@@ -105,6 +127,7 @@ pub(crate) fn parse_prices(json: &str) -> Result<PriceTable, CostError> {
                 output_nano_per_token: usd_per_token_to_nano(output),
                 cache_creation_nano_per_token: cache_creation.map(usd_per_token_to_nano),
                 cache_read_nano_per_token: cache_read.map(usd_per_token_to_nano),
+                long_prompt,
             },
         );
     }
@@ -123,6 +146,38 @@ pub(crate) fn parse_prices(json: &str) -> Result<PriceTable, CostError> {
         commit: "",
         fetched_at: "",
     })
+}
+
+/// Reads the optional `*_above_100k_tokens` rates. The tier needs both an
+/// input and an output rate; one without the other is a corrupted refresh.
+fn parse_long_prompt(
+    entry: &serde_json::Map<String, serde_json::Value>,
+    model: &str,
+) -> Result<Option<LongPromptPrices>, CostError> {
+    let input = optional_f64(entry, "input_cost_per_token_above_100k_tokens", model)?;
+    let output = optional_f64(entry, "output_cost_per_token_above_100k_tokens", model)?;
+    let cache_creation = optional_f64(
+        entry,
+        "cache_creation_input_token_cost_above_100k_tokens",
+        model,
+    )?;
+    let cache_read = optional_f64(
+        entry,
+        "cache_read_input_token_cost_above_100k_tokens",
+        model,
+    )?;
+    match (input, output) {
+        (None, None) if cache_creation.is_none() && cache_read.is_none() => Ok(None),
+        (Some(input), Some(output)) => Ok(Some(LongPromptPrices {
+            input_nano_per_token: usd_per_token_to_nano(input),
+            output_nano_per_token: usd_per_token_to_nano(output),
+            cache_creation_nano_per_token: cache_creation.map(usd_per_token_to_nano),
+            cache_read_nano_per_token: cache_read.map(usd_per_token_to_nano),
+        })),
+        _ => Err(CostError::PricesMissing(format!(
+            "model {model} has an incomplete above-100k tier (needs input and output rates)"
+        ))),
+    }
 }
 
 fn required_f64(
@@ -229,10 +284,13 @@ mod tests {
     #[test]
     fn bundled_prices_cover_current_opus_fable_and_mythos_rates() {
         // USD per million tokens from Anthropic's published pricing, expressed
-        // as nano-USD/token. In particular, 5.1 cache reads are 0.025x input.
+        // as nano-USD/token. In particular, 5.1 cache reads are 0.025x input and
+        // 5.5 Opus/Sonnet cache reads are 0.05x input.
         let table = load_bundled_prices().unwrap();
         for (model, input, output, write, read) in [
             ("claude-opus-5", 5000, 25000, 6250, 500),
+            ("claude-opus-5-5", 4000, 20000, 5000, 200),
+            ("claude-sonnet-5-5", 2000, 10000, 2500, 100),
             ("claude-fable-5", 10000, 50000, 12500, 1000),
             ("claude-mythos-5", 10000, 50000, 12500, 1000),
             ("claude-fable-5-1", 10000, 50000, 12500, 250),
@@ -245,9 +303,48 @@ mod tests {
                     output_nano_per_token: output,
                     cache_creation_nano_per_token: Some(write),
                     cache_read_nano_per_token: Some(read),
+                    long_prompt: None,
                 }),
                 "{model}"
             );
+        }
+    }
+
+    #[test]
+    fn haiku_5_5_carries_its_above_100k_tier() {
+        // $0.10/$0.50 base, $0.50/$2.50 above 100k prompt tokens; cache
+        // writes 1.25x and cache reads 0.1x of the tier's input rate.
+        let table = load_bundled_prices().unwrap();
+        assert_eq!(
+            table.models.get("claude-haiku-5-5"),
+            Some(&ModelPrices {
+                input_nano_per_token: 100,
+                output_nano_per_token: 500,
+                cache_creation_nano_per_token: Some(125),
+                cache_read_nano_per_token: Some(10),
+                long_prompt: Some(LongPromptPrices {
+                    input_nano_per_token: 500,
+                    output_nano_per_token: 2500,
+                    cache_creation_nano_per_token: Some(625),
+                    cache_read_nano_per_token: Some(50),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_prices_rejects_half_a_long_prompt_tier() {
+        let json = r#"{
+            "claude-half-tier": {
+                "input_cost_per_token": 1.0e-7,
+                "output_cost_per_token": 5.0e-7,
+                "input_cost_per_token_above_100k_tokens": 5.0e-7
+            }
+        }"#;
+        match parse_prices(json).unwrap_err() {
+            CostError::PricesMissing(msg) => {
+                assert!(msg.contains("incomplete above-100k tier"), "got: {msg}")
+            }
         }
     }
 
