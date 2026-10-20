@@ -32,7 +32,7 @@ use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot, ExtraUsage};
 use chrono::{DateTime, Utc};
 use claude_cost::{Cost, ModelCost};
 use claude_statusline::StatuslineFilePayload;
-use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
+use codex_local::{CodexCredits, CodexQuotaSnapshot, RateLimitWindow};
 use openai_client::{LineItemCost, OpenAiCosts};
 use serde::Serialize;
 use state_coordinator::{JsonlSnapshot, Snapshot, WindowPace};
@@ -288,6 +288,8 @@ struct JsonCodexQuota<'a> {
     secondary: Option<&'a RateLimitWindow>,
     plan_type: &'a str,
     rate_limit_reached: bool,
+    /// Credits as the provider reported them; `balance` is whole credits.
+    credits: Option<&'a CodexCredits>,
 }
 
 impl<'a> JsonCodexQuota<'a> {
@@ -303,6 +305,7 @@ impl<'a> JsonCodexQuota<'a> {
             secondary: c.secondary.as_ref(),
             plan_type: &c.plan_type,
             rate_limit_reached: c.rate_limit_reached,
+            credits: c.credits.as_ref(),
         }
     }
 }
@@ -623,6 +626,22 @@ mod tests {
     fn non_verbose_redacts_codex_session_id_to_sentinel_string() {
         let v = render_to_value(&populated_snapshot(), false);
         assert_eq!(v["codex_quota"]["session_id"], "<redacted>");
+    }
+
+    #[test]
+    fn codex_credits_are_exposed_as_reported() {
+        let mut snap = populated_snapshot();
+        assert!(render_to_value(&snap, false)["codex_quota"]["credits"].is_null());
+
+        snap.codex_quota.as_mut().unwrap().credits = Some(CodexCredits {
+            has_credits: true,
+            unlimited: false,
+            balance: Some(62_500),
+        });
+        let credits = &render_to_value(&snap, false)["codex_quota"]["credits"];
+        assert_eq!(credits["balance"], 62_500);
+        assert_eq!(credits["has_credits"], true);
+        assert_eq!(credits["unlimited"], false);
     }
 
     #[test]

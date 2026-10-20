@@ -185,5 +185,15 @@
     { "microUsd": -5000, "cents": -1 },
     { "microUsd": -4999, "cents": 0 },
     { "microUsd": -1005000, "cents": -101 }
+  ],
+  "codexCredits": [
+    { "hasCredits": true, "unlimited": false, "balance": 62500, "expected": "62,500 credits" },
+    { "hasCredits": true, "unlimited": false, "balance": 1234567, "expected": "1,234,567 credits" },
+    { "hasCredits": true, "unlimited": false, "balance": 999, "expected": "999 credits" },
+    { "hasCredits": true, "unlimited": false, "balance": 1, "expected": "1 credit" },
+    { "hasCredits": true, "unlimited": false, "balance": 0, "expected": null },
+    { "hasCredits": true, "unlimited": false, "balance": null, "expected": null },
+    { "hasCredits": false, "unlimited": false, "balance": 500, "expected": null },
+    { "hasCredits": true, "unlimited": true, "balance": null, "expected": "unlimited credits" }
   ]
 }

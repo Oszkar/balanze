@@ -59,6 +59,12 @@ export interface RateLimitWindow {
   window_duration_minutes: number;
   resets_at: string;
 }
+export interface CodexCredits {
+  has_credits: boolean;
+  unlimited: boolean;
+  /// Whole credits; absent when the provider reports none.
+  balance: number | null;
+}
 export interface CodexQuotaSnapshot {
   observed_at: string;
   session_id: string;
@@ -66,6 +72,7 @@ export interface CodexQuotaSnapshot {
   secondary: RateLimitWindow | null;
   plan_type: string;
   rate_limit_reached: boolean;
+  credits?: CodexCredits | null;
 }
 
 export interface LineItemCost { line_item: string; amount_micro_usd: number; }

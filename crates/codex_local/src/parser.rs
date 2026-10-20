@@ -308,21 +308,41 @@ fn parse_token_usage(info: Option<&Value>) -> Option<CodexTokenUsage> {
 }
 
 /// Parse the `credits` object. `null` -> `None`. `balance` is a JSON string
-/// (e.g. "0") parsed to `i64` when numeric.
+/// that carries a decimal point in practice (`"62500.0000000000"`); it is kept
+/// as whole credits, discarding the fraction. A non-numeric or negative string
+/// yields `None`.
 fn parse_credits(credits: Option<&Value>) -> Option<CodexCredits> {
     let obj = credits?.as_object()?;
     let has_credits = obj
         .get("has_credits")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let unlimited = obj
+        .get("unlimited")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let balance = obj
         .get("balance")
         .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<i64>().ok());
+        .and_then(parse_whole_credits);
     Some(CodexCredits {
         has_credits,
+        unlimited,
         balance,
     })
+}
+
+/// Whole-credit part of a decimal balance string. The fraction must still be
+/// plain digits so garbage such as `"1.x"` is rejected rather than truncated.
+fn parse_whole_credits(s: &str) -> Option<i64> {
+    let (whole, frac) = s.split_once('.').unwrap_or((s, ""));
+    if !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    whole
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| i64::try_from(n).ok())
 }
 
 #[cfg(test)]
@@ -624,5 +644,49 @@ mod tests {
         let c = snap.credits.expect("credits parsed");
         assert_eq!(c.balance, None);
         assert!(c.has_credits);
+    }
+
+    #[test]
+    fn credits_decimal_balance_keeps_whole_credits() {
+        // Real shape from a ChatGPT Pro 100 account: the balance string
+        // carries ten fractional zeros, which an integer parse rejects.
+        const E1: &str = r#"{"timestamp":"2026-10-20T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"limit_id":"codex","limit_name":null,"primary":{"used_percent":2.0,"window_minutes":10080,"resets_at":1793089460},"secondary":null,"credits":{"has_credits":true,"unlimited":false,"balance":"62500.0000000000"},"plan_type":"prolite","rate_limit_reached_type":null}}}"#;
+        let mut f = NamedTempFile::new().unwrap();
+        write!(
+            f,
+            "{SESSION_META}
+{E1}
+"
+        )
+        .unwrap();
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        let c = snap.credits.expect("credits parsed");
+        assert_eq!(c.balance, Some(62_500));
+        assert!(c.has_credits);
+        assert!(!c.unlimited);
+    }
+
+    #[test]
+    fn credits_fraction_is_truncated_and_garbage_rejected() {
+        assert_eq!(parse_whole_credits("12.9"), Some(12));
+        assert_eq!(parse_whole_credits("0"), Some(0));
+        assert_eq!(parse_whole_credits("1.x"), None);
+        assert_eq!(parse_whole_credits("-3.0"), None);
+        assert_eq!(parse_whole_credits(""), None);
+    }
+
+    #[test]
+    fn credits_unlimited_flag_parsed() {
+        const E1: &str = r#"{"timestamp":"2026-10-20T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"primary":{"used_percent":1.0,"window_minutes":300,"resets_at":1783490621},"credits":{"has_credits":true,"unlimited":true,"balance":null},"plan_type":"enterprise","rate_limit_reached_type":null}}}"#;
+        let mut f = NamedTempFile::new().unwrap();
+        write!(
+            f,
+            "{SESSION_META}
+{E1}
+"
+        )
+        .unwrap();
+        let snap = read_latest_quota_snapshot(f.path()).unwrap().unwrap();
+        assert!(snap.credits.expect("credits parsed").unlimited);
     }
 }

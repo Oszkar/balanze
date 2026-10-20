@@ -48,13 +48,53 @@ pub struct CodexTokenUsage {
     pub recent_burn_tokens_per_min: Option<f64>,
 }
 
-/// Codex credits balance. INTERNAL ONLY (see [`CodexTokenUsage`]). For observed
-/// data this is effectively always zero/absent; the real balance and per-model
-/// (Spark) caps are backend-only and NOT obtainable from local files.
+/// Codex credits, from the account-wide `credits` block. `balance` is whole
+/// credits (the provider sends a decimal string; the fraction is dropped). It
+/// is only as fresh as the newest session file, so it changes when Codex is
+/// used rather than on a clock. Per-model (Spark) caps are backend-only and not
+/// obtainable from local files.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct CodexCredits {
     pub has_credits: bool,
+    /// Plans with no credit ceiling report `unlimited` and no balance.
+    #[serde(default)]
+    pub unlimited: bool,
     pub balance: Option<i64>,
+}
+
+impl CodexCredits {
+    /// Display label shared by every surface, or `None` when there is nothing
+    /// worth showing (no credits, a zero or unknown balance). Whole credits
+    /// with thousands separators; `unlimited` plans get a word instead.
+    ///
+    /// Keep the TypeScript mirror (`codexCreditsLabel` in
+    /// `src/lib/presentation/quota.ts`) in lockstep; both languages exercise
+    /// `tests/fixtures/presentation-policy.json`.
+    pub fn label(&self) -> Option<String> {
+        if self.unlimited {
+            return Some("unlimited credits".to_string());
+        }
+        if !self.has_credits {
+            return None;
+        }
+        match self.balance? {
+            n if n <= 0 => None,
+            1 => Some("1 credit".to_string()),
+            n => Some(format!("{} credits", group_thousands(n))),
+        }
+    }
+}
+
+/// Comma-grouped decimal for a positive integer (`62500` -> `62,500`).
+fn group_thousands(n: i64) -> String {
+    let digits = n.to_string();
+    let mut groups: Vec<&str> = digits
+        .as_bytes()
+        .rchunks(3)
+        .map(|c| std::str::from_utf8(c).unwrap_or_default())
+        .collect();
+    groups.reverse();
+    groups.join(",")
 }
 
 impl RateLimitWindow {
@@ -211,8 +251,9 @@ pub struct CodexQuotaSnapshot {
     /// deferred from UI. See [`CodexTokenUsage`].
     #[serde(skip)]
     pub tokens: Option<CodexTokenUsage>,
-    /// INTERNAL, not serialized. Credits balance; deferred from UI.
-    #[serde(skip)]
+    /// Credits balance. `#[serde(default)]` keeps snapshots written before this
+    /// field existed readable.
+    #[serde(default)]
     pub credits: Option<CodexCredits>,
 }
 
@@ -317,23 +358,67 @@ mod tests {
     }
 
     #[test]
-    fn internal_fields_are_not_serialized() {
+    fn shared_credits_label_vectors_match_rust() {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Case {
+            has_credits: bool,
+            unlimited: bool,
+            balance: Option<i64>,
+            expected: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Fixture {
+            codex_credits: Vec<Case>,
+        }
+        let fixture: Fixture = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/presentation-policy.json"
+        ))
+        .expect("shared presentation-policy fixture parses");
+        for c in fixture.codex_credits {
+            let credits = CodexCredits {
+                has_credits: c.has_credits,
+                unlimited: c.unlimited,
+                balance: c.balance,
+            };
+            assert_eq!(credits.label(), c.expected, "{credits:?}");
+        }
+    }
+
+    #[test]
+    fn token_usage_is_not_serialized() {
         let mut s = snap(win(1.0, 300), Some(win(2.0, 10080)));
         s.tokens = Some(CodexTokenUsage {
             context_window: 258400,
             session_total_tokens: 999,
             ..Default::default()
         });
-        s.credits = Some(CodexCredits {
-            has_credits: false,
-            balance: Some(0),
-        });
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("tokens"), "{json}");
-        assert!(!json.contains("credits"), "{json}");
         assert!(!json.contains("context_window"), "{json}");
         // round-trips back to None (skipped fields default on deserialize).
         let back: CodexQuotaSnapshot = serde_json::from_str(&json).unwrap();
-        assert!(back.tokens.is_none() && back.credits.is_none());
+        assert!(back.tokens.is_none());
+    }
+
+    #[test]
+    fn credits_round_trip_and_old_payloads_still_load() {
+        let mut s = snap(win(1.0, 300), Some(win(2.0, 10080)));
+        s.credits = Some(CodexCredits {
+            has_credits: true,
+            unlimited: false,
+            balance: Some(62_500),
+        });
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""balance":62500"#), "{json}");
+        let back: CodexQuotaSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.credits, s.credits);
+
+        // A snapshot written before credits were serialized has no key at all.
+        let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        v.as_object_mut().unwrap().remove("credits");
+        let old: CodexQuotaSnapshot = serde_json::from_value(v).unwrap();
+        assert!(old.credits.is_none());
     }
 }

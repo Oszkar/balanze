@@ -268,13 +268,14 @@ Historical details and implementation rationale live in the [CHANGELOG](../CHANG
 
 ### v0.5.4 - Window consistency & maintenance
 
-A bounded maintenance release with three deliverables:
+A bounded maintenance release with four deliverables:
 
-- **Codex window parity** ([#294](https://github.com/Oszkar/balanze/issues/294)). The maintainer currently sees only `Codex 7d · prolite` in the Tauri popover on Windows and macOS. Trace ingestion and presentation to identify the cause. Show distinct 5-hour and 7-day windows when the account-wide source supplies both, matching Claude's treatment; do not fabricate absent data. Check the CLI, TUI, and statusline for the same omission while respecting compact surface formats.
+- **Codex window rendering** ([#294](https://github.com/Oszkar/balanze/issues/294)). The maintainer's `Codex 7d · prolite` popover row is correct: ChatGPT Pro 100 supplies only a 7-day account-wide window, and the 5-hour window is plan-dependent. Verify with a both-windows fixture that Grid, Cards, CLI, `watch`, and statusline show distinct 5-hour and 7-day windows matching Claude's treatment, and that single-window data never invents a 5-hour row. Run after the label work so it checks the final labels.
+- **Codex credits** (no separate issue). Show the Codex credits balance on the popover (Grid and Cards) and in CLI `status --sections` and `--json`, hidden when there is no balance. Parsing a decimal balance string was the blocker. The `watch` TUI and a statusline placeholder are not part of this release.
 - **Consistent window labels** ([#280](https://github.com/Oszkar/balanze/issues/280)). Normalize known and unknown window labels across surfaces, retain model-specific labels where applicable, and cover the policy with shared fixture vectors.
 - **Maintainer price refresh** ([#277](https://github.com/Oszkar/balanze/issues/277)). Automate the pinned LiteLLM snapshot refresh with a reviewable rate diff and missing-model checks. Official-price cross-checking remains manual; no runtime fetching or scheduled refresh.
 
-Done when the reported window omission is explained and corrected where data exists, label parity is covered, and a maintainer can run the documented refresh workflow. Diagnostics bundling is deferred.
+Done when the reported window omission is explained, both-window rendering is verified, label parity is covered, and a maintainer can run the documented refresh workflow. Diagnostics bundling is deferred.
 
 ### v0.6 - Glanceable tray & menu bar
 
