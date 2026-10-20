@@ -35,11 +35,9 @@ use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 use state_coordinator::{Sink, Snapshot, Source, StateCoordinatorHandle, StateMsg};
 use tokio::sync::watch;
 
-use crate::format::{format_codex_window, micro_usd_to_display_dollars, short_cadence};
-use crate::present::{
-    Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction, matching_anthropic_pace,
-};
-use crate::render::{OverageState, classify_overage};
+use crate::format::{format_codex_window, micro_usd_to_display_dollars};
+use crate::present::{Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction};
+use crate::render::{OverageState, classify_overage, compact_pace_line, pace_bucket};
 
 // ---------------------------------------------------------------------------
 // ChannelSink: republish snapshots into a watch channel.
@@ -492,27 +490,15 @@ fn draw_codex_windows(
 }
 
 fn draw_pace(frame: &mut Frame, area: Rect, s: &Snapshot) {
-    let pace = matching_anthropic_pace(s);
-    if pace.is_empty() {
+    // Same line and the same verdict color as compact `status`.
+    let Some(line) = compact_pace_line(s) else {
         frame.render_widget(Paragraph::new("Pace: -"), area);
         return;
-    }
-    let parts: Vec<String> = pace
-        .into_iter()
-        .map(|p| {
-            let ratio = match p.ratio {
-                Some(r) => format!("{r:.1}x"),
-                None => "-".to_string(),
-            };
-            format!(
-                "{} {:.0}% used / {:.0}% elapsed ({ratio})",
-                short_cadence(&p.key),
-                p.used_fraction * 100.0,
-                p.elapsed_fraction * 100.0,
-            )
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(format!("Pace: {}", parts.join(";  "))), area);
+    };
+    frame.render_widget(
+        Paragraph::new(line).style(Style::default().fg(bucket_color(pace_bucket(s)))),
+        area,
+    );
 }
 
 fn draw_leverage(frame: &mut Frame, area: Rect, s: &Snapshot) {
@@ -1001,9 +987,21 @@ mod tests {
         let terminal = render_to_terminal(&snap);
         let text = buffer_text(&terminal);
         assert!(
-            text.contains("Pace: 5h 90% used / 10% elapsed (9.0x)"),
+            text.contains("Pace: 5h 90% used / 10% elapsed (9.0×)"),
             "{text}"
         );
+        // A critical verdict paints the line red, the same bucket compact
+        // `status` uses; the monochrome path strips it like every other cell.
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| draw_with_color(f, &snap, false)).unwrap();
+        let pace_cell = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .find(|c| c.symbol() == "P")
+            .expect("pace line starts with 'P'");
+        assert_eq!(pace_cell.fg, Color::Red);
     }
 
     #[test]
@@ -1037,7 +1035,7 @@ mod tests {
         let terminal = render_to_terminal(&snap);
         let text = buffer_text(&terminal);
         assert!(text.contains("Pace: -"), "{text}");
-        assert!(!text.contains("9.0x"), "{text}");
+        assert!(!text.contains("9.0×"), "{text}");
     }
 
     #[test]
