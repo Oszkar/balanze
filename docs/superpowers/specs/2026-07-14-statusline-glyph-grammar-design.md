@@ -1,5 +1,7 @@
 # Statusline glyph grammar
 
+> Historical design/planning record. Release assignments and implementation instructions describe the plan at that date; they are not the current roadmap. Use the [PRD](../../PRD.md), [architecture](../../ARCHITECTURE.md), and [changelog](../../../CHANGELOG.md) for current scope, contracts, and shipped behavior.
+
 Date: 2026-07-14
 Status: implemented, shipped in v0.4.4
 

@@ -7,8 +7,8 @@ latest rate-limit quota snapshot.
 Fills the "Codex %" cell of Balanze's 4-quadrant matrix. Codex reports
 two rolling windows (5-hour + weekly); the crate classifies them by
 duration and exposes `five_hour()` / `weekly()` / `worst_window()`. The
-tray reads the worst window; the popover, cards, and statusline show
-both. The schema details that drove the design live in `SCHEMA-NOTES.md`
+tray reads the worst window; other surfaces consume the available windows.
+A reported popover omission is tracked in [#294](https://github.com/Oszkar/balanze/issues/294). The schema details that drove the design live in `SCHEMA-NOTES.md`
 (this directory) - re-read those if Codex CLI changes its JSONL format.
 
 ## Public API
@@ -69,9 +69,7 @@ match read_codex_quota() {
   Anthropic does; there's no `(message_id, request_id)` shape to dedup
   on, and one `token_count` event per turn is the actual emit pattern.
   See `SCHEMA-NOTES.md` §"No dedup module needed".
-- **No `IncrementalParser`.** v0.1 reads the latest session file
-  cold each call (~120 KB, ~1 ms). If v0.2's watcher tier shows this
-  is a hot loop, revisit; for v0.1 the simpler scan wins.
+- **No `IncrementalParser`.** Each read scans candidate session files for the latest quota. Revisit incremental reads only if profiling identifies this path as a bottleneck.
 - **No per-token cost computation.** Codex side is quota %, not $. The
   4-quadrant matrix's "OpenAI API $" cell is filled by `openai_client`
   (Admin Costs API). The per-turn token/context (`CodexTokenUsage`) and
@@ -91,10 +89,7 @@ CODEX_CONFIG_DIR=/path/to/codex-data balanze
 
 ## Tests
 
-31 unit tests across `walker.rs` (11), `parser.rs` (16), `types.rs` (2), and `lib.rs` (2). Fixtures
-embed anonymized real-data lines captured during the schema spike;
-the original raw data lives at
-`~/.gstack/projects/balanze/spike-codex-schema-20260514.md`.
+Tests cover walking, parsing, window classification, and source selection. Fixtures embed anonymized session records; run `cargo test -p codex_local`. The schema rationale is recorded in [SCHEMA-NOTES.md](SCHEMA-NOTES.md).
 
 ## License
 

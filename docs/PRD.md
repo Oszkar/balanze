@@ -43,7 +43,7 @@ A small team or technically inclined individual who wants a local dashboard and 
 - Make the app useful from the tray or menu bar with minimal interaction.
 - Provide a consistent UX across operating systems while following each OS's design conventions.
 - Keep all core functionality local-first and transparent.
-- Preserve a clean path to later add Android and a hosted dashboard without rewriting the core architecture.
+- Keep shared domain logic reusable without building speculative Android or hosted infrastructure.
 - Be glanceable, simple, colorful.
 
 ### Non-goals
@@ -72,8 +72,8 @@ A small team or technically inclined individual who wants a local dashboard and 
 - A productized, cross-provider Claude Code statusline (v0.4.2).
 - Provider connectors for OpenAI and Anthropic.
 - Unified account list across subscription and API account types.
-- Manual refresh plus periodic background refresh.
-- Local secure storage for credentials and preferences. (Durable local history is deferred to the post-1.0 dashboard; the CLI `export` re-derives history from JSONL statelessly.)
+- Periodic background refresh and a manual display refresh using the latest known snapshot; on-demand provider polling is not implemented.
+- Local secure storage for credentials and preferences. (Durable history is deferred until a concrete consumer needs it; CLI `export` re-derives history from JSONL statelessly.)
 - Runnable distribution: downloadable binaries, no Rust toolchain required (v0.5).
 
 ### Out of scope
@@ -162,7 +162,7 @@ The headline view is a 2×2 matrix - Anthropic / OpenAI × subscription **quota 
 
 A cell is filled only by a number that was actually measured or actually billed:
 
-- **Anthropic quota %** - server-authoritative OAuth utilization (real).
+- **Anthropic quota %** - fresh statusline quota, with OAuth fallback (real).
 - **OpenAI quota %** - Codex CLI rate-limit % (real).
 - **OpenAI billed $** - Admin Costs API (real).
 - **Anthropic billed $** - the `extra_usage` pay-as-you-go overage, *only* if the user enabled it on claude.ai (real, exact cents). Otherwise the cell reads as honestly **unavailable** ("Anthropic exposes no per-user API spend") - it is never backfilled with a substitute number. Recovering real Anthropic API spend/balance stays an open future item.
@@ -188,9 +188,9 @@ The product should support API usage and billing-related visibility using offici
 
 The product should support Claude-related usage views across API billing and subscription usage where reliable access is available. Claude Code owns its OAuth credential in every storage form; Balanze reads it without refreshing, modifying, mirroring, or backing it up, and directs the user to `claude login` when it expires. An explicit file-refresh opt-in may be considered during settings and configurability work, but must remain off by default and can never make the macOS Keychain source writable. Claude documents subscription usage and length limits as dynamic and plan-dependent, so the app should present these carefully and avoid overstating precision.
 
-### Alerts
+### Alerts (deferred)
 
-Users should be able to define alerts for:
+Candidate notifications for a later release, subject to reliable source data and an actionable user need:
 
 - Spend exceeds threshold.
 - Credits remaining below threshold.
@@ -201,31 +201,19 @@ Users should be able to define alerts for:
 ### Storage
 
 - Store credentials locally using OS-appropriate secure storage when possible.
-- Store settings and recent history locally.
+- Store settings locally. Export re-derives Claude history from local JSONL; durable history storage is deferred.
 - No mandatory cloud backend.
 
 ## UX requirements
 
 - The compact popup should open fast and be glanceable in under 5 seconds.
-- The tray or menu-bar state should surface the single most useful live indicator, such as total spend today, provider warning count, or next reset.
+- The tray or menu-bar state should communicate utilization magnitude, with configurable combined or separate provider indicators planned for v0.6.
 - Visual design should remain functional and lightweight rather than dashboard-heavy.
 - Users should understand at a glance what is official data versus inferred data.
 
 ## Technical approach
 
-### Architecture
-
-Recommended architecture:
-
-- Rust core for data normalization, polling, storage, alerting, and provider connector logic.
-- Tauri desktop shell for tray behavior, windows, OS integration and packaging.
-- Shared frontend for popup and dashboard views.
-- Connector abstraction layer per provider so future Android or hosted surfaces can reuse the same normalized model.
-- A bounded actor owns the live snapshot. Settings changes are acknowledged only after the previous poller generation is joined and the replacement generation is active; stale-generation updates are rejected. Durable snapshot publication is coalesced on a dedicated blocking writer so local storage latency cannot freeze the tray or IPC queries.
-
-### Design implications
-
-This architecture keeps the desktop product as the first-class surface while making future web or Android clients consumers of the same normalized domain model, rather than forks of the business logic.
+Tauri provides the desktop shell, Rust owns shared domain logic and provider integration, and Svelte provides the popover and settings UI. The [architecture document](ARCHITECTURE.md) owns the crate map, write boundaries, IPC contract, and supervision rules. The roadmap does not authorize changes to those contracts without the review required by [AGENTS.md](../AGENTS.md).
 
 ## Risks and constraints
 
@@ -252,112 +240,72 @@ Usefulness:
 - Two providers work reliably enough for personal use.
 - The tray or compact popup answers the core status question in a few seconds.
 - Setup time for one provider is under 10 minutes.
-- Alerting reduces surprise credit depletion or quota exhaustion (v0.6, configured in the settings UI; v0.1-v0.5 ship without alerts).
+- Tray utilization and provider identity are legible without opening the popover (v0.6). Notifications are deferred.
 
 Engineering bar (what "finished-feeling" means here):
 
 - The tray UI reads as intentional and credible, not a scaffold - clean enough that a screenshot stands on its own.
 - The source/confidence model is legible at a glance: an onlooker can tell real billed spend from a quota % from a counterfactual estimate without reading documentation.
-- The codebase tells its own story: the architecture, the data-provenance model, and the "measured status, not forecasts" decision (why the EWMA predictor was built, dogfooded, and then retired in favour of honest pace facts) are explained well enough (README + a short "how it works" writeup) that someone can understand the interesting decisions without spelunking.
+- User documentation explains provenance and measured pace; the architecture document explains implementation boundaries without duplicating the user guide.
 - Someone can download a release and run it without a Rust toolchain (lightweight distribution, v0.5).
 
-## Phasing
+## Roadmap
 
-The MVP lands across five release phases - Data -> Liveness -> UI -> Surfaces -> Distribution - followed by two committed enhancement phases (Alerts, then Settings & configurability) and a post-1.0 deferred tier (Dashboard, then the uncommitted Vision ideas). Each phase has **one dominant theme** so "done" is hard to fudge and risk is sequenced correctly (read-only data primitives first, asymmetric/UI work later). Shipped phases are summarized to a line here; the blow-by-blow lives in the [CHANGELOG](../CHANGELOG.md), and this section stays forward-looking.
+Current release: **v0.5.3**. The next two releases focus on window consistency and glanceability. Alerts move to a later, unassigned release. Settings work needed for tray choices belongs to v0.6; broader customization is not a prerequisite for v1.0. The v1.0 readiness bar will be revisited after v0.6.
 
-**Current status: shipped through v0.5.3 (Distribution & Legibility).** The data layer, the live spine, the Tauri popover + settings, the UI polish pass, the first-class CLI surface, the productized cross-provider statusline, first-class Codex treatment (both rolling windows, everywhere), a cross-cutting hardening pass, and the first signed/notarized binary release with launch-at-login are done, and the product is useful day to day and downloadable without a Rust toolchain. The remaining Phase 5 work is support tooling (v0.5.4); v0.6 adds alerts; v0.7 deepens settings and theming.
+### Shipped
 
-### Phase 1 - v0.1: Data (shipped)
+Historical details and implementation rationale live in the [CHANGELOG](../CHANGELOG.md) and [architecture document](ARCHITECTURE.md).
 
-A complete, honest **four-quadrant data layer** exposed as a CLI (`balanze-cli`): Anthropic quota % (OAuth) and the real `extra_usage` overage $, OpenAI Codex quota % and real billed $ (Admin Costs API), with the JSONL list-price figure kept separate as the "Subscription leverage" insight. Every cell holds measured reality only, per the matrix presentation contract (see Functional requirements). Distribution was source-only (`cargo install`). Full feature list in the CHANGELOG.
+| Releases | Delivered |
+|---|---|
+| v0.1 | Four-quadrant data layer and CLI, with measured billing separate from subscription leverage. |
+| v0.2 | Live updates, statusline bridge, and measured quota-versus-elapsed pace. |
+| v0.3 | Tauri popover, settings, provider controls, and visible provenance/degradation. |
+| v0.4 | Polished GUI, CLI, and statusline; Codex window support; reliability hardening. |
+| v0.5.0-v0.5.2 | Desktop and CLI binaries, macOS signing, launch-at-login, Homebrew, and the docs site. |
+| v0.5.3 | Cross-process coordination, ingestion, freshness, pricing, and presentation correctness fixes. |
 
-### Phase 2 - v0.2: Liveness (shipped)
+### v0.5.4 - Window consistency & maintenance
 
-The data updates itself and the Anthropic API $ story is made honest. Live spine = Claude Code `statusLine` push + JSONL `notify`, with OAuth demoted to a backoff'd fallback poll (it 429s exactly during active use). The **pace model** - measured quota-used % vs window-elapsed %, no forecast - replaced a built-then-retired EWMA predictor, the "measured status, not forecasts" call the trust story rests on. Still CLI-only.
+A bounded maintenance release with three deliverables:
 
-### Phase 3 - v0.3: UI (shipped through v0.3.1)
+- **Codex window parity** ([#294](https://github.com/Oszkar/balanze/issues/294)). The maintainer currently sees only `Codex 7d · prolite` in the Tauri popover on Windows and macOS. Trace ingestion and presentation to identify the cause. Show distinct 5-hour and 7-day windows when the account-wide source supplies both, matching Claude's treatment; do not fabricate absent data. Check the CLI, TUI, and statusline for the same omission while respecting compact surface formats.
+- **Consistent window labels** ([#280](https://github.com/Oszkar/balanze/issues/280)). Normalize known and unknown window labels across surfaces, retain model-specific labels where applicable, and cover the policy with shared fixture vectors.
+- **Maintainer price refresh** ([#277](https://github.com/Oszkar/balanze/issues/277)). Automate the pinned LiteLLM snapshot refresh with a reviewable rate diff and missing-model checks. Official-price cross-checking remains manual; no runtime fetching or scheduled refresh.
 
-The Tauri surface - the hero artifact - delivered as bounded sub-milestones so the popover screenshot existed early.
+Done when the reported window omission is explained and corrected where data exists, label parity is covered, and a maintainer can run the documented refresh workflow. Diagnostics bundling is deferred.
 
-**v0.3.0 - Popover (shipped).** Color-shifting gauge tray icon + hidden-on-launch popover: one progress bar per Anthropic cadence, the pace view, the burn number, and the matrix tiles with visible source/confidence badges (transposed grid + a Cards density view). Wires the live spine into the Tauri host (watcher -> coordinator -> `TauriSink`) and the popover IPC (`get_snapshot`, `refresh_now`, `usage_updated`, `degraded_state`).
+### v0.6 - Glanceable tray & menu bar
 
-**v0.3.1 - Settings & trust (shipped).** Settings UI (keys to keychain, live provider toggles, statusLine wiring), the Windows `keyring-core` fix, the macOS Keychain OAuth read, Codex-staleness honesty, and the degraded-state banner.
+Make utilization and provider identity useful without opening the popover.
 
-**Phase 3 is done at v0.3.1.** The popover and settings are a credible UI. Alerts - originally sketched here as v0.3.2 - are resequenced into their own phase below, after distribution, so the product reaches real users sooner; the dashboard (sketched as v0.3.3) is deferred further still, past 1.0.
+- **Utilization icon and provider modes** ([#295](https://github.com/Oszkar/balanze/issues/295)). Compare a filling square/bar and a circular gauge at actual tray sizes. Offer a user setting for one most-constrained indicator or separate Claude/Codex indicators. The maintainer prefers seeing both. One shared icon versus separate tray icons, the default mode, and which window drives each provider remain design decisions.
+- **Compact macOS text** ([#296](https://github.com/Oszkar/balanze/issues/296)). Replace the space-heavy fully spelled-out provider text with a compact presentation. Evaluate short provider labels and optional percentages/icon-only display in a realistically crowded menu bar; exact options remain open.
+- **Consistent passive urgency** ([#263](https://github.com/Oszkar/balanze/issues/263)). Define how quota severity, pace, stale data, and source errors interact across surfaces, with intentional differences documented and representative parity coverage. Passive indicators are distinct from OS notifications.
 
-### Phase 4 - v0.4: Surfaces
+Done when utilization magnitude and provider identity are readable at native Windows/macOS tray sizes, users can select combined or separate provider presentation, macOS text is materially shorter, and missing/stale/error states remain honest. Preserve deduped repainting. Settings/schema/capability and architecture details still require the normal design review before implementation.
 
-Make every surface - popover, CLI, statusline - first-class and presentable. The theme is **"each way in reads as intentional, not a scaffold."** Four bounded sub-milestones, built in order.
+OS notifications, broad theming, and multi-environment aggregation are outside this release. The broad presentation refactor in [#232](https://github.com/Oszkar/balanze/issues/232) needs re-audit against shipped fixes; it is not automatically a prerequisite for either release.
 
-**v0.4.0 - UI polish.** A lightweight visual pass, not a design system - the frontend is ~14 small components, so a token/component framework would be YAGNI. Tighten spacing, type scale, and color; grow the existing `theme.css` into a small token set; add real empty / loading / error states. The bar is the Success-criteria line: the UI reads as intentional, not a scaffold, and a screenshot stands on its own. Sequenced first because it feeds the v0.5 release screenshots.
+### Later - unassigned
 
-**v0.4.1 - CLI polish** Turn `balanze-cli` from feature-complete into a first-class surface (it is also the entire Linux story). Surface note: `status` / `watch` are now explicit subcommands (was bare `--json` / `--sections` / `--watch`); bare `balanze-cli` still defaults to `status`. The CLI stayed glue - no new Tauri command/event (IPC contract unchanged), no change to the twelve architectural boundaries or the actor-model write boundary, and nothing persisted.
+These are candidates, not a release sequence or prerequisites for v1.0:
 
-**v0.4.2 - Statusline polish.** Productize the Claude Code statusline (already shipped in v0.2 as the watcher's IPC bridge) into a first-class, installable display that **replaces** an existing statusline like cship - the low-friction way into Balanze for people who live in their coding-agent prompt. Ownership is exact: only the canonical `balanze-cli statusline` command is Balanze-owned, while wrappers and composed commands remain foreign. A failed replacement keeps the saved command available for restore whenever publication is uncertain. Concurrent prompt processes coordinate OpenAI fallback refreshes through the provider-owned gate shared by every Costs caller rather than multiplying upstream requests. Upgraded processes serialize gate transactions with a persistent native file lock; older binaries receive best-effort lease handoff and must be upgraded for the full machine-wide guarantee.
+- **Multiple local environments** ([#297](https://github.com/Oszkar/balanze/issues/297)): investigate one Windows host plus WSL2 instances using the same Claude/OpenAI accounts. WSL-only activity must eventually keep the host view current; concurrent activity should contribute complete aggregates without duplicate records. Account-wide quota observations must be reconciled, never summed. First compare additional read locations with a local bridge and define freshness, identity, lifecycle, and deduplication requirements. Cloud sync and different-account support are not requirements for this investigation.
+- **Alerts**: choose actionable quota, reset, spend, or persistent-failure notifications based on real use. Require fresh data, duplicate suppression, and defined startup/re-arm behavior. Credits alerts depend on a reliable balance source. No notification thresholds are committed yet.
+- **Save Diagnostics...** ([#278](https://github.com/Oszkar/balanze/issues/278)): revisit when collecting support information solves a concrete need; contents, redaction, packaging, and CLI access remain open.
+- **Additional configuration**: themes, statusline controls in the UI, refresh cadence within provider floors, and startup behavior, as actual needs emerge.
+- **CLI improvements**: export filtering ([#114](https://github.com/Oszkar/balanze/issues/114)), JSON time-series export ([#247](https://github.com/Oszkar/balanze/issues/247)), and typed failure categories ([#279](https://github.com/Oszkar/balanze/issues/279)). These do not fit either release's theme; typed status errors need separate schema review.
+- **Platform ergonomics**: Linux credential storage ([#231](https://github.com/Oszkar/balanze/issues/231)) and Windows arm64 desktop artifacts ([#219](https://github.com/Oszkar/balanze/issues/219)). Windows arm64 CLI artifacts already ship.
+- **Dashboard/history, extra providers, Ubuntu GNOME desktop, cross-device sync, and Android** remain uncommitted. Durable history needs a concrete consumer before adding storage. WinGet and auto-update remain optional; Windows signing remains declined as documented above.
 
-**v0.4.3 - Codex maturity.** Codex stops being a second-class quota source. `codex_local` classifies each of Codex's two rolling windows (5-hour and weekly) by duration instead of trusting a plan-dependent JSON slot, and both windows surface everywhere - tray, popover, cards, CLI, and statusline - on the same shared 50/75/90 color scale as Claude. Alongside it: a parser-reliability fix (a single bad JSONL line no longer stalls the incremental cursor for the rest of the file), honest `BALANZE_LOG` file logging, and a quieter macOS Keychain path (no more re-prompting every poll tick).
+The Vite development-server issue ([#136](https://github.com/Oszkar/balanze/issues/136)) remains a development impediment to track independently, not a promised product feature. Explicit Claude file-credential refresh ([#186](https://github.com/Oszkar/balanze/issues/186)) remains uncommitted and requires its own credential-boundary review; the shipped read-only policy stands.
 
-**Phase 4 is done at v0.4.3.** Every surface reads as intentional, and Codex is now a peer citizen across all of them rather than an afterthought.
+## Open decisions
 
-**v0.4.4 - Hardening (follow-on).** A cross-cutting reliability and correctness patch that settles the phase before Distribution rather than a fifth surface: Codex quota reads the account-wide limit instead of a per-model window, Claude credentials are strictly read-only on every platform, live settings transitions are supervised and race-free, and the weekly-window label and reset countdown read identically across every surface.
-
-### Phase 5 - v0.5: Distribution & Legibility
-
-Get it into people's hands and make the engineering legible. Deliberately **lightweight** (see Project intent) - signing/store work stays optional, not load-bearing. Like Phase 4, it ships as bounded sub-milestones under patch bumps rather than one tag.
-
-**v0.5.0 - Runnable release & discoverability.** The first binary release: signed & notarized macOS DMG/app plus unsigned Windows MSI/NSIS on GitHub Releases, so someone can download and run it without `cargo` (the macOS signing path landed ahead of the tag). Alongside it: **launch-at-login** so the tray app behaves like a tray app after a reboot, a **README refresh** with a popover screenshot and the download install path, and a recorded **docs-site decision** (adopt mdBook; the site itself is built in v0.5.2). Done when the signed/notarized macOS release publishes successfully with assets attached.
-
-**v0.5.1 - Reach.** CLI distribution: prebuilt `balanze-cli` binaries on Releases for Windows (x64 and arm64), macOS (Apple Silicon), and Linux (static musl), plus a Homebrew tap carrying a CLI formula and a desktop cask. Linux gets its first install path that is not `cargo install`. crates.io is **out by design**: the workspace is deliberately unpublishable (`publish = false`, and generic-named internal path crates like `window` / `keychain` / `settings`), so publishing the CLI would mean publishing its whole dependency graph into a shared namespace. Windows arm64 lands for the CLI only - the desktop app has a WebView2 dependency the CLI does not, so the desktop half stays open.
-
-**v0.5.2 - Legibility.** The **mdBook docs site**, grown from a skeleton into the canonical user-facing documentation: the rendered user guide with real screenshots from the states gallery, plus Install, CLI Reference, and FAQ chapters that absorb the long-form content the README used to carry. The README keeps short-form and links down, so the two stop being two manuals for the same reader. A standalone "how it works" writeup was drafted and then folded back in rather than kept as its own chapter - the data-provenance section duplicated the guide almost verbatim, the "measured status, not forecasts" call (why the EWMA predictor was retired in favor of honest pace facts) is now a one-line aside in the guide's pace section, and the actor-model architecture and the twelve boundaries stay in `ARCHITECTURE.md` rather than getting a dedicated site page - the same call made for the surface-consistency design record: internal engineering detail, not user-facing. Auditing the live site before tagging also turned up defects worth fixing under the same theme: the guide was publishing nine screenshot placeholders, mdBook was copying an internal design record into the published site, and its smart-punctuation default was emitting characters AGENTS.md section 3.5 prohibits. A pre-merge docs gate now builds the book, asserts the chapters exist, scans for that punctuation, and link-checks the book and the README together. The generator decision was recorded in v0.5.0.
-
-**v0.5.3 - Hardening.** The accumulated correctness debt, which grew well past its original list once a review pass started turning over stones: one Codex window-selection contract; cross-process settings transactions that lock before reloading and apply field-level intent, including recoverable ordering for keychain and statusline multi-resource changes; a provider-owned, provenance-safe OpenAI Costs gate shared by every caller; the deferred pace-display call (pace follows the active quota source, and the redundant tooltip is gone); one Anthropic freshness rule and one money-rounding rule across every surface; completed-record deduplication and 1-hour cache-write pricing in the leverage estimate; and CLI exit codes, staleness, and partial-month reporting that match their documentation. Originally scoped together with the two support features below; they were split out so the fixes would not wait on a feature with an open secrets-boundary question.
-
-**v0.5.4 - Support.** A **price-table refresh script** (`scripts/refresh-claude-prices.*`, [#277](https://github.com/Oszkar/balanze/issues/277)) mechanizing the vendored LiteLLM Anthropic price-table refresh, and a **log-bundle tray item** ([#278](https://github.com/Oszkar/balanze/issues/278)) collecting rotated logs plus a recent state snapshot for support. The bundle is saved locally for the user to attach; nothing is uploaded.
-
-The v0.4.0 screenshots already exist, so the README refresh lands in v0.5.0 ahead of the rest.
-
-**Optional (not committed):** WinGet, Tauri auto-update - done only if the admin cost feels worth it. Homebrew is no longer on this list either; the tap, the CLI formula, and the desktop cask are committed scope in v0.5.1 above. Windows code-signing is no longer on this list; it is declined on the merits (see [Code signing](#code-signing)), and unsigned-runnable already clears the "an evaluator can try it" bar for Windows.
-
-### Phase 6 - v0.6: Alerts
-
-Kept deliberately minimal - table-stakes, not gold-plated. OS notifications for: spend exceeds threshold, credits/quota below threshold, subscription approaching cap, reset window approaching, connector failure / stale data. Configured in the settings UI with minimal inline thresholds, informed by accumulated real-use observation through v0.1-v0.5 - the deferral is deliberate, since premature defaults are noise. The richer settings / theming pass that deepens this config is v0.7.
-
-### Phase 7 - v0.7: Settings & configurability
-
-Deepen the configuration surface once there is enough to configure. The theme is **"make it yours."** The v0.3.1 settings UI already covers keys, provider toggles, and statusLine wiring; this phase grows it:
-
-- **Color themes** - popover (and statusline) theming beyond the existing light/dark, so a screenshot can match a user's taste; the visible-polish win for a showcase.
-- **Refresh cadence & startup** - user-set poll cadence (still floor-clamped per §3.1) and start-hidden behavior. (Launch-at-login shipped earlier, in v0.5.0.)
-- **Statusline config in the UI** - surface the v0.4.2 segment / color choices in the settings panel, not just a config file.
-- **Deeper alert UX** - the threshold / notification controls alerts (v0.6) shipped inline, refined into a proper per-alert configuration surface, now informed by real v0.6 usage.
-
-The last committed pre-1.0 milestone; v1.0 follows.
-
-### Post-1.0 - Dashboard & trends (deferred)
-
-Past the v1.0 line - v1.0 is feature-complete at the end of v0.7 (surfaces + distribution + alerts + configurability). Kept here rather than in Vision because it is a committed-in-spirit consumer of work already done, just not pre-1.0.
-
-The optional full dashboard window: per-provider detail, recent trends / sparklines, source/confidence detail, troubleshooting. Light: durable history was deferred from v0.4.1 (see Open Questions), so the dashboard is where persistence lands - the v0.4.x CLI `export` already re-derives Claude history from JSONL statelessly, so the history layer was decided before this (deferred, not invented here). Deferred past 1.0 because the popover + CLI TUI already answer the glanceable question, which makes the dashboard the least load-bearing surface and the right thing to cut from the critical path.
-
-**Demoted / not committed:** the Anthropic Console cookie-paste. Its only unique signal is the *current* prepaid balance; `extra_usage` already gives the real overage and statusline gives authoritative quota, so the fragile/unofficial scrape (§3.3) is implemented only if a concrete user need surfaces.
-
-### Vision - uncommitted
-
-Genuinely uncommitted ideas, picked up as a bounded phase only if desire or a real need surfaces. Not promised, not sequenced - listed so the architecture keeps them cheap.
-
-- **Prove the connector abstraction** - add a third provider (Gemini CLI / OpenRouter / Cursor) to turn the "one shared core, thin connectors" claim from asserted into demonstrated. The strongest single "this architecture generalizes" signal, if/when it's wanted.
-- Ubuntu 24.04 LTS+ GNOME support - deferred until the Windows + macOS experience is solid (GNOME tray behavior is the most fragile of the three).
-- Cross-device sync via a small relay (GitHub Gist / Cloudflare KV / iCloud Drive) - one Balanze identity reading/writing the same numbers across devices; sets up Android + hosted dashboard cleanly.
-- Export / snapshot reporting beyond the v0.4.1 CLI surface; broader provider coverage as repeated personal need surfaces.
-- Android companion app - read-only feed of the desktop's state via the sync layer.
-
-## Open questions
-
-Most of the original product-level questions are now resolved; they are kept here, marked, because the resolutions are load-bearing rationale.
-
-- **Which provider metrics are realistically obtainable through stable official integration versus inference?** *Resolved for the two committed providers.* Anthropic's official Usage & Cost API is enterprise/admin-gated (NO-GO for the modal user); current Claude Code JSONL carries no per-event cost (verified across 790 files), so the JSONL figure is labeled leverage-not-spend; the OAuth `extra_usage` block is the claude.ai pay-as-you-go overage meter (cents, exact, real billed money); and statusline carries authoritative 5h/7d %+resets plus a client-side session-cost estimate. The Console cookie-paste (prepaid balance) is demoted to "implement only if a real user need surfaces". Broader provider coverage (Vision) needs similar per-provider investigation.
-- **Should onboarding ask users to choose a trust mode ("official only" versus "include estimated metrics")?** *Resolved - won't build.* The shipped per-metric source/confidence badges plus the degraded-state banner make every metric's provenance visible at the point of use, which makes a global trust-mode toggle redundant.
-- **How much locally-stored history is needed, and is durable storage (SQLite) worth adding now?** *Resolved - deferred.* The earlier answer was "SQLite lands in v0.4.1, earned by export"; the spike reopened it and v0.4.1 settled it: durable storage is **deferred with the post-1.0 dashboard**, not added now. Rationale: (1) Claude usage history is re-derivable from JSONL on demand (ccusage proves a fully stateless tool ships), so v0.4.1 `export` re-derives the full Claude `(day, model)` series from JSONL on every run; (2) OpenAI daily buckets *within* the current month are free from the Admin Costs API, so the only thing persistence buys is OpenAI history *across* months, which the post-1.0 dashboard is the first surface to actually need; (3) the time-series dashboard that most wanted a DB is itself post-1.0. So `export` was built stateless (no persistence), history-*query* commands fold in when the DB lands with the dashboard, and `get_history` stays planned-not-built.
-- **What is the right default alert threshold mix?** *Deferred to v0.6.* Decided then, informed by accumulated real-use observation through v0.1-v0.5 - premature thresholds are noise.
-- **How should the popover present the matrix and the leverage insight visually?** *Resolved.* The matrix presentation contract (measured-only grid + a separate "Subscription leverage" insight) plus the shipped v0.3.0 popover (visible source/confidence badges) settled this; retained as the rationale for that treatment.
+- Which tray geometry remains legible at native sizes, and should separate providers use separate icons?
+- Which window drives each provider's indicator, how are ties handled, and how do stale/error states interact with utilization?
+- What compact macOS text options and default best balance identity, information, and width?
+- For host/WSL shared accounts, what collection mechanism yields fresh quotas and complete activity without duplicate records or additional provider traffic?
+- After v0.6, what concrete readiness criteria remain for v1.0?

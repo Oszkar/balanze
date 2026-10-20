@@ -37,7 +37,7 @@
 
 ## What it does
 
-Balanze surfaces one normalized snapshot two ways - the `balanze-cli` CLI and the tray popover above. Both render the same data, and that data holds **measured reality only** - server-reported quota % and real billed $ - so every cell in a column is the same *kind* of number:
+Balanze presents normalized usage through the CLI, tray popover, and Claude Code statusline. The snapshot-driven CLI and popover share source-selection rules; their headline matrix holds **measured reality only** - server-reported quota % and real billed $ - so every cell in a column is the same *kind* of number:
 
 |               | Quota %                              | API $ (real billed)                                 |
 |---------------|--------------------------------------|-----------------------------------------------------|
@@ -52,7 +52,7 @@ The Claude list-price figure is deliberately **not** a matrix cell - it sits out
 - **OpenAI API $** - this-month spend plus a per-line-item breakdown from `/v1/organization/costs`, using an `sk-admin-...` key. Real billing data.
 - **Subscription leverage (a separate estimate)** - `claude_cost` multiplies the current calendar month's local Claude Code JSONL by a vendored LiteLLM price table to show what that usage *would* cost at API list prices. For Pro/Max users that is leverage from the subscription, **never billed**. In Cards view, missing prices or model names produce a partial estimate with the priced-event count and exclusions; when no events can be priced, the estimate is unavailable. Claude API-rate estimates price 5-minute and 1-hour cache writes separately when the local log includes their breakdown. Older records retain the 5-minute assumption; token totals count cache writes only once.
 
-Roadmap and phase detail live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); user-facing answers in the [FAQ](https://oszkar.github.io/balanze/faq.html) and developer traps in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md).
+Product scope and roadmap live in [`docs/PRD.md`](docs/PRD.md); architecture and the twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); release history in [`CHANGELOG.md`](CHANGELOG.md); code discipline in [`AGENTS.md`](AGENTS.md); user-facing answers in the [FAQ](https://oszkar.github.io/balanze/faq.html) and developer traps in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); security posture in [`docs/SECURITY.md`](docs/SECURITY.md).
 
 **Full documentation:** [oszkar.github.io/balanze](https://oszkar.github.io/balanze/) - install detail, the user guide, the CLI reference, and the FAQ.
 
@@ -117,9 +117,7 @@ balanze-cli setup               interactive wizard - run this first
 balanze-cli statusline          Claude Code statusLine command
 ```
 
-Watch honors `--quiet` by suppressing the human display and shutdown message; explicit `--json` still streams data. `--no-color` and non-empty `NO_COLOR` disable TUI colors. Source failures do not stop watch: on Ctrl-C or `q`, its final snapshot uses the same exit classification as status (auth 3, network 4, other degraded state 5 only with `--strict`). Recovered errors do not affect the final exit code; fatal task failures exit 1. Any expired Codex window makes the rollout stale for display and strict classification. Cached values carry inline stale markers when their source fails.
-
-The `status --json` and `watch --json` document schema is version 2. It includes `claude_oauth_unavailable` so scripts can distinguish "Claude Code not installed" from cold start.
+The `status --json` and `watch --json` presentation schema is version 2. The CLI reference documents its fields, stale-data handling, and exit codes.
 
 Every command, flag, exit code, and environment variable is documented in the [CLI Reference](https://oszkar.github.io/balanze/cli.html). Scripting against it? See [Exit codes](https://oszkar.github.io/balanze/cli.html#exit-codes).
 
@@ -148,7 +146,7 @@ bun run gallery                                # standalone CSR gallery on :1430
 
 **States gallery (dev-only).** `bun run gallery` opens a standalone page (port 1430) showing every popover screen and cell state at once - cold start, the OpenAI connect CTA, fetch errors, stale windows, billed overage, the settings panel - in both light and dark, rendered with the real Svelte components and `theme.css` tokens. It is a SvelteKit-free CSR page with no Tauri host (IPC is stubbed and every write is a no-op, so it can't touch your keychain or settings). `bun run gallery:snap` captures the states with Playwright. Source: `gallery.html` + `src/gallery-main.ts` + `src/lib/gallery/`.
 
-`bun install` runs `lefthook install` (skipped without `.git/`), wiring `commit-msg` (Conventional Commits - blocking), `pre-commit` (rustfmt + svelte-check) and `pre-push` (clippy + tests) so the gates CI enforces fail locally first. Bypass one commit with `git commit --no-verify`, or `LEFTHOOK=0` for a session.
+`bun install` runs `lefthook install` (skipped without `.git/`), wiring `commit-msg` (Conventional Commits - blocking), `pre-commit` (rustfmt + svelte-check) and `pre-push` (clippy + tests) so the gates CI enforces fail locally first. Fix failing hooks before committing or pushing; do not bypass them (see `AGENTS.md`).
 
 **`default-members = ["crates/*"]`:** bare `cargo build`/`test`/`run` skip `src-tauri`, so a CLI build never needs GUI libraries. The desktop app is the explicit opt-in (`cargo build --workspace` or `bun run tauri dev`) and pulls in the platform GUI stack:
 
@@ -160,13 +158,7 @@ If you only want the CLI on Linux, never run a `--workspace` build and you will 
 
 ### Finding your way around
 
-The workspace is a set of small, single-responsibility crates under `crates/`: one HTTP client per provider, one keychain wrapper, one actor that owns state. The twelve boundaries that keep them honest are spelled out in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the short version:
-
-- **Provider connectors** - `anthropic_oauth`, `openai_client`, `codex_local`, and `claude_parser` (the Claude JSONL wire format) each own one source. `openai_client` also owns the durable machine-wide 300-second Costs gate shared by every caller. Adding a provider means a new connector crate wired into the `SnapshotSources` fetches that `snapshot_composer::compose` orchestrates (plus the watcher/coordinator for live updates) - the normalized `Snapshot` and the actor stay put. That connector abstraction is the design's central bet.
-- **Domain math** - `window` (rolling-window + pace), `claude_cost` (the pure list-price estimate), and `money` (the one currency display policy: integer rounding to cents, or to ten-thousandths for sub-cent breakdowns, never via `f64`). Pure functions, no I/O, tested first.
-- **Composition + glue** - `snapshot_composer` (one-shot) and `state_coordinator` (the live actor) both assemble the same `Snapshot`; `balanze_cli` and `src-tauri` are thin glue over them, never logic. Both paths share JSONL record handling, statusline freshness, quota selection, and pace. One-shot status honors provider toggles before I/O and works without a running tray/watch process. The Anthropic toggle controls OAuth; local Claude reads remain available. The existing OpenAI environment-key override still applies.
-- **Local mutation ownership** - `settings` serializes every Balanze settings mutation across processes with a stable sibling lock, reloads before applying field-level intent, and publishes atomically. `claude_statusline` owns the safely ordered backup/replace/restore workflow for Claude Code's separate settings file; the two files are recoverable on retry rather than falsely treated as one atomic transaction. A failed replacement keeps the restore backup unless rereading Claude settings confirms the original command remains installed.
-- **OpenAI request coordination** - a persistent OS file lock serializes Costs reservations across upgraded Balanze processes, with no lock held during HTTP. Upgrade all running copies to share this guarantee; older statusline binaries receive best-effort lease handoff.
+The workspace separates provider readers, domain math, snapshot composition, and platform glue. Start with the crate map and twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). [`AGENTS.md`](AGENTS.md) owns implementation rules and validation; [`docs/PRD.md`](docs/PRD.md) owns product scope and the roadmap.
 
 Hitting a wall? [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) collects the non-obvious traps (double tray icons, JSONL CPU spikes, Tauri dep-version mismatches). Test discipline and the per-crate validation matrix live in `AGENTS.md` §6-§7.
 

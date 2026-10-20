@@ -66,7 +66,7 @@ balanze-cli            # 4-quadrant status
 
 **The CLI has zero system-library dependencies.** Windows 11, macOS 15+, and Linux build with just the Rust toolchain (Linux also needs a C compiler for the `ring` TLS dependency). No GTK/GLib/Cairo/WebKit - that native stack belongs to the desktop app, not the CLI.
 
-The Claude side needs no setup if Claude Code is already configured: Balanze reads its OAuth credential (from `~/.claude/.credentials.json`, `~/.config/claude/.credentials.json`, or Claude Code's login Keychain entry on recent macOS) strictly **read-only** - it never refreshes, modifies, or copies it. If it expires, re-run `claude login`. An opt-in file-refresh mode is tracked in [#186](https://github.com/Oszkar/balanze/issues/186). Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, the popover's settings panel, or the `BALANZE_OPENAI_KEY` env var.
+The Claude side needs no setup if Claude Code is already configured: Balanze reads its OAuth credential (from `~/.claude/.credentials.json`, `~/.config/claude/.credentials.json`, or Claude Code's login Keychain entry on recent macOS) strictly **read-only** - it never refreshes, modifies, or copies it. If it expires, re-run `claude login`. Provide the OpenAI Admin key via `balanze-cli setup`, `set-openai-key`, the popover's settings panel, or the `BALANZE_OPENAI_KEY` env var.
 
 > **macOS note:** builds you compile yourself are unsigned, so macOS can't reliably remember a Keychain "Always Allow" grant across rebuilds - expect the occasional repeat password prompt for the Claude Code credential and/or a saved OpenAI key. The downloadable release DMG is signed and notarized (from v0.5.0 onward) and does not have this problem.
 

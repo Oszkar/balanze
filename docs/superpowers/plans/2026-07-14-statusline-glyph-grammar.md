@@ -1,5 +1,7 @@
 # Statusline Glyph Grammar Implementation Plan
 
+> Historical design/planning record. Release assignments and implementation instructions describe the plan at that date; they are not the current roadmap. Use the [PRD](../../PRD.md), [architecture](../../ARCHITECTURE.md), and [changelog](../../../CHANGELOG.md) for current scope, contracts, and shipped behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give the Claude Code statusline a single glyph rule (`<emoji><space><content>`, emoji names the provider), relabel the Codex weekly window `7d` for cross-surface parity, and drop the OpenAI API spend segment from the default line without leaving its fetch machinery running.

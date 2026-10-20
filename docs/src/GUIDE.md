@@ -22,13 +22,13 @@ The popover is one normalized snapshot of your AI usage. Everything in the grid 
 
 ![Details view with stacked Anthropic and OpenAI cards showing quota bars and billed spend](assets/guide/details-two-providers.png)
 
-*The default Details view, Anthropic and OpenAI side by side.*
+*The default Details view, with a card for each provider.*
 
 ### The matrix
 
 |               | Quota %                              | API $ (real billed)                                 |
 |---------------|--------------------------------------|-----------------------------------------------------|
-| **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
+| **Anthropic** | Fresh statusline quota, OAuth fallback (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
 | **OpenAI**    | Codex CLI rate-limit % (5h / weekly) | real billed spend (Admin Costs API)                 |
 
 - **Anthropic quota %** - fresh local Claude Code statusline quota first, with `/api/oauth/usage` as fallback, with a reset clock on each bar. This selection is shared by the tray, watch, and one-shot status.
@@ -67,15 +67,17 @@ The tray gauge is a color-shifting ring on one shared scale - **green / yellow /
 
 ## Connecting OpenAI
 
-OpenAI spend and Codex quota need an OpenAI **Admin** key (`sk-admin-...`), created in your OpenAI org's API-key settings. A regular `sk-...` key will not reach the Admin Costs API.
+OpenAI API spend needs an OpenAI **Admin** key (`sk-admin-...`), created in your OpenAI org's API-key settings. A regular `sk-...` key will not reach the Admin Costs API.
 
-Provide it any of these ways:
+Codex quota comes from local Codex session files and does not need an Admin key.
+
+Provide the billing key any of these ways:
 
 - `balanze-cli setup` or `balanze-cli set-openai-key` (masked prompt).
 - The popover's settings panel (Set / Replace / Remove). The key is validated before it is saved, and stored in your OS keychain - never written to disk in plaintext.
 - The `BALANZE_OPENAI_KEY` env var (handy for CI or a locked keychain; takes precedence over the keychain).
 
-Until a key is present, the OpenAI column shows a connect prompt rather than a blank cell.
+Without a billing key, the spend cell offers a connect prompt. Codex quota remains available when local Codex data exists.
 
 ![OpenAI cells replaced by an add-OpenAI call to action](assets/guide/openai-connect-cta.png)
 
@@ -109,8 +111,9 @@ Run `balanze-cli help` (or `--help` on any subcommand) for the full reference, a
 The popover's gear opens settings:
 
 - **Keys** - set / replace / remove the OpenAI Admin key.
-- **Provider toggles** - enable or disable each provider live; a disabled provider's cell clears instead of going stale.
+- **Provider toggles** - control Anthropic OAuth, Codex reads, and OpenAI billing independently. Disabling Anthropic OAuth leaves local Claude JSONL and statusline reads available.
 - **Statusline** - wire, unwire, or restore the Claude Code statusline.
+- **Launch at login** - start the desktop app when you sign in.
 
 ## Linux
 
@@ -124,7 +127,7 @@ export BALANZE_OPENAI_KEY=sk-admin-...
 
 This variable takes precedence over the keychain on every platform, so it is also the escape hatch if a macOS or Windows keychain is locked. Once it is set, `balanze-cli doctor` reports the keychain line as OK and names the env var as the source. With no key configured, that line is a warning rather than a failure, because a missing store on Linux is the expected state and not a fault. The overall run can still fail: `doctor` reports a failure when *no* provider source is usable, which is what a freshly installed box with no Claude, no Codex, and no key looks like.
 
-Neither provider needs a secret that Balanze manages. Codex quota and the Claude JSONL figures come from local files those tools already write. Anthropic quota uses Claude Code's own OAuth credential, which Balanze reads in place and never modifies - so it works once you have run `claude login`, with nothing extra to set up here.
+Neither local Codex quota nor Claude tracking needs a secret that Balanze manages. Codex quota and the Claude JSONL figures come from local files those tools already write. Anthropic quota uses Claude Code's own OAuth credential, which Balanze reads in place and never modifies - so it works once you have run `claude login`, with nothing extra to set up here.
 
 ## Troubleshooting
 

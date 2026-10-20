@@ -1,5 +1,7 @@
 # OpenAI Costs Machine-Wide Gate Implementation Plan
 
+> Historical design/planning record. Release assignments and implementation instructions describe the plan at that date; they are not the current roadmap. Use the [PRD](../../PRD.md), [architecture](../../ARCHITECTURE.md), and [changelog](../../../CHANGELOG.md) for current scope, contracts, and shipped behavior.
+
 > **For agentic workers:** Execute this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Keep every task green before starting the next one.
 
 **Goal:** Close GitHub issue #204 by enforcing one OpenAI Admin Costs request per 300 seconds for each resolved request identity across the watcher, statusline self-compose, one-shot status, export, setup, doctor, and Tauri key validation.
