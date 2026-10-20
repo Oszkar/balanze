@@ -84,38 +84,18 @@ the data file can never drift.
 
 The bundled snapshot was fetched on 2026-10-15 from [LiteLLM commit 8302f00](https://github.com/BerriAI/litellm/blob/8302f006ddf5b44b13baf17e2673c0fceb826725/model_prices_and_context_window.json). Current model rates were cross-checked against [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing). It includes Opus 5 and 5.5, Sonnet 5 and 5.5, Fable 5.1 and Mythos models, and Sonnet 5's permanent $2/$10 per million input/output tokens. Opus 5.5 and Sonnet 5.5 cache reads are 0.05x base input. Haiku 5.5 is priced in two tiers split at 100,000 prompt tokens: a request whose prompt (input + cache writes + cache reads) exceeds that is billed entirely at the higher rates, chosen per event (`ModelPrices::long_prompt`, `LONG_PROMPT_THRESHOLD_TOKENS`). Historical entries remain available for exports, including ones upstream has dropped (carried forward unchanged). Estimates use this snapshot's list rates for all events, using each event's 5-minute/1-hour cache-write breakdown when available; they do not reconstruct historical invoices. The 1-hour write rate is derived from Anthropic's published 2x base-input multiplier. Legacy events without a breakdown retain the 5-minute estimate. Duration components are summed in nano-USD before rounding once to micro-USD.
 
-## Refresh procedure (manual)
+## Refresh procedure
 
-A script to mechanize the file handling below is tracked in [#277](https://github.com/Oszkar/balanze/issues/277). The cross-check against Anthropic's pricing stays a human step either way.
+Use the maintainer-only `scripts/refresh-claude-prices.mjs` from the repository root. It requires Node.js with built-in `fetch` (the repo's current Node toolchain suffices), accepts a full lowercase 40-character LiteLLM commit SHA, and performs no runtime or scheduled fetching.
 
-1. Fetch `model_prices_and_context_window.json` from a chosen LiteLLM
-   commit:
-   ```
-   COMMIT=<sha>
-   curl -sf "https://raw.githubusercontent.com/BerriAI/litellm/$COMMIT/model_prices_and_context_window.json" \
-     -o /tmp/litellm-full.json
-   ```
-2. Filter to bare `claude-*` keys (no vendor prefix, no slashes). Keep
-   only the fields `claude_cost` reads:
-   - `input_cost_per_token`, `output_cost_per_token`
-   - the non-batch `*_above_100k_tokens` variants of those four rates,
-     where present (a tier needs at least input and output)
-   - `cache_creation_input_token_cost`, `cache_read_input_token_cost`
-   - `max_input_tokens`, `max_output_tokens`, `litellm_provider` (kept
-     for forward-compat / debugging; not consumed by code today)
+1. Choose a LiteLLM commit and preview it with `just refresh-claude-prices <full-sha> --dry-run`. The equivalent direct invocation is `node scripts/refresh-claude-prices.mjs <full-sha> --dry-run`. Review the added models, missing upstream models, and changed rates.
+2. Missing keys fail by default without changing files. After reviewing them, add `--retain-missing` to carry historical entries forward unchanged. The current snapshot already includes retired upstream models, so this option will normally be necessary. `_meta.retained_models` records the previous snapshot's commit and fetch date for each retained entry, preserving that attribution on subsequent refreshes. For legacy snapshots without per-model provenance, this identifies the snapshot the entry was copied from, not necessarily its original upstream commit.
+3. Remove `--dry-run` to publish. The script validates rates, writes `data/litellm-prices-<commit-short>-<YYYYMMDD>.json` using the current UTC date, updates the single matching `include_str!` in `src/prices.rs`, and removes the old snapshot. `build.rs` derives the provenance constants from the filename. Run one refresh at a time in a clean checkout. Ordinary publication failures attempt rollback; a process crash or rollback failure may require restoring the snapshot and `prices.rs` from git before retrying.
+4. Cross-check current model rates against [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing), including cache reads, the 5-minute cache-write rate, above-100k tiers, and the 2x base-input multiplier used for 1-hour writes. The script deliberately marks the snapshot as unverified. After checking, add `_meta.verified_against`, replace `_meta.verification_note` with what was verified, update this README's provenance paragraph, and add or update assertions for newly supported or changed rates in `src/prices.rs`. New pricing structures require a separate code change; the script only preserves the fields supported today.
+5. Review upstream `LICENSE` at the chosen commit and update `data/LICENSE-LITELLM` if needed.
+6. Run `bun run test -- scripts/refresh-claude-prices.test.ts`, then `cargo build -p claude_cost` and `cargo test -p claude_cost`. A refresh changes a Rust source path, so also run the repository's required Rust gates: `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace`, and `cargo fmt --all -- --check`. Review the complete git diff before committing.
 
-   Cross-check current model rates against Anthropic's pricing page, including cache reads, the 5-minute cache-write rate, and the 2x base-input multiplier used for 1-hour writes. Check that historical model keys are not silently removed. Record the verification URL in `_meta` and keep assertions for newly supported or changed rates in `src/prices.rs`.
-3. Save to `data/litellm-prices-<commit-short>-<YYYYMMDD>.json` with a
-   `_meta` block at the top describing `source`, `commit`, `fetched_at`,
-   `filter`, and `license`.
-4. Delete the old `data/litellm-prices-*.json` file.
-5. **Update the `include_str!()` path in `src/prices.rs`** to match the
-   new filename. The `build.rs` script auto-picks-up the new filename
-   for the provenance consts, but `include_str!` requires a string
-   literal and cannot be rewritten at build time.
-6. Run `cargo build -p claude_cost && cargo test -p claude_cost` to
-   verify everything still works.
-7. Update `data/LICENSE-LITELLM` if upstream LICENSE changed.
+The filter keeps bare `claude-*` entries with `litellm_provider: "anthropic"`, excluding slash-prefixed and colon-bearing provider variants. It retains input/output and cache creation/read rates, their four non-batch `*_above_100k_tokens` variants (a tier requires input and output), and the informational `max_input_tokens`, `max_output_tokens`, and `litellm_provider` fields. Tests use local fixtures and never contact providers.
 
 ## License
 

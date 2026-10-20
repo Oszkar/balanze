@@ -20,6 +20,10 @@ check:
 fmt:
     cargo fmt --all
 
+# Refresh the vendored Claude price table from a full LiteLLM commit SHA.
+refresh-claude-prices commit *options:
+    node scripts/refresh-claude-prices.mjs "{{commit}}" {{options}}
+
 # Run the full test suite (Rust via cargo-nextest, frontend via vitest).
 test:
     cargo nextest run --workspace
