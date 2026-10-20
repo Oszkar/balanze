@@ -384,3 +384,25 @@ export const DEMO_STATUSLINE: StatuslineWire = {
   command: null,
   replaced_command: null,
 };
+
+// Focused renderer regression fixtures, selected with ?label-regression.
+export const LABEL_STATES: GalleryState[] = (() => {
+  const oauth = baseSnapshot();
+  oauth.claude_oauth!.cadences[0].display_label = 'Current 5-hour session';
+  oauth.claude_oauth!.cadences[1] = { key: 'seven_day_opus', display_label: 'Provider Opus weekly', utilization_percent: 91, resets_at: iso(72 * H) };
+  oauth.codex_quota!.secondary = { used_percent: 95, window_duration_minutes: 4320, resets_at: iso(48 * H) };
+  const statusline = clone(oauth);
+  statusline.claude_statusline = {
+    schema_version: 2, captured_at: iso(0),
+    payload: { rate_limits: { windows: oauth.claude_oauth!.cadences.map((w) => ({ key: w.key, label: w.key === 'five_hour' ? '5-hour' : 'Opus weekly', used_percent: w.utilization_percent, resets_at: w.resets_at })) }, session_cost_micro_usd: null, claude_code_version: null },
+  };
+  const unknown = clone(oauth);
+  unknown.claude_oauth!.cadences[1] = { key: 'monthly_phoenix', display_label: 'Monthly Phoenix', utilization_percent: 91, resets_at: iso(72 * H) };
+  return [
+    { label: 'Grid - model limit', view: 'grid', openaiEnabled: true, snapshot: oauth },
+    { label: 'Cards - OAuth labels', view: 'cards', openaiEnabled: true, snapshot: oauth },
+    { label: 'Cards - statusline labels', view: 'cards', openaiEnabled: true, snapshot: statusline },
+    { label: 'Grid - unknown limit', view: 'grid', openaiEnabled: true, snapshot: unknown },
+    { label: 'Cards - unknown limit', view: 'cards', openaiEnabled: true, snapshot: unknown },
+  ];
+})();

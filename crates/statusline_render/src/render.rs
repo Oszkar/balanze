@@ -8,8 +8,8 @@ use crate::style::apply_style;
 pub struct CrossProvider {
     /// Local Codex 5-hour window utilization (0..100). `None` if absent.
     pub codex_five_hour: Option<f32>,
-    /// Local Codex weekly window utilization (0..100). `None` if absent.
-    pub codex_weekly: Option<f32>,
+    /// Selected non-five-hour Codex utilization and canonical label; `None` if absent.
+    pub codex_weekly: Option<(f32, &'static str)>,
     pub openai_cost_micro_usd: Option<i64>,
     /// True when the OpenAI Costs endpoint reported that more pages exist, so
     /// the displayed total is only the fetched prefix rather than the full bill.
@@ -161,10 +161,9 @@ fn render_segment(key: &str, input: &RenderInput) -> Option<String> {
             if let Some(pct) = cross.codex_five_hour {
                 windows.push(render_codex_window("🌀 5h", pct, input));
             }
-            if let Some(pct) = cross.codex_weekly {
-                // "7d", not "wk": every other surface calls this window 7d, and
-                // the provider glyph is what separates it from Claude's 7d.
-                windows.push(render_codex_window("🌀 7d", pct, input));
+            if let Some((pct, label)) = cross.codex_weekly {
+                // The fallback slot can carry an unknown cadence as well as a week.
+                windows.push(render_codex_window(&format!("🌀 {label}"), pct, input));
             }
             if windows.is_empty() {
                 return None;
@@ -213,7 +212,14 @@ fn render_usage(input: &RenderInput) -> Option<String> {
     if let Some(w) = weekly {
         let window_len =
             (w.key == "seven_day" || w.key.starts_with("seven_day_")).then_some(Duration::days(7));
-        windows.push(render_window("✳️ 7d", w, window_len, c, input));
+        let label = window::anthropic_label(&w.key, &w.label, false);
+        windows.push(render_window(
+            &format!("✳️ {label}"),
+            w,
+            window_len,
+            c,
+            input,
+        ));
     }
     if windows.is_empty() {
         None
@@ -479,6 +485,27 @@ mod tests {
     }
 
     #[test]
+    fn unknown_codex_window_keeps_its_label_and_staleness() {
+        let snapshot = snap();
+        let config = cfg();
+        let cross = CrossProvider {
+            codex_weekly: Some((91.0, "window")),
+            codex_stale: true,
+            ..Default::default()
+        };
+        let output = render(&RenderInput {
+            snapshot: &snapshot,
+            cross: Some(&cross),
+            config: &config,
+            now: now(),
+            color: false,
+        });
+        assert!(output.contains("🌀 window 91%"), "{output}");
+        assert!(output.contains('⚠'), "{output}");
+        assert!(!output.contains("🌀 7d"), "{output}");
+    }
+
+    #[test]
     fn model_specific_weekly_window_is_rendered_and_can_drive_severity() {
         let mut snapshot = snap();
         snapshot.rate_limits.as_mut().unwrap().windows = vec![
@@ -505,11 +532,11 @@ mod tests {
         });
 
         assert!(output.contains("✳️ 5h 10%"), "{output}");
-        assert!(output.contains("✳️ 7d 95%"), "{output}");
+        assert!(output.contains("✳️ 7d-opus 95%"), "{output}");
     }
 
     #[test]
-    fn unknown_cadence_keeps_7d_slot_without_assumed_weekly_pace() {
+    fn unknown_cadence_keeps_its_label_without_assumed_weekly_pace() {
         let mut snapshot = snap();
         snapshot.rate_limits.as_mut().unwrap().windows = vec![claude_statusline::RateWindow {
             key: "monthly_phoenix".to_string(),
@@ -525,7 +552,7 @@ mod tests {
             now: now(),
             color: false,
         });
-        assert!(output.contains("✳️ 7d 50%"), "{output}");
+        assert!(output.contains("✳️ Monthly Phoenix 50%"), "{output}");
         assert!(
             !output.contains('×'),
             "unknown duration must not invent pace: {output}"
@@ -1011,7 +1038,7 @@ mod tests {
         let s = snap();
         let cross = CrossProvider {
             codex_five_hour: Some(2.0),
-            codex_weekly: Some(3.0),
+            codex_weekly: Some((3.0, "7d")),
             ..Default::default()
         };
         let out = render(&RenderInput {
@@ -1035,7 +1062,7 @@ mod tests {
         let s = snap();
         let cross = CrossProvider {
             codex_five_hour: Some(12.0),
-            codex_weekly: Some(7.0),
+            codex_weekly: Some((7.0, "7d")),
             openai_cost_micro_usd: Some(0),
             ..Default::default()
         };
@@ -1066,7 +1093,7 @@ mod tests {
         c.lines = vec!["{codex}".to_string()];
         let s = snap();
         let cross = CrossProvider {
-            codex_weekly: Some(7.0),
+            codex_weekly: Some((7.0, "7d")),
             ..Default::default()
         };
         let out = render(&RenderInput {
@@ -1089,7 +1116,7 @@ mod tests {
         let s = snap();
         let cross = CrossProvider {
             codex_five_hour: Some(12.0),
-            codex_weekly: Some(7.0),
+            codex_weekly: Some((7.0, "7d")),
             openai_cost_micro_usd: Some(0),
             ..Default::default()
         };
@@ -1124,7 +1151,7 @@ mod tests {
         let s = snap();
         let cross = CrossProvider {
             codex_five_hour: Some(12.0),
-            codex_weekly: Some(7.0),
+            codex_weekly: Some((7.0, "7d")),
             openai_cost_micro_usd: Some(0),
             ..Default::default()
         };

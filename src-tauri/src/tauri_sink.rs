@@ -4,7 +4,7 @@
 //! `(ColorBucket, title, tooltip)` per AGENTS.md §3.1.
 
 use serde::Serialize;
-use state_coordinator::{AnthropicQuotaSource, Sink, Snapshot, Source, WindowKind};
+use state_coordinator::{AnthropicQuotaSource, Sink, Snapshot, Source};
 use tauri::{AppHandle, Emitter};
 
 use crate::tray_icon;
@@ -90,12 +90,12 @@ fn degraded_tooltip(source: Source) -> String {
 /// windows. Source precedence comes from
 /// `Snapshot::anthropic_quota_source` so tray, CLI, and TUI cannot disagree.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
-struct TrayView {
+struct TrayView<'a> {
     claude_5h: Option<f32>,
-    claude_7d: Option<f32>,
+    claude_7d: Option<(&'a str, f32)>,
     claude_stale: bool,
     codex_5h: Option<f32>,
-    codex_weekly: Option<f32>,
+    codex_weekly: Option<(&'static str, f32)>,
     // Selected by codex_local before conversion to display precision. Detailed
     // slots must never re-select the Codex headline or its label.
     codex_headline: Option<(&'static str, f32)>,
@@ -106,8 +106,15 @@ fn fold_max(slot: &mut Option<f32>, v: f32) {
     *slot = Some(slot.map_or(v, |cur| cur.max(v)));
 }
 
-impl TrayView {
-    fn from_snapshot(s: &Snapshot) -> Self {
+// Keep the selected label and value inseparable; first wins equal percentages.
+fn fold_labeled_max<'a>(slot: &mut Option<(&'a str, f32)>, value: (&'a str, f32)) {
+    if slot.is_none_or(|(_, current)| value.1 > current) {
+        *slot = Some(value);
+    }
+}
+
+impl<'a> TrayView<'a> {
+    fn from_snapshot(s: &'a Snapshot) -> Self {
         let mut v = TrayView::default();
         match s.anthropic_quota_source() {
             Some(AnthropicQuotaSource::OAuth { snapshot: o, stale }) => {
@@ -116,7 +123,13 @@ impl TrayView {
                     if c.key == "five_hour" {
                         fold_max(&mut v.claude_5h, c.utilization_percent);
                     } else {
-                        fold_max(&mut v.claude_7d, c.utilization_percent);
+                        fold_labeled_max(
+                            &mut v.claude_7d,
+                            (
+                                window::anthropic_label(&c.key, &c.display_label, false),
+                                c.utilization_percent,
+                            ),
+                        );
                     }
                 }
             }
@@ -129,7 +142,13 @@ impl TrayView {
                     if w.key == "five_hour" {
                         fold_max(&mut v.claude_5h, w.used_percent);
                     } else {
-                        fold_max(&mut v.claude_7d, w.used_percent);
+                        fold_labeled_max(
+                            &mut v.claude_7d,
+                            (
+                                window::anthropic_label(&w.key, &w.label, false),
+                                w.used_percent,
+                            ),
+                        );
                     }
                 }
             }
@@ -140,23 +159,18 @@ impl TrayView {
             // retain one stale bit so the tray uses its warning treatment rather
             // than presenting an expired rollout as confidently live.
             v.codex_expired = q.any_window_expired(s.fetched_at);
-            v.codex_headline = q.worst_window().map(|w| {
-                let label = match w.kind() {
-                    WindowKind::FiveHour => "Codex 5h",
-                    WindowKind::Weekly => "Codex 7d",
-                    WindowKind::Other => "Codex window",
-                };
-                (label, w.used_percent as f32)
-            });
-            for w in q.windows() {
-                if w.kind() == WindowKind::FiveHour {
-                    fold_max(&mut v.codex_5h, w.used_percent as f32);
-                } else {
-                    // Weekly (10080) or any other duration folds into the weekly
-                    // slot so no window can hide from the ring/title.
-                    fold_max(&mut v.codex_weekly, w.used_percent as f32);
-                }
+            v.codex_headline = q
+                .worst_window()
+                .map(|w| (w.kind().label(), w.used_percent as f32));
+            for w in q
+                .windows()
+                .filter(|w| w.kind() == state_coordinator::WindowKind::FiveHour)
+            {
+                fold_max(&mut v.codex_5h, w.used_percent as f32);
             }
+            v.codex_weekly = q
+                .weekly_or_other()
+                .map(|w| (w.kind().label(), w.used_percent as f32));
         }
         v
     }
@@ -173,7 +187,7 @@ impl TrayView {
     /// Claude's worst window (max of 5h and 7d) - the single Claude figure shown
     /// in the menu-bar title.
     fn claude_worst(&self) -> Option<f32> {
-        match (self.claude_5h, self.claude_7d) {
+        match (self.claude_5h, self.claude_7d.map(|(_, pct)| pct)) {
             (Some(a), Some(b)) => Some(a.max(b)),
             (a, b) => a.or(b),
         }
@@ -183,11 +197,13 @@ impl TrayView {
     /// and the tooltip header. Compared on the raw value; callers round for
     /// display. Codex contributes its canonical headline, preserving its window
     /// identity on ties. Cross-provider ties retain the existing Codex priority.
-    fn worst(&self) -> Option<(&'static str, f32)> {
+    fn worst(&self) -> Option<(String, f32)> {
         [
-            self.claude_5h.map(|p| ("Claude 5h", p)),
-            self.claude_7d.map(|p| ("Claude 7d", p)),
-            self.codex_headline,
+            self.claude_5h.map(|p| ("Claude 5h".to_string(), p)),
+            self.claude_7d
+                .map(|(label, p)| (format!("Claude {label}"), p)),
+            self.codex_headline
+                .map(|(label, p)| (format!("Codex {label}"), p)),
         ]
         .into_iter()
         .flatten()
@@ -249,8 +265,8 @@ fn tray_tooltip(view: &TrayView, degraded: bool) -> String {
     if let Some(p) = view.claude_5h {
         claude.push(format!("5h {}%", p.round() as i64));
     }
-    if let Some(p) = view.claude_7d {
-        claude.push(format!("7d {}%", p.round() as i64));
+    if let Some((label, p)) = view.claude_7d {
+        claude.push(format!("{label} {}%", p.round() as i64));
     }
     if !claude.is_empty() {
         lines.push(format!("Claude  {}", claude.join("  ")));
@@ -259,8 +275,8 @@ fn tray_tooltip(view: &TrayView, degraded: bool) -> String {
     if let Some(p) = view.codex_5h {
         codex.push(format!("5h {}%", p.round() as i64));
     }
-    if let Some(p) = view.codex_weekly {
-        codex.push(format!("7d {}%", p.round() as i64));
+    if let Some((label, p)) = view.codex_weekly {
+        codex.push(format!("{label} {}%", p.round() as i64));
     }
     if !codex.is_empty() {
         lines.push(format!("Codex   {}", codex.join("  ")));
@@ -374,6 +390,29 @@ mod tests {
     }
     fn select_bucket(s: &Snapshot, degraded: bool) -> ColorBucket {
         bucket_for_view(&TrayView::from_snapshot(s), degraded)
+    }
+
+    #[test]
+    fn tooltip_preserves_variant_and_unknown_labels() {
+        let mut snapshot = Snapshot::empty(chrono::Utc::now());
+        let mut oauth = oauth_5h_7d(10.0, 91.0);
+        oauth.cadences[1].key = "seven_day_opus".into();
+        oauth.cadences[1].display_label = "Provider Opus wording".into();
+        snapshot.claude_oauth = Some(oauth);
+        let mut codex = codex_5h_weekly(20.0, 95.0);
+        codex.secondary.as_mut().unwrap().window_duration_minutes = 4320;
+        snapshot.codex_quota = Some(codex);
+        let view = TrayView::from_snapshot(&snapshot);
+        let tooltip = tray_tooltip(&view, false);
+        assert!(tooltip.contains("worst: Codex window 95%"), "{tooltip}");
+        assert!(tooltip.contains("7d-opus 91%"), "{tooltip}");
+        assert!(tooltip.contains("window 95%"), "{tooltip}");
+        assert!(!tooltip.contains("7d 95%"), "{tooltip}");
+        let cadence = &mut snapshot.claude_oauth.as_mut().unwrap().cadences[1];
+        cadence.key = "monthly_phoenix".into();
+        cadence.display_label = "Monthly Phoenix".into();
+        let tooltip = tray_tooltip(&TrayView::from_snapshot(&snapshot), false);
+        assert!(tooltip.contains("Monthly Phoenix 91%"), "{tooltip}");
     }
 
     #[test]
@@ -694,7 +733,7 @@ mod tests {
 
         let view = TrayView::from_snapshot(&s);
         assert_eq!(view.codex_5h, Some(85.0));
-        assert_eq!(view.codex_weekly, Some(4.0));
+        assert_eq!(view.codex_weekly, Some(("7d", 4.0)));
         assert!(view.codex_expired);
         assert_eq!(tray_title(&view), "Codex 85%");
         assert_eq!(
@@ -732,7 +771,7 @@ mod tests {
         s.codex_quota = Some(codex_5h_weekly(12.0, 80.0));
         let view = TrayView::from_snapshot(&s);
         assert_eq!(view.codex_5h, Some(12.0));
-        assert_eq!(view.codex_weekly, Some(80.0));
+        assert_eq!(view.codex_weekly, Some(("7d", 80.0)));
         assert_eq!(tray_title(&view), "Codex 80%");
         let tip = tray_tooltip(&view, false);
         assert!(tip.contains("worst: Codex 7d 80%"), "{tip}");
@@ -820,7 +859,8 @@ mod tests {
     #[test]
     fn cold_start_vs_degraded_tooltip() {
         use chrono::Utc;
-        let view = TrayView::from_snapshot(&Snapshot::empty(Utc::now()));
+        let snapshot = Snapshot::empty(Utc::now());
+        let view = TrayView::from_snapshot(&snapshot);
         assert_eq!(tray_tooltip(&view, false), "Balanze - connecting...");
         assert_eq!(tray_tooltip(&view, true), "Balanze - quota unavailable");
     }
@@ -840,7 +880,7 @@ mod tests {
         });
         s.claude_oauth = Some(oauth);
         let view = TrayView::from_snapshot(&s);
-        assert_eq!(view.claude_7d, Some(80.0));
+        assert_eq!(view.claude_7d, Some(("7d-opus", 80.0)));
         assert_eq!(tray_title(&view), "Claude 80%");
         assert_eq!(bucket_for_view(&view, false), ColorBucket::Orange);
     }

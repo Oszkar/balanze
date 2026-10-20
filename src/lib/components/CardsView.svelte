@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, anthropicSourceView, quotaTone, codexElapsedFraction, codexQuota, codexWindowLabel, codexWindowsByKind, matchingAnthropicPace, openAiCostCell, overageCell } from '$lib/presentation/quota';
+  import { anthropicWindowLabel, anthropicQuota, anthropicSourceView, quotaTone, codexElapsedFraction, codexQuota, codexWindowLabel, codexWindowsByKind, matchingAnthropicPace, openAiCostCell, overageCell } from '$lib/presentation/quota';
   import { PROV } from '$lib/presentation/provenance';
   import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
   import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
@@ -40,7 +40,7 @@
   const anthWindows = $derived.by<CardWindow[]>(() => {
     if (!anthView) return [];
     return anthView.windows.map((w) => ({
-      label: w.label,
+      label: anthropicWindowLabel(w, true),
       used: w.pct,
       elapsed: paceElapsed(w.key),
       tone: quotaTone(w.pct),

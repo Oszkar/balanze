@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, codexCreditsLabel, classifyOverage, matchingAnthropicPace, openAiCostCell, overageCell } from './quota';
+import { anthropicWindowLabel, quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, codexCreditsLabel, classifyOverage, matchingAnthropicPace, openAiCostCell, overageCell } from './quota';
 import type { Snapshot, ExtraUsage } from '../types/snapshot';
 import policy from '../../../tests/fixtures/presentation-policy.json';
 
@@ -485,5 +485,16 @@ it('preserves Anthropic variant and unknown source labels', () => {
       extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: base.fetched_at,
     } };
     expect(anthropicQuota(s)?.headline.label).toBe(expected);
+  }
+});
+
+it('matches shared quota label vectors independently of source wording', () => {
+  for (const c of policy.anthropicLabels) {
+    const w = { key: c.key, label: c.supplied };
+    expect(anthropicWindowLabel(w), c.key).toBe(c.short);
+    expect(anthropicWindowLabel(w, true), c.key).toBe(c.expanded);
+  }
+  for (const c of policy.codexLabels) {
+    expect(codexWindowLabel({ window_duration_minutes: c.minutes, used_percent: 42, resets_at: base.fetched_at })).toBe(c.label);
   }
 });

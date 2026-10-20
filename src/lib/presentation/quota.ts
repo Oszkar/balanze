@@ -79,13 +79,18 @@ export function matchingAnthropicPace(s: Snapshot): WindowPace[] {
   return s.pace.filter((pace) => selectedKeys.has(pace.key));
 }
 
-function anthropicWindowLabel(w: AnthropicSourceWindow): string {
+export function anthropicWindowLabel(w: Pick<AnthropicSourceWindow, 'key' | 'label'>, expanded = false): string {
   const labels: Record<string, string> = {
     five_hour: '5h', seven_day: '7d', seven_day_sonnet: '7d-son',
     seven_day_opus: '7d-opus', seven_day_oauth_apps: '7d-apps',
     seven_day_cowork: '7d-cowork', seven_day_omelette: '7d-omel',
   };
-  return labels[w.key] ?? w.label;
+  const longLabels: Record<string, string> = {
+    five_hour: '5-hour', seven_day: '7-day', seven_day_sonnet: '7-day Sonnet',
+    seven_day_opus: '7-day Opus', seven_day_oauth_apps: '7-day OAuth apps',
+    seven_day_cowork: '7-day Cowork', seven_day_omelette: '7-day Omelette',
+  };
+  return (expanded ? longLabels : labels)[w.key] ?? w.label;
 }
 
 export function anthropicQuota(s: Snapshot): AnthropicQuota | null {

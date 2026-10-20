@@ -269,7 +269,7 @@ fn cross_from_payload(
             .codex_quota
             .as_ref()
             .and_then(|q| q.weekly_or_other())
-            .map(|w| w.used_percent as f32),
+            .map(|w| (w.used_percent as f32, w.kind().label())),
         openai_cost_micro_usd: snap.openai.as_ref().map(|c| c.total_micro_usd),
         openai_partial: snap.openai.as_ref().is_some_and(|c| c.truncated),
         codex_stale: envelope_stale || snap.codex_quota_error.is_some() || codex_expired,
@@ -375,6 +375,20 @@ mod statusline_tests {
     }
 
     #[test]
+    fn fallback_keeps_the_codex_label_with_its_percentage() {
+        let mut stale = cp_codex(None, None, true);
+        stale.codex_weekly = Some((91.0, "window"));
+        let current = cp_codex(Some(12.0), None, false);
+        let merged = super::pick_cross(Some(current), Some(stale.clone())).unwrap();
+        assert_eq!(merged.codex_weekly, Some((91.0, "window")));
+        assert!(merged.codex_stale);
+        let current = cp_codex(Some(12.0), Some(8.0), false);
+        let merged = super::pick_cross(Some(current), Some(stale)).unwrap();
+        assert_eq!(merged.codex_weekly, Some((8.0, "7d")));
+        assert!(!merged.codex_stale);
+    }
+
+    #[test]
     fn render_with_default_config_contains_known_segments() {
         let snap = claude_statusline::parse(
             r#"{"rate_limits":{"five_hour":{"used_percentage":82,"resets_at":4102444800}},"cost":{"total_cost_usd":2.5},"model":{"display_name":"Opus"}}"#,
@@ -417,12 +431,24 @@ mod statusline_tests {
         let fresh = state_coordinator::SnapshotFilePayload::new(s.clone(), now);
         let c = super::cross_from_payload(&fresh, now);
         // The single window is weekly (10_080 min), so it lands in codex_weekly.
-        assert_eq!(c.codex_weekly, Some(6.0));
+        assert_eq!(c.codex_weekly, Some((6.0, "7d")));
         assert_eq!(c.codex_five_hour, None);
         assert_eq!(c.openai_cost_micro_usd, Some(4_200_000));
         assert!(c.openai_partial);
         assert!(!c.codex_stale, "fresh payload: codex not stale");
         assert!(!c.openai_stale, "fresh payload: openai not stale");
+        let mut unknown = fresh.clone();
+        unknown
+            .snapshot
+            .codex_quota
+            .as_mut()
+            .unwrap()
+            .primary
+            .window_duration_minutes = 4320;
+        let mapped = super::cross_from_payload(&unknown, now);
+        assert_eq!(mapped.codex_weekly, Some((6.0, "window")));
+        assert!(!mapped.codex_stale);
+
         let exact_boundary = state_coordinator::SnapshotFilePayload::new(
             fresh.snapshot.clone(),
             now - chrono::Duration::seconds(super::SNAPSHOT_FRESHNESS_SECS),
@@ -487,7 +513,7 @@ mod statusline_tests {
         let c = super::cross_from_payload(&payload, now);
         // Both windows surface independently: 5h at 1% and weekly at 6%.
         assert_eq!(c.codex_five_hour, Some(1.0));
-        assert_eq!(c.codex_weekly, Some(6.0));
+        assert_eq!(c.codex_weekly, Some((6.0, "7d")));
     }
 
     #[test]
@@ -525,7 +551,7 @@ mod statusline_tests {
         let payload = state_coordinator::SnapshotFilePayload::new(s, now);
         let c = super::cross_from_payload(&payload, now);
         // The single window is weekly (10_080 min).
-        assert_eq!(c.codex_weekly, Some(6.0));
+        assert_eq!(c.codex_weekly, Some((6.0, "7d")));
         assert_eq!(c.openai_cost_micro_usd, Some(4_200_000));
         assert!(
             c.codex_stale,
@@ -768,7 +794,7 @@ mod statusline_tests {
     ) -> statusline_render::CrossProvider {
         statusline_render::CrossProvider {
             codex_five_hour: five_hour,
-            codex_weekly: weekly,
+            codex_weekly: weekly.map(|pct| (pct, "7d")),
             openai_cost_micro_usd: None,
             openai_partial: false,
             codex_stale: stale,
@@ -791,7 +817,7 @@ mod statusline_tests {
         assert_eq!(got.codex_five_hour, Some(12.0), "the fresh 5h value wins");
         assert_eq!(
             got.codex_weekly,
-            Some(64.0),
+            Some((64.0, "7d")),
             "the stale weekly value is retained, not blanked"
         );
         assert!(
@@ -811,7 +837,7 @@ mod statusline_tests {
         .unwrap();
 
         assert_eq!(got.codex_five_hour, Some(12.0));
-        assert_eq!(got.codex_weekly, Some(7.0));
+        assert_eq!(got.codex_weekly, Some((7.0, "7d")));
         assert!(!got.codex_stale, "no stale window was retained");
     }
 

@@ -56,6 +56,8 @@ Product scope and roadmap live in [`docs/PRD.md`](docs/PRD.md); architecture and
 
 **Full documentation:** [oszkar.github.io/balanze](https://oszkar.github.io/balanze/) - install detail, the user guide, the CLI reference, and the FAQ.
 
+Quota labels identify the same window across the tray, popover, CLI, and statusline. Compact views use labels such as `5h` and `7d-opus`; Cards and sections use `5-hour` and `7-day Opus`. Unknown Anthropic windows keep their supplied label; unclassified Codex durations read `window`.
+
 ## Install
 
 **Desktop app (tray popover):** download from [GitHub Releases](https://github.com/Oszkar/balanze/releases/latest) - no Rust toolchain required. On macOS, you can instead install the desktop cask with `brew install --cask oszkar/balanze/balanze`.

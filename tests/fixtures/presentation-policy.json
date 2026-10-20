@@ -1,4 +1,124 @@
 {
+  "anthropicLabels": [
+    {
+      "key": "five_hour",
+      "supplied": "5-hour",
+      "short": "5h",
+      "expanded": "5-hour"
+    },
+    {
+      "key": "five_hour",
+      "supplied": "Current 5-hour session",
+      "short": "5h",
+      "expanded": "5-hour"
+    },
+    {
+      "key": "seven_day",
+      "supplied": "Source-specific wording",
+      "short": "7d",
+      "expanded": "7-day"
+    },
+    {
+      "key": "seven_day_sonnet",
+      "supplied": "Source-specific wording",
+      "short": "7d-son",
+      "expanded": "7-day Sonnet"
+    },
+    {
+      "key": "seven_day_opus",
+      "supplied": "Source-specific wording",
+      "short": "7d-opus",
+      "expanded": "7-day Opus"
+    },
+    {
+      "key": "seven_day_oauth_apps",
+      "supplied": "Source-specific wording",
+      "short": "7d-apps",
+      "expanded": "7-day OAuth apps"
+    },
+    {
+      "key": "seven_day_cowork",
+      "supplied": "Source-specific wording",
+      "short": "7d-cowork",
+      "expanded": "7-day Cowork"
+    },
+    {
+      "key": "seven_day_omelette",
+      "supplied": "Source-specific wording",
+      "short": "7d-omel",
+      "expanded": "7-day Omelette"
+    },
+    {
+      "key": "monthly_phoenix",
+      "supplied": "Monthly Phoenix",
+      "short": "Monthly Phoenix",
+      "expanded": "Monthly Phoenix"
+    },
+    {
+      "key": "seven_day_fable",
+      "supplied": "Seven Day Fable",
+      "short": "Seven Day Fable",
+      "expanded": "Seven Day Fable"
+    }
+  ],
+  "codexLabels": [
+    {
+      "minutes": 0,
+      "label": "window"
+    },
+    {
+      "minutes": 60,
+      "label": "window"
+    },
+    {
+      "minutes": 90,
+      "label": "window"
+    },
+    {
+      "minutes": 294,
+      "label": "window"
+    },
+    {
+      "minutes": 295,
+      "label": "5h"
+    },
+    {
+      "minutes": 300,
+      "label": "5h"
+    },
+    {
+      "minutes": 305,
+      "label": "5h"
+    },
+    {
+      "minutes": 306,
+      "label": "window"
+    },
+    {
+      "minutes": 4320,
+      "label": "window"
+    },
+    {
+      "minutes": 10074,
+      "label": "window"
+    },
+    {
+      "minutes": 10075,
+      "label": "7d"
+    },
+    {
+      "minutes": 10080,
+      "label": "7d"
+    },
+    {
+      "minutes": 10085,
+      "label": "7d"
+    },
+    {
+      "minutes": 10086,
+      "label": "window"
+    }
+  ],
   "anthropic": [
     {
       "name": "fresh statusline wins and keeps the worst weekly variant",
