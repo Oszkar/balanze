@@ -44,9 +44,10 @@ const SESSION_ID_REDACTED: &str = "<redacted>";
 /// when the wire shape changes so machine consumers can detect a break; keep the
 /// AGENTS.md §2.1 `--json` row and the README example in lockstep. Independent
 /// of `state_coordinator::SNAPSHOT_SCHEMA_VERSION` (the IPC `Snapshot` is a
-/// different surface). Version 2 adds the neutral
-/// `claude_oauth_unavailable` state; version 1 introduced i64 micro-USD money.
-const SCHEMA_VERSION: u32 = 2;
+/// different surface). Version 3 adds `codex_quota.credits`; version 2 adds the
+/// neutral `claude_oauth_unavailable` state; version 1 introduced i64 micro-USD
+/// money.
+const SCHEMA_VERSION: u32 = 3;
 
 /// Serialize `snap` as pretty-printed JSON suitable for `balanze-cli status
 /// --json`. When `verbose=false`, account identifiers (`org_uuid`,
@@ -527,7 +528,7 @@ mod tests {
         let s = Snapshot::empty(fixed_now());
         let v = render_to_value(&s, false);
         // The DTO carries an explicit, top-level schema version for consumers.
-        assert_eq!(v["schema_version"], 2);
+        assert_eq!(v["schema_version"], 3);
         assert!(v["anthropic_api_cost"].is_null());
         assert!(v["openai"].is_null());
         assert!(v["claude_oauth"].is_null());

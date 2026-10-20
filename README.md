@@ -117,7 +117,7 @@ balanze-cli setup               interactive wizard - run this first
 balanze-cli statusline          Claude Code statusLine command
 ```
 
-The `status --json` and `watch --json` presentation schema is version 2. The CLI reference documents its fields, stale-data handling, and exit codes.
+The `status --json` and `watch --json` presentation schema is version 3. The CLI reference documents its fields, stale-data handling, and exit codes.
 
 Every command, flag, exit code, and environment variable is documented in the [CLI Reference](https://oszkar.github.io/balanze/cli.html). Scripting against it? See [Exit codes](https://oszkar.github.io/balanze/cli.html#exit-codes).
 
