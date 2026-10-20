@@ -467,7 +467,9 @@ impl statusline_render::CrossSources for LiveCrossSources {
         match quota {
             Ok(Some(q)) => statusline_render::CodexWindows {
                 five_hour: q.five_hour().map(|w| w.used_percent as f32),
-                weekly: q.weekly_or_other().map(|w| w.used_percent as f32),
+                weekly: q
+                    .weekly_or_other()
+                    .map(|w| (w.used_percent as f32, w.kind().label())),
                 // The read is fresh; the rollout behind it may not be. Without
                 // this the statusline printed a week-old figure unmarked.
                 stale: q.any_window_expired(now),

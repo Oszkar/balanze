@@ -24,6 +24,28 @@ pub enum WindowKind {
     Other,
 }
 
+impl WindowKind {
+    /// Classify a reported duration using the provider rounding tolerance.
+    pub fn from_duration(minutes: u64) -> Self {
+        if minutes.abs_diff(300) <= WINDOW_DURATION_TOLERANCE_MINUTES {
+            WindowKind::FiveHour
+        } else if minutes.abs_diff(10_080) <= WINDOW_DURATION_TOLERANCE_MINUTES {
+            WindowKind::Weekly
+        } else {
+            WindowKind::Other
+        }
+    }
+
+    /// Canonical presentation label; unknown durations never imply a week.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FiveHour => "5h",
+            Self::Weekly => "7d",
+            Self::Other => "window",
+        }
+    }
+}
+
 /// Provider durations are minute counts and can drift slightly when an
 /// upstream client rounds a boundary. Keep known windows stable within five
 /// minutes while leaving genuinely new cadences classified as `Other`.
@@ -120,14 +142,7 @@ impl RateLimitWindow {
 
     /// Classify this window by its duration. See [`WindowKind`].
     pub fn kind(&self) -> WindowKind {
-        if self.window_duration_minutes.abs_diff(300) <= WINDOW_DURATION_TOLERANCE_MINUTES {
-            WindowKind::FiveHour
-        } else if self.window_duration_minutes.abs_diff(10_080) <= WINDOW_DURATION_TOLERANCE_MINUTES
-        {
-            WindowKind::Weekly
-        } else {
-            WindowKind::Other
-        }
+        WindowKind::from_duration(self.window_duration_minutes)
     }
 }
 
@@ -279,6 +294,19 @@ mod tests {
             rate_limit_reached: false,
             tokens: None,
             credits: None,
+        }
+    }
+
+    #[test]
+    fn labels_preserve_tolerant_classification_without_guessing_unknowns() {
+        for minutes in [295, 300, 305] {
+            assert_eq!(win(50.0, minutes).kind().label(), "5h");
+        }
+        for minutes in [10075, 10080, 10085] {
+            assert_eq!(win(50.0, minutes).kind().label(), "7d");
+        }
+        for minutes in [0, 294, 306, 4320, 10074, 10086] {
+            assert_eq!(win(50.0, minutes).kind().label(), "window");
         }
     }
 

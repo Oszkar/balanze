@@ -11,7 +11,8 @@ use crate::render::CrossProvider;
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CodexWindows {
     pub five_hour: Option<f32>,
-    pub weekly: Option<f32>,
+    /// Selected non-five-hour percentage and label, retained together through fallback.
+    pub weekly: Option<(f32, &'static str)>,
     pub stale: bool,
 }
 
@@ -144,7 +145,7 @@ mod tests {
             },
             codex: CodexWindows {
                 five_hour: Some(12.0),
-                weekly: Some(25.0),
+                weekly: Some((25.0, "window")),
                 stale: true,
             },
             calls: Cell::new(0),
@@ -153,7 +154,7 @@ mod tests {
         assert_eq!(source.calls.get(), 0);
         assert_eq!(composed.openai_cost_micro_usd, None);
         assert_eq!(composed.codex_five_hour, Some(12.0));
-        assert_eq!(composed.codex_weekly, Some(25.0));
+        assert_eq!(composed.codex_weekly, Some((25.0, "window")));
         assert!(composed.codex_stale);
     }
 }

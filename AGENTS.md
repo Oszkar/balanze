@@ -125,6 +125,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - data-flow diagram, crate ma
 
 When the architecture changes, update both files in lockstep along with `README.md` and `docs/PRD.md`. They share the boundary list and the IPC contract; drift between them is the most common doc bug.
 
+Quota labels are presentation-only: known Anthropic keys use canonical compact labels (`5h`, `7d-opus`) or expanded labels (`5-hour`, `7-day Opus`), while unknown keys retain their supplied label. Codex uses `5h`, `7d`, or `window` for unclassified durations. Rust shares Anthropic labels through `window` and Codex labels through `codex_local::WindowKind`; TypeScript mirrors the policy against `tests/fixtures/presentation-policy.json`. Statusline and tray adapters retain the selected label with its percentage through fallback. Source labels and serialized schemas remain unchanged.
+
 ## 5. Quick Start for Agents
 
 ### Every task

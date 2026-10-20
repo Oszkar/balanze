@@ -175,6 +175,8 @@ Rationale: a grid asserts that cells in the same column are the same kind of num
 
 Claude API-rate estimates use separate 5-minute and 1-hour cache-write counts when present in local logs; legacy logs use the 5-minute estimate. Cache duration never changes the aggregate token count. These are current list-rate estimates, not reconstructed invoices.
 
+Quota labels are presentation-only: known Anthropic keys use canonical compact labels (`5h`, `7d-opus`) or expanded labels (`5-hour`, `7-day Opus`), while unknown keys retain their supplied label. Codex uses `5h`, `7d`, or `window` for unclassified durations. Rust shares Anthropic labels through `window` and Codex labels through `codex_local::WindowKind`; TypeScript mirrors the policy against `tests/fixtures/presentation-policy.json`. Statusline and tray adapters retain the selected label with its percentage through fallback. Source labels and serialized schemas remain unchanged.
+
 Anthropic quota is current only when its source timestamp is no more than 15 minutes old and not future-dated, no reported window has passed its reset, and the source has no error. Fresh statusline takes precedence over fresh OAuth. When neither is fresh, the last known quota remains visible with a stale label and no pace. The existing refresh cadence updates this status without pretending a new provider fetch occurred.
 
 

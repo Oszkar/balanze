@@ -1,9 +1,12 @@
-//! Pure rolling-window math over `UsageEvent` slices.
+//! Pure rolling-window math over `UsageEvent` slices and quota presentation policy.
 //!
 //! Per AGENTS.md §4 #2, this crate is I/O-free and synchronous: it consumes
 //! event slices (from `claude_parser`) and produces a typed summary.
 //! No `tokio::spawn`, no `reqwest`, no logging above `debug`. Orchestration
 //! (file scanning, error fan-out, display) belongs in the caller.
+
+mod labels;
+pub use labels::anthropic_label;
 
 use std::collections::BTreeMap;
 

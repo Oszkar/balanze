@@ -1104,7 +1104,7 @@ mod tests {
         // it, but the TUI must still surface a live cap (the non-TUI renderers do)
         // rather than blank the row. Here primary=5h (low, classified) and
         // secondary=an unknown 3-day duration (high) - the high one must not be
-        // dropped, and it's labeled by its actual duration.
+        // dropped, and its label must not imply a known cadence.
         let mut snap = populated_snapshot();
         snap.codex_quota = Some(CodexQuotaSnapshot {
             observed_at: ts("2026-05-15T10:55:00Z"),
@@ -1135,7 +1135,7 @@ mod tests {
             "unclassified worst window must not be dropped in:\n{text}"
         );
         assert!(
-            text.contains("Codex 3d"),
+            text.contains("Codex window"),
             "unclassified window labeled by its duration in:\n{text}"
         );
     }
@@ -1169,7 +1169,7 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(text.contains("Codex 5h"), "5h window shown in:\n{text}");
         assert!(
-            text.contains("Codex 3d"),
+            text.contains("Codex window"),
             "the lower unclassified window must still fill the free row in:\n{text}"
         );
         assert!(

@@ -56,7 +56,7 @@
   {#if anthState.kind === 'data' && aq}
     <QuotaCell pct={aq.headline.pct} used={(anthPace?.used_fraction ?? aq.headline.pct / 100) * 100}
       elapsed={anthPace ? anthPace.elapsed_fraction * 100 : null} tone={aq.tone}
-      resetsAt={aq.headline.resetsAt} secondary={aq.secondary ? `7d ${aq.secondary.pct.toFixed(0)}%` : ''}
+      resetsAt={aq.headline.resetsAt} secondary={aq.secondary ? `${aq.secondary.label} ${aq.secondary.pct.toFixed(0)}%` : ''}
       stale={anthStale} staleLabel="stale"
       title={aq.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title} />
   {:else if anthState.kind === 'error'}

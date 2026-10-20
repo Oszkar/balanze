@@ -12,7 +12,7 @@ use state_coordinator::{AnthropicQuotaSource, Snapshot};
 
 use crate::format::{
     fmt_int, format_codex_age, format_codex_window, micro_usd_to_display_dollars,
-    micro_usd_to_display_precise, pretty_duration, short_cadence,
+    micro_usd_to_display_precise, pretty_duration,
 };
 use crate::present::{
     Bucket, TRAY_ORANGE, anthropic_display_windows, bucket_for_fraction, bucket_for_pace_ratio,
@@ -316,15 +316,11 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             q.observed_at.format("%Y-%m-%d %H:%M:%S UTC"),
         )?;
         for win in q.windows() {
-            let label = match win.kind() {
-                codex_local::WindowKind::FiveHour => "5h",
-                codex_local::WindowKind::Weekly => "7d",
-                codex_local::WindowKind::Other => "window",
-            };
+            let label = win.kind().label();
             let resets_in = win.resets_at.signed_duration_since(snapshot.fetched_at);
             writeln!(
                 w,
-                "  {label:<8} window: {:.2}% of {} minutes  (resets in {})",
+                "  {label:<8} {:.2}% of {} minutes  (resets in {})",
                 win.used_percent,
                 win.window_duration_minutes,
                 pretty_duration(resets_in),
@@ -360,7 +356,13 @@ fn write_selected_anthropic_quota<W: Write>(s: &Snapshot, w: &mut W) -> io::Resu
             rate_limits
                 .windows
                 .iter()
-                .map(|w| (w.label.as_str(), w.used_percent, w.resets_at))
+                .map(|w| {
+                    (
+                        window::anthropic_label(&w.key, &w.label, true),
+                        w.used_percent,
+                        w.resets_at,
+                    )
+                })
                 .collect(),
             stale,
         ),
@@ -369,7 +371,13 @@ fn write_selected_anthropic_quota<W: Write>(s: &Snapshot, w: &mut W) -> io::Resu
             snapshot
                 .cadences
                 .iter()
-                .map(|c| (c.display_label.as_str(), c.utilization_percent, c.resets_at))
+                .map(|c| {
+                    (
+                        window::anthropic_label(&c.key, &c.display_label, true),
+                        c.utilization_percent,
+                        c.resets_at,
+                    )
+                })
                 .collect(),
             stale,
         ),
@@ -584,9 +592,23 @@ pub(crate) fn compact_pace_line(s: &Snapshot) -> Option<String> {
                 Some(r) => format!("{r:.1}×"),
                 None => "-".to_string(),
             };
+            let source_label = match s.anthropic_quota_source() {
+                Some(AnthropicQuotaSource::Statusline { rate_limits, .. }) => rate_limits
+                    .windows
+                    .iter()
+                    .find(|w| w.key == p.key)
+                    .map(|w| w.label.as_str()),
+                Some(AnthropicQuotaSource::OAuth { snapshot, .. }) => snapshot
+                    .cadences
+                    .iter()
+                    .find(|w| w.key == p.key)
+                    .map(|w| w.display_label.as_str()),
+                None => None,
+            }
+            .unwrap_or(&p.key);
             format!(
                 "{} {:.0}% used / {:.0}% elapsed ({ratio})",
-                short_cadence(&p.key),
+                crate::format::cadence_label(&p.key, source_label),
                 p.used_fraction * 100.0,
                 p.elapsed_fraction * 100.0,
             )
@@ -986,6 +1008,36 @@ mod tests {
     }
 
     #[test]
+    fn sections_codex_labels_do_not_repeat_window_and_preserve_details() {
+        for (minutes, label) in [(300, "5h"), (10080, "7d"), (4320, "window")] {
+            let mut snapshot = fully_populated_snapshot();
+            let quota = snapshot.codex_quota.as_mut().unwrap();
+            quota.primary.window_duration_minutes = minutes;
+            quota.primary.used_percent = 91.0;
+            quota.primary.resets_at = snapshot.fetched_at + Duration::hours(3);
+            let output = render_sections(&snapshot, false);
+            let expected = format!("  {label:<8} 91.00% of {minutes} minutes  (resets in 3h 0m)");
+            assert!(output.lines().any(|line| line == expected), "{output}");
+        }
+    }
+
+    #[test]
+    fn pace_preserves_unknown_selected_source_labels() {
+        let mut snapshot = fully_populated_snapshot();
+        let cadence = &mut snapshot.claude_oauth.as_mut().unwrap().cadences[0];
+        cadence.key = "seven_day_fable".into();
+        cadence.display_label = "Seven Day Fable".into();
+        snapshot.pace = vec![state_coordinator::WindowPace {
+            key: "seven_day_fable".into(),
+            used_fraction: 0.5,
+            elapsed_fraction: 0.5,
+            ratio: Some(1.0),
+        }];
+        let text = compact_pace_line(&snapshot).unwrap();
+        assert!(text.contains("Seven Day Fable 50% used"), "{text}");
+    }
+
+    #[test]
     fn compact_anthropic_uses_fresh_statusline_and_worst_non_five_hour_window() {
         let mut snap = fully_populated_snapshot();
         let now = snap.fetched_at;
@@ -1017,7 +1069,7 @@ mod tests {
 
         let cell = compact_anthropic_quota(&snap);
         assert!(cell.contains("10% 5h"), "{cell}");
-        assert!(cell.contains("91% 7d"), "{cell}");
+        assert!(cell.contains("91% 7d-opus"), "{cell}");
         assert!(cell.contains("(statusline)"), "{cell}");
         assert!(!cell.contains("42%"), "OAuth must not be folded in: {cell}");
 
@@ -1027,7 +1079,7 @@ mod tests {
             "{sections}"
         );
         assert!(
-            sections.contains("Opus weekly") && sections.contains("91.00%"),
+            sections.contains("7-day Opus") && sections.contains("91.00%"),
             "{sections}"
         );
         assert!(

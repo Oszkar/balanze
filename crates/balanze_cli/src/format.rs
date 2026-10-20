@@ -3,7 +3,6 @@
 //! crosses to f64 here at the display boundary (AGENTS.md §2.1).
 
 use chrono::{DateTime, Duration, Utc};
-use codex_local::WINDOW_DURATION_TOLERANCE_MINUTES;
 
 /// Format an `i64` micro-USD value as a human-readable USD string. Delegates
 /// to the `money` crate, which owns the one cent-rounding policy every Rust
@@ -19,22 +18,11 @@ pub(crate) fn micro_usd_to_display_precise(micro: i64) -> String {
     money::micro_usd_to_display_precise(micro)
 }
 
-/// Render a Codex window duration in human units. Codex windows are commonly
-/// 300 minutes (5h) or 10080 minutes (7d); dividing by 1440 and flooring
-/// collapsed the 5h case to "0d". Known 5h and 7d windows use the connector's
-/// tolerant classifier; other durations use their coarsest exact unit.
+/// Canonical Codex label, including an honest fallback for unknown durations.
 pub(crate) fn format_codex_window(minutes: u64) -> String {
-    if minutes.abs_diff(300) <= WINDOW_DURATION_TOLERANCE_MINUTES {
-        "5h".to_string()
-    } else if minutes.abs_diff(10_080) <= WINDOW_DURATION_TOLERANCE_MINUTES {
-        "7d".to_string()
-    } else if minutes >= 1440 && minutes.is_multiple_of(1440) {
-        format!("{}d", minutes / 1440)
-    } else if minutes >= 60 && minutes.is_multiple_of(60) {
-        format!("{}h", minutes / 60)
-    } else {
-        format!("{minutes}m")
-    }
+    codex_local::WindowKind::from_duration(minutes)
+        .label()
+        .to_string()
 }
 
 /// Format the age of a Codex snapshot for the rendered output. Returns
@@ -59,29 +47,6 @@ pub(crate) fn format_codex_age(
         return Some(format!("{}h", total_secs / 3600));
     }
     Some(format!("{}d", total_secs / 86_400))
-}
-
-/// Short cadence tag for the compact view, keyed off the **stable
-/// cadence `key`** (e.g. "five_hour", "seven_day_sonnet") rather than
-/// the free-form `display_label`. `anthropic_oauth` documents
-/// `display_label` as curated-but-free-form, so matching on it is
-/// fragile; the `key` is the wire-stable identifier.
-///
-/// Each 7-day sub-variant gets a distinct suffix so a user on a
-/// Sonnet-only or Opus-only flow doesn't see two indistinguishable
-/// "7d" cells (e.g. "19% 7d, 84% 7d-son"). Unknown / internal-codename
-/// cadences return "?"; cadence_label replaces that sentinel with the source label.
-pub(crate) fn short_cadence(key: &str) -> &'static str {
-    match key {
-        "five_hour" => "5h",
-        "seven_day" => "7d",
-        "seven_day_sonnet" => "7d-son",
-        "seven_day_opus" => "7d-opus",
-        "seven_day_oauth_apps" => "7d-apps",
-        "seven_day_cowork" => "7d-cowork",
-        "seven_day_omelette" => "7d-omel",
-        _ => "?",
-    }
 }
 
 pub(crate) fn pretty_duration(d: Duration) -> String {
@@ -116,10 +81,7 @@ pub(crate) fn fmt_int(n: u64) -> String {
 
 /// Preserve provider labels for cadence keys that have no known abbreviation.
 pub(crate) fn cadence_label<'a>(key: &str, label: &'a str) -> &'a str {
-    match short_cadence(key) {
-        "?" => label,
-        known => known,
-    }
+    window::anthropic_label(key, label, false)
 }
 
 #[cfg(test)]
@@ -136,6 +98,29 @@ mod tests {
 
     fn t(year: i32, month: u32, day: u32, h: u32, m: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(year, month, day, h, m, 0).unwrap()
+    }
+
+    #[test]
+    fn labels_match_shared_presentation_vectors() {
+        let policy: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/presentation-policy.json"
+        ))
+        .unwrap();
+        for case in policy["anthropicLabels"].as_array().unwrap() {
+            let key = case["key"].as_str().unwrap();
+            let source = case["supplied"].as_str().unwrap();
+            assert_eq!(cadence_label(key, source), case["short"].as_str().unwrap());
+            assert_eq!(
+                window::anthropic_label(key, source, true),
+                case["expanded"].as_str().unwrap()
+            );
+        }
+        for case in policy["codexLabels"].as_array().unwrap() {
+            assert_eq!(
+                format_codex_window(case["minutes"].as_u64().unwrap()),
+                case["label"].as_str().unwrap()
+            );
+        }
     }
 
     #[test]
@@ -179,8 +164,8 @@ mod tests {
         // 7-day window (10080 min) reads "7d".
         assert_eq!(format_codex_window(10_080), "7d");
         // Exact-hour and sub-hour windows.
-        assert_eq!(format_codex_window(60), "1h");
-        assert_eq!(format_codex_window(90), "90m");
+        assert_eq!(format_codex_window(60), "window");
+        assert_eq!(format_codex_window(90), "window");
     }
 
     #[test]
