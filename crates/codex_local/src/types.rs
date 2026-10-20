@@ -2,8 +2,7 @@
 //!
 //! Single-value output shape per the design decision: the
 //! Codex 4-quadrant matrix cell needs ONE number (the latest rate-limit
-//! utilization), not a stream of events. See `SCHEMA-NOTES.md` for the
-//! reasoning.
+//! utilization), not a stream of events.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -32,8 +31,7 @@ pub const WINDOW_DURATION_TOLERANCE_MINUTES: u64 = 5;
 
 /// Per-session token/context accounting from the `token_count` event's `info`
 /// block. INTERNAL ONLY: `#[serde(skip)]` on the snapshot keeps these off the
-/// IPC wire. Parsed and tested now; surfacing them in any UI is deferred
-/// (see SCHEMA-NOTES.md "Token/context: internal only").
+/// IPC wire. Parsed and tested now; surfacing them in any UI is deferred.
 ///
 /// LIMITATION: Codex's cap is percentage-windows, not tokens, so token burn
 /// does NOT predict quota exhaustion (unlike Claude, whose cap IS tokens). The

@@ -19,7 +19,7 @@ Balanze names each situation instead of blanking a cell.
 
 ## The tray icon is missing, duplicated, or flickering
 
-None of these are configurable, and none are caused by anything you did. They are bugs in the build you are running. Please [file an issue](https://github.com/Oszkar/balanze/issues/new) with your OS and version and the Balanze version from `balanze-cli --version`.
+First check the Windows hidden-icons area or whether the macOS menu bar is crowded. If the icon is still missing, duplicated, or repeatedly flickering, please [file an issue](https://github.com/Oszkar/balanze/issues/new) with your OS and version and the Balanze version from `balanze-cli --version`.
 
 ## The statusline is wired but my Claude Code prompt is blank (Windows)
 
@@ -47,11 +47,19 @@ Starting the desktop app or `balanze-cli watch` produces a fresh snapshot, which
 
 ## Balanze is using a lot of CPU while Claude Code is active
 
-It should not: the JSONL reader is incremental and re-reads only what was appended. Sustained high CPU means that has regressed. Please [file an issue](https://github.com/Oszkar/balanze/issues/new) noting roughly how large `~/.claude/projects` is.
+Normal appends are read incrementally; replaced or rewritten files need rereading. If high CPU persists, please [file an issue](https://github.com/Oszkar/balanze/issues/new) noting roughly how large `~/.claude/projects` is.
+
+## Codex shows only a weekly window
+
+Balanze is intended to show both 5-hour and weekly windows when Codex supplies them. A popover report on Windows and macOS currently shows only the weekly row; [the investigation](https://github.com/Oszkar/balanze/issues/294) will determine whether the other window is absent from the input or lost during selection/display. Balanze must not invent a missing quota value.
+
+## Does the Windows app combine usage from WSL?
+
+Not currently. Host and WSL environments can have separate local activity files even when signed into the same accounts. WSL-only activity can leave host readings stale, and concurrent usage can leave activity totals incomplete. [Shared-account host/WSL support](https://github.com/Oszkar/balanze/issues/297) is being investigated; account-wide quota percentages must not be added together.
 
 ## My OpenAI key is rejected
 
-The OpenAI cells need an **Admin** key (`sk-admin-...`), created in your organization's API-key settings. A regular `sk-...` key cannot reach the Admin Costs API and will be refused. `balanze-cli doctor` distinguishes the two. Validation shares the same 300-second gate as normal fetching, so it can report a deferred result after any recent attempt instead of bypassing the cooldown. OpenAI organization selection is not supported; Balanze uses the organization associated with the key.
+OpenAI API billing needs an **Admin** key (`sk-admin-...`), created in your organization's API-key settings. A regular `sk-...` key cannot reach the Admin Costs API and will be refused. `balanze-cli doctor` distinguishes the two. Validation shares the same 300-second gate as normal fetching, so it can report a deferred result after any recent attempt instead of bypassing the cooldown. OpenAI organization selection is not supported; Balanze uses the organization associated with the key.
 
 At UTC month rollover, an attempt started just before the new month can keep validation and full OpenAI data for the same API key and normalized API base deferred for up to 5 minutes. This is the deliberate machine-wide request guarantee, not evidence that the current key is invalid. Retry after the reservation expires.
 

@@ -10,7 +10,7 @@ Everything in the headline view is **measured reality only** - a server-reported
 
 |               | Quota %                              | API $ (real billed)                                 |
 |---------------|--------------------------------------|-----------------------------------------------------|
-| **Anthropic** | OAuth usage (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
+| **Anthropic** | Fresh statusline quota, OAuth fallback (5h / 7-day / per-model) | `extra_usage` overage if you enabled it, else *n/a* |
 | **OpenAI**    | Codex CLI rate-limit % (5h / weekly) | real billed spend (Admin Costs API)                 |
 
 The current-month Claude list-price figure is deliberately **not** in that grid. It sits outside as a separate *Subscription leverage* insight, so a counterfactual estimate can never be mistaken for billed spend.

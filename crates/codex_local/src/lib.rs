@@ -6,8 +6,7 @@
 //! `openai_client`. Unlike `claude_parser`, the output is a single
 //! [`CodexQuotaSnapshot`] (not a stream of events) because the Codex
 //! 4-quadrant matrix cell needs ONE number - the latest rate-limit
-//! utilization. See `SCHEMA-NOTES.md` (in this crate) for the schema
-//! investigation that established this design and the field-by-field schema.
+//! utilization. The parser and its fixtures define the supported wire format.
 //!
 //! # Public API
 //!
