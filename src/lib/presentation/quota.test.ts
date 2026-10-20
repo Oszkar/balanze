@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, classifyOverage, matchingAnthropicPace, openAiCostCell, overageCell } from './quota';
+import { quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, codexCreditsLabel, classifyOverage, matchingAnthropicPace, openAiCostCell, overageCell } from './quota';
 import type { Snapshot, ExtraUsage } from '../types/snapshot';
 import policy from '../../../tests/fixtures/presentation-policy.json';
 
@@ -301,6 +301,31 @@ describe('quota', () => {
       { used_percent: 95, window_duration_minutes: 1440, resets_at: '2026-07-09T12:00:00Z' },
     ).codex_quota!;
     expect(codexWindowsByKind(q).weekly?.used_percent).toBe(95);
+  });
+
+  it('matches the shared Codex credits label vectors', () => {
+    for (const c of policy.codexCredits) {
+      expect(
+        codexCreditsLabel({ has_credits: c.hasCredits, unlimited: c.unlimited, balance: c.balance }),
+        JSON.stringify(c),
+      ).toBe(c.expected);
+    }
+    expect(codexCreditsLabel(null)).toBeNull();
+    expect(codexCreditsLabel(undefined)).toBeNull();
+  });
+
+  it('codexQuota: carries the credits label and hides it when absent', () => {
+    const withCredits = {
+      ...base,
+      codex_quota: {
+        observed_at: '2026-07-08T10:00:00Z', session_id: 's',
+        primary: { used_percent: 3, window_duration_minutes: 10080, resets_at: '2026-07-14T12:00:00Z' },
+        secondary: null, plan_type: 'prolite', rate_limit_reached: false,
+        credits: { has_credits: true, unlimited: false, balance: 62500 },
+      },
+    } as Snapshot;
+    expect(codexQuota(withCredits)?.credits).toBe('62,500 credits');
+    expect(codexQuota({ ...withCredits, codex_quota: { ...withCredits.codex_quota!, credits: undefined } })?.credits).toBeNull();
   });
 
   it('codexQuota: null snapshot -> null', () => {

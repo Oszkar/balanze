@@ -6,6 +6,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Added
+
+- **Codex credits balance.** The popover (Grid and Cards) and `status --sections` show your remaining Codex credits, for example `62,500 credits`, and `status --json` exposes them under `codex_quota.credits`. The line is hidden when there is no balance.
+
+### Changed
+
+- **CLI JSON output advances to schema version 3.** The new nullable `codex_quota.credits` object carries the credits balance. Consumers that reject unknown schema versions must accept version 3 before upgrading; all version 2 fields keep their names and types.
+
+### Fixed
+
+- **Codex credits balances were silently dropped.** The provider reports the balance as a decimal string (`"62500.0000000000"`), which the integer parse rejected, so the balance never reached any surface.
+
 ## [0.5.3] - Hardening - 2026-10-09
 
 No new surface: the same numbers, made trustworthy. Every surface now agrees on which quota source wins, when it is stale, and how money rounds; the leverage estimate stops dropping output tokens and mispricing one-hour cache writes; concurrent Balanze processes can no longer multiply OpenAI requests or overwrite each other's settings; and the CLI's exit codes and CSV now say what the documentation says they do. Upgrade every running copy - the desktop app and any CLI on your PATH - to get the machine-wide guarantees.

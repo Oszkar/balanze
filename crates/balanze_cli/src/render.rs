@@ -330,6 +330,9 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
                 pretty_duration(resets_in),
             )?;
         }
+        if let Some(credits) = q.credits.as_ref().and_then(|c| c.label()) {
+            writeln!(w, "  Credits:           {credits}")?;
+        }
         if q.rate_limit_reached {
             writeln!(
                 w,
@@ -1614,6 +1617,27 @@ mod tests {
             out.contains(", 5m old)"),
             "codex sections header must carry the freshness tag:\n{out}"
         );
+    }
+
+    #[test]
+    fn sections_view_shows_codex_credits_only_when_there_is_a_balance() {
+        let mut snap = fully_populated_snapshot();
+        let q = snap.codex_quota.as_mut().expect("fixture has codex quota");
+        q.credits = Some(codex_local::CodexCredits {
+            has_credits: true,
+            unlimited: false,
+            balance: Some(62_500),
+        });
+        let out = render_sections(&snap, false);
+        assert!(out.contains("Credits:           62,500 credits"), "{out}");
+
+        let q = snap.codex_quota.as_mut().unwrap();
+        q.credits = Some(codex_local::CodexCredits {
+            has_credits: true,
+            unlimited: false,
+            balance: Some(0),
+        });
+        assert!(!render_sections(&snap, false).contains("Credits:"));
     }
 
     #[test]

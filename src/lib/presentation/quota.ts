@@ -1,4 +1,4 @@
-import type { Snapshot, CodexQuotaSnapshot, RateLimitWindow, ExtraUsage, WindowPace } from '../types/snapshot';
+import type { Snapshot, CodexCredits, CodexQuotaSnapshot, RateLimitWindow, ExtraUsage, WindowPace } from '../types/snapshot';
 import type { Tone } from './pace';
 import { microUsdToDollars } from './format';
 import { PROV } from './provenance';
@@ -151,12 +151,26 @@ export function codexWindowLabel(w: RateLimitWindow): CodexWindowLabel {
   return 'window';
 }
 
+// Display label for the Codex credits balance, or `null` when there is nothing
+// worth showing (no credits, a zero or unknown balance). Mirrors
+// `codex_local::CodexCredits::label`; `codexCredits` vectors in
+// tests/fixtures/presentation-policy.json pin both languages to it.
+export function codexCreditsLabel(c: CodexCredits | null | undefined): string | null {
+  if (!c) return null;
+  if (c.unlimited) return 'unlimited credits';
+  if (!c.has_credits || c.balance == null || c.balance <= 0) return null;
+  if (c.balance === 1) return '1 credit';
+  return `${new Intl.NumberFormat('en-US').format(c.balance)} credits`;
+}
+
 export interface CodexQuota {
   headline: { pct: number; resetsAt: string; window: RateLimitWindow; label: CodexWindowLabel };
   /// The other window, demoted to the cell's secondary text. `null` on
   /// single-window plans (e.g. "go").
   secondary: { pct: number; label: CodexWindowLabel } | null;
   plan: string;
+  /// Credits balance label; `null` when hidden. See `codexCreditsLabel`.
+  credits: string | null;
   tone: Tone;
   /// True when ANY window has reset - not just the headline. The cell carries
   /// one stale marker for the whole rollout, so checking only the headline let
@@ -212,6 +226,7 @@ export function codexQuota(s: Snapshot): CodexQuota | null {
       ? { pct: secondaryWin.used_percent, label: codexWindowLabel(secondaryWin) }
       : null,
     plan: q.plan_type,
+    credits: codexCreditsLabel(q.credits),
     tone: quotaTone(headlineWin.used_percent),
     expired: all.some((w) => codexWindowExpired(w, s.fetched_at)),
   };

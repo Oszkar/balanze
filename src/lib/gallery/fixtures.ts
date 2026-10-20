@@ -59,6 +59,7 @@ export function baseSnapshot(): Snapshot {
       secondary: null,
       plan_type: 'Plus',
       rate_limit_reached: false,
+      credits: { has_credits: true, unlimited: false, balance: 62_500 },
     },
     codex_quota_error: null,
     openai: {

@@ -23,8 +23,10 @@
   // `dismiss` renders the × that collapses the column - action plus its labels,
   // caller-supplied so this component stays provider-agnostic. `onConnect` wires
   // the connect CTA.
-  let { name, plan, windows, billed, quotaState, dismiss, onConnect }:
+  let { name, plan, windows, meta, billed, quotaState, dismiss, onConnect }:
     { name: string; plan: string; windows: CardWindow[];
+      // Quiet one-line fact under the bars (e.g. the Codex credits balance).
+      meta?: { text: string; title?: string };
       billed?: { amount: string | null; note: string; badge?: 'real' | 'na'; placeholder?: string; title?: string };
       quotaState?: CardQuotaState; dismiss?: { aria: string; title: string; onClick: () => void };
       onConnect?: () => void } = $props();
@@ -66,6 +68,7 @@
         <UsageBar used={w.used} elapsed={w.elapsed} tone={w.tone} />
       </div>
     {/each}
+    {#if meta}<div class="meta" title={meta.title}>{meta.text}</div>{/if}
   {/if}
   {#if billed}
     <div class="billed" title={billed.title}>
@@ -118,6 +121,7 @@
   .blabel { display: flex; justify-content: space-between; font-size: var(--text-xs); gap: 8px; }
   .bl { color: var(--ink2); } .br { color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .br .sfb { color: var(--warn); }
+  .meta { font-size: var(--text-2xs); color: var(--faint); cursor: help; font-variant-numeric: tabular-nums; }
   .billed { display: flex; justify-content: space-between; align-items: center; padding-top: 2px; cursor: help; }
   .amt { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; font-size: 14px; font-weight: 560; font-variant-numeric: tabular-nums; }
   /* Empty-state placeholder ("none"/"unavailable") sits in the amount slot, muted. */

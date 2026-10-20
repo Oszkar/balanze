@@ -34,7 +34,7 @@ Without pay-as-you-go "Extra usage" enabled on claude.ai, the Anthropic API-$ ce
 
 ### The `--json` schema
 
-`status --json` (and `watch --json`) currently emit schema version 2. Version 2 adds the nullable `claude_oauth_unavailable: string | null` field so a consumer can distinguish "Claude Code not installed" from a cold start. All version 1 fields keep their existing names and types, but consumers that reject unknown schema versions must explicitly accept version 2 before upgrading.
+`status --json` (and `watch --json`) currently emit schema version 3. Version 3 adds the nullable `codex_quota.credits` object (`has_credits`, `unlimited`, and `balance` as whole credits, null when the provider reports none). Version 2 added the nullable `claude_oauth_unavailable: string | null` field so a consumer can distinguish "Claude Code not installed" from a cold start. All version 1 fields keep their existing names and types, but consumers that reject unknown schema versions must explicitly accept versions 2 and 3 before upgrading.
 
 Every money cell is tagged `{ value_micro_usd, source, confidence, details }` in i64 micro-USD - so a consumer can tell an estimate from real billed spend straight from the wire shape, without parsing labels. The full schema is documented in [`docs/ARCHITECTURE.md`](https://github.com/Oszkar/balanze/blob/main/docs/ARCHITECTURE.md).
 

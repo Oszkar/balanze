@@ -32,7 +32,7 @@ use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot, ExtraUsage};
 use chrono::{DateTime, Utc};
 use claude_cost::{Cost, ModelCost};
 use claude_statusline::StatuslineFilePayload;
-use codex_local::{CodexQuotaSnapshot, RateLimitWindow};
+use codex_local::{CodexCredits, CodexQuotaSnapshot, RateLimitWindow};
 use openai_client::{LineItemCost, OpenAiCosts};
 use serde::Serialize;
 use state_coordinator::{JsonlSnapshot, Snapshot, WindowPace};
@@ -44,9 +44,10 @@ const SESSION_ID_REDACTED: &str = "<redacted>";
 /// when the wire shape changes so machine consumers can detect a break; keep the
 /// AGENTS.md §2.1 `--json` row and the README example in lockstep. Independent
 /// of `state_coordinator::SNAPSHOT_SCHEMA_VERSION` (the IPC `Snapshot` is a
-/// different surface). Version 2 adds the neutral
-/// `claude_oauth_unavailable` state; version 1 introduced i64 micro-USD money.
-const SCHEMA_VERSION: u32 = 2;
+/// different surface). Version 3 adds `codex_quota.credits`; version 2 adds the
+/// neutral `claude_oauth_unavailable` state; version 1 introduced i64 micro-USD
+/// money.
+const SCHEMA_VERSION: u32 = 3;
 
 /// Serialize `snap` as pretty-printed JSON suitable for `balanze-cli status
 /// --json`. When `verbose=false`, account identifiers (`org_uuid`,
@@ -288,6 +289,8 @@ struct JsonCodexQuota<'a> {
     secondary: Option<&'a RateLimitWindow>,
     plan_type: &'a str,
     rate_limit_reached: bool,
+    /// Credits as the provider reported them; `balance` is whole credits.
+    credits: Option<&'a CodexCredits>,
 }
 
 impl<'a> JsonCodexQuota<'a> {
@@ -303,6 +306,7 @@ impl<'a> JsonCodexQuota<'a> {
             secondary: c.secondary.as_ref(),
             plan_type: &c.plan_type,
             rate_limit_reached: c.rate_limit_reached,
+            credits: c.credits.as_ref(),
         }
     }
 }
@@ -524,7 +528,7 @@ mod tests {
         let s = Snapshot::empty(fixed_now());
         let v = render_to_value(&s, false);
         // The DTO carries an explicit, top-level schema version for consumers.
-        assert_eq!(v["schema_version"], 2);
+        assert_eq!(v["schema_version"], 3);
         assert!(v["anthropic_api_cost"].is_null());
         assert!(v["openai"].is_null());
         assert!(v["claude_oauth"].is_null());
@@ -623,6 +627,22 @@ mod tests {
     fn non_verbose_redacts_codex_session_id_to_sentinel_string() {
         let v = render_to_value(&populated_snapshot(), false);
         assert_eq!(v["codex_quota"]["session_id"], "<redacted>");
+    }
+
+    #[test]
+    fn codex_credits_are_exposed_as_reported() {
+        let mut snap = populated_snapshot();
+        assert!(render_to_value(&snap, false)["codex_quota"]["credits"].is_null());
+
+        snap.codex_quota.as_mut().unwrap().credits = Some(CodexCredits {
+            has_credits: true,
+            unlimited: false,
+            balance: Some(62_500),
+        });
+        let credits = &render_to_value(&snap, false)["codex_quota"]["credits"];
+        assert_eq!(credits["balance"], 62_500);
+        assert_eq!(credits["has_credits"], true);
+        assert_eq!(credits["unlimited"], false);
     }
 
     #[test]
