@@ -8,8 +8,11 @@ Fills the "Codex %" cell of Balanze's 4-quadrant matrix. Codex reports
 two rolling windows (5-hour + weekly); the crate classifies them by
 duration and exposes `five_hour()` / `weekly()` / `worst_window()`. The
 tray reads the worst window; other surfaces consume the available windows.
-A reported popover omission is tracked in [#294](https://github.com/Oszkar/balanze/issues/294). The schema details that drove the design live in `SCHEMA-NOTES.md`
-(this directory) - re-read those if Codex CLI changes its JSONL format.
+A reported popover omission is tracked in [#294](https://github.com/Oszkar/balanze/issues/294).
+
+## Parsing rules
+
+Classify quota windows by duration, never by the `primary` or `secondary` slot. Either window may be absent. Only account-wide `limit_id: "codex"` (or absent/null for older records) supplies account quota; skip per-model limits. A non-string limit ID is schema drift. The parser and its fixtures define the supported wire format.
 
 ## Public API
 
@@ -68,7 +71,6 @@ match read_codex_quota() {
 - **No dedup module.** Codex doesn't stream-duplicate events the way
   Anthropic does; there's no `(message_id, request_id)` shape to dedup
   on, and one `token_count` event per turn is the actual emit pattern.
-  See `SCHEMA-NOTES.md` §"No dedup module needed".
 - **No `IncrementalParser`.** Each read scans candidate session files for the latest quota. Revisit incremental reads only if profiling identifies this path as a bottleneck.
 - **No per-token cost computation.** Codex side is quota %, not $. The
   4-quadrant matrix's "OpenAI API $" cell is filled by `openai_client`
@@ -89,7 +91,7 @@ CODEX_CONFIG_DIR=/path/to/codex-data balanze
 
 ## Tests
 
-Tests cover walking, parsing, window classification, and source selection. Fixtures embed anonymized session records; run `cargo test -p codex_local`. The schema rationale is recorded in [SCHEMA-NOTES.md](SCHEMA-NOTES.md).
+Tests cover walking, parsing, window classification, and source selection. Fixtures embed anonymized session records; run `cargo test -p codex_local`.
 
 ## License
 
