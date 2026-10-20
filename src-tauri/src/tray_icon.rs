@@ -75,7 +75,10 @@ fn bucket_rgb(bucket: ColorBucket) -> (u8, u8, u8) {
         ColorBucket::Yellow => (0xcf, 0x8a, 0x2a),
         ColorBucket::Orange => (0xd9, 0x6a, 0x2a),
         ColorBucket::Red => (0xc0, 0x49, 0x3a),
-        ColorBucket::Warn => (0xc0, 0x49, 0x3a),
+        // Degraded/stale. Deliberately outside the green-to-red heat ramp: the
+        // ring has no room for a marker, so a source problem must be
+        // distinguishable from 90% without opening the tooltip.
+        ColorBucket::Warn => (0x7c, 0x6a, 0xc9),
     }
 }
 
@@ -231,6 +234,27 @@ mod tests {
             opaque < (SIZE * SIZE) as usize,
             "ring must not be fully filled"
         );
+    }
+
+    #[test]
+    fn every_bucket_has_a_distinct_ring_color() {
+        let buckets = [
+            ColorBucket::Neutral,
+            ColorBucket::Green,
+            ColorBucket::Yellow,
+            ColorBucket::Orange,
+            ColorBucket::Red,
+            ColorBucket::Warn,
+        ];
+        for (i, a) in buckets.iter().enumerate() {
+            for b in &buckets[i + 1..] {
+                assert_ne!(
+                    bucket_rgb(*a),
+                    bucket_rgb(*b),
+                    "{a:?} and {b:?} must not share a ring color"
+                );
+            }
+        }
     }
 
     /// Set every property the current platform paints, i.e. a fully

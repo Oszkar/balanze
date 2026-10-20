@@ -26,7 +26,7 @@ On a terminal it renders like this:
 Anthropic           ok 82% 5h, 88% 7d (oauth)               $20.92/$25.00 overage (real)
 OpenAI              ok 6% 7d (codex go)                     $4.20 (admin costs)
 
-Pace: 5h 82% used / 60% elapsed (1.4x);  7d 88% used / 95% elapsed (0.9x)
+Pace: 5h 82% used / 60% elapsed (1.4×);  7d 88% used / 95% elapsed (0.9×)
 Subscription leverage: ~$2197.11 of this month's Claude Code usage at API list prices (leverage - NOT billed)
 ```
 

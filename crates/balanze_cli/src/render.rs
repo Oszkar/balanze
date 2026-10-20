@@ -569,7 +569,7 @@ fn compact_subscription_leverage(s: &Snapshot) -> Option<String> {
 
 /// Per-window pace line: used % vs elapsed % of the window, plus the ratio.
 /// `None` when no pace data is present.
-fn compact_pace_line(s: &Snapshot) -> Option<String> {
+pub(crate) fn compact_pace_line(s: &Snapshot) -> Option<String> {
     let pace = matching_anthropic_pace(s);
     if pace.is_empty() {
         return None;
@@ -590,6 +590,19 @@ fn compact_pace_line(s: &Snapshot) -> Option<String> {
         })
         .collect();
     Some(format!("Pace: {}", parts.join(";  ")))
+}
+
+/// Bucket for the whole pace line: the worst per-window ratio, classified by
+/// `window::PaceVerdict` via `bucket_for_pace_ratio`. Shared by compact `status`
+/// and the `watch` TUI so both paint the same line the same way.
+pub(crate) fn pace_bucket(s: &Snapshot) -> Bucket {
+    let worst_ratio = matching_anthropic_pace(s)
+        .into_iter()
+        .filter_map(|p| p.ratio)
+        .fold(None, |acc: Option<f64>, r| {
+            Some(acc.map_or(r, |a| a.max(r)))
+        });
+    bucket_for_pace_ratio(worst_ratio)
 }
 
 /// The rolling window the compact "Codex %" cell represents: the worst
@@ -743,15 +756,13 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     let openai_quota = compact_codex_quota(snapshot);
     let openai_cost = compact_openai_cost(snapshot);
 
-    // A failed-fetch cell (starts with ✗) is always Critical; a stale Codex
-    // rollout (any expired window or a cached source error, shown with ⚠)
-    // is Warn; otherwise color by the row's quota fraction, Neutral when there's
-    // no signal.
-    let anth_stale = anthropic_display_windows(snapshot).is_some_and(|(_, _, stale)| stale);
+    // A failed-fetch cell (starts with ✗) has no utilization to retain, so it
+    // is Critical. Every other cell keeps its utilization color, Neutral when
+    // there is no signal; a stale source is flagged by the cell's ⚠ marker and
+    // "stale" text rather than by recoloring (the tray is the one surface that
+    // must replace the color, since it has no room for a marker).
     let anth_bucket = if anth_quota.starts_with('✗') {
         Bucket::Critical
-    } else if anth_stale {
-        Bucket::Warn
     } else {
         match anthropic_quota_fraction(snapshot) {
             Some(f) => bucket_for_fraction(f),
@@ -760,12 +771,6 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
     };
     let codex_bucket = if openai_quota.starts_with('✗') {
         Bucket::Critical
-    } else if codex_window_expired(snapshot) || snapshot.codex_quota_error.is_some() {
-        // Stale rollout or failed read: color Warn so
-        // the ⚠ glyph in the cell and the bucket color agree. Without this
-        // check a <50% stale window would be colored Ok (green), contradicting
-        // the warning marker.
-        Bucket::Warn
     } else {
         match codex_quota_fraction(snapshot) {
             Some(f) => bucket_for_fraction(f),
@@ -792,13 +797,7 @@ pub(crate) fn write_compact_colored<W: Write>(snapshot: &Snapshot, w: &mut W) ->
 
     if let Some(pace) = compact_pace_line(snapshot) {
         // Color the whole pace line by the worst per-window ratio bucket.
-        let worst_ratio = matching_anthropic_pace(snapshot)
-            .into_iter()
-            .filter_map(|p| p.ratio)
-            .fold(None, |acc: Option<f64>, r| {
-                Some(acc.map_or(r, |a| a.max(r)))
-            });
-        let style = bucket_style(bucket_for_pace_ratio(worst_ratio));
+        let style = bucket_style(pace_bucket(snapshot));
         writeln!(w, "{}", pace.style(style))?;
     }
     if let Some(lev) = compact_subscription_leverage(snapshot) {
@@ -1645,17 +1644,29 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // FIX A: stale Codex bucket color regression guard
+    // Stale cells retain their utilization color
     // -----------------------------------------------------------------------
 
-    /// A stale Codex window (fetched_at > primary.resets_at, shown with ⚠) must
-    /// produce a Warn (yellow) bucket, NOT an Ok (green) bucket, even when the
-    /// used% is below the 50% Warn threshold. The old code only short-circuited
-    /// on ✗; the ⚠ path fell through to `bucket_for_fraction`, coloring a
-    /// <50%-stale window green - contradicting its own warning glyph.
+    /// The OpenAI row of a colored compact render, ANSI intact.
+    fn colored_openai_row(snap: &Snapshot) -> String {
+        let raw = String::from_utf8(render_compact_with_choice(
+            snap,
+            anstream::ColorChoice::Always,
+        ))
+        .unwrap();
+        raw.lines()
+            .find(|line| line.starts_with("OpenAI "))
+            .unwrap()
+            .to_string()
+    }
+
+    /// A stale Codex cell (cached source error or an expired window) keeps the
+    /// color its utilization earns and carries the staleness in the cell's own
+    /// ⚠ marker and "stale" text. Replacing the color with a warning yellow
+    /// would hide a 95% window behind the same color as a 60% one.
     #[test]
-    fn cached_codex_error_colors_warn_at_any_utilization() {
-        for percent in [17.5, 74.5, 95.0] {
+    fn cached_codex_error_retains_utilization_color() {
+        for (percent, sgr) in [(17.5, "[32m"), (60.0, "[33m"), (95.0, "[31m")] {
             let mut snap = fully_populated_snapshot();
             let q = snap.codex_quota.as_mut().unwrap();
             q.primary.used_percent = percent;
@@ -1663,78 +1674,63 @@ mod tests {
             q.secondary = None;
             snap.codex_quota_error = Some("read failed".into());
             assert!(!codex_window_expired(&snap));
-            let raw = String::from_utf8(render_compact_with_choice(
-                &snap,
-                anstream::ColorChoice::Always,
-            ))
-            .unwrap();
-            let row = raw
-                .lines()
-                .find(|line| line.starts_with("OpenAI "))
-                .unwrap();
-            assert!(row.contains("stale"), "{row}");
-            assert!(
-                row.contains("\x1b[33m"),
-                "cached error must use warning color: {row}"
-            );
-            assert!(
-                !row.contains("\x1b[32m") && !row.contains("\x1b[31m"),
-                "{row}"
-            );
+            let row = colored_openai_row(&snap);
+            assert!(row.contains("⚠") && row.contains("stale"), "{row}");
+            assert!(row.contains(sgr), "{percent}% must keep {sgr:?}: {row}");
         }
     }
 
     #[test]
-    fn stale_codex_window_colors_warn_not_ok() {
+    fn expired_codex_window_retains_utilization_color() {
         let now = fixture_fetched_at();
         let mut snap = fully_populated_snapshot();
-        if let Some(q) = snap.codex_quota.as_mut() {
-            // Low usage (<50%) but expired window - old code returned Ok (green).
-            q.primary.used_percent = 17.5;
-            q.primary.resets_at = now - Duration::hours(1); // expired
-        }
-        // Confirm codex_window_expired detects the condition.
-        assert!(
-            codex_window_expired(&snap),
-            "sanity: expired window must be detected"
-        );
-        // Confirm compact_codex_quota emits ⚠ (the display matches the bucket).
+        let q = snap.codex_quota.as_mut().unwrap();
+        q.primary.used_percent = 17.5;
+        q.primary.resets_at = now - Duration::hours(1);
+        assert!(codex_window_expired(&snap), "sanity: window is expired");
         let cell = compact_codex_quota(&snap);
         assert!(
             cell.starts_with('⚠'),
-            "stale cell must carry the ⚠ marker:\n{cell}"
+            "stale cell keeps its marker:
+{cell}"
         );
-        // The colored output must NOT contain a green SGR code wrapping the
-        // codex cell. We check by asserting the cell renders Warn (yellow) via
-        // the ANSI SGR code 33m (owo-colors yellow) and does NOT render 32m
-        // (owo-colors green). Use ColorChoice::Always to force ANSI emission.
-        let bytes = render_compact_with_choice(&snap, anstream::ColorChoice::Always);
-        let raw = String::from_utf8(bytes).expect("utf8");
-        // Yellow SGR must be present.
+        let row = colored_openai_row(&snap);
         assert!(
-            raw.contains("\x1b[33m"),
-            "stale Codex cell must be colored yellow (SGR 33m), got:\n{raw}"
+            row.contains("[32m") && !row.contains("[33m"),
+            "17.5% stale must stay green, not turn warning yellow: {row}"
         );
-        // Green SGR must NOT appear for the codex row. We confirm by checking
-        // the full output has no occurrence of the green code at all (the only
-        // colored cells in a fully-stale snapshot are the stale Codex cell and
-        // the Anthropic quota cell, which is at ~42% -> also Ok normally, but
-        // the oauth cell is the OTHER colored cell; we must not see green on the
-        // OpenAI row). Since the Anthropic cell IS at 42% (Ok / green) we
-        // can't blanket-assert "no green" - but we CAN verify that no green
-        // appears on the OpenAI/Codex row by checking for yellow and checking
-        // the Anthropic bucket is still Ok independently.
-        let anth_fraction = anthropic_quota_fraction(&snap).expect("anthropic fraction present");
-        assert_eq!(
-            bucket_for_fraction(anth_fraction),
-            Bucket::Ok,
-            "Anthropic cell stays Ok at 42.5%"
-        );
-        // The codex bucket helper itself must return Warn.
-        assert!(
-            codex_window_expired(&snap),
-            "helper returns true for expired"
-        );
+    }
+
+    #[test]
+    fn stale_anthropic_cell_retains_utilization_color() {
+        let mut snap = fully_populated_snapshot();
+        snap.claude_oauth.as_mut().unwrap().cadences[0].utilization_percent = 95.0;
+        snap.claude_oauth_error = Some("refresh failed".into());
+        let raw = String::from_utf8(render_compact_with_choice(
+            &snap,
+            anstream::ColorChoice::Always,
+        ))
+        .unwrap();
+        let row = raw.lines().find(|l| l.starts_with("Anthropic ")).unwrap();
+        assert!(row.contains("stale"), "{row}");
+        assert!(row.contains("[31m"), "95% stale stays red: {row}");
+    }
+
+    #[test]
+    fn pace_bucket_follows_the_verdict_thresholds() {
+        let mut snap = fully_populated_snapshot();
+        let mut with_ratio = |ratio: f64| {
+            snap.pace = vec![state_coordinator::WindowPace {
+                key: "five_hour".to_string(),
+                used_fraction: 0.5,
+                elapsed_fraction: 0.5,
+                ratio: Some(ratio),
+            }];
+            pace_bucket(&snap)
+        };
+        assert_eq!(with_ratio(0.5), Bucket::Ok);
+        assert_eq!(with_ratio(1.12), Bucket::Warn);
+        assert_eq!(with_ratio(1.5), Bucket::Critical);
     }
 
     // -----------------------------------------------------------------------
