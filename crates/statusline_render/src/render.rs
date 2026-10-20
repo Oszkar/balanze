@@ -199,7 +199,14 @@ fn render_usage(input: &RenderInput) -> Option<String> {
         .windows
         .iter()
         .filter(|w| w.key != "five_hour")
-        .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent));
+        // Match the other surfaces: compare raw percentages and retain the first tie.
+        .reduce(|first, candidate| {
+            if candidate.used_percent > first.used_percent {
+                candidate
+            } else {
+                first
+            }
+        });
     if let Some(w) = five {
         windows.push(render_window(
             "✳️ 5h",
@@ -481,6 +488,39 @@ mod tests {
             claude_code_version: None,
             model_display_name: Some("Opus".to_string()),
             context_used_percent: Some(42.0),
+        }
+    }
+
+    #[test]
+    fn anthropic_ties_keep_the_first_window_before_rounding() {
+        for (first_key, first_pct, second_key, second_pct, expected) in [
+            ("seven_day", 0.0, "seven_day_opus", 0.0, "✳️ 7d 0%"),
+            ("seven_day_opus", 91.0, "seven_day", 91.0, "✳️ 7d-opus 91%"),
+            ("seven_day", 90.1, "seven_day_opus", 90.2, "✳️ 7d-opus 90%"),
+            ("seven_day_opus", 91.0, "seven_day", 80.0, "✳️ 7d-opus 91%"),
+        ] {
+            let mut snapshot = snap();
+            snapshot.rate_limits.as_mut().unwrap().windows =
+                [(first_key, first_pct), (second_key, second_pct)]
+                    .into_iter()
+                    .map(|(key, used_percent)| claude_statusline::RateWindow {
+                        key: key.into(),
+                        label: key.into(),
+                        used_percent,
+                        resets_at: now() + Duration::days(5),
+                    })
+                    .collect();
+            let mut config = cfg();
+            config.lines = vec!["{usage}".into()];
+            let output = render(&RenderInput {
+                snapshot: &snapshot,
+                cross: None,
+                config: &config,
+                now: now(),
+                color: false,
+            });
+            assert!(output.starts_with(expected), "{output}");
+            assert_eq!(output.matches("✳️").count(), 1, "{output}");
         }
     }
 

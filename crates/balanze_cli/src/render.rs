@@ -320,7 +320,7 @@ fn write_sections<W: Write>(snapshot: &Snapshot, verbose: bool, w: &mut W) -> io
             let resets_in = win.resets_at.signed_duration_since(snapshot.fetched_at);
             writeln!(
                 w,
-                "  {label:<8} window: {:.2}% of {} minutes  (resets in {})",
+                "  {label:<8} {:.2}% of {} minutes  (resets in {})",
                 win.used_percent,
                 win.window_duration_minutes,
                 pretty_duration(resets_in),
@@ -1005,6 +1005,20 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         write_compact(snap, &mut buf).expect("write_compact ok");
         String::from_utf8(buf).expect("compact output is UTF-8")
+    }
+
+    #[test]
+    fn sections_codex_labels_do_not_repeat_window_and_preserve_details() {
+        for (minutes, label) in [(300, "5h"), (10080, "7d"), (4320, "window")] {
+            let mut snapshot = fully_populated_snapshot();
+            let quota = snapshot.codex_quota.as_mut().unwrap();
+            quota.primary.window_duration_minutes = minutes;
+            quota.primary.used_percent = 91.0;
+            quota.primary.resets_at = snapshot.fetched_at + Duration::hours(3);
+            let output = render_sections(&snapshot, false);
+            let expected = format!("  {label:<8} 91.00% of {minutes} minutes  (resets in 3h 0m)");
+            assert!(output.lines().any(|line| line == expected), "{output}");
+        }
     }
 
     #[test]
