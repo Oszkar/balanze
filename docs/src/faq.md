@@ -51,7 +51,7 @@ Normal appends are read incrementally; replaced or rewritten files need rereadin
 
 ## Codex shows only a weekly window
 
-Balanze is intended to show both 5-hour and weekly windows when Codex supplies them. A popover report on Windows and macOS currently shows only the weekly row; [the investigation](https://github.com/Oszkar/balanze/issues/294) will determine whether the other window is absent from the input or lost during selection/display. Balanze must not invent a missing quota value.
+The available windows depend on your Codex plan. ChatGPT Pro 100 (`prolite`), for example, supplies only a weekly account-wide window. Balanze shows both 5-hour and weekly windows when Codex supplies both, and never invents an absent window. The compact CLI status shows only the highest-utilization window; `status --sections`, `watch`, the popover, and statusline show both when available.
 
 ## Does the Windows app combine usage from WSL?
 

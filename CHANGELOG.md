@@ -9,14 +9,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 ### Added
 
 - **Codex credits balance.** The popover (Grid and Cards) and `status --sections` show your remaining Codex credits, for example `62,500 credits`, and `status --json` exposes them under `codex_quota.credits`. The line is hidden when there is no balance.
+- **A maintainer price-refresh command.** `just refresh-claude-prices <full-sha> --dry-run` previews a pinned LiteLLM snapshot with added models, missing models, and changed rates. Publishing requires explicit retention of missing historical models; official-price verification remains manual. Runtime pricing stays offline.
 
 ### Changed
 
 - **CLI JSON output advances to schema version 3.** The new nullable `codex_quota.credits` object carries the credits balance. Consumers that reject unknown schema versions must accept version 3 before upgrading; all version 2 fields keep their names and types.
+- **Quota window labels agree across surfaces.** Known Anthropic windows use compact labels such as `5h` and `7d-opus`, or expanded labels such as `5-hour` and `7-day Opus`. Unknown Anthropic windows retain their supplied labels, and unknown Codex durations read `window`.
+- **The bundled Claude prices use the 2026-10-15 LiteLLM snapshot.** Opus 5.5, Sonnet 5.5, and Haiku 5.5 are priced, including Haiku 5.5's higher rates above 100,000 prompt tokens. Historical model prices are retained.
+- **Stale quota keeps its utilization color in CLI status.** A separate marker identifies stale or failing sources. The tray uses a distinct violet ring for degradation, and `watch` now colors its pace line with the same verdict as compact status.
 
 ### Fixed
 
 - **Codex credits balances were silently dropped.** The provider reports the balance as a decimal string (`"62500.0000000000"`), which the integer parse rejected, so the balance never reached any surface.
+- **Selected window labels stay paired with their percentages.** Model-specific Anthropic limits and unknown Codex durations retain their identities in Grid, tray tooltips, and statusline fallback instead of being mislabeled as a generic weekly limit.
+- **Codex documentation and tooltips explain plan-dependent windows.** Weekly-only plans no longer receive a tooltip claiming a five-hour window. The FAQ explains that an absent five-hour value is expected on some plans.
+
+### Security
+
+- **rustls is updated to 0.23.46** for RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, and RUSTSEC-2026-0349. Tauri frontend packages and Rust dependencies are also updated, with the npm lockfile aligned to the Tauri 2.12 packages.
 
 ## [0.5.3] - Hardening - 2026-10-09
 

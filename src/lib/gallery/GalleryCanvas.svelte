@@ -3,7 +3,7 @@
   import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
   import Popover from '$lib/components/Popover.svelte';
   import GalleryFrame from './GalleryFrame.svelte';
-  import { GALLERY_STATES, LABEL_STATES, DEMO_SETTINGS, DEMO_STATUSLINE, baseSnapshot } from './fixtures';
+  import { GALLERY_STATES, LABEL_STATES, CREDIT_STATES, DEMO_SETTINGS, DEMO_STATUSLINE, baseSnapshot } from './fixtures';
 
   // Theme is seeded from the URL (?theme=dark) so a snapshot harness can pin a
   // palette deterministically before paint; the toggle keeps it interactive.
@@ -12,6 +12,7 @@
     return new URLSearchParams(window.location.search).get('theme') === 'dark' ? 'dark' : 'light';
   }
   const labelRegression = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('label-regression');
+  const creditsRegression = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('credits-regression');
   let theme = $state<'light' | 'dark'>(initialTheme());
   const scrollRegression =
     typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('scroll-regression');
@@ -86,7 +87,7 @@
       </button>
     </header>
     <div class="grid">
-      {#each (labelRegression ? LABEL_STATES : GALLERY_STATES) as s (s.label)}
+      {#each (creditsRegression ? CREDIT_STATES : labelRegression ? LABEL_STATES : GALLERY_STATES) as s (s.label)}
         <GalleryFrame
           label={s.label}
           view={s.view}

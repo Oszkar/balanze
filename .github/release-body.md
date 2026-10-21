@@ -1,13 +1,20 @@
-Balanze v0.5.3 - Hardening
+Balanze v0.5.4 - Window consistency & maintenance
 
-This release fixes usage undercounting, one-hour cache-write pricing, stale quota displays, concurrent settings updates, and duplicate OpenAI Costs requests. See the [full changelog](https://github.com/Oszkar/balanze/blob/v0.5.3/CHANGELOG.md#053---hardening---2026-10-09) for details.
+This release shows Codex credits, makes quota window labels consistent, refreshes Claude pricing, and adds a maintainer price-refresh command. Stale quota keeps its utilization color in CLI status, the tray uses a distinct violet degraded ring, and `watch` shares compact status's pace colors. See the [full changelog](https://github.com/Oszkar/balanze/blob/v0.5.4/CHANGELOG.md) for details.
+
+**What's included**
+
+- Codex credits appear in both popover layouts and `status --sections`, with zero or absent balances hidden. `status --json` exposes the nullable credits object and preserves reported zero balances. Credits reflect the last Codex session. No new credits segment is added to `watch` or statusline.
+- Window labels retain model-specific Anthropic limits and identify unknown Codex durations honestly. Codex windows remain plan-dependent: weekly-only plans do not gain a synthetic five-hour value.
+- Bundled Claude pricing includes Opus 5.5, Sonnet 5.5, and Haiku 5.5, including Haiku's above-100,000-prompt-token tier. Historical prices remain available for exports.
+- Maintainers can preview a pinned LiteLLM price refresh with `just refresh-claude-prices <full-sha> --dry-run`. Official-price cross-checking remains manual; runtime pricing stays offline.
+- rustls 0.23.46 addresses four TLS advisories; Tauri and other dependencies are updated.
 
 **Before upgrading**
 
 - Upgrade every running copy, including the desktop app and any `balanze-cli` on your PATH. The machine-wide OpenAI request and settings-write guarantees require cooperating upgraded processes.
-- CLI JSON output now uses **schema version 2**, adding the nullable `claude_oauth_unavailable` field. All version 1 fields retain their names and types, but consumers that reject unknown schema versions must accept version 2 before upgrading.
-- CSV export adds a 13th **`partial`** column: `true` or `false` for OpenAI rows, empty for Claude rows. Update consumers that require an exact header or column count. Existing column positions are unchanged.
-- A partial OpenAI export warns on stderr even with `--quiet` and exits 5 with `--strict`. Authentication and network failures now use the documented exit codes 3 and 4.
+- CLI JSON output now uses **schema version 3**, adding nullable `codex_quota.credits` with `has_credits`, `unlimited`, and `balance` as whole credits. All version 2 fields retain their names and types; consumers that reject unknown schema versions must accept version 3 before upgrading.
+- When upgrading from before v0.5.3, also account for schema 2's nullable `claude_oauth_unavailable` field and CSV export's 13th `partial` column. A partial export warns even with `--quiet` and exits 5 with `--strict`; authentication and network failures use exit codes 3 and 4.
 
 **Desktop app**
 

@@ -5,10 +5,10 @@ Reads the user's local OpenAI Codex CLI session files
 latest rate-limit quota snapshot.
 
 Fills the "Codex %" cell of Balanze's 4-quadrant matrix. Codex reports
-two rolling windows (5-hour + weekly); the crate classifies them by
+plan-dependent rolling windows (5-hour and/or weekly); the crate classifies them by
 duration and exposes `five_hour()` / `weekly()` / `worst_window()`. The
-tray reads the worst window; other surfaces consume the available windows.
-A reported popover omission is tracked in [#294](https://github.com/Oszkar/balanze/issues/294).
+tray and compact CLI read the worst window; other surfaces consume the available windows.
+ChatGPT Pro 100 (`prolite`) supplies only a weekly account-wide window. Missing windows are never synthesized.
 
 ## Parsing rules
 
@@ -74,10 +74,14 @@ match read_codex_quota() {
 - **No `IncrementalParser`.** Each read scans candidate session files for the latest quota. Revisit incremental reads only if profiling identifies this path as a bottleneck.
 - **No per-token cost computation.** Codex side is quota %, not $. The
   4-quadrant matrix's "OpenAI API $" cell is filled by `openai_client`
-  (Admin Costs API). The per-turn token/context (`CodexTokenUsage`) and
-  credits (`CodexCredits`) are already parsed into internal `#[serde(skip)]`
-  fields on the snapshot (tested, deliberately not surfaced in any UI yet);
-  this crate still computes no dollar cost - only the Admin Costs API does.
+  (Admin Costs API). Per-turn token/context (`CodexTokenUsage`) stays internal
+  through `#[serde(skip)]`. Credits (`CodexCredits`) are serialized and shown in
+  the Grid and Cards popover layouts and CLI `status --sections`.
+  The provider's decimal balance string is truncated to whole credits; zero or
+  absent balances are hidden, while unlimited plans show `unlimited credits`.
+  `status --json` exposes the nullable credits object and preserves reported zero balances.
+  Credits reflect the last Codex session, not a periodic balance fetch. They are
+  not a dollar estimate; this crate still computes no dollar cost.
 
 ## `CODEX_CONFIG_DIR`
 

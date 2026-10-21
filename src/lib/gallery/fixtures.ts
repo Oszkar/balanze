@@ -406,3 +406,18 @@ export const LABEL_STATES: GalleryState[] = (() => {
     { label: 'Cards - unknown limit', view: 'cards', openaiEnabled: true, snapshot: unknown },
   ];
 })();
+
+// Focused credits fixtures keep the general gallery's screenshot set unchanged.
+export const CREDIT_STATES: GalleryState[] = ['balance', 'zero', 'unknown', 'null', 'absent'].flatMap((state) => {
+  const snapshot = baseSnapshot();
+  const quota = snapshot.codex_quota!;
+  quota.primary.window_duration_minutes = 10080;
+  quota.plan_type = 'prolite';
+  if (state === 'zero') quota.credits!.balance = 0;
+  if (state === 'unknown') quota.credits!.balance = null;
+  if (state === 'null') quota.credits = null;
+  if (state === 'absent') delete quota.credits;
+  return (['grid', 'cards'] as const).map((view) => ({
+    label: `${view} - credits ${state}`, view, openaiEnabled: true, snapshot,
+  }));
+});
