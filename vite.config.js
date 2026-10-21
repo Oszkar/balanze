@@ -29,8 +29,10 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` and the Cargo workspace
+      //    `target/` at the repo root (100k+ files; crawling it on startup
+      //    pushes SvelteKit's dev SSR past Vite's 60s module-runner timeout)
+      ignored: ["**/src-tauri/**", "**/target/**"],
     },
   },
 }));
