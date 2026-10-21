@@ -8,7 +8,7 @@ This release shows Codex credits, makes quota window labels consistent, refreshe
 - Window labels retain model-specific Anthropic limits and identify unknown Codex durations honestly. Codex windows remain plan-dependent: weekly-only plans do not gain a synthetic five-hour value.
 - Bundled Claude pricing includes Opus 5.5, Sonnet 5.5, and Haiku 5.5, including Haiku's above-100,000-prompt-token tier. Historical prices remain available for exports.
 - Maintainers can preview a pinned LiteLLM price refresh with `just refresh-claude-prices <full-sha> --dry-run`. Official-price cross-checking remains manual; runtime pricing stays offline.
-- rustls 0.23.46 addresses four TLS advisories; Tauri and other dependencies are updated.
+- rustls 0.23.46 addresses four TLS advisories. rustls-webpki 0.103.16 and webpki-roots 1.0.10 reject distrusted emSign certificate paths and remove the affected bundled root.
 
 **Before upgrading**
 
