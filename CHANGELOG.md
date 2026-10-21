@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Security
+
+- **TLS certificate validation rejects distrusted emSign intermediates.** `rustls-webpki` is updated to 0.103.16 for RUSTSEC-2026-0382, and `webpki-roots` to 1.0.10 for RUSTSEC-2026-0381. These updates reject affected certificate paths and remove the distrusted root from the bundled trust store.
+
 ### Added
 
 - **Codex credits balance.** The popover (Grid and Cards) and `status --sections` show your remaining Codex credits, for example `62,500 credits`, and `status --json` exposes them under `codex_quota.credits`. The line is hidden when there is no balance.
