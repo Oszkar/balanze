@@ -39,7 +39,11 @@ updates:
           - minor
           - patch
 
-  - package-ecosystem: npm
+  # The frontend is managed by Bun (`bun.lock`); `npm_and_yarn` refuses to run
+  # against a repo with a `bun.lock`, so this must stay the `bun` ecosystem.
+  # `bun` does not accept `versioning-strategy`; `"private": true` in
+  # package.json is what makes Dependabot treat this as an app, not a library.
+  - package-ecosystem: bun
     directory: /
     schedule:
       interval: weekly
