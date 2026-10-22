@@ -1,6 +1,7 @@
 {
   "name": "balanze",
   "version": "0.5.4",
+  "private": true,
   "description": "",
   "type": "module",
   "packageManager": "bun@1.3.13",
