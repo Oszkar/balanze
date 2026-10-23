@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { BadgeKind } from '$lib/presentation/provenance';
+  import type { BadgeKind } from '#lib/presentation/provenance.ts';
   let { kind }: { kind: BadgeKind } = $props();
   const TEXT: Record<BadgeKind, string> = { real: 'REAL $', quota: 'QUOTA %', est: 'EST', na: 'N/A' };
 </script>

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { microUsdToDollars } from '$lib/presentation/format';
-  import { PROV } from '$lib/presentation/provenance';
-  import type { Cost } from '$lib/types/snapshot';
+  import { microUsdToDollars } from '#lib/presentation/format.ts';
+  import { PROV } from '#lib/presentation/provenance.ts';
+  import type { Cost } from '#lib/types/snapshot.ts';
   let { cost, error = null }: { cost: Cost | null; error?: string | null } = $props();
   const pricedCount = $derived(cost?.per_model.reduce((sum, row) => sum + row.event_count, 0) ?? 0);
   // Partial means usage went unpriced: a model missing from the price table, or an

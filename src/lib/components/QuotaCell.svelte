@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { Tone } from '$lib/presentation/pace';
-  import type { BadgeKind } from '$lib/presentation/provenance';
+  import type { Tone } from '#lib/presentation/pace.ts';
+  import type { BadgeKind } from '#lib/presentation/provenance.ts';
   import Badge from './Badge.svelte';
   import UsageBar from './UsageBar.svelte';
-  import { relativeReset } from '$lib/presentation/format';
+  import { relativeReset } from '#lib/presentation/format.ts';
   let { pct, used, elapsed, tone, resetsAt, secondary, title, stale = false, staleLabel = 'fallback', badge = null }:
     { pct: number; used: number; elapsed: number | null; tone: Tone;
       resetsAt: string; secondary: string; title: string; stale?: boolean; staleLabel?: string; badge?: BadgeKind | null } = $props();

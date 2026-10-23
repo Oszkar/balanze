@@ -2,7 +2,7 @@
   import DensityToggle from './DensityToggle.svelte';
   // Imported (not /logo.svg from static/) so it resolves under both SvelteKit
   // and the standalone gallery, which runs plain Vite and does not serve static/.
-  import logoUrl from '$lib/assets/logo.svg?url';
+  import logoUrl from '#lib/assets/logo.svg?url';
   let { view = $bindable('cards'), refreshing = false, onRefresh, onSettings }:
     { view?: 'grid' | 'cards'; refreshing?: boolean; onRefresh: () => void; onSettings: () => void } = $props();
 </script>

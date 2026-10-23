@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
-  import Popover from '$lib/components/Popover.svelte';
+  import Popover from '#lib/components/Popover.svelte';
   import GalleryFrame from './GalleryFrame.svelte';
   import { GALLERY_STATES, LABEL_STATES, CREDIT_STATES, DEMO_SETTINGS, DEMO_STATUSLINE, baseSnapshot } from './fixtures';
 

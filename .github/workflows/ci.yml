@@ -94,6 +94,9 @@ jobs:
       - name: frontend unit tests
         run: bun run test
 
+      - name: static frontend build
+        run: bun run build
+
   cross-platform:
     name: cross-platform
     # Only fires on the weekly schedule + manual dispatch. NOT on PR or push,

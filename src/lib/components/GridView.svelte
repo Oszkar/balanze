@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicQuota, anthropicSourceView, codexElapsedFraction, codexQuota, matchingAnthropicPace, openAiCostCell, overageCell } from '$lib/presentation/quota';
-  import { PROV } from '$lib/presentation/provenance';
-  import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
-  import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
+  import type { Snapshot } from '#lib/types/snapshot.ts';
+  import { anthropicQuota, anthropicSourceView, codexElapsedFraction, codexQuota, matchingAnthropicPace, openAiCostCell, overageCell } from '#lib/presentation/quota.ts';
+  import { PROV } from '#lib/presentation/provenance.ts';
+  import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '#lib/presentation/quotaCopy.ts';
+  import { anthropicQuotaState, openaiColumnState } from '#lib/presentation/cellState.ts';
   import QuotaCell from './QuotaCell.svelte';
   import BilledCell from './BilledCell.svelte';
 
