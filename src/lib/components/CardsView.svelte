@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { Snapshot } from '$lib/types/snapshot';
-  import { anthropicWindowLabel, anthropicQuota, anthropicSourceView, quotaTone, codexElapsedFraction, codexQuota, codexWindowLabel, codexWindowsByKind, matchingAnthropicPace, openAiCostCell, overageCell } from '$lib/presentation/quota';
-  import { PROV } from '$lib/presentation/provenance';
-  import { anthropicQuotaState, openaiColumnState } from '$lib/presentation/cellState';
-  import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '$lib/presentation/quotaCopy';
+  import type { Snapshot } from '#lib/types/snapshot.ts';
+  import { anthropicWindowLabel, anthropicQuota, anthropicSourceView, quotaTone, codexElapsedFraction, codexQuota, codexWindowLabel, codexWindowsByKind, matchingAnthropicPace, openAiCostCell, overageCell } from '#lib/presentation/quota.ts';
+  import { PROV } from '#lib/presentation/provenance.ts';
+  import { anthropicQuotaState, openaiColumnState } from '#lib/presentation/cellState.ts';
+  import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '#lib/presentation/quotaCopy.ts';
   import ProviderCard, { type CardWindow, type CardQuotaState } from './ProviderCard.svelte';
 
   // `openaiEnabled` = the OpenAI billing opt-in (`openai_enabled`); default false.

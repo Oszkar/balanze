@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { BadgeKind } from '$lib/presentation/provenance';
+  import type { BadgeKind } from '#lib/presentation/provenance.ts';
   import Badge from './Badge.svelte';
   let { amount = null, note, title, hatch = false, placeholder = 'unavailable', badge = null }:
     { amount?: string | null; note: string; title: string; hatch?: boolean; placeholder?: string; badge?: BadgeKind | null } = $props();

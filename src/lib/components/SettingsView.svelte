@@ -14,8 +14,8 @@
     openExternal,
     getLaunchAtLogin,
     setLaunchAtLogin,
-  } from '$lib/ipc';
-  import type { Settings, StatuslineWire } from '$lib/types/settings';
+  } from '#lib/ipc.ts';
+  import type { Settings, StatuslineWire } from '#lib/types/settings.ts';
 
   let { onBack }: { onBack: () => void } = $props();
 
