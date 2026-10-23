@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { usage } from '$lib/stores/usage.svelte';
-  import { hideWindow } from '$lib/ipc';
-  import Popover from '$lib/components/Popover.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
+  import { usage } from '#lib/stores/usage.svelte.ts';
+  import { hideWindow } from '#lib/ipc.ts';
+  import Popover from '#lib/components/Popover.svelte';
+  import EmptyState from '#lib/components/EmptyState.svelte';
 
   onMount(() => {
     usage.init();

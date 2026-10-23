@@ -1,14 +1,14 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import type { Snapshot } from '$lib/types/snapshot';
-  import Header from '$lib/components/Header.svelte';
-  import GridView from '$lib/components/GridView.svelte';
-  import CardsView from '$lib/components/CardsView.svelte';
-  import SettingsView from '$lib/components/SettingsView.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
-  import DegradedBanner from '$lib/components/DegradedBanner.svelte';
-  import BurnIndicator from '$lib/components/BurnIndicator.svelte';
-  import LeverageBox from '$lib/components/LeverageBox.svelte';
+  import type { Snapshot } from '#lib/types/snapshot.ts';
+  import Header from '#lib/components/Header.svelte';
+  import GridView from '#lib/components/GridView.svelte';
+  import CardsView from '#lib/components/CardsView.svelte';
+  import SettingsView from '#lib/components/SettingsView.svelte';
+  import EmptyState from '#lib/components/EmptyState.svelte';
+  import DegradedBanner from '#lib/components/DegradedBanner.svelte';
+  import BurnIndicator from '#lib/components/BurnIndicator.svelte';
+  import LeverageBox from '#lib/components/LeverageBox.svelte';
 
   // One gallery frame: a caption plus the real popover chrome (Header + view),
   // wrapped in the `.pop` shell at the fixed 360px width. Composed exactly as

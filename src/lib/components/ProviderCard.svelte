@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import type { Tone } from '$lib/presentation/pace';
+  import type { Tone } from '#lib/presentation/pace.ts';
   export interface CardWindow { label: string; used: number; elapsed: number | null; tone: Tone; resetsAt: string; stale?: boolean; title?: string; }
 
   // Non-data states for the quota area, rendered in place of the window bars.
@@ -17,7 +17,7 @@
 <script lang="ts">
   import UsageBar from './UsageBar.svelte';
   import Badge from './Badge.svelte';
-  import { relativeReset } from '$lib/presentation/format';
+  import { relativeReset } from '#lib/presentation/format.ts';
   // `billed` is optional: the connect/error states suppress the spend row (the
   // state block spans the card body, mirroring GridView's two-row span).
   // `dismiss` renders the × that collapses the column - action plus its labels,

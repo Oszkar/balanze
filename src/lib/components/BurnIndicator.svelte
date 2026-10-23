@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatBurn } from '$lib/presentation/format';
+  import { formatBurn } from '#lib/presentation/format.ts';
   let { tokensPerMin, withLeverage = true }: { tokensPerMin: number | null; withLeverage?: boolean } = $props();
 </script>
 <div class="legend" class:compact={!withLeverage}>

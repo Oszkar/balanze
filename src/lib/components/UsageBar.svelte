@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Tone } from '$lib/presentation/pace';
+  import type { Tone } from '#lib/presentation/pace.ts';
   let { used, elapsed = null, tone = 'ok', height = 11 }:
     { used: number; elapsed?: number | null; tone?: Tone; height?: number } = $props();
   const clamp = (n: number) => Math.min(100, Math.max(0, n));

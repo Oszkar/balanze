@@ -1,11 +1,18 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+import adapter from "@sveltejs/adapter-static";
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [sveltekit()],
+  plugins: [sveltekit({
+    // Tauri serves a static SPA without a Node.js server.
+    adapter: adapter({ fallback: "index.html" }),
+    preprocess: vitePreprocess(),
+    version: { pollInterval: 0 },
+  })],
 
   test: {
     include: ['src/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'],

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Snapshot } from '$lib/types/snapshot';
-  import { getSettings, setSettings, resizePopover } from '$lib/ipc';
+  import type { Snapshot } from '#lib/types/snapshot.ts';
+  import { getSettings, setSettings, resizePopover } from '#lib/ipc.ts';
   import Header from './Header.svelte';
   import GridView from './GridView.svelte';
   import CardsView from './CardsView.svelte';

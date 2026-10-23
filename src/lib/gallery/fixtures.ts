@@ -3,8 +3,8 @@
 // and presentation logic - no IPC, no live data. See the "States gallery" note
 // in README.md.
 
-import type { Snapshot } from '$lib/types/snapshot';
-import type { Settings, StatuslineWire } from '$lib/types/settings';
+import type { Snapshot } from '#lib/types/snapshot.ts';
+import type { Settings, StatuslineWire } from '#lib/types/settings.ts';
 
 // Timestamps are anchored at module load so `relativeReset` (wall-clock relative)
 // reads naturally ("2h left"). `iso(0)` is "now"; positive = future reset,
