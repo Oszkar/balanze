@@ -74,7 +74,7 @@ pub struct LongPromptPrices {
 /// table, update both the data filename and this line. The build script
 /// validates the filename pattern but cannot rewrite this `include_str!`
 /// because `include_str!` requires a string literal at parse time.
-const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-8302f00-20261015.json");
+const BUNDLED_PRICES_JSON: &str = include_str!("../data/litellm-prices-2749119-20261119.json");
 
 /// Load the compile-time-embedded vendored price table.
 ///
@@ -284,7 +284,8 @@ mod tests {
     #[test]
     fn bundled_prices_cover_current_opus_fable_and_mythos_rates() {
         // USD per million tokens from Anthropic's published pricing, expressed
-        // as nano-USD/token. In particular, 5.1 cache reads are 0.025x input and
+        // as nano-USD/token. In particular, 5.1 and 5.2 Fable/Mythos cache reads
+        // are 0.025x input and
         // 5.5 Opus/Sonnet cache reads are 0.05x input.
         let table = load_bundled_prices().unwrap();
         for (model, input, output, write, read) in [
@@ -295,6 +296,8 @@ mod tests {
             ("claude-mythos-5", 10000, 50000, 12500, 1000),
             ("claude-fable-5-1", 10000, 50000, 12500, 250),
             ("claude-mythos-5-1", 10000, 50000, 12500, 250),
+            ("claude-fable-5-2", 8000, 40000, 10000, 200),
+            ("claude-mythos-5-2", 8000, 40000, 10000, 200),
         ] {
             assert_eq!(
                 table.models.get(model),

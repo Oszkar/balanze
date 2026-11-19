@@ -53,7 +53,12 @@ yanked = "warn"
 # because plist requires quick-xml ^0.39.2 and tauri-winrt-notification
 # requires quick-xml ^0.37. Balanze does not parse untrusted XML through
 # these paths; remove once upstream Tauri deps can take quick-xml >=0.41.0.
-ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
+# RUSTSEC-2026-0543: chrono is declared unmaintained (all versions, no safe
+# upgrade). It is a direct dependency across the workspace and carries the
+# timestamps in UsageEvent / Snapshot, so replacing it (jiff or time) is a
+# cross-crate schema-adjacent migration, not a lockfile bump. This is an
+# unmaintained notice, not a vulnerability. Remove once that migration lands.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195", "RUSTSEC-2026-0543"]
 # Only check WORKSPACE crates for unmaintained status. Transitive
 # unmaintained crates (e.g., Unicode helpers Tauri pulls in via Windows
 # Webview2 deps) aren't actionable from this repo - Dependabot tracks
