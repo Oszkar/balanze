@@ -506,7 +506,7 @@ async fn wait_for_restart_or_reload(
 }
 
 /// Own the watcher's task lifecycle. Re-spawns the task set on two triggers:
-/// a settings reload (fresh settings, so provider toggles apply live) and an
+/// a polling/credential change (provider toggles apply live) and an
 /// *unexpected* task death (an `Err` return or panic). On a death it surfaces a
 /// `degraded_state` for the affected source, then re-spawns with bounded backoff
 /// so a persistent failure self-heals (or stays visibly degraded) instead of
@@ -516,7 +516,20 @@ async fn wait_for_restart_or_reload(
 /// shutdown.
 async fn supervise_watcher(
     handle: state_coordinator::StateCoordinatorHandle,
+    reload_rx: tokio::sync::mpsc::Receiver<commands::SettingsTransition>,
+) -> Result<(), String> {
+    let current_settings = settings::load_or_default();
+    let generation = 1;
+    let watched = activate_watcher_generation(&handle, &current_settings, generation).await?;
+    supervise_watcher_tasks(handle, reload_rx, current_settings, generation, watched).await
+}
+
+async fn supervise_watcher_tasks(
+    handle: state_coordinator::StateCoordinatorHandle,
     mut reload_rx: tokio::sync::mpsc::Receiver<commands::SettingsTransition>,
+    mut current_settings: settings::Settings,
+    mut generation: state_coordinator::WatcherGeneration,
+    mut watched: watcher::WatchedTasks,
 ) -> Result<(), String> {
     enum Wake {
         Reload(Box<commands::SettingsTransition>),
@@ -524,12 +537,8 @@ async fn supervise_watcher(
         NoActiveTasks,
         Shutdown,
     }
-
     let mut consecutive_failures: u32 = 0;
     let mut last_failure: Option<std::time::Instant> = None;
-    let mut generation: state_coordinator::WatcherGeneration = 1;
-    let mut current_settings = settings::load_or_default();
-    let mut watched = activate_watcher_generation(&handle, &current_settings, generation).await?;
     let mut death_channel_open = true;
 
     loop {
@@ -551,6 +560,16 @@ async fn supervise_watcher(
                 death_channel_open = false;
             }
             Wake::Reload(transition) => {
+                let Some(transition) = apply_presentation_transition(
+                    &handle,
+                    &mut current_settings,
+                    generation,
+                    *transition,
+                )
+                .await?
+                else {
+                    continue;
+                };
                 generation = match generation.checked_add(1) {
                     Some(next) => next,
                     None => {
@@ -608,15 +627,25 @@ async fn supervise_watcher(
                     "watcher: task '{label}' died; re-spawning in {}s",
                     delay.as_secs()
                 );
-                let mut replacement_settings = current_settings.clone();
+                let replacement_settings;
                 let mut transition_ack = None;
-                match wait_for_restart_or_reload(delay, &mut reload_rx).await {
-                    RestartWake::DelayElapsed => {}
+                match wait_for_polling_restart(
+                    &handle,
+                    &mut current_settings,
+                    generation,
+                    delay,
+                    &mut reload_rx,
+                )
+                .await?
+                {
+                    RestartWake::DelayElapsed => replacement_settings = current_settings.clone(),
                     RestartWake::Reload(transition) => {
                         replacement_settings = transition.settings;
                         transition_ack = Some(transition.applied);
                         consecutive_failures = 0;
-                        tracing::info!("watcher: settings reload pre-empted restart backoff");
+                        tracing::info!(
+                            "watcher: polling settings reload pre-empted restart backoff"
+                        );
                     }
                     RestartWake::Shutdown => return Ok(()),
                 }
@@ -652,6 +681,62 @@ async fn supervise_watcher(
             }
         }
     }
+}
+
+/// Cosmetic saves remain live while recovery waits, without restarting its
+/// deadline. Changes to polling inputs may still wake recovery immediately.
+async fn wait_for_polling_restart(
+    handle: &state_coordinator::StateCoordinatorHandle,
+    current: &mut settings::Settings,
+    generation: state_coordinator::WatcherGeneration,
+    delay: std::time::Duration,
+    reload_rx: &mut tokio::sync::mpsc::Receiver<commands::SettingsTransition>,
+) -> Result<RestartWake, String> {
+    let deadline = tokio::time::Instant::now() + delay;
+    loop {
+        match wait_for_restart_or_reload(
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+            reload_rx,
+        )
+        .await
+        {
+            RestartWake::Reload(transition) => {
+                if let Some(transition) =
+                    apply_presentation_transition(handle, current, generation, *transition).await?
+                {
+                    return Ok(RestartWake::Reload(Box::new(transition)));
+                }
+                // A stream of cosmetic saves must not starve recovery either.
+                if tokio::time::Instant::now() >= deadline {
+                    return Ok(RestartWake::DelayElapsed);
+                }
+            }
+            wake => return Ok(wake),
+        }
+    }
+}
+
+/// Reuse the active generation only when its task inputs are unchanged. The
+/// coordinator still applies settings and repaints before the caller is acked.
+async fn apply_presentation_transition(
+    handle: &state_coordinator::StateCoordinatorHandle,
+    current: &mut settings::Settings,
+    generation: state_coordinator::WatcherGeneration,
+    transition: commands::SettingsTransition,
+) -> Result<Option<commands::SettingsTransition>, String> {
+    if transition.requires_restart(current) {
+        return Ok(Some(transition));
+    }
+    let result = handle
+        .transition_settings(transition.settings.clone(), generation)
+        .await
+        .map_err(|error| error.to_string());
+    if result.is_ok() {
+        *current = transition.settings;
+    }
+    let _ = transition.applied.send(result.clone());
+    result?;
+    Ok(None)
 }
 
 async fn replace_watcher_generation(
@@ -814,6 +899,151 @@ mod tests {
         coordinator.await.unwrap();
     }
 
+    struct SettingsSink(tokio::sync::mpsc::UnboundedSender<settings::TraySettings>);
+
+    impl state_coordinator::Sink for SettingsSink {
+        fn on_settings(&mut self, settings: &settings::Settings) {
+            let _ = self.0.send(settings.tray.clone());
+        }
+        fn on_snapshot(&mut self, _: &state_coordinator::Snapshot) {}
+        fn on_degraded(&mut self, _: state_coordinator::Source, _: &str) {}
+    }
+
+    #[tokio::test]
+    async fn cosmetic_and_noop_saves_keep_tasks_and_generation_until_shutdown() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let flag = StopFlag(Arc::clone(&stopped));
+        let (probe_tx, mut probe_rx) =
+            tokio::sync::mpsc::channel::<tokio::sync::oneshot::Sender<u32>>(1);
+        let task = tokio::spawn(async move {
+            let _flag = flag;
+            let mut count = 0;
+            while let Some(reply) = probe_rx.recv().await {
+                count += 1;
+                let _ = reply.send(count);
+            }
+            Ok(())
+        });
+        let watched = watcher::watch_for_task_death(vec![("test", task)]);
+        let (settings_tx, mut settings_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (handle, coordinator) = state_coordinator::spawn(SettingsSink(settings_tx));
+        let initial = settings::Settings::default();
+        handle
+            .transition_settings(initial.clone(), 7)
+            .await
+            .unwrap();
+        settings_rx.recv().await.unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let supervisor = tokio::spawn(super::supervise_watcher_tasks(
+            handle.clone(),
+            rx,
+            initial.clone(),
+            7,
+            watched,
+        ));
+        for (index, mode) in [
+            settings::TrayMode::Combined,
+            settings::TrayMode::Separate,
+            settings::TrayMode::Separate,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut next = initial.clone();
+            next.tray.mode = mode;
+            next.tray.show_percentages = index != 0;
+            let (applied, completed) = tokio::sync::oneshot::channel();
+            tx.send(crate::commands::SettingsTransition {
+                settings: next.clone(),
+                restart_watchers: false,
+                applied,
+            })
+            .await
+            .unwrap();
+            completed.await.unwrap().unwrap();
+            assert_eq!(
+                settings_rx.try_recv().unwrap(),
+                next.tray,
+                "settings reach sink before acknowledgment"
+            );
+            assert!(!stopped.load(Ordering::SeqCst));
+            let (reply, received) = tokio::sync::oneshot::channel();
+            probe_tx.send(reply).await.unwrap();
+            assert_eq!(
+                received.await.unwrap(),
+                index as u32 + 1,
+                "task-local state is retained"
+            );
+            handle
+                .send(state_coordinator::StateMsg::Update(
+                    state_coordinator::SourceUpdate {
+                        generation: 7,
+                        source: state_coordinator::Source::ClaudeOAuth,
+                        result: Err(format!("active-{index}")),
+                    },
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                handle.query().await.unwrap().claude_oauth_error,
+                Some(format!("active-{index}")),
+                "updates from retained generation remain accepted"
+            );
+        }
+        drop(tx);
+        supervisor.await.unwrap().unwrap();
+        assert!(
+            stopped.load(Ordering::SeqCst),
+            "retained tasks still join on shutdown"
+        );
+        drop(handle);
+        coordinator.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cosmetic_saves_do_not_preempt_recovery_but_polling_changes_do() {
+        let (handle, coordinator) = state_coordinator::spawn(state_coordinator::NullSink);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let waiter = tokio::spawn(async move {
+            let mut current = settings::Settings::default();
+            super::wait_for_polling_restart(
+                &handle,
+                &mut current,
+                1,
+                std::time::Duration::from_secs(60),
+                &mut rx,
+            )
+            .await
+            .unwrap()
+        });
+        let mut settings = settings::Settings::default();
+        settings.tray.mode = settings::TrayMode::Combined;
+        let (applied, completed) = tokio::sync::oneshot::channel();
+        tx.send(crate::commands::SettingsTransition {
+            settings: settings.clone(),
+            restart_watchers: false,
+            applied,
+        })
+        .await
+        .unwrap();
+        completed.await.unwrap().unwrap();
+        assert!(
+            !waiter.is_finished(),
+            "cosmetic acknowledgment must not end recovery backoff"
+        );
+        settings.providers.codex_enabled = !settings.providers.codex_enabled;
+        let (applied, _completed) = tokio::sync::oneshot::channel();
+        tx.send(crate::commands::SettingsTransition {
+            settings,
+            restart_watchers: false,
+            applied,
+        })
+        .await
+        .unwrap();
+        assert!(matches!(waiter.await.unwrap(), RestartWake::Reload(_)));
+        coordinator.await.unwrap();
+    }
+
     #[test]
     fn respawn_backoff_is_exponential_capped_at_60s() {
         assert_eq!(respawn_backoff(0).as_secs(), 1);
@@ -831,6 +1061,7 @@ mod tests {
         let (applied, _completed) = tokio::sync::oneshot::channel();
         tx.send(crate::commands::SettingsTransition {
             settings: settings::Settings::default(),
+            restart_watchers: false,
             applied,
         })
         .await

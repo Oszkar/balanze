@@ -154,7 +154,7 @@ pub async fn set_settings(
     patch: SettingsPatch,
     reload: State<'_, WatcherReload>,
 ) -> Result<Settings, String> {
-    commit_settings_live(&reload, move || {
+    commit_settings_live(&reload, false, move || {
         settings::update(|current| {
             patch.apply(current);
             Ok::<(), settings::SettingsError>(())
@@ -184,7 +184,7 @@ pub async fn set_api_key(
     // blocking ACL prompt while the lock is held. That tradeoff is intentional:
     // contenders time out explicitly instead of reordering the keychain and
     // provider-flag effects.
-    commit_settings_live(&reload, move || {
+    commit_settings_live(&reload, true, move || {
         let mut transaction = settings::begin_update().map_err(|e| e.to_string())?;
         keychain::set(keychain::keys::OPENAI_API_KEY, &key).map_err(|e| e.to_string())?;
         transaction.settings_mut().providers.openai_enabled = true;
@@ -261,7 +261,7 @@ pub async fn clear_api_key(
     if provider != "openai" {
         return Err(format!("unsupported provider: {provider}"));
     }
-    commit_settings_live(&reload, || {
+    commit_settings_live(&reload, true, || {
         // See set_api_key: a macOS prompt may hold the settings lock, but
         // releasing it here would let keychain and provider-flag order diverge.
         let mut transaction = settings::begin_update().map_err(|e| e.to_string())?;
@@ -277,11 +277,21 @@ pub async fn clear_api_key(
     .map(|_| ())
 }
 
-/// Sender that asks the host's watcher supervisor to re-spawn its tasks with
-/// the latest settings. Managed in Tauri state by `boot_backend`.
+/// Requests acknowledged settings application, replacing watchers only when
+/// needed. Managed in Tauri state by `boot_backend`.
 pub struct SettingsTransition {
     pub settings: Settings,
+    /// Key writes must restart even when the enabled flag stays unchanged.
+    pub restart_watchers: bool,
     pub applied: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
+
+impl SettingsTransition {
+    pub fn requires_restart(&self, current: &Settings) -> bool {
+        self.restart_watchers
+            || self.settings.providers != current.providers
+            || self.settings.oauth_poll_interval_secs != current.oauth_poll_interval_secs
+    }
 }
 
 pub struct WatcherReload {
@@ -330,12 +340,17 @@ const SETTINGS_SEQUENCER_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// [`SETTINGS_SEQUENCER_TIMEOUT`] and the live-apply half by
 /// [`SETTINGS_TRANSITION_TIMEOUT`] - so a command that is stuck holding the
 /// sequencer fails its contenders explicitly rather than hanging them.
-async fn commit_settings_live<F>(reload: &WatcherReload, persist: F) -> Result<Settings, String>
+async fn commit_settings_live<F>(
+    reload: &WatcherReload,
+    restart_watchers: bool,
+    persist: F,
+) -> Result<Settings, String>
 where
     F: FnOnce() -> Result<Settings, String> + Send + 'static,
 {
     commit_settings_live_with_timeouts(
         reload,
+        restart_watchers,
         persist,
         SETTINGS_SEQUENCER_TIMEOUT,
         SETTINGS_TRANSITION_TIMEOUT,
@@ -345,6 +360,7 @@ where
 
 async fn commit_settings_live_with_timeouts<F>(
     reload: &WatcherReload,
+    restart_watchers: bool,
     persist: F,
     sequencer_timeout: std::time::Duration,
     transition_timeout: std::time::Duration,
@@ -361,24 +377,35 @@ where
                 .to_string()
         })?;
     let settings = run_blocking(persist).await?;
-    apply_settings_live_with_timeout(reload, settings.clone(), transition_timeout).await?;
+    apply_settings_live_with_timeout(
+        reload,
+        settings.clone(),
+        restart_watchers,
+        transition_timeout,
+    )
+    .await?;
     Ok(settings)
 }
 
-/// Await one supervised settings transition. The supervisor joins the old
-/// pollers, advances the coordinator generation, starts the replacement task
-/// set, and only then completes the reply. A closed supervisor is an explicit
-/// command error, never a silently dropped live update.
+/// Await one supervised settings transition. Presentation-only changes keep
+/// the current tasks and generation; polling or credential changes join and
+/// replace them. Both paths await coordinator application before replying. A
+/// closed supervisor is an explicit error, never a silently dropped update.
 async fn apply_settings_live_with_timeout(
     reload: &WatcherReload,
     settings: Settings,
+    restart_watchers: bool,
     timeout: std::time::Duration,
 ) -> Result<(), String> {
     let (applied, completed) = tokio::sync::oneshot::channel();
     tokio::time::timeout(timeout, async {
         reload
             .tx
-            .send(SettingsTransition { settings, applied })
+            .send(SettingsTransition {
+                settings,
+                restart_watchers,
+                applied,
+            })
             .await
             .map_err(|_| "watcher settings supervisor has shut down".to_string())?;
         completed
@@ -541,6 +568,35 @@ mod tests {
     use claude_statusline::WireStatus;
 
     #[test]
+    fn watcher_restart_depends_on_polling_settings_or_explicit_credentials_change() {
+        let current = settings::Settings::default();
+        let (applied, _) = tokio::sync::oneshot::channel();
+        let mut transition = super::SettingsTransition {
+            settings: current.clone(),
+            restart_watchers: false,
+            applied,
+        };
+        assert!(!transition.requires_restart(&current));
+        transition.settings.tray.mode = settings::TrayMode::Combined;
+        transition.settings.tray.show_percentages = true;
+        assert!(!transition.requires_restart(&current));
+        transition.restart_watchers = true;
+        assert!(transition.requires_restart(&current));
+        transition.restart_watchers = false;
+        transition.settings.oauth_poll_interval_secs += 1;
+        assert!(transition.requires_restart(&current));
+        transition.settings = current.clone();
+        transition.settings.providers.anthropic_enabled = !current.providers.anthropic_enabled;
+        assert!(transition.requires_restart(&current));
+        transition.settings = current.clone();
+        transition.settings.providers.codex_enabled = !current.providers.codex_enabled;
+        assert!(transition.requires_restart(&current));
+        transition.settings = current.clone();
+        transition.settings.providers.openai_enabled = !current.providers.openai_enabled;
+        assert!(transition.requires_restart(&current));
+    }
+
+    #[test]
     fn clamp_popover_height_bounds() {
         use super::{POPOVER_MAX_H, POPOVER_MIN_H, clamp_popover_height};
         assert_eq!(clamp_popover_height(10), POPOVER_MIN_H);
@@ -598,6 +654,7 @@ mod tests {
         let result = apply_settings_live_with_timeout(
             &reload,
             settings::Settings::default(),
+            false,
             std::time::Duration::from_millis(10),
         )
         .await;
@@ -605,6 +662,39 @@ mod tests {
         assert_eq!(result.unwrap_err(), "watcher settings transition timed out");
         assert_eq!(SETTINGS_TRANSITION_TIMEOUT.as_secs(), 15);
         transition.abort();
+    }
+
+    #[tokio::test]
+    async fn credential_restart_intent_survives_commit_and_live_apply_failure() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let persisted = Arc::new(AtomicBool::new(false));
+        let committed = Arc::clone(&persisted);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let reload = WatcherReload::new(tx);
+        let supervisor = tokio::spawn(async move {
+            let transition = rx.recv().await.unwrap();
+            assert!(
+                transition.restart_watchers,
+                "unchanged provider flags must not hide a key replacement"
+            );
+            assert_eq!(transition.settings, settings::Settings::default());
+            transition
+                .applied
+                .send(Err("live apply failed".into()))
+                .unwrap();
+        });
+        let result = super::commit_settings_live(&reload, true, move || {
+            committed.store(true, Ordering::SeqCst);
+            Ok(settings::Settings::default())
+        })
+        .await;
+        assert_eq!(result.unwrap_err(), "live apply failed");
+        assert!(
+            persisted.load(Ordering::SeqCst),
+            "an IPC error can follow a successful commit"
+        );
+        supervisor.await.unwrap();
     }
 
     #[tokio::test]
@@ -622,6 +712,7 @@ mod tests {
         let persisted_in_contender = Arc::clone(&persisted);
         let error = super::commit_settings_live_with_timeouts(
             &reload,
+            false,
             move || {
                 persisted_in_contender.store(true, Ordering::SeqCst);
                 Ok(settings::Settings::default())
@@ -690,7 +781,7 @@ mod tests {
         let first_reload = Arc::clone(&reload);
         let first_log = Arc::clone(&log);
         let first_command = tokio::spawn(async move {
-            super::commit_settings_live(&first_reload, move || {
+            super::commit_settings_live(&first_reload, false, move || {
                 first_log.lock().unwrap().push("persist-1".to_string());
                 Ok(settings_with(1))
             })
@@ -703,7 +794,7 @@ mod tests {
         let second_reload = Arc::clone(&reload);
         let second_log = Arc::clone(&log);
         let second_command = tokio::spawn(async move {
-            super::commit_settings_live(&second_reload, move || {
+            super::commit_settings_live(&second_reload, false, move || {
                 second_log.lock().unwrap().push("persist-2".to_string());
                 Ok(settings_with(2))
             })
