@@ -10,6 +10,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 - Separate Claude and Codex tray fill bars, with an optional combined highest-utilization indicator. macOS uses compact Cla/Cdx labels and optional percentages; Windows uses A/O identities beside the bars. Quota degradation affects the relevant provider without obscuring healthy fallback data.
 
+### Fixed
+
+- Tray preference changes retain provider polling schedules, retry and credential cooldowns, and incremental file parsing state instead of restarting watchers.
+- A failed main-tray paint no longer blocks independent Codex updates. Switching to a combined indicator retains the extra item until its replacement is ready and removes it on the main thread, preventing a macOS crash.
+- Tray and provider settings controls reconcile with saved settings after errors, including failures after the disk write. A failed reread offers a reload action instead of displaying an unconfirmed preference.
+
 ## [0.5.4] - Window consistency & maintenance - 2026-10-21
 
 ### Added

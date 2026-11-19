@@ -83,8 +83,9 @@ impl StateCoordinatorHandle {
     }
 
     /// Apply settings for a watcher generation and await the actor's
-    /// acknowledgment. Hosts call this only after joining the prior generation
-    /// and before spawning replacement pollers.
+    /// acknowledgment. Polling changes require joining the prior generation
+    /// before applying and spawning replacements. Presentation-only changes
+    /// retain the active generation and its pollers.
     pub async fn transition_settings(
         &self,
         settings: Settings,
@@ -337,8 +338,8 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             generation,
             applied,
         } => {
-            // Live-apply the provider toggles. The watcher is re-spawned by the
-            // host (it decides which pollers run); here we own the Snapshot, so
+            // Live-apply preferences. The host replaces watchers for polling
+            // changes and retains them for presentation-only changes. We own the Snapshot, so
             // we reset the cell of any now-disabled provider and repaint. A
             // re-enabled provider isn't touched - its poller repopulates it.
             let p = &s.providers;
@@ -365,7 +366,8 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             for (source, err) in freshness_errors {
                 sink.on_degraded(source, &err);
             }
-            // The supervisor waits for this before it spawns the new pollers.
+            // The supervisor waits for this before acknowledging the command
+            // and, on polling changes, before spawning replacement pollers.
             // A dropped receiver means the caller went away after the state was
             // still applied, so there is nothing to roll back.
             let _ = applied.send(());

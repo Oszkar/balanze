@@ -295,25 +295,70 @@ fn paint(
 /// Create a replacement before removing the extra item so popover access is
 /// retained on failures. Only successful per-item setters are cached.
 fn paint_set(app: &AppHandle, target: &PaintSet, applied: &mut AppliedSet) -> Result<(), String> {
-    paint(app, "main", &target.main, &mut applied.main)?;
+    paint_set_with(
+        target,
+        applied,
+        |id, target, applied| {
+            if id == "codex" && app.tray_by_id(id).is_none() {
+                crate::create_codex_tray(app).map_err(|e| e.to_string())?;
+                *applied = AppliedPaint::default();
+            }
+            paint(app, id, target, applied)
+        },
+        || remove_codex_on_main_thread(app),
+    )
+}
+
+/// Called only on the painter's blocking worker. Tauri's removal returns the
+/// final tray handle without dispatching its destructor. AppKit requires both
+/// the removal and that final drop on the main thread. Wait for completion so
+/// a following separate-mode paint cannot race a queued removal.
+fn remove_codex_on_main_thread(app: &AppHandle) -> Result<(), String> {
+    if app.tray_by_id("codex").is_none() {
+        return Ok(());
+    }
+    let (completed, wait) = std::sync::mpsc::sync_channel(1);
+    let main_app = app.clone();
+    app.run_on_main_thread(move || {
+        drop(main_app.remove_tray_by_id("codex"));
+        let _ = completed.send(());
+    })
+    .map_err(|error| format!("remove Codex dispatch failed: {error}"))?;
+    wait.recv()
+        .map_err(|error| format!("remove Codex completion failed: {error}"))
+}
+
+/// Keep independent items progressing after a partial failure. Removal is
+/// dependent on the replacement paint succeeding, so it deliberately waits.
+fn paint_set_with(
+    target: &PaintSet,
+    applied: &mut AppliedSet,
+    mut paint_item: impl FnMut(&str, &PaintTarget, &mut AppliedPaint) -> Result<(), String>,
+    remove_codex: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let mut failures = Vec::new();
+    if let Err(error) = paint_item("main", &target.main, &mut applied.main) {
+        failures.push(format!("main: {error}"));
+    }
     if let Some(codex) = &target.codex {
-        if app.tray_by_id("codex").is_none() {
-            crate::create_codex_tray(app).map_err(|e| e.to_string())?;
-            applied.codex = Some(AppliedPaint::default());
-        }
-        paint(
-            app,
+        if let Err(error) = paint_item(
             "codex",
             codex,
             applied.codex.get_or_insert_with(AppliedPaint::default),
-        )?;
-    } else {
-        if app.tray_by_id("codex").is_some() {
-            drop(app.remove_tray_by_id("codex"));
+        ) {
+            failures.push(format!("codex: {error}"));
         }
-        applied.codex = None;
+    } else if failures.is_empty() {
+        match remove_codex() {
+            Ok(()) => applied.codex = None,
+            Err(error) => failures.push(error),
+        }
     }
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 /// Start the single repaint worker. The watch channel coalesces a burst to the
@@ -397,6 +442,169 @@ mod tests {
             fill: Some(fill),
             state: IconState::Fresh,
         }
+    }
+
+    #[test]
+    fn main_failure_does_not_starve_codex_and_retains_partial_success() {
+        let main = PaintTarget {
+            icon: icon(40),
+            title: "Cla".into(),
+            tooltip: "Claude".into(),
+        };
+        let mut codex = main.clone();
+        codex.icon.provider = Provider::Codex;
+        let target = PaintSet {
+            main,
+            codex: Some(codex),
+        };
+        let mut applied = AppliedSet::default();
+        let mut calls = Vec::new();
+        let error = paint_set_with(
+            &target,
+            &mut applied,
+            |id, next, cache| {
+                calls.push(id.to_string());
+                if id == "main" {
+                    cache.icon = Some(next.icon);
+                    Err("tooltip failed".into())
+                } else {
+                    *cache = fully_applied(next);
+                    Ok(())
+                }
+            },
+            || panic!("separate mode must not remove Codex"),
+        )
+        .unwrap_err();
+        assert_eq!(calls, ["main", "codex"]);
+        assert!(error.contains("tooltip failed"));
+        assert!(!applied.main.needs_icon(&target.main));
+        assert!(
+            applied
+                .codex
+                .as_ref()
+                .unwrap()
+                .matches(target.codex.as_ref().unwrap())
+        );
+        paint_set_with(
+            &target,
+            &mut applied,
+            |id, next, cache| {
+                if id == "main" {
+                    assert!(!cache.needs_icon(next));
+                    assert!(cache.needs_tooltip(next));
+                } else {
+                    assert!(
+                        cache.matches(next),
+                        "successful Codex properties survive retries"
+                    );
+                }
+                *cache = fully_applied(next);
+                Ok(())
+            },
+            || panic!("separate mode must not remove Codex"),
+        )
+        .unwrap();
+        assert!(applied.matches(&target));
+    }
+
+    #[test]
+    fn both_tray_errors_are_reported() {
+        let main = PaintTarget {
+            icon: icon(40),
+            title: "Cla".into(),
+            tooltip: "Claude".into(),
+        };
+        let target = PaintSet {
+            codex: Some(main.clone()),
+            main,
+        };
+        let error = paint_set_with(
+            &target,
+            &mut AppliedSet::default(),
+            |id, _, _| Err(format!("{id} failed")),
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert!(error.contains("main failed"));
+        assert!(error.contains("codex failed"));
+    }
+
+    #[test]
+    fn combined_mode_keeps_codex_until_replacement_is_fully_painted() {
+        let main = PaintTarget {
+            icon: icon(40),
+            title: "Cla".into(),
+            tooltip: "Claude".into(),
+        };
+        let target = PaintSet { main, codex: None };
+        let mut applied = AppliedSet {
+            main: AppliedPaint::default(),
+            codex: Some(AppliedPaint::default()),
+        };
+        assert!(
+            paint_set_with(
+                &target,
+                &mut applied,
+                |_, _, _| Err("main failed".into()),
+                || panic!("failed replacement must retain Codex")
+            )
+            .is_err()
+        );
+        assert!(applied.codex.is_some());
+        let mut removed = false;
+        paint_set_with(
+            &target,
+            &mut applied,
+            |_, next, cache| {
+                *cache = fully_applied(next);
+                Ok(())
+            },
+            || {
+                removed = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(removed);
+        assert!(applied.matches(&target));
+    }
+
+    #[test]
+    fn failed_removal_keeps_codex_pending_for_retry() {
+        let main = PaintTarget {
+            icon: icon(40),
+            title: "Cla".into(),
+            tooltip: "Claude".into(),
+        };
+        let target = PaintSet { main, codex: None };
+        let mut applied = AppliedSet {
+            main: AppliedPaint::default(),
+            codex: Some(AppliedPaint::default()),
+        };
+        let error = paint_set_with(
+            &target,
+            &mut applied,
+            |_, next, cache| {
+                *cache = fully_applied(next);
+                Ok(())
+            },
+            || Err("dispatch failed".into()),
+        )
+        .unwrap_err();
+        assert!(error.contains("dispatch failed"));
+        assert!(!applied.matches(&target));
+        assert!(applied.codex.is_some());
+        paint_set_with(
+            &target,
+            &mut applied,
+            |_, next, cache| {
+                assert!(cache.matches(next), "successful main setters are retained");
+                Ok(())
+            },
+            || Ok(()),
+        )
+        .unwrap();
+        assert!(applied.matches(&target));
     }
 
     #[test]

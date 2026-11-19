@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import {
     getSettings,
     setSettings,
@@ -15,7 +15,7 @@
     getLaunchAtLogin,
     setLaunchAtLogin,
   } from '#lib/ipc.ts';
-  import type { Settings, StatuslineWire, TraySettings } from '#lib/types/settings.ts';
+  import type { Settings, SettingsPatch, StatuslineWire, TraySettings } from '#lib/types/settings.ts';
 
   let { onBack }: { onBack: () => void } = $props();
 
@@ -59,6 +59,16 @@
   }
 
   onMount(load);
+
+  async function reloadSettings() {
+    busy = true;
+    status = null;
+    try {
+      await load();
+    } finally {
+      busy = false;
+    }
+  }
 
   async function setWire(wired: boolean) {
     busy = true;
@@ -190,43 +200,49 @@
     }
   }
 
-  async function updateTray(patch: Partial<TraySettings>) {
+  async function saveSettings(patch: SettingsPatch) {
     const current = settings;
-    if (!current) return;
+    if (!current || busy) return;
     busy = true;
     status = null;
+    settings = {
+      ...current,
+      ...patch,
+      providers: { ...current.providers, ...patch.providers },
+      tray: { ...current.tray, ...patch.tray },
+    };
+    // Flush the optimistic primitives before even an immediately rejected IPC
+    // can roll them back. Svelte otherwise caches the old checked/select value
+    // and skips restoring a control that the browser already changed.
+    await tick();
     try {
-      settings = await setSettings({ tray: patch });
+      settings = await setSettings(patch);
     } catch (e) {
       status = `Save failed: ${e}`;
-      settings = { ...current };
+      try {
+        // Persistence precedes live application, so rejection does not prove
+        // the previous value is still on disk.
+        settings = await getSettings();
+      } catch (readError) {
+        settings = null;
+        status += ` Couldn't reload saved settings: ${readError}`;
+      }
     } finally {
       busy = false;
     }
   }
 
+  async function updateTray(patch: Partial<TraySettings>) {
+    await saveSettings({ tray: patch });
+  }
+
   async function toggle(provider: 'openai' | 'anthropic' | 'codex', value: boolean) {
-    const current = settings;
-    if (!current) return;
-    const providerPatch = provider === 'openai'
+    const providers = provider === 'openai'
       ? { openai_enabled: value }
       : provider === 'anthropic'
         ? { anthropic_enabled: value }
         : { codex_enabled: value };
-    busy = true;
-    status = null;
-    try {
-      settings = await setSettings({ providers: providerPatch });
-    } catch (e) {
-      status = `Save failed: ${e}`;
-      // We never optimistically mutated `settings`, so there's nothing to
-      // reload - just reassign to the persisted value so the checkbox snaps
-      // back from its clicked state. Avoids masking this error with a reload
-      // failure and avoids an unnecessary round-trip.
-      settings = { ...current };
-    } finally {
-      busy = false;
-    }
+    await saveSettings({ providers });
   }
 
   // Launch-at-login toggle. Optimistically set the (primitive) flag so the
@@ -431,6 +447,8 @@
       </label>
       <div class="hint">Start Balanze in the tray automatically when you sign in.</div>
     </div>
+  {:else if status}
+    <button type="button" disabled={busy} onclick={reloadSettings}>Reload settings</button>
   {:else}
     <div class="loading">Loading settings...</div>
   {/if}

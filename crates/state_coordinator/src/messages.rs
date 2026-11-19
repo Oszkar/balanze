@@ -126,9 +126,10 @@ pub enum StateMsg {
     /// so it can repaint. The coordinator itself does NOT fetch - refreshes are
     /// re-paints, not re-fetches. Pollers run on their own cadence.
     Refresh,
-    /// The supervisor has joined the prior watcher generation and is applying
-    /// settings for the replacement generation. The coordinator advances its
-    /// acceptance gate, clears disabled cells, and confirms through `applied`.
+    /// Apply settings and confirm through `applied`. Presentation-only changes
+    /// retain the active generation. For polling changes, the supervisor first
+    /// joins the old generation; the actor then advances its acceptance gate
+    /// and clears disabled cells before replacement pollers start.
     /// Boxed: `Settings` carries the full statusline config (~450 bytes), which
     /// would otherwise dominate this enum's size (clippy `large_enum_variant`).
     SettingsChanged {
