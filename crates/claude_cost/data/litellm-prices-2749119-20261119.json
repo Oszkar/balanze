@@ -1,13 +1,51 @@
 {
   "_meta": {
     "source": "https://github.com/BerriAI/litellm",
-    "commit": "8302f006ddf5b44b13baf17e2673c0fceb826725",
-    "fetched_at": "2026-10-15",
+    "commit": "274911986e64f29c2713b6f1a2ee4f5009546d21",
+    "fetched_at": "2026-11-19",
     "source_file": "model_prices_and_context_window.json",
-    "filter": "bare claude-* keys, anthropic provider only (no vendor prefix, no slashes, no Bedrock -v1:0 variants); plus the *_above_100k_tokens rates (non-batch) where present",
+    "filter": "bare claude-* keys, anthropic provider only (no slashes or colon variants); non-batch base and above-100k rates",
     "license": "MIT (see LICENSE-LITELLM)",
     "verified_against": "https://platform.claude.com/docs/en/about-claude/pricing",
-    "verification_note": "Current Opus, Sonnet, Fable and Mythos rates checked against Anthropic, including Opus 5.5 and Sonnet 5.5 (0.05x cache reads); cache creation uses the 5-minute rate. claude-haiku-5-5 carries its above-100k-prompt-token tier ($0.50/$2.50, cache write $0.625, cache read $0.05 per MTok), checked against Anthropic. Entries upstream has since dropped (claude-3-7-sonnet-20250219, claude-3-haiku-20240307, claude-3-opus-20240229, claude-4-opus-20250514, claude-4-sonnet-20250514, claude-opus-4-1, claude-opus-4-1-20250805, claude-opus-4-20250514, claude-sonnet-4-20250514) are carried forward unchanged from the previous snapshot so historical exports keep pricing."
+    "verification_note": "Current Opus, Sonnet, Fable and Mythos rates checked against Anthropic, including Fable 5.2 and Mythos 5.2 ($8/$40 per MTok, 5-minute cache write $10, cache read $0.20 at 0.025x input; 1-hour write $16 matches the 2x base-input rule; no long-context tier) and Opus 5.5 and Sonnet 5.5 (0.05x cache reads); cache creation uses the 5-minute rate. claude-haiku-5-5 carries its above-100k-prompt-token tier ($0.50/$2.50, cache write $0.625, cache read $0.05 per MTok), checked against Anthropic. Entries upstream has dropped are carried forward unchanged; retained_models records the upstream commit each was last sourced from.",
+    "retained_models": {
+      "claude-3-7-sonnet-20250219": {
+        "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+        "fetched_at": "2026-09-16"
+      },
+      "claude-3-haiku-20240307": {
+        "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+        "fetched_at": "2026-09-16"
+      },
+      "claude-3-opus-20240229": {
+        "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+        "fetched_at": "2026-09-16"
+      },
+      "claude-4-opus-20250514": {
+        "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+        "fetched_at": "2026-09-16"
+      },
+      "claude-4-sonnet-20250514": {
+        "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+        "fetched_at": "2026-09-16"
+      },
+      "claude-opus-4-1": {
+        "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+        "fetched_at": "2026-09-16"
+      },
+      "claude-opus-4-1-20250805": {
+        "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+        "fetched_at": "2026-09-16"
+      },
+      "claude-opus-4-20250514": {
+        "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+        "fetched_at": "2026-09-16"
+      },
+      "claude-sonnet-4-20250514": {
+        "commit": "c8114ba41ff76365e3fb065dd3c7ca387598fd98",
+        "fetched_at": "2026-09-16"
+      }
+    }
   },
   "claude-3-7-sonnet-20250219": {
     "input_cost_per_token": 0.000003,
@@ -72,6 +110,15 @@
     "max_output_tokens": 128000,
     "litellm_provider": "anthropic"
   },
+  "claude-fable-5-2": {
+    "input_cost_per_token": 0.000008,
+    "output_cost_per_token": 0.00004,
+    "cache_creation_input_token_cost": 0.00001,
+    "cache_read_input_token_cost": 2e-7,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "litellm_provider": "anthropic"
+  },
   "claude-haiku-4-5": {
     "input_cost_per_token": 0.000001,
     "output_cost_per_token": 0.000005,
@@ -117,6 +164,15 @@
     "output_cost_per_token": 0.00005,
     "cache_creation_input_token_cost": 0.0000125,
     "cache_read_input_token_cost": 2.5e-7,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "litellm_provider": "anthropic"
+  },
+  "claude-mythos-5-2": {
+    "input_cost_per_token": 0.000008,
+    "output_cost_per_token": 0.00004,
+    "cache_creation_input_token_cost": 0.00001,
+    "cache_read_input_token_cost": 2e-7,
     "max_input_tokens": 1000000,
     "max_output_tokens": 128000,
     "litellm_provider": "anthropic"
