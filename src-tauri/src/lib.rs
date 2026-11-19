@@ -349,23 +349,37 @@ fn normalize_settings_on_disk() {
     }
 }
 
-fn setup_tray(app: &mut App) -> tauri::Result<()> {
+fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let open = MenuItemBuilder::with_id("open", "Open Balanze").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-    let menu = MenuBuilder::new(app)
+    MenuBuilder::new(app)
         .items(&[&open, &PredefinedMenuItem::separator(app)?, &quit])
-        .build()?;
+        .build()
+}
 
+fn create_codex_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    tauri::tray::TrayIconBuilder::with_id("codex")
+        .menu(&tray_menu(app)?)
+        .show_menu_on_left_click(false)
+        .icon_as_template(false)
+        .tooltip("Balanze - OpenAI / Codex quota")
+        .build(app)?;
+    Ok(())
+}
+
+fn setup_tray(app: &mut App) -> tauri::Result<()> {
     let tray = app
         .tray_by_id("main")
-        .expect("tray 'main' is declared in tauri.conf.json");
-    tray.set_menu(Some(menu))?;
-    tray.on_menu_event(|app, event| match event.id().as_ref() {
+        .ok_or_else(|| tauri::Error::AssetNotFound("tray main".into()))?;
+    tray.set_menu(Some(tray_menu(app.handle())?))?;
+    // Register once at app scope. Recreating a provider item must not append
+    // another global menu callback or retain a handler for a removed item.
+    app.on_menu_event(|app, event| match event.id().as_ref() {
         "open" => show_popover_at_cursor(app),
         "quit" => app.exit(0),
         _ => {}
     });
-    tray.on_tray_icon_event(|tray, event| {
+    app.on_tray_icon_event(|app, event| {
         if let TrayIconEvent::Click {
             button: MouseButton::Left,
             button_state: MouseButtonState::Up,
@@ -373,7 +387,7 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
             ..
         } = event
         {
-            show_popover_anchored(tray.app_handle(), position);
+            show_popover_anchored(app, position);
         }
     });
     Ok(())

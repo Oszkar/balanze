@@ -7,8 +7,14 @@ export interface ProviderSettings {
   codex_enabled: boolean;
 }
 
+export interface TraySettings {
+  mode: 'separate' | 'combined';
+  show_percentages: boolean;
+}
+
 export interface Settings {
   version: number;
+  tray: TraySettings;
   providers: ProviderSettings;
   oauth_poll_interval_secs: number;
   // Backend-owned first-run flag (the host sets it; set_settings preserves it
@@ -26,6 +32,7 @@ export interface ProviderSettingsPatch {
 }
 
 export interface SettingsPatch {
+  tray?: Partial<TraySettings>;
   providers?: ProviderSettingsPatch;
   oauth_poll_interval_secs?: number;
 }

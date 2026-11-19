@@ -171,3 +171,7 @@ Not actively soliciting contributions yet - this is a personal tool first. Found
 ## License
 
 MIT - see `LICENSE`.
+
+## Tray presentation settings
+
+Separate filling bars show each provider’s highest-utilization window. macOS uses Cla/Cdx with optional percentages; Windows uses A/O beside the bars, with exact percentages in tooltips. Settings offers separate indicators (the default) or one highest-utilization indicator. Percentages default off. Either item opens the same popover and offers Open/Quit. A disabled Codex source hides its item; missing quota is neutral, and stale quota retains its last fill with a violet warning marker. Billing and activity failures stay in the popover.

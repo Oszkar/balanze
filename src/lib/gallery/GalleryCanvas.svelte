@@ -56,6 +56,7 @@
         // opened inside the Tauri app. Each is an explicit, logged no-op so the
         // safety is intentional, not an accident of the default branch.
         case 'set_settings':
+          return DEMO_SETTINGS;
         case 'set_api_key':
         case 'clear_api_key':
         case 'set_statusline_wired':

@@ -58,6 +58,30 @@ pub struct Settings {
     /// (no schema version bump). Consumed by the `statusline_render` crate.
     #[serde(default)]
     pub statusline: StatuslineConfig,
+    #[serde(default)]
+    pub tray: TraySettings,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayMode {
+    #[default]
+    Separate,
+    Combined,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraySettings {
+    #[serde(default)]
+    pub mode: TrayMode,
+    #[serde(default)]
+    pub show_percentages: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct TraySettingsPatch {
+    pub mode: Option<TrayMode>,
+    pub show_percentages: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +109,8 @@ pub struct SettingsPatch {
     #[serde(default)]
     pub providers: ProviderSettingsPatch,
     pub oauth_poll_interval_secs: Option<u32>,
+    #[serde(default)]
+    pub tray: TraySettingsPatch,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -96,6 +122,12 @@ pub struct ProviderSettingsPatch {
 
 impl SettingsPatch {
     pub fn apply(self, settings: &mut Settings) {
+        if let Some(mode) = self.tray.mode {
+            settings.tray.mode = mode;
+        }
+        if let Some(show) = self.tray.show_percentages {
+            settings.tray.show_percentages = show;
+        }
         if let Some(enabled) = self.providers.openai_enabled {
             settings.providers.openai_enabled = enabled;
         }
@@ -129,6 +161,7 @@ impl Default for Settings {
             oauth_poll_interval_secs: default_poll_interval(),
             seen_welcome: false,
             statusline: StatuslineConfig::default(),
+            tray: TraySettings::default(),
         }
     }
 }
@@ -1322,6 +1355,7 @@ mod tests {
                 ..Default::default()
             },
             oauth_poll_interval_secs: Some(900),
+            ..Default::default()
         };
 
         patch.apply(&mut current);
@@ -1330,6 +1364,27 @@ mod tests {
         assert!(!current.providers.anthropic_enabled);
         assert!(!current.providers.codex_enabled);
         assert_eq!(current.oauth_poll_interval_secs, 900);
+    }
+
+    #[test]
+    fn tray_defaults_and_partial_patches_preserve_other_preferences() {
+        let mut current: Settings = serde_json::from_str(r#"{"version":2}"#).unwrap();
+        assert_eq!(current.tray.mode, TrayMode::Separate);
+        assert!(!current.tray.show_percentages);
+        let mode: SettingsPatch = serde_json::from_str(r#"{"tray":{"mode":"combined"}}"#).unwrap();
+        mode.apply(&mut current);
+        let percentages: SettingsPatch =
+            serde_json::from_str(r#"{"tray":{"show_percentages":true}}"#).unwrap();
+        percentages.apply(&mut current);
+        assert_eq!(current.tray.mode, TrayMode::Combined);
+        assert!(current.tray.show_percentages);
+        let providers = current.providers.clone();
+        let roundtrip: Settings =
+            serde_json::from_str(&serde_json::to_string(&current).unwrap()).unwrap();
+        assert_eq!(roundtrip, current);
+        assert_eq!(roundtrip.providers, providers);
+        assert_eq!(roundtrip.version, 2);
+        assert!(serde_json::from_str::<SettingsPatch>(r#"{"tray":{"mode":"unknown"}}"#).is_err());
     }
 
     #[test]

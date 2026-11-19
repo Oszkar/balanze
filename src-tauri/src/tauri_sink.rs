@@ -1,7 +1,7 @@
 //! Production sink for the `state_coordinator` actor (AGENTS.md §4 #7 - the
 //! only crate that may call Tauri tray APIs). Emits `usage_updated` /
 //! `degraded_state` to the Svelte UI and enqueues gauge tray targets, deduped by
-//! `(ColorBucket, title, tooltip)` per AGENTS.md §3.1.
+//! provider identity, fill, state, title, and tooltip per AGENTS.md §3.1.
 
 use serde::Serialize;
 use state_coordinator::{AnthropicQuotaSource, Sink, Snapshot, Source};
@@ -58,26 +58,6 @@ fn source_key(source: Source) -> &'static str {
         Source::OpenAiCosts => "openai_costs",
         Source::ClaudeStatusline => "claude_statusline",
     }
-}
-
-/// Friendly source label for the degraded tray tooltip (mirrors the popover's
-/// DegradedBanner labels).
-fn degraded_source_label(source: Source) -> &'static str {
-    match source {
-        Source::ClaudeOAuth => "Anthropic quota",
-        Source::ClaudeJsonl => "Claude activity",
-        Source::AnthropicApiCost => "Anthropic cost",
-        Source::CodexQuota => "Codex quota",
-        Source::OpenAiCosts => "OpenAI cost",
-        Source::ClaudeStatusline => "Claude statusLine",
-    }
-}
-
-/// Tooltip for the `on_degraded` repaint path, which has no Snapshot to build a
-/// `TrayView` from - name the failing source so the Warn icon is always
-/// explained, including a cold-start failure with no prior paint.
-fn degraded_tooltip(source: Source) -> String {
-    format!("Balanze - {} unavailable", degraded_source_label(source))
 }
 
 /// The tray's canonical windows, per provider: Claude 5h, Claude weekly (7d =
@@ -232,8 +212,8 @@ fn bucket_for_view(view: &TrayView, degraded: bool) -> ColorBucket {
 }
 
 /// Menu-bar title (macOS) / tooltip line 1: `Claude X% · Codex Y%`, both
-/// providers in fixed slots, each showing that provider's worst window. The ring
-/// color matches the larger of the two shown numbers. An unconfigured provider
+/// providers in fixed slots, each showing that provider's worst window. The
+/// fill color matches the larger of the two shown numbers. An unconfigured provider
 /// is omitted.
 fn tray_title(view: &TrayView) -> String {
     let c = view
@@ -246,7 +226,7 @@ fn tray_title(view: &TrayView) -> String {
 }
 
 /// Tooltip: a fixed-layout status panel. A header names the worst window so the
-/// ring color is explained, then both providers in stable slots. Kept compact
+/// fill color is explained, then both providers in stable slots. Kept compact
 /// for the Windows ~128-char tooltip cap - per-window reset times live in the
 /// popover, not here.
 fn tray_tooltip(view: &TrayView, degraded: bool) -> String {
@@ -287,10 +267,124 @@ fn tray_tooltip(view: &TrayView, degraded: bool) -> String {
     lines.join("\n")
 }
 
+/// Build presentation targets only from coordinator-owned inputs.
+fn paint_targets(snapshot: &Snapshot, settings: &settings::Settings) -> tray_icon::PaintSet {
+    use tray_icon::{IconState, Provider};
+    let view = TrayView::from_snapshot(snapshot);
+    let claude = TrayView {
+        codex_5h: None,
+        codex_weekly: None,
+        codex_headline: None,
+        codex_expired: false,
+        ..view
+    };
+    let codex = TrayView {
+        claude_5h: None,
+        claude_7d: None,
+        claude_stale: false,
+        ..view
+    };
+    let claude_state = if view.claude_stale {
+        IconState::Stale
+    } else if claude.has_data() {
+        IconState::Fresh
+    } else if snapshot.claude_oauth_error.is_some() || snapshot.claude_statusline_error.is_some() {
+        IconState::Error
+    } else if snapshot.claude_oauth_unavailable.is_some() || !settings.providers.anthropic_enabled {
+        IconState::Missing
+    } else {
+        IconState::Connecting
+    };
+    let codex_state = if snapshot.codex_quota_error.is_some() {
+        if codex.has_data() {
+            IconState::Stale
+        } else {
+            IconState::Error
+        }
+    } else if view.codex_expired {
+        IconState::Stale
+    } else if codex.has_data() {
+        IconState::Fresh
+    } else {
+        IconState::Missing
+    };
+    let make = |provider: Provider, provider_view: &TrayView<'_>, state: IconState| {
+        let percent = provider_view.worst().map(|(_, p)| p.round());
+        let title = if settings.tray.show_percentages && percent.is_some() {
+            tray_title(provider_view)
+                .replace("Claude", "Cla")
+                .replace("Codex", "Cdx")
+        } else {
+            provider.short_name().to_string()
+        };
+        let title = if state.degraded() {
+            format!("{title} !")
+        } else {
+            title
+        };
+        let detail = provider_view.worst().map_or_else(
+            || state.description().to_string(),
+            |(window, p)| {
+                format!(
+                    "{window} {}% used\n{}",
+                    p.round() as i64,
+                    state.description()
+                )
+            },
+        );
+        tray_icon::PaintTarget {
+            icon: tray_icon::IconTarget {
+                provider,
+                bucket: bucket_for_view(provider_view, state.degraded()),
+                fill: percent.map(|p| p.clamp(0.0, 100.0) as u8),
+                state,
+            },
+            title,
+            tooltip: format!("Balanze - {}\n{detail}", provider.full_name()),
+        }
+    };
+    let mut c = make(Provider::Claude, &claude, claude_state);
+    let o = make(Provider::Codex, &codex, codex_state);
+    if settings.tray.mode == settings::TrayMode::Separate {
+        return tray_icon::PaintSet {
+            main: c,
+            codex: settings.providers.codex_enabled.then_some(o),
+        };
+    }
+    // Preserve Codex priority on ties, and select using raw values before rounding.
+    let codex_wins = settings.providers.codex_enabled
+        && codex
+            .worst()
+            .is_some_and(|(_, p)| claude.worst().is_none_or(|(_, c)| p >= c));
+    if codex_wins {
+        c = o;
+    }
+    let degraded =
+        claude_state.degraded() || (settings.providers.codex_enabled && codex_state.degraded());
+    if degraded && !c.icon.state.degraded() {
+        // The selected value is current, but the combined indicator must also
+        // disclose an unavailable/stale participating provider.
+        c.icon.state = IconState::Partial;
+        c.icon.bucket = ColorBucket::Warn;
+        c.title.push_str(" !");
+    }
+    let combined_view = if settings.providers.codex_enabled {
+        view
+    } else {
+        claude
+    };
+    c.tooltip = tray_tooltip(&combined_view, degraded);
+    tray_icon::PaintSet {
+        main: c,
+        codex: None,
+    }
+}
+
 pub(crate) struct TauriSink {
     app: AppHandle,
-    repaint: tokio::sync::watch::Sender<Option<tray_icon::PaintTarget>>,
-    last_requested: Option<(ColorBucket, String, String)>,
+    repaint: tokio::sync::watch::Sender<Option<tray_icon::PaintSet>>,
+    last_requested: Option<tray_icon::PaintSet>,
+    settings: settings::Settings,
 }
 
 impl TauriSink {
@@ -301,49 +395,37 @@ impl TauriSink {
                 app,
                 repaint,
                 last_requested: None,
+                settings: settings::Settings::default(),
             },
             painter,
         )
     }
 
-    fn paint_target(&self, s: &Snapshot, degraded: bool) -> (ColorBucket, String, String) {
-        let view = TrayView::from_snapshot(s);
-        let stale = degraded || view.codex_expired || view.claude_stale;
-        (
-            bucket_for_view(&view, stale),
-            tray_title(&view),
-            tray_tooltip(&view, stale),
-        )
+    fn enqueue(&mut self, snapshot: &Snapshot) {
+        let target = paint_targets(snapshot, &self.settings);
+        if self.last_requested.as_ref() != Some(&target) {
+            self.repaint.send_replace(Some(target.clone()));
+            self.last_requested = Some(target);
+        }
     }
 }
 
-/// True if any source's error slot is set. Used to keep the tray on the
-/// warning bucket while ANY source is degraded - a later success from a
-/// different source must not clear the warning while another source is still
-/// failing (the bug: `on_snapshot` previously hard-coded `degraded = false`).
-fn any_source_degraded(s: &Snapshot) -> bool {
-    s.claude_oauth_error.is_some()
-        || s.claude_jsonl_error.is_some()
-        || s.anthropic_api_cost_error.is_some()
-        || s.codex_quota_error.is_some()
-        || s.openai_error.is_some()
-        || s.claude_statusline_error.is_some()
-}
-
 impl Sink for TauriSink {
+    fn on_settings(&mut self, settings: &settings::Settings) {
+        self.settings = settings.clone();
+    }
+
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
         if let Err(e) = self.app.emit("usage_updated", snapshot) {
             tracing::warn!("tauri_sink: emit usage_updated failed: {e}");
         }
-        let target = self.paint_target(snapshot, any_source_degraded(snapshot));
-        if self.last_requested.as_ref() != Some(&target) {
-            self.repaint.send_replace(Some(tray_icon::PaintTarget {
-                bucket: target.0,
-                title: target.1.clone(),
-                tooltip: target.2.clone(),
-            }));
-            self.last_requested = Some(target);
-        }
+        self.enqueue(snapshot);
+    }
+
+    fn on_snapshot_durable(&mut self, snapshot: &Snapshot) {
+        // Error-only updates carry the canonical error slots and fallback
+        // selection. Repaint them without duplicating usage_updated events.
+        self.enqueue(snapshot);
     }
 
     fn on_degraded(&mut self, source: Source, error: &str) {
@@ -353,24 +435,6 @@ impl Sink for TauriSink {
         };
         if let Err(e) = self.app.emit("degraded_state", payload) {
             tracing::warn!("tauri_sink: emit degraded_state failed: {e}");
-        }
-        // Keep the last-known numbers in the (macOS) title, but the tooltip names
-        // the failing source rather than cloning the last NORMAL tooltip - so the
-        // red icon is always explained, including a cold-start failure with no
-        // prior paint (which would otherwise show the generic "Balanze").
-        let title = self
-            .last_requested
-            .as_ref()
-            .map(|(_, t, _)| t.clone())
-            .unwrap_or_default();
-        let target = (ColorBucket::Warn, title, degraded_tooltip(source));
-        if self.last_requested.as_ref() != Some(&target) {
-            self.repaint.send_replace(Some(tray_icon::PaintTarget {
-                bucket: target.0,
-                title: target.1.clone(),
-                tooltip: target.2.clone(),
-            }));
-            self.last_requested = Some(target);
         }
     }
 }
@@ -415,13 +479,24 @@ mod tests {
         assert!(tooltip.contains("Monthly Phoenix 91%"), "{tooltip}");
     }
 
+    fn fresh_oauth(five: f32, seven: f32) -> anthropic_oauth::ClaudeOAuthSnapshot {
+        let mut oauth = oauth_5h_7d(five, seven);
+        for cadence in &mut oauth.cadences {
+            cadence.resets_at = oauth.fetched_at + chrono::Duration::hours(1);
+        }
+        oauth
+    }
+
     #[test]
-    fn any_source_error_keeps_warning() {
-        use chrono::Utc;
-        let mut s = Snapshot::empty(Utc::now());
-        assert!(!any_source_degraded(&s));
-        s.openai_error = Some("HTTP 500".into());
-        assert!(any_source_degraded(&s));
+    fn billing_and_activity_errors_do_not_change_quota_targets() {
+        let mut s = Snapshot::empty(chrono::Utc::now());
+        s.claude_oauth = Some(fresh_oauth(32.0, 78.0));
+        s.fetched_at = chrono::Utc::now();
+        let settings = settings::Settings::default();
+        let before = paint_targets(&s, &settings);
+        s.openai_error = Some("billing failed".into());
+        s.claude_jsonl_error = Some("activity failed".into());
+        assert_eq!(before, paint_targets(&s, &settings));
     }
 
     #[test]
@@ -538,6 +613,11 @@ mod tests {
         ));
 
         assert_eq!(worst_utilization(&s), 10.0);
+        s.claude_oauth_error = Some("OAuth failed while statusline is current".into());
+        let target = paint_targets(&s, &settings::Settings::default());
+        assert_eq!(target.main.icon.state, tray_icon::IconState::Fresh);
+        assert_eq!(target.main.icon.bucket, ColorBucket::Green);
+        assert_eq!(target.main.icon.fill, Some(10));
     }
 
     /// A stale statusLine payload (frozen file - another tool owns the slot)
@@ -899,16 +979,46 @@ mod tests {
     }
 
     #[test]
-    fn degraded_tooltip_names_the_failing_source() {
-        // The on_degraded path has no snapshot; it must still explain the red
-        // icon by naming the source, not reuse the last normal tooltip.
+    fn separate_mode_isolates_stale_codex_and_combined_discloses_it() {
+        let mut s = Snapshot::empty(chrono::Utc::now());
+        s.claude_oauth = Some(fresh_oauth(94.0, 20.0));
+        s.codex_quota = Some(codex_5h_weekly(10.0, 20.0));
+        s.codex_quota_error = Some("offline".into());
+        s.fetched_at = chrono::Utc::now();
+        let mut settings = settings::Settings::default();
+        let targets = paint_targets(&s, &settings);
+        assert_eq!(targets.main.icon.bucket, ColorBucket::Red);
         assert_eq!(
-            degraded_tooltip(Source::ClaudeOAuth),
-            "Balanze - Anthropic quota unavailable"
+            targets.codex.unwrap().icon.state,
+            tray_icon::IconState::Stale
         );
+        settings.tray.mode = settings::TrayMode::Combined;
+        let target = paint_targets(&s, &settings);
+        assert!(target.codex.is_none());
+        assert_eq!(target.main.icon.provider, tray_icon::Provider::Claude);
+        assert_eq!(target.main.icon.state, tray_icon::IconState::Partial);
+        assert!(target.main.tooltip.contains("stale"));
+    }
+
+    #[test]
+    fn settings_change_mode_percentages_and_disabled_codex() {
+        let mut s = Snapshot::empty(chrono::Utc::now());
+        s.claude_oauth = Some(fresh_oauth(32.0, 78.0));
+        s.fetched_at = chrono::Utc::now();
+        s.codex_quota = Some(codex_5h_weekly(10.0, 78.0));
+        s.fetched_at = chrono::Utc::now();
+        let mut settings = settings::Settings::default();
+        assert_eq!(paint_targets(&s, &settings).main.title, "Cla");
+        settings.tray.show_percentages = true;
+        assert_eq!(paint_targets(&s, &settings).main.title, "Cla 78%");
+        settings.tray.mode = settings::TrayMode::Combined;
         assert_eq!(
-            degraded_tooltip(Source::OpenAiCosts),
-            "Balanze - OpenAI cost unavailable"
+            paint_targets(&s, &settings).main.icon.provider,
+            tray_icon::Provider::Codex
         );
+        settings.providers.codex_enabled = false;
+        let target = paint_targets(&s, &settings);
+        assert!(target.codex.is_none());
+        assert_eq!(target.main.icon.provider, tray_icon::Provider::Claude);
     }
 }

@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follo
 
 ## [Unreleased]
 
+### Added
+
+- Separate Claude and Codex tray fill bars, with an optional combined highest-utilization indicator. macOS uses compact Cla/Cdx labels and optional percentages; Windows uses A/O identities beside the bars. Quota degradation affects the relevant provider without obscuring healthy fallback data.
+
 ## [0.5.4] - Window consistency & maintenance - 2026-10-21
 
 ### Added

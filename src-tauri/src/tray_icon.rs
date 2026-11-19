@@ -1,5 +1,5 @@
 //! Runtime-rendered gauge tray icon. Hand-rolled RGBA raster (no extra dep):
-//! a colored ring on a transparent background, color chosen by `ColorBucket`.
+//! vertical utilization bars with provider identity and explicit missing/stale states.
 //! AGENTS.md §3.1: targets are deduped upstream in `tauri_sink`; this worker
 //! also retains per-property successes while retrying a partial paint.
 
@@ -12,11 +12,86 @@ const SIZE: u32 = 32;
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 const WARN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Provider {
+    Claude,
+    Codex,
+}
+impl Provider {
+    pub(crate) fn short_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Cla",
+            Self::Codex => "Cdx",
+        }
+    }
+    pub(crate) fn full_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Anthropic / Claude quota",
+            Self::Codex => "OpenAI / Codex quota",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IconState {
+    Fresh,
+    Stale,
+    Partial,
+    Missing,
+    Connecting,
+    Error,
+}
+impl IconState {
+    pub(crate) fn degraded(self) -> bool {
+        matches!(self, Self::Stale | Self::Partial | Self::Error)
+    }
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::Fresh => "current",
+            Self::Stale => "stale - last known quota",
+            Self::Partial => "some quota unavailable",
+            Self::Missing => "quota unavailable",
+            Self::Connecting => "connecting...",
+            Self::Error => "quota error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IconTarget {
+    pub(crate) provider: Provider,
+    pub(crate) bucket: ColorBucket,
+    pub(crate) fill: Option<u8>,
+    pub(crate) state: IconState,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaintTarget {
-    pub(crate) bucket: ColorBucket,
+    pub(crate) icon: IconTarget,
     pub(crate) title: String,
     pub(crate) tooltip: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaintSet {
+    pub(crate) main: PaintTarget,
+    pub(crate) codex: Option<PaintTarget>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AppliedSet {
+    main: AppliedPaint,
+    codex: Option<AppliedPaint>,
+}
+impl AppliedSet {
+    fn matches(&self, target: &PaintSet) -> bool {
+        self.main.matches(&target.main)
+            && match (&self.codex, &target.codex) {
+                (None, None) => true,
+                (Some(applied), Some(next)) => applied.matches(next),
+                _ => false,
+            }
+    }
 }
 
 /// Tray properties that the operating system has accepted. This is the
@@ -25,7 +100,7 @@ pub(crate) struct PaintTarget {
 /// when every property in here matches it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct AppliedPaint {
-    bucket: Option<ColorBucket>,
+    icon: Option<IconTarget>,
     tooltip: Option<String>,
     #[cfg(target_os = "macos")]
     title: Option<String>,
@@ -33,7 +108,7 @@ struct AppliedPaint {
 
 impl AppliedPaint {
     fn needs_icon(&self, target: &PaintTarget) -> bool {
-        self.bucket != Some(target.bucket)
+        self.icon != Some(target.icon)
     }
 
     fn effective_tooltip(target: &PaintTarget) -> &str {
@@ -76,51 +151,118 @@ fn bucket_rgb(bucket: ColorBucket) -> (u8, u8, u8) {
         ColorBucket::Orange => (0xd9, 0x6a, 0x2a),
         ColorBucket::Red => (0xc0, 0x49, 0x3a),
         // Degraded/stale. Deliberately outside the green-to-red heat ramp: the
-        // ring has no room for a marker, so a source problem must be
+        // fill color and marker make a source problem
         // distinguishable from 90% without opening the tooltip.
         ColorBucket::Warn => (0x7c, 0x6a, 0xc9),
     }
 }
 
-/// Render a `size`x`size` RGBA ring in the bucket color on transparent bg.
-pub(crate) fn render_gauge(bucket: ColorBucket, size: u32) -> Vec<u8> {
-    let (r, g, b) = bucket_rgb(bucket);
-    let mut buf = vec![0u8; (size * size * 4) as usize];
-    let c = (size as f32 - 1.0) / 2.0;
-    let outer = size as f32 / 2.0 - 1.0;
-    let inner = outer - size as f32 * 0.22;
-    for y in 0..size {
-        for x in 0..size {
-            let dx = x as f32 - c;
-            let dy = y as f32 - c;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let alpha: u8 = if dist > inner && dist < outer { 255 } else { 0 };
-            let i = ((y * size + x) * 4) as usize;
-            buf[i] = r;
-            buf[i + 1] = g;
-            buf[i + 2] = b;
-            buf[i + 3] = alpha;
+/// Integer raster at a 16-pixel design grid, doubled for the supplied image.
+/// Identity never changes with severity. Windows uses A/O with a contrasting
+/// outline; macOS has the full short name in its native title.
+fn render_bar(target: IconTarget, windows: bool) -> Vec<u8> {
+    let mut pixels = vec![0; (SIZE * SIZE * 4) as usize];
+    let mut dot = |x: usize, y: usize, rgb: (u8, u8, u8)| {
+        for dy in 0..2 {
+            for dx in 0..2 {
+                let i = ((y * 2 + dy) * SIZE as usize + x * 2 + dx) * 4;
+                pixels[i..i + 4].copy_from_slice(&[rgb.0, rgb.1, rgb.2, 255]);
+            }
+        }
+    };
+    let (left, right) = if windows { (9, 14) } else { (5, 10) };
+    let top = 2;
+    let bottom = 13;
+    for y in top..=bottom {
+        for x in left..=right {
+            if x == left || x == right || y == top || y == bottom {
+                dot(x, y, (138, 143, 153));
+            }
         }
     }
-    buf
+    let color = bucket_rgb(target.bucket);
+    if let Some(fill) = target.fill {
+        let height = (usize::from(fill.min(100)) * (bottom - top - 1) + 50) / 100;
+        for y in bottom - height..bottom {
+            for x in left + 1..right {
+                dot(x, y, color);
+            }
+        }
+    } else {
+        match target.state {
+            IconState::Connecting => {
+                for y in [5, 7, 9] {
+                    dot(left + 2, y, color);
+                }
+            }
+            IconState::Error => {
+                for y in 4..8 {
+                    dot(left + 2, y, color);
+                }
+                dot(left + 2, 10, color);
+            }
+            _ => {
+                for x in left + 1..right {
+                    dot(x, 7, color);
+                }
+            }
+        }
+    }
+    if windows {
+        let glyph = match target.provider {
+            Provider::Claude => [0b010, 0b101, 0b111, 0b101, 0b101],
+            Provider::Codex => [0b111, 0b101, 0b101, 0b101, 0b111],
+        };
+        // Dark halo plus light foreground remains visible in both taskbar themes.
+        for (row, bits) in glyph.iter().enumerate() {
+            for col in 0..3 {
+                if bits & (1 << (2 - col)) != 0 {
+                    for dy in 0..3 {
+                        for dx in 0..3 {
+                            dot(1 + col + dx, 4 + row + dy, (32, 36, 32));
+                        }
+                    }
+                }
+            }
+        }
+        for (row, bits) in glyph.iter().enumerate() {
+            for col in 0..3 {
+                if bits & (1 << (2 - col)) != 0 {
+                    dot(2 + col, 5 + row, (245, 246, 239));
+                }
+            }
+        }
+    }
+    if target.state.degraded() {
+        for y in 1..4 {
+            dot(15, y, color);
+        }
+        dot(15, 5, color);
+    }
+    pixels
 }
 
 /// Paint the tray icon, macOS menu-bar title, and hover tooltip. `title` is the
-/// compact `Claude X% · Codex Y%` line (macOS menu bar only); `tooltip` is the
+/// compact `Cla X%` or `Cdx Y%` label (macOS menu bar only); `tooltip` is the
 /// multi-line status panel shown on hover (and the only text on Windows, where
 /// the tray has no persistent label). Setter failures are collected and
 /// returned to the dedicated painter, which retries without blocking the
 /// coordinator actor or repeating properties that already landed.
-fn paint(app: &AppHandle, target: &PaintTarget, applied: &mut AppliedPaint) -> Result<(), String> {
-    let Some(tray) = app.tray_by_id("main") else {
-        return Err("tray 'main' not found".to_string());
+fn paint(
+    app: &AppHandle,
+    id: &str,
+    target: &PaintTarget,
+    applied: &mut AppliedPaint,
+) -> Result<(), String> {
+    let Some(tray) = app.tray_by_id(id) else {
+        return Err(format!("tray {id} not found"));
     };
     let mut failures = Vec::new();
     if applied.needs_icon(target) {
-        let rgba = render_gauge(target.bucket, SIZE);
+        let rgba = render_bar(target.icon, cfg!(target_os = "windows"));
         let img = Image::new_owned(rgba, SIZE, SIZE);
         match tray.set_icon(Some(img)) {
-            Ok(()) => applied.bucket = Some(target.bucket),
+            Ok(()) => applied.icon = Some(target.icon),
             Err(error) => failures.push(format!("set_icon failed: {error}")),
         }
     }
@@ -150,18 +292,42 @@ fn paint(app: &AppHandle, target: &PaintTarget, applied: &mut AppliedPaint) -> R
     }
 }
 
+/// Create a replacement before removing the extra item so popover access is
+/// retained on failures. Only successful per-item setters are cached.
+fn paint_set(app: &AppHandle, target: &PaintSet, applied: &mut AppliedSet) -> Result<(), String> {
+    paint(app, "main", &target.main, &mut applied.main)?;
+    if let Some(codex) = &target.codex {
+        if app.tray_by_id("codex").is_none() {
+            crate::create_codex_tray(app).map_err(|e| e.to_string())?;
+            applied.codex = Some(AppliedPaint::default());
+        }
+        paint(
+            app,
+            "codex",
+            codex,
+            applied.codex.get_or_insert_with(AppliedPaint::default),
+        )?;
+    } else {
+        if app.tray_by_id("codex").is_some() {
+            drop(app.remove_tray_by_id("codex"));
+        }
+        applied.codex = None;
+    }
+    Ok(())
+}
+
 /// Start the single repaint worker. The watch channel coalesces a burst to the
 /// newest target, and each blocking Tauri/main-thread round trip runs on the
 /// blocking pool rather than on the coordinator's tokio worker.
 pub(crate) fn spawn_painter(
     app: AppHandle,
 ) -> (
-    tokio::sync::watch::Sender<Option<PaintTarget>>,
+    tokio::sync::watch::Sender<Option<PaintSet>>,
     tokio::task::JoinHandle<Result<(), String>>,
 ) {
-    let (tx, mut rx) = tokio::sync::watch::channel::<Option<PaintTarget>>(None);
+    let (tx, mut rx) = tokio::sync::watch::channel::<Option<PaintSet>>(None);
     let join = tokio::spawn(async move {
-        let mut applied = AppliedPaint::default();
+        let mut applied = AppliedSet::default();
         let mut last_warn: Option<std::time::Instant> = None;
         loop {
             if rx.changed().await.is_err() {
@@ -178,7 +344,7 @@ pub(crate) fn spawn_painter(
                 let attempt = target.clone();
                 let mut attempt_applied = applied.clone();
                 let (next_applied, result) = tokio::task::spawn_blocking(move || {
-                    let result = paint(&paint_app, &attempt, &mut attempt_applied);
+                    let result = paint_set(&paint_app, &attempt, &mut attempt_applied);
                     (attempt_applied, result)
                 })
                 .await
@@ -224,20 +390,91 @@ pub(crate) fn spawn_painter(
 mod tests {
     use super::*;
 
+    fn icon(fill: u8) -> IconTarget {
+        IconTarget {
+            provider: Provider::Claude,
+            bucket: ColorBucket::from_util(f32::from(fill)),
+            fill: Some(fill),
+            state: IconState::Fresh,
+        }
+    }
+
+    #[test]
+    fn fill_and_identity_changes_repaint_within_the_same_bucket() {
+        let a = PaintTarget {
+            icon: icon(10),
+            title: "Cla".into(),
+            tooltip: "quota".into(),
+        };
+        let mut b = a.clone();
+        b.icon.fill = Some(40);
+        let applied = fully_applied(&a);
+        assert!(applied.needs_icon(&b));
+        assert_ne!(render_bar(a.icon, true), render_bar(b.icon, true));
+        b.icon = a.icon;
+        b.icon.provider = Provider::Codex;
+        assert!(applied.needs_icon(&b));
+        assert_ne!(render_bar(a.icon, true), render_bar(b.icon, true));
+    }
+
+    #[test]
+    fn topology_changes_are_not_deduped_even_when_main_is_unchanged() {
+        let main = PaintTarget {
+            icon: icon(32),
+            title: "Cla".into(),
+            tooltip: "Claude quota".into(),
+        };
+        let mut codex = main.clone();
+        codex.icon.provider = Provider::Codex;
+        codex.title = "Cdx".into();
+        let separate = PaintSet {
+            main: main.clone(),
+            codex: Some(codex.clone()),
+        };
+        let combined = PaintSet {
+            main: main.clone(),
+            codex: None,
+        };
+        let mut applied = AppliedSet {
+            main: fully_applied(&main),
+            codex: None,
+        };
+        assert!(applied.matches(&combined));
+        assert!(!applied.matches(&separate));
+        applied.codex = Some(fully_applied(&codex));
+        assert!(applied.matches(&separate));
+        assert!(!applied.matches(&combined));
+    }
+
+    #[test]
+    fn missing_stale_and_zero_have_distinct_pixels() {
+        let zero = icon(0);
+        let mut missing = zero;
+        missing.fill = None;
+        missing.state = IconState::Missing;
+        let mut stale = zero;
+        stale.state = IconState::Stale;
+        stale.bucket = ColorBucket::Warn;
+        for windows in [false, true] {
+            assert_ne!(render_bar(zero, windows), render_bar(missing, windows));
+            assert_ne!(render_bar(zero, windows), render_bar(stale, windows));
+        }
+    }
+
     #[test]
     fn gauge_has_correct_size_and_some_opaque_pixels() {
-        let buf = render_gauge(ColorBucket::Green, SIZE);
+        let buf = render_bar(icon(10), true);
         assert_eq!(buf.len(), (SIZE * SIZE * 4) as usize);
         let opaque = buf.chunks_exact(4).filter(|px| px[3] > 0).count();
-        assert!(opaque > 0, "ring must have some opaque pixels");
+        assert!(opaque > 0, "bar must have some opaque pixels");
         assert!(
             opaque < (SIZE * SIZE) as usize,
-            "ring must not be fully filled"
+            "bar must not be fully filled"
         );
     }
 
     #[test]
-    fn every_bucket_has_a_distinct_ring_color() {
+    fn every_bucket_has_a_distinct_fill_color() {
         let buckets = [
             ColorBucket::Neutral,
             ColorBucket::Green,
@@ -251,7 +488,7 @@ mod tests {
                 assert_ne!(
                     bucket_rgb(*a),
                     bucket_rgb(*b),
-                    "{a:?} and {b:?} must not share a ring color"
+                    "{a:?} and {b:?} must not share a fill color"
                 );
             }
         }
@@ -261,7 +498,7 @@ mod tests {
     /// successful paint of `target`.
     fn fully_applied(target: &PaintTarget) -> AppliedPaint {
         AppliedPaint {
-            bucket: Some(target.bucket),
+            icon: Some(target.icon),
             tooltip: Some(AppliedPaint::effective_tooltip(target).to_string()),
             #[cfg(target_os = "macos")]
             title: Some(target.title.clone()),
@@ -271,12 +508,12 @@ mod tests {
     #[test]
     fn reverting_to_the_last_target_after_a_partial_paint_still_repaints() {
         let a = PaintTarget {
-            bucket: ColorBucket::Green,
+            icon: icon(10),
             title: "Claude 10%".to_string(),
             tooltip: "Claude 10%".to_string(),
         };
         let b = PaintTarget {
-            bucket: ColorBucket::Red,
+            icon: icon(95),
             title: "Claude 95%".to_string(),
             tooltip: "Claude 95%".to_string(),
         };
@@ -286,7 +523,7 @@ mod tests {
         assert!(applied.matches(&a));
 
         // B painted partially: the icon landed, the tooltip setter failed.
-        applied.bucket = Some(b.bucket);
+        applied.icon = Some(b.icon);
         assert!(!applied.matches(&b), "B is not fully applied");
 
         // Back to A: the operating system is still showing B's icon, so this
@@ -297,14 +534,14 @@ mod tests {
         assert!(!applied.needs_tooltip(&a), "A's tooltip never changed");
 
         // Once the icon is repainted, A is genuinely applied again.
-        applied.bucket = Some(a.bucket);
+        applied.icon = Some(a.icon);
         assert!(applied.matches(&a));
     }
 
     #[test]
     fn partial_success_retries_only_unapplied_properties() {
         let target = PaintTarget {
-            bucket: ColorBucket::Green,
+            icon: icon(10),
             title: "Claude 10%".to_string(),
             tooltip: "Balanze".to_string(),
         };
@@ -312,7 +549,7 @@ mod tests {
 
         assert!(applied.needs_icon(&target));
         assert!(applied.needs_tooltip(&target));
-        applied.bucket = Some(target.bucket);
+        applied.icon = Some(target.icon);
         assert!(!applied.needs_icon(&target));
         assert!(applied.needs_tooltip(&target));
 
