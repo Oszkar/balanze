@@ -61,9 +61,9 @@ A density toggle switches between the default **Details** view and a **Compact**
 
 *The Compact grid.*
 
-## The tray icon
+## Tray indicators
 
-Separate filling bars show each provider’s highest-utilization window. macOS uses Cla/Cdx with optional percentages; Windows uses A/O beside the bars, with exact percentages in tooltips. Settings offers separate indicators (the default) or one highest-utilization indicator. Percentages default off. Either item opens the same popover and offers Open/Quit. A disabled Codex source hides its item; missing quota is neutral, and stale quota retains its last fill with a violet warning marker. Billing and activity failures stay in the popover. Utilization colors use the shared green/yellow/orange/red thresholds at 50/75/90 percent. Hover to see which window drives the fill.
+Separate filling bars show each provider’s highest-utilization window. macOS uses Cla/Cdx with optional percentages; Windows uses A/O beside the bars, with exact percentages in tooltips. Open **Settings > Tray indicators > Provider display** and choose **Separate providers** (the default) or **Highest utilization** for one indicator. On macOS, enable **Show percentages in the menu bar** for exact numbers beside Cla/Cdx. Percentages default off. Either item opens the same popover and offers Open/Quit. A disabled Codex source hides its item; missing quota is neutral, and stale quota retains its last fill with a violet warning marker. Billing and activity failures stay in the popover. Utilization colors use the shared green/yellow/orange/red thresholds at 50/75/90 percent. Hover to see which window drives the fill.
 
 ## Connecting OpenAI
 

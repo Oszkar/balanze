@@ -138,7 +138,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 bun run check                                  # svelte-check + tsc
 
-# Desktop app - gauge tray icon + live popover:
+# Desktop app - provider tray bars + live popover:
 bun install                                    # also installs git hooks (see below)
 bun run tauri dev
 
@@ -162,7 +162,7 @@ If you only want the CLI on Linux, never run a `--workspace` build and you will 
 
 The workspace separates provider readers, domain math, snapshot composition, and platform glue. Start with the crate map and twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). [`AGENTS.md`](AGENTS.md) owns implementation rules and validation; [`docs/PRD.md`](docs/PRD.md) owns product scope and the roadmap.
 
-Hitting a wall? [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) collects the non-obvious traps (double tray icons, JSONL CPU spikes, Tauri dep-version mismatches). Test discipline and the per-crate validation matrix live in `AGENTS.md` §6-§7.
+Hitting a wall? [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) collects the non-obvious traps (unexpected duplicate indicators, JSONL CPU spikes, Tauri dep-version mismatches). Test discipline and the per-crate validation matrix live in `AGENTS.md` §6-§7.
 
 ## Contributing
 
