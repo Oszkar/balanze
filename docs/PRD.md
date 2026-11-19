@@ -273,11 +273,11 @@ Historical details and implementation rationale live in the [CHANGELOG](../CHANG
 
 Make utilization and provider identity useful without opening the popover.
 
-- **Utilization icon and provider modes** ([#295](https://github.com/Oszkar/balanze/issues/295)). Compare a filling square/bar and a circular gauge at actual tray sizes. Offer a user setting for one most-constrained indicator or separate Claude/Codex indicators. The maintainer prefers seeing both. One shared icon versus separate tray icons, the default mode, and which window drives each provider remain design decisions.
-- **Compact macOS text** ([#296](https://github.com/Oszkar/balanze/issues/296)). Replace the space-heavy fully spelled-out provider text with a compact presentation. Evaluate short provider labels and optional percentages/icon-only display in a realistically crowded menu bar; exact options remain open.
+- **Utilization icon and provider modes** ([#295](https://github.com/Oszkar/balanze/issues/295)). Approved: separate filling bars by default, each using its provider’s highest-utilization window, with an optional combined mode. Windows uses A/O beside each bar. Native Windows visual validation remains pending.
+- **Compact macOS text** ([#296](https://github.com/Oszkar/balanze/issues/296)). Approved: Cla/Cdx identities beside the bars, with percentages off by default and available in Settings.
 - **Consistent passive urgency** ([#263](https://github.com/Oszkar/balanze/issues/263)). Define how quota severity, pace, stale data, and source errors interact across surfaces, with intentional differences documented and representative parity coverage. Passive indicators are distinct from OS notifications.
 
-Done when utilization magnitude and provider identity are readable at native Windows/macOS tray sizes, users can select combined or separate provider presentation, macOS text is materially shorter, and missing/stale/error states remain honest. Preserve deduped repainting. Settings/schema/capability and architecture details still require the normal design review before implementation.
+Done when utilization magnitude and provider identity are readable at native Windows/macOS tray sizes, users can select combined or separate provider presentation, macOS text is materially shorter, and missing/stale/error states remain honest. Preserve deduped repainting. The additive tray settings and two-item lifecycle are approved; native interaction and Windows readability checks remain release gates.
 
 OS notifications, broad theming, and multi-environment aggregation are outside this release. The broad presentation refactor in [#232](https://github.com/Oszkar/balanze/issues/232) needs re-audit against shipped fixes; it is not automatically a prerequisite for either release.
 
@@ -297,8 +297,10 @@ The Vite development-server issue ([#136](https://github.com/Oszkar/balanze/issu
 
 ## Open decisions
 
-- Which tray geometry remains legible at native sizes, and should separate providers use separate icons?
-- Which window drives each provider's indicator, how are ties handled, and how do stale/error states interact with utilization?
-- What compact macOS text options and default best balance identity, information, and width?
+- Do the selected A/O bars remain readable across native Windows scaling, themes, and the overflow area? Native validation is pending.
 - For host/WSL shared accounts, what collection mechanism yields fresh quotas and complete activity without duplicate records or additional provider traffic?
 - After v0.6, what concrete readiness criteria remain for v1.0?
+
+## Tray presentation settings
+
+Separate filling bars show each provider’s highest-utilization window. macOS uses Cla/Cdx with optional percentages; Windows uses A/O beside the bars, with exact percentages in tooltips. Settings offers separate indicators (the default) or one highest-utilization indicator. Percentages default off. Either item opens the same popover and offers Open/Quit. A disabled Codex source hides its item; missing quota is neutral, and stale quota retains its last fill with a violet warning marker. Billing and activity failures stay in the popover. Combined mode compares raw utilization, with Codex winning ties, and flags degradation in either participating quota provider. The [approved spec and native checklist](prototypes/tray-indicators-spec.md) record the remaining validation.

@@ -19,7 +19,9 @@ Balanze names each situation instead of blanking a cell.
 
 ## The tray icon is missing, duplicated, or flickering
 
-First check the Windows hidden-icons area or whether the macOS menu bar is crowded. If the icon is still missing, duplicated, or repeatedly flickering, please [file an issue](https://github.com/Oszkar/balanze/issues/new) with your OS and version and the Balanze version from `balanze-cli --version`.
+Two indicators are expected with **Separate providers** selected in Settings > Tray indicators: Cla/Cdx on macOS, A/O on Windows. Choose **Highest utilization** for one indicator. Disabling Codex scanning hides its separate item.
+
+For an unexpectedly missing or duplicated indicator, first check the Windows hidden-icons area or whether the macOS menu bar is crowded. If the icon is still missing, duplicated, or repeatedly flickering, please [file an issue](https://github.com/Oszkar/balanze/issues/new) with your OS and version and the Balanze version from `balanze-cli --version`.
 
 ## The statusline is wired but my Claude Code prompt is blank (Windows)
 

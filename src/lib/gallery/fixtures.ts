@@ -377,6 +377,7 @@ export const DEMO_SETTINGS: Settings = {
   providers: { openai_enabled: true, anthropic_enabled: true, codex_enabled: true },
   oauth_poll_interval_secs: 300,
   seen_welcome: true,
+  tray: { mode: 'separate', show_percentages: false },
 };
 
 export const DEMO_STATUSLINE: StatuslineWire = {

@@ -161,6 +161,9 @@ struct PublishingSink<S> {
 }
 
 impl<S: Sink> Sink for PublishingSink<S> {
+    fn on_settings(&mut self, settings: &Settings) {
+        self.inner.on_settings(settings);
+    }
     fn on_snapshot(&mut self, snapshot: &Snapshot) {
         if let Some(publisher) = &mut self.publisher {
             publisher.publish(snapshot);
@@ -352,6 +355,7 @@ fn handle_msg<S: Sink>(state: &mut CoordinatorState, sink: &mut S, msg: StateMsg
             if !p.codex_enabled {
                 clear_source(&mut state.snapshot, Source::CodexQuota);
             }
+            sink.on_settings(&s);
             state.last_settings = Some(*s);
             state.active_generation = generation;
             let now = Utc::now();
@@ -1382,6 +1386,36 @@ mod tests {
         apply_settings(&handle, s, 1).await;
         // Followed by a Query to confirm the actor is still alive and processing:
         let _ = handle.query().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn committed_tray_preferences_reach_sink_before_snapshot_and_ack() {
+        struct OrderedSink(Arc<Mutex<Vec<String>>>);
+        impl Sink for OrderedSink {
+            fn on_settings(&mut self, settings: &Settings) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(format!("settings:{:?}", settings.tray.mode));
+            }
+            fn on_snapshot(&mut self, _: &Snapshot) {
+                self.0.lock().unwrap().push("snapshot".into());
+            }
+            fn on_degraded(&mut self, _: Source, _: &str) {}
+        }
+        let events = Arc::new(Mutex::new(Vec::new()));
+        // Exercise forwarding through the same wrapper used with durable snapshots.
+        let sink = PublishingSink {
+            inner: OrderedSink(events.clone()),
+            publisher: None,
+        };
+        let (handle, join) = spawn(sink);
+        let mut settings = Settings::default();
+        settings.tray.mode = settings::TrayMode::Combined;
+        apply_settings(&handle, settings, 1).await;
+        assert_eq!(*events.lock().unwrap(), ["settings:Combined", "snapshot"]);
+        drop(handle);
+        join.await.unwrap();
     }
 
     #[tokio::test]

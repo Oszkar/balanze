@@ -4,15 +4,15 @@ Non-obvious traps when working *on* Balanze. Entries here prescribe code and con
 
 **Using Balanze rather than building it?** The user-facing answers are in the [FAQ](https://oszkar.github.io/balanze/faq.html).
 
-## "Tray icon doesn't appear" or "two tray icons in the menu bar"
+## "Tray icon doesn't appear" or unexpected duplicate indicators
 
-The double-tray-icon trap: `tauri.conf.json` declares a default tray with id `"main"`, and code in `lib.rs` creates a second tray via `TrayIconBuilder::new()`. The handler attaches to the invisible second icon; the visible one receives clicks that go nowhere.
+Two items are expected in separate mode while Codex scanning is enabled: Claude uses the configured `main` item and Codex uses the dynamically created `codex` item. Combined mode has only `main`; disabling Codex removes its separate item. Check Settings > Tray indicators before diagnosing duplicates.
 
-Attach the handler to `app.tray_by_id("main")`, handling a missing tray explicitly. Reuse the existing tray rather than creating a second one; see `src-tauri/src/lib.rs`.
+Do not create another anonymous tray alongside these named items. The painter owns Codex creation/removal, and app-scoped click/menu handlers register once in `setup_tray`. Repeated mode changes must not append handlers. Inspect `app.tray_by_id("main")` and `app.tray_by_id("codex")` and the painter retry logs when an expected item is absent; see `src-tauri/src/{lib,tray_icon}.rs`.
 
 ## "macOS tray click events don't fire"
 
-If the handler is attached correctly (above) and clicks still don't fire on macOS, check `iconAsTemplate` in `tauri.conf.json`. Template-mode icons can interact strangely with click events on certain macOS versions. Balanze's tray icon should have `iconAsTemplate: false` (the color gauge IS the signal; we don't want macOS inverting it).
+If the handler is attached correctly (above) and clicks still don't fire on macOS, check `iconAsTemplate` in `tauri.conf.json`. Template-mode icons can interact strangely with click events on certain macOS versions. Balanze's tray icon should have `iconAsTemplate: false` (the colored utilization bar is part of the signal; we don't want macOS inverting it).
 
 ## "JSONL parser eats 100% CPU during an active Claude session"
 

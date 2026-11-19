@@ -15,7 +15,7 @@
     getLaunchAtLogin,
     setLaunchAtLogin,
   } from '#lib/ipc.ts';
-  import type { Settings, StatuslineWire } from '#lib/types/settings.ts';
+  import type { Settings, StatuslineWire, TraySettings } from '#lib/types/settings.ts';
 
   let { onBack }: { onBack: () => void } = $props();
 
@@ -29,6 +29,7 @@
   let canSaveAnyway = $state(false);
   let confirmingReplace = $state(false);
   let launchAtLogin = $state(false);
+  const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
   async function load() {
     try {
@@ -184,6 +185,21 @@
       await load();
     } catch (e) {
       status = `Remove failed: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function updateTray(patch: Partial<TraySettings>) {
+    const current = settings;
+    if (!current) return;
+    busy = true;
+    status = null;
+    try {
+      settings = await setSettings({ tray: patch });
+    } catch (e) {
+      status = `Save failed: ${e}`;
+      settings = { ...current };
     } finally {
       busy = false;
     }
@@ -379,6 +395,28 @@
     </div>
 
     <div class="connector">
+      <div class="chd"><span class="title">Tray indicators</span></div>
+      <label class="toggle">
+        <span>Provider display</span>
+        <select aria-label="Tray provider display" value={settings.tray.mode} disabled={busy}
+          onchange={(e) => updateTray({ mode: e.currentTarget.value as TraySettings['mode'] })}>
+          <option value="separate">Separate providers</option>
+          <option value="combined">Highest utilization</option>
+        </select>
+      </label>
+      <div class="hint">Each bar shows the provider's highest-utilization quota window. Hover for the window and exact percentage.</div>
+      {#if isMac}
+        <label class="toggle">
+          <input type="checkbox" checked={settings.tray.show_percentages} disabled={busy}
+            onchange={(e) => updateTray({ show_percentages: e.currentTarget.checked })} />
+          <span>Show percentages in the menu bar</span>
+        </label>
+      {:else}
+        <div class="hint">A identifies Anthropic's Claude quota; O identifies OpenAI's Codex quota. Percentages appear in tooltips.</div>
+      {/if}
+    </div>
+
+    <div class="connector">
       <div class="chd">
         <span class="title">General</span>
       </div>
@@ -403,6 +441,7 @@
 </div>
 
 <style>
+  select { color: var(--ink); background: var(--paper); border: 1px solid var(--hair); border-radius: 4px; padding: 5px; font: inherit; max-width: 180px; }
   .settings { padding: var(--sp-4) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
   .hd { display: flex; align-items: center; gap: var(--sp-2); }
   .back { display: inline-grid; place-items: center; min-width: var(--control-target-min); min-height: var(--control-target-min); background: none; border: none; color: var(--faint); cursor: pointer; font-size: var(--text-md); padding: 2px var(--sp-1); border-radius: 4px; }

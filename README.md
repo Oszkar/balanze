@@ -138,7 +138,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 bun run check                                  # svelte-check + tsc
 
-# Desktop app - gauge tray icon + live popover:
+# Desktop app - provider tray bars + live popover:
 bun install                                    # also installs git hooks (see below)
 bun run tauri dev
 
@@ -162,7 +162,7 @@ If you only want the CLI on Linux, never run a `--workspace` build and you will 
 
 The workspace separates provider readers, domain math, snapshot composition, and platform glue. Start with the crate map and twelve boundaries in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). [`AGENTS.md`](AGENTS.md) owns implementation rules and validation; [`docs/PRD.md`](docs/PRD.md) owns product scope and the roadmap.
 
-Hitting a wall? [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) collects the non-obvious traps (double tray icons, JSONL CPU spikes, Tauri dep-version mismatches). Test discipline and the per-crate validation matrix live in `AGENTS.md` §6-§7.
+Hitting a wall? [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) collects the non-obvious traps (unexpected duplicate indicators, JSONL CPU spikes, Tauri dep-version mismatches). Test discipline and the per-crate validation matrix live in `AGENTS.md` §6-§7.
 
 ## Contributing
 
@@ -171,3 +171,7 @@ Not actively soliciting contributions yet - this is a personal tool first. Found
 ## License
 
 MIT - see `LICENSE`.
+
+## Tray presentation settings
+
+Separate filling bars show each provider’s highest-utilization window. macOS uses Cla/Cdx with optional percentages; Windows uses A/O beside the bars, with exact percentages in tooltips. Settings offers separate indicators (the default) or one highest-utilization indicator. Percentages default off. Either item opens the same popover and offers Open/Quit. A disabled Codex source hides its item; missing quota is neutral, and stale quota retains its last fill with a violet warning marker. Billing and activity failures stay in the popover.

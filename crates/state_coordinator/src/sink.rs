@@ -13,6 +13,10 @@ use crate::messages::Source;
 use crate::snapshot::Snapshot;
 
 pub trait Sink: Send + 'static {
+    /// Committed preferences, delivered before the generation's snapshot.
+    /// Presentation adapters may retain them; this never mutates canonical state.
+    fn on_settings(&mut self, _settings: &settings::Settings) {}
+
     /// Called after a successful merge into the snapshot. Implementations that
     /// enqueue repaints should dedup their target before sending it to a worker.
     fn on_snapshot(&mut self, snapshot: &Snapshot);
@@ -24,8 +28,8 @@ pub trait Sink: Send + 'static {
         self.on_snapshot(snapshot);
     }
 
-    /// Called when snapshot state must be durably published without notifying
-    /// presentation sinks. Error-slot transitions use this path so
+    /// Called when error-slot state must be durably published. Adapters may
+    /// repaint indicators without emitting a usage event. This path ensures
     /// `snapshot.json` stays current without re-emitting an unchanged data
     /// snapshot to the frontend on every failed provider poll.
     fn on_snapshot_durable(&mut self, _snapshot: &Snapshot) {}
