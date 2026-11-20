@@ -5,7 +5,9 @@
 //! No `tokio::spawn`, no `reqwest`, no logging above `debug`. Orchestration
 //! (file scanning, error fan-out, display) belongs in the caller.
 
+mod anthropic_selection;
 mod labels;
+pub use anthropic_selection::{AnthropicWindows, select_anthropic_windows};
 pub use labels::anthropic_label;
 
 use std::collections::BTreeMap;

@@ -93,13 +93,26 @@ export function anthropicWindowLabel(w: Pick<AnthropicSourceWindow, 'key' | 'lab
   return (expanded ? longLabels : labels)[w.key] ?? w.label;
 }
 
+/** Mirrors window::select_anthropic_windows, including first-on-tie behavior. */
+export function selectAnthropicWindows<T extends { key: string; pct: number }>(windows: T[]): { five: T | null; other: T | null; weekly: T | null } {
+  let five: T | null = null;
+  let other: T | null = null;
+  let weekly: T | null = null;
+  for (const w of windows) {
+    if (w.key === 'five_hour') {
+      five ??= w;
+    } else {
+      if (!other || w.pct > other.pct) other = w;
+      if ((w.key === 'seven_day' || w.key.startsWith('seven_day_')) && (!weekly || w.pct > weekly.pct)) weekly = w;
+    }
+  }
+  return { five, other, weekly };
+}
+
 export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
   const selected = anthropicSourceView(s);
   if (!selected) return null;
-  const five = selected.windows.find((w) => w.key === 'five_hour') ?? null;
-  const seven = selected.windows
-    .filter((w) => w.key !== 'five_hour')
-    .reduce<AnthropicSourceWindow | null>((worst, w) => !worst || w.pct > worst.pct ? w : worst, null);
+  const { five, other: seven } = selectAnthropicWindows(selected.windows);
   const headline = five ?? seven;
   if (!headline) return null;
   return {

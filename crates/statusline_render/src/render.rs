@@ -194,19 +194,13 @@ fn render_usage(input: &RenderInput) -> Option<String> {
     let rl = input.snapshot.rate_limits.as_ref()?;
     let c = &input.config.segments.usage;
     let mut windows: Vec<String> = Vec::new();
-    let five = rl.windows.iter().find(|w| w.key == "five_hour");
-    let weekly = rl
-        .windows
-        .iter()
-        .filter(|w| w.key != "five_hour")
-        // Match the other surfaces: compare raw percentages and retain the first tie.
-        .reduce(|first, candidate| {
-            if candidate.used_percent > first.used_percent {
-                candidate
-            } else {
-                first
-            }
-        });
+    let selected = window::select_anthropic_windows(
+        rl.windows
+            .iter()
+            .map(|w| (w, w.key.as_str(), w.used_percent)),
+    );
+    let five = selected.five_hour;
+    let weekly = selected.other;
     if let Some(w) = five {
         windows.push(render_window(
             "✳️ 5h",
@@ -489,6 +483,32 @@ mod tests {
             model_display_name: Some("Opus".to_string()),
             context_used_percent: Some(42.0),
         }
+    }
+
+    #[test]
+    fn usage_keeps_live_first_five_and_worst_unknown_window() {
+        let mut snapshot = snap();
+        let windows = &mut snapshot.rate_limits.as_mut().unwrap().windows;
+        let mut duplicate = windows[0].clone();
+        duplicate.used_percent = 99.0;
+        windows.push(duplicate);
+        let mut unknown = windows[1].clone();
+        unknown.key = "monthly_unknown".into();
+        unknown.label = "Monthly".into();
+        unknown.used_percent = 95.0;
+        windows.push(unknown);
+        let config = cfg();
+        let output = render_usage(&RenderInput {
+            snapshot: &snapshot,
+            cross: None,
+            config: &config,
+            now: now(),
+            color: false,
+        })
+        .unwrap();
+        assert!(output.contains("5h 82%"), "{output}");
+        assert!(output.contains("Monthly 95%"), "{output}");
+        assert!(!output.contains("99%"), "{output}");
     }
 
     #[test]

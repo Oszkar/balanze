@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { anthropicWindowLabel, quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, codexCreditsLabel, classifyOverage, matchingAnthropicPace, openAiCostCell, overageCell } from './quota';
+import { anthropicWindowLabel, quotaTone, anthropicQuota, anthropicSourceView, selectAnthropicWindows, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, codexCreditsLabel, classifyOverage, matchingAnthropicPace, openAiCostCell, overageCell } from './quota';
 import type { Snapshot, ExtraUsage } from '../types/snapshot';
 import policy from '../../../tests/fixtures/presentation-policy.json';
 import alerts from '../../../tests/fixtures/alert-parity.csv?raw';
@@ -17,6 +17,15 @@ const base: Snapshot = {
 };
 
 describe('quota', () => {
+  it('selects Anthropic slots using shared selection cases', () => {
+    for (const test of policy.anthropicSelections) {
+      const windows = test.windows.map((w) => ({ key: w.key, pct: w.percent }));
+      const selected = selectAnthropicWindows(windows);
+      for (const slot of ['five', 'other', 'weekly'] as const) {
+        expect(selected[slot], `${test.name}: ${slot}`).toBe(test[slot] === null ? null : windows[test[slot]]);
+      }
+    }
+  });
   it('uses the shared alert scenarios for quota tone and stale pace suppression', () => {
     for (const line of alerts.trim().split('\n').slice(1)) {
       const [name, value, staleText, ratioText, , severity] = line.split(',');

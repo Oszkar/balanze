@@ -26,6 +26,7 @@
 mod coordinator;
 mod jsonl;
 mod messages;
+mod presentation;
 mod sink;
 mod sink_file;
 mod snapshot;
@@ -39,6 +40,9 @@ pub use coordinator::{StateCoordinatorHandle, spawn, spawn_with_optional_file};
 pub use jsonl::{JsonlCells, summarize_jsonl};
 pub use messages::{
     ClaudeJsonlInput, Source, SourcePartial, SourceUpdate, StateMsg, WatcherGeneration,
+};
+pub use presentation::{
+    AnthropicPresentation, AnthropicPresentationSource, AnthropicPresentationWindow,
 };
 pub use sink::{LogSink, NullSink, Sink};
 pub use snapshot::{

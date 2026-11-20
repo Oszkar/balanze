@@ -1,4 +1,11 @@
 {
+  "anthropicSelections": [
+    { "name": "empty", "windows": [], "five": null, "other": null, "weekly": null },
+    { "name": "five only", "windows": [{"key":"five_hour","percent":20}], "five": 0, "other": null, "weekly": null },
+    { "name": "unknown versus weekly", "windows": [{"key":"five_hour","percent":20},{"key":"seven_day","percent":60},{"key":"monthly_unknown","percent":80}], "five": 0, "other": 2, "weekly": 1 },
+    { "name": "first duplicates and ties", "windows": [{"key":"five_hour","percent":20},{"key":"five_hour","percent":90},{"key":"seven_day_opus","percent":60},{"key":"seven_day","percent":60}], "five": 0, "other": 2, "weekly": 2 },
+    { "name": "only unknown", "windows": [{"key":"monthly_unknown","percent":50}], "five": null, "other": 0, "weekly": null }
+  ],
   "anthropicLabels": [
     {
       "key": "five_hour",

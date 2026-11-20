@@ -4,7 +4,7 @@
 //! provider identity, fill, state, title, and tooltip per AGENTS.md §3.1.
 
 use serde::Serialize;
-use state_coordinator::{AnthropicQuotaSource, Sink, Snapshot, Source};
+use state_coordinator::{Sink, Snapshot, Source};
 use tauri::{AppHandle, Emitter};
 
 use crate::tray_icon;
@@ -98,61 +98,14 @@ fn fold_labeled_max<'a>(slot: &mut Option<(&'a str, f32)>, value: (&'a str, f32)
 impl<'a> TrayView<'a> {
     fn from_snapshot(s: &'a Snapshot) -> Self {
         let mut v = TrayView::default();
-        match s.anthropic_quota_source() {
-            Some(AnthropicQuotaSource::OAuth { snapshot: o, stale }) => {
-                v.claude_stale = stale;
-                for c in &o.cadences {
-                    if c.key == "seven_day" || c.key.starts_with("seven_day_") {
-                        fold_labeled_max(
-                            &mut v.claude_weekly,
-                            (
-                                window::anthropic_label(&c.key, &c.display_label, false),
-                                c.utilization_percent,
-                            ),
-                        );
-                    }
-                    if c.key == "five_hour" {
-                        fold_max(&mut v.claude_5h, c.utilization_percent);
-                    } else {
-                        fold_labeled_max(
-                            &mut v.claude_7d,
-                            (
-                                window::anthropic_label(&c.key, &c.display_label, false),
-                                c.utilization_percent,
-                            ),
-                        );
-                    }
-                }
-            }
-            Some(AnthropicQuotaSource::Statusline {
-                rate_limits: rl,
-                stale,
-            }) => {
-                v.claude_stale = stale;
-                for w in &rl.windows {
-                    if w.key == "seven_day" || w.key.starts_with("seven_day_") {
-                        fold_labeled_max(
-                            &mut v.claude_weekly,
-                            (
-                                window::anthropic_label(&w.key, &w.label, false),
-                                w.used_percent,
-                            ),
-                        );
-                    }
-                    if w.key == "five_hour" {
-                        fold_max(&mut v.claude_5h, w.used_percent);
-                    } else {
-                        fold_labeled_max(
-                            &mut v.claude_7d,
-                            (
-                                window::anthropic_label(&w.key, &w.label, false),
-                                w.used_percent,
-                            ),
-                        );
-                    }
-                }
-            }
-            None => {}
+        if let Some(view) = s.anthropic_presentation() {
+            v.claude_stale = view.stale;
+            v.claude_5h = view.windows.five_hour.map(|w| w.percent);
+            let labeled = |w: state_coordinator::AnthropicPresentationWindow<'a>| {
+                (window::anthropic_label(w.key, w.label, false), w.percent)
+            };
+            v.claude_7d = view.windows.other.map(labeled);
+            v.claude_weekly = view.windows.weekly.map(labeled);
         }
         if let Some(q) = &s.codex_quota {
             // Keep the same last-known values every other surface shows, but
@@ -685,6 +638,26 @@ mod tests {
         s.openai_error = Some("billing failed".into());
         s.claude_jsonl_error = Some("activity failed".into());
         assert_eq!(before, paint_targets(&s, &settings));
+    }
+
+    #[test]
+    fn anthropic_slots_keep_first_five_and_distinguish_weekly_from_unknown() {
+        let mut snapshot = Snapshot::empty(chrono::Utc::now());
+        let mut oauth = fresh_oauth(20.0, 60.0);
+        let mut duplicate = oauth.cadences[0].clone();
+        duplicate.utilization_percent = 90.0;
+        oauth.cadences.push(duplicate);
+        let mut unknown = oauth.cadences[1].clone();
+        unknown.key = "monthly_unknown".into();
+        unknown.display_label = "Monthly".into();
+        unknown.utilization_percent = 80.0;
+        oauth.cadences.push(unknown);
+        snapshot.fetched_at = oauth.fetched_at;
+        snapshot.claude_oauth = Some(oauth);
+        let view = TrayView::from_snapshot(&snapshot);
+        assert_eq!(view.claude_5h, Some(20.0));
+        assert_eq!(view.claude_7d, Some(("Monthly", 80.0)));
+        assert_eq!(view.claude_weekly, Some(("7d", 60.0)));
     }
 
     #[test]
