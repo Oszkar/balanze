@@ -1,6 +1,6 @@
 [package]
 name = "redact"
-description = "Pure secret-shaped substring redaction (sk- keys, Bearer tokens) shared by the provider HTTP clients and the diagnostics bundle. No dependencies. AGENTS.md §3.4."
+description = "Pure secret-shaped substring redaction (sk- keys, Bearer tokens) used by the provider HTTP clients to sanitize error bodies. No dependencies. AGENTS.md §3.4."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

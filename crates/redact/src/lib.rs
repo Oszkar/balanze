@@ -1,17 +1,35 @@
-//! Secret-shaped substring redaction (AGENTS.md §3.4). Shared by the provider
-//! HTTP clients (error bodies that reach `Display`, logs, and the UI) and the
-//! diagnostics bundle. Pure and dependency-free so neither caller pulls in the
-//! other's dependencies.
+//! Secret-shaped substring redaction (AGENTS.md §3.4): masks `sk-` API keys and
+//! `Bearer` tokens in untrusted text. Used by the provider HTTP clients to
+//! sanitize error bodies before they reach `Display`, logs, and the UI. Pure
+//! and dependency-free.
 
 /// Display cap used by [`redact_for_display`].
 pub const DISPLAY_MAX_CHARS: usize = 500;
 
 struct Pattern {
     prefix: &'static str,
+    /// Match `prefix` ignoring ASCII case (the prefix itself must be ASCII).
+    ignore_ascii_case: bool,
     /// Minimum token length after `prefix` for the run to count as a secret.
     min_len: usize,
     marker: &'static str,
     is_token_char: fn(char) -> bool,
+}
+
+impl Pattern {
+    /// Absolute byte offset of the first match at or after `from`.
+    fn find_from(&self, text: &str, from: usize) -> Option<usize> {
+        let hay = &text[from..];
+        if self.ignore_ascii_case {
+            let needle = self.prefix.as_bytes();
+            hay.as_bytes()
+                .windows(needle.len())
+                .position(|w| w.eq_ignore_ascii_case(needle))
+                .map(|i| from + i)
+        } else {
+            hay.find(self.prefix).map(|i| from + i)
+        }
+    }
 }
 
 fn key_char(c: char) -> bool {
@@ -23,15 +41,18 @@ fn bearer_char(c: char) -> bool {
 }
 
 /// `sk-` covers OpenAI keys and Anthropic OAuth tokens (`sk-ant-oat01-...`).
+/// The `Bearer` auth scheme is case-insensitive (RFC 7235).
 const PATTERNS: &[Pattern] = &[
     Pattern {
         prefix: "sk-",
+        ignore_ascii_case: false,
         min_len: 15,
         marker: "sk-...REDACTED",
         is_token_char: key_char,
     },
     Pattern {
         prefix: "Bearer ",
+        ignore_ascii_case: true,
         min_len: 20,
         marker: "Bearer ...REDACTED",
         is_token_char: bearer_char,
@@ -45,7 +66,8 @@ pub fn redact_secrets(text: &str) -> String {
     out
 }
 
-/// Redact, then cap at [`DISPLAY_MAX_CHARS`] characters with a
+/// Apply the same rules as [`redact_secrets`] (`sk-` keys and Bearer tokens),
+/// then cap at [`DISPLAY_MAX_CHARS`] characters with a
 /// `...[truncated, N bytes]` suffix. Only the displayed prefix is retained, so
 /// an oversized body never costs a second body-sized allocation, and a key
 /// crossing the display boundary is still classified as a whole.
@@ -59,34 +81,54 @@ pub fn redact_for_display(body: &str) -> String {
 }
 
 /// Returns `true` when output stopped at `max_chars` with input remaining.
+///
+/// Linear time: each pattern's next match is cached as an absolute offset and
+/// only re-searched once the cursor has moved past it, so no region of `text`
+/// is scanned more than once per pattern. Allocation-free beyond `out`.
 fn scan(text: &str, out: &mut String, max_chars: Option<usize>) -> bool {
     let mut count = 0usize;
-    let mut rest = text;
+    let mut pos = 0usize;
+    // `None` = never searched; `Some(None)` = no further match.
+    let mut next: [Option<Option<usize>>; PATTERNS.len()] = [None; PATTERNS.len()];
     loop {
         if max_chars == Some(count) {
-            return !rest.is_empty();
+            return pos < text.len();
         }
-        let next = PATTERNS
-            .iter()
-            .filter_map(|p| rest.find(p.prefix).map(|i| (i, p)))
-            .min_by_key(|(i, _)| *i);
-        let Some((idx, p)) = next else {
-            return push_bounded(out, &mut count, rest, max_chars);
+        let mut best: Option<(usize, &Pattern)> = None;
+        for (slot, p) in next.iter_mut().zip(PATTERNS) {
+            let found = match *slot {
+                Some(found @ None) => found,
+                Some(found @ Some(off)) if off >= pos => found,
+                _ => {
+                    let found = p.find_from(text, pos);
+                    *slot = Some(found);
+                    found
+                }
+            };
+            if let Some(off) = found
+                && best.is_none_or(|(b, _)| off < b)
+            {
+                best = Some((off, p));
+            }
+        }
+        let Some((idx, p)) = best else {
+            return push_bounded(out, &mut count, &text[pos..], max_chars);
         };
-        if push_bounded(out, &mut count, &rest[..idx], max_chars) {
+        if push_bounded(out, &mut count, &text[pos..idx], max_chars) {
             return true;
         }
-        let after = &rest[idx + p.prefix.len()..];
+        let after_start = idx + p.prefix.len();
+        let after = &text[after_start..];
         let len = after
             .find(|c: char| !(p.is_token_char)(c))
             .unwrap_or(after.len());
         let marker = if len >= p.min_len {
-            rest = &after[len..];
+            pos = after_start + len;
             p.marker
         } else {
-            // Not secret-shaped; emit the prefix verbatim and keep scanning.
-            rest = after;
-            p.prefix
+            // Not secret-shaped; emit the original prefix bytes and keep scanning.
+            pos = after_start;
+            &text[idx..after_start]
         };
         if push_bounded(out, &mut count, marker, max_chars) {
             return true;
@@ -94,8 +136,8 @@ fn scan(text: &str, out: &mut String, max_chars: Option<usize>) -> bool {
     }
 }
 
-/// Append `segment`, stopping at `max` chars. Returns `true` only when the cap
-/// was hit with part of `segment` still unwritten.
+/// Append `segment`, stopping at `max` chars (`None` means unbounded). Returns
+/// `true` only when the cap was hit with part of `segment` still unwritten.
 fn push_bounded(out: &mut String, count: &mut usize, segment: &str, max: Option<usize>) -> bool {
     let Some(max) = max else {
         out.push_str(segment);
@@ -261,5 +303,62 @@ mod tests {
             redact_secrets(&text),
             "a sk-...REDACTED b Bearer ...REDACTED c"
         );
+    }
+
+    #[test]
+    fn redact_for_display_masks_bearer_token() {
+        let body = format!("auth failed: Bearer {} end", "T".repeat(30));
+        let out = redact_for_display(&body);
+        assert_eq!(out, "auth failed: Bearer ...REDACTED end");
+        assert!(!out.contains("TTTT"));
+    }
+
+    #[test]
+    fn redact_for_display_masks_bearer_straddling_cap() {
+        let body = format!("{}Bearer {}", "x".repeat(490), "Z".repeat(40));
+        let out = redact_for_display(&body);
+        assert!(out.contains("...[truncated"), "got: {out}");
+        assert!(!out.contains('Z'), "token leaked: {out}");
+    }
+
+    #[test]
+    fn redact_secrets_masks_any_case_bearer_scheme() {
+        let token = "q".repeat(25);
+        assert_eq!(
+            redact_secrets(&format!("bearer {token}")),
+            "Bearer ...REDACTED"
+        );
+        assert_eq!(
+            redact_secrets(&format!("BEARER {token}")),
+            "Bearer ...REDACTED"
+        );
+    }
+
+    #[test]
+    fn redact_secrets_keeps_short_lowercase_bearer_verbatim() {
+        assert_eq!(
+            redact_secrets("bearer token missing"),
+            "bearer token missing"
+        );
+        assert_eq!(
+            redact_secrets("BEARER token missing"),
+            "BEARER token missing"
+        );
+    }
+
+    #[test]
+    fn redact_secrets_runs_in_linear_time() {
+        use std::time::{Duration, Instant};
+        for unit in ["Bearer ", "sk-1 "] {
+            let text = unit.repeat(1_000_000 / unit.len());
+            let start = Instant::now();
+            let out = redact_secrets(&text);
+            let elapsed = start.elapsed();
+            assert_eq!(out, text, "short runs must pass through unchanged");
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "{unit:?} took {elapsed:?}"
+            );
+        }
     }
 }
