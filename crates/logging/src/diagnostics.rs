@@ -52,18 +52,35 @@ fn fill(sources: &BundleSources, dir: &Path) -> io::Result<()> {
     let mut included = Vec::new();
     if let Some(log_dir) = &sources.log_dir {
         for name in log_file_names(log_dir)? {
-            copy_redacted(&log_dir.join(&name), &dir.join(&name))?;
-            included.push(name);
+            if copy_if_regular(&log_dir.join(&name), &dir.join(&name))? {
+                included.push(name);
+            }
         }
     }
-    if let Some(snapshot) = &sources.snapshot_path {
-        match copy_redacted(snapshot, &dir.join("snapshot.json")) {
-            Ok(()) => included.push("snapshot.json".to_string()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
-        }
+    if let Some(snapshot) = &sources.snapshot_path
+        && copy_if_regular(snapshot, &dir.join("snapshot.json"))?
+    {
+        included.push("snapshot.json".to_string());
     }
     fs::write(dir.join("README.txt"), readme(&included))
+}
+
+/// Copy `src` only if it is a regular file right now (not a symlink or
+/// directory). Returns `Ok(false)` when it is absent, vanished before the
+/// read (log rotation racing the click), or not a regular file; other errors
+/// propagate.
+fn copy_if_regular(src: &Path, dst: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(src) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        Ok(_) => return Ok(false),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    }
+    match copy_redacted(src, dst) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Sorted `balanze-*.log` regular files; a missing log dir is empty, not an error.
@@ -113,7 +130,7 @@ fn readme(included: &[String]) -> String {
     }
     s.push_str(
         "\nWhat these files contain:\n\
-         - Logs: up to the last 3 days of Balanze app and CLI log lines.\n\
+         - Logs: the most recent Balanze app and CLI log files (up to 3 per app).\n\
          - snapshot.json: the latest usage figures (quota percentages, spend,\n\
            token counts) and any source error messages.\n\
          - File paths in either may include your OS user name.\n\
@@ -210,6 +227,39 @@ mod tests {
         assert!(readme.contains("snapshot.json"));
         assert!(readme.contains("Nothing has been uploaded"));
         assert!(readme.contains("OS user name"));
+        assert!(readme.contains("Not included"));
+    }
+
+    #[test]
+    fn copy_redacted_on_missing_source_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = copy_redacted(&dir.path().join("gone.log"), &dir.path().join("out")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn copy_if_regular_skips_missing_and_copies_regular() {
+        let dir = tempfile::tempdir().unwrap();
+        let dst = dir.path().join("out");
+        assert!(!copy_if_regular(&dir.path().join("gone.log"), &dst).unwrap());
+        assert!(!dst.exists());
+        let src = dir.path().join("a.log");
+        fs::write(&src, "INFO ok\n").unwrap();
+        assert!(copy_if_regular(&src, &dst).unwrap());
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "INFO ok\n");
+    }
+
+    #[test]
+    fn non_regular_snapshot_is_skipped_and_bundle_succeeds() {
+        let (data, mut sources, dest) = setup();
+        let dir_snapshot = data.path().join("snapshot-dir").join("snapshot.json");
+        fs::create_dir_all(&dir_snapshot).unwrap();
+        sources.snapshot_path = Some(dir_snapshot);
+        let out = build_bundle(&sources, dest.path(), "s").unwrap();
+        assert!(!out.join("snapshot.json").exists());
+        let readme = fs::read_to_string(out.join("README.txt")).unwrap();
+        assert!(readme.contains("balanze-gui.2026-11-20.log"));
+        assert!(!readme.contains("  - snapshot.json"));
     }
 
     #[test]
