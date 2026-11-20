@@ -48,6 +48,6 @@ This is expected fallback behavior. See the [FAQ](https://oszkar.github.io/balan
 
 ## "`bun run tauri dev` hangs with `transport invoke timed out after 60000ms`"
 
-Tracked in [#136](https://github.com/Oszkar/balanze/issues/136). The issue records a Vite module-runner timeout while loading SvelteKit's development runtime, including reproduction without Tauri. Its current diagnosis distinguishes cached timeout failures from the still-unexplained slow initial transform; do not assume a Windows-only deadlock or an IPv4 fix.
+The closed [#136](https://github.com/Oszkar/balanze/issues/136) records an earlier Vite module-runner timeout while loading SvelteKit's development runtime, including reproduction without Tauri. If it recurs, capture current versions and reproduction details before assuming the same cause.
 
-Use the issue for reproduction evidence and upstream-fix status. Production builds do not use the development module runner: `bun run tauri build --no-bundle` produces a binary for desktop smoke testing. The SvelteKit-free states gallery (`bun run gallery`) is useful for component checks but does not test Tauri integration.
+Production builds do not use the development module runner: `bun run tauri build --no-bundle` produces a binary for desktop smoke testing. The SvelteKit-free states gallery (`bun run gallery`) is useful for component checks but does not test Tauri integration.

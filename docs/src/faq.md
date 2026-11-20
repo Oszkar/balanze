@@ -12,14 +12,14 @@ Balanze names each situation instead of blanking a cell.
   ![Quota cells showing loading skeletons](assets/guide/state-cold-start.png)
 - **Claude Code not detected** - a neutral "not configured" state, not an error. The tray stays neutral and raises no warning.
   ![Anthropic cells reading not detected in neutral styling, with no warning color](assets/guide/state-not-detected.png)
-- **Stale window** - a window that already reset degrades to a `stale` marker rather than showing a confidently-wrong number.
-  ![Codex cell marked stale instead of showing a number](assets/guide/state-stale-window.png)
+- **Stale window** - a window that already reset retains its last known value with a `stale` marker.
+  ![Codex cell with a stale marker](assets/guide/state-stale-window.png)
 - **Fetch error** - a failed source shows an error placeholder and raises the degraded-state banner naming the affected source.
   ![OpenAI cell showing an error placeholder above the degraded-state banner](assets/guide/state-fetch-error.png)
 
 ## The tray icon is missing, duplicated, or flickering
 
-Two indicators are expected with **Separate providers** selected in Settings > Tray indicators: Cla/Cdx on macOS, A/O on Windows. Choose **Highest utilization** for one indicator. Disabling Codex scanning hides its separate item.
+In unreleased builds from current source, two indicators are expected with **Separate providers** selected in Settings > Tray indicators: Cla/Cdx on macOS, A/O on Windows. Choose **Highest utilization** for one indicator. Disabling Codex scanning hides its separate item. The latest published release, v0.5.4, has one tray indicator.
 
 For an unexpectedly missing or duplicated indicator, first check the Windows hidden-icons area or whether the macOS menu bar is crowded. If the icon is still missing, duplicated, or repeatedly flickering, please [file an issue](https://github.com/Oszkar/balanze/issues/new) with your OS and version and the Balanze version from `balanze-cli --version`.
 

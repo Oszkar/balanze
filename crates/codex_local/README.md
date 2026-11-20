@@ -66,7 +66,7 @@ match read_codex_quota() {
   `watcher::tasks::safety::codex_update`. See the crate-level `lib.rs`
   docs for the full failure-mode mapping.
 
-## What's NOT in this crate (per spike findings)
+## What's not in this crate
 
 - **No dedup module.** Codex doesn't stream-duplicate events the way
   Anthropic does; there's no `(message_id, request_id)` shape to dedup

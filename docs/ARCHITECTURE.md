@@ -137,7 +137,7 @@ When no fresh `snapshot.json` exists, `balanze-cli statusline` still self-compos
 
 ## Alert presentation by surface
 
-The tray, the popover, and the CLI's `status` and `watch` read the same `state_coordinator::Snapshot`. The statusline is a **mixed-input** surface: its Claude segments render the live `claude_statusline::StatuslineSnapshot` that Claude Code pipes in on stdin, while its cross-provider segments (`codex`, `openai_cost`) come from `snapshot.json`, or are self-composed when that file is stale or missing. All of them share the same **meaning** for each signal. What differs is the paint, and in two places the precedence. This section records what ships, so that "shared" claims elsewhere stay honest and so the alerts work has a baseline to change deliberately.
+The tray, the popover, and the CLI's `status` and `watch` read the same `state_coordinator::Snapshot`. The statusline is a **mixed-input** surface: its Claude segments render the live `claude_statusline::StatuslineSnapshot` that Claude Code pipes in on stdin, while its cross-provider segments (`codex`, `openai_cost`) come from `snapshot.json`, or are self-composed when that file is stale or missing. Surfaces share the signal semantics below, with presentation differences and known inconsistencies recorded here.
 
 **Shared by construction** (one Rust implementation; the Svelte side mirrors it and `tests/fixtures/presentation-policy.json` pins the two together):
 

@@ -30,9 +30,6 @@
 </p>
 <p align="center"><sub>The tray popover - quota per cadence with a pace tick, real billed spend badged as such, and the subscription-leverage estimate kept deliberately outside the grid.</sub></p>
 
-<p align="center">
-  <img src="docs/src/assets/watch-tui.png" alt="balanze-cli watch - live cross-provider TUI" width="680">
-</p>
 <p align="center"><sub><code>balanze-cli watch</code> - a live, bounded TUI showing Anthropic and OpenAI usage side by side.</sub></p>
 
 ## What it does
@@ -57,6 +54,8 @@ Product scope and roadmap live in [`docs/PRD.md`](docs/PRD.md); architecture and
 **Full documentation:** [oszkar.github.io/balanze](https://oszkar.github.io/balanze/) - install detail, the user guide, the CLI reference, and the FAQ.
 
 Quota labels identify the same window across the tray, popover, CLI, and statusline. Compact views use labels such as `5h` and `7d-opus`; Cards and sections use `5-hour` and `7-day Opus`. Unknown Anthropic windows keep their supplied label; unclassified Codex durations read `window`.
+
+**Unreleased:** Builds from current source add separate Claude and Codex tray indicators and an optional combined indicator. See the [tray guide](https://oszkar.github.io/balanze/GUIDE.html#tray-indicators) for details. The latest published release, v0.5.4, uses one indicator.
 
 ## Install
 
@@ -171,9 +170,3 @@ Not actively soliciting contributions yet - this is a personal tool first. Found
 ## License
 
 MIT - see `LICENSE`.
-
-## Tray presentation settings
-
-Separate filling bars show each provider’s highest-utilization window. macOS uses Cla/Cdx with optional percentages; Windows uses A/O beside the bars, with exact percentages in tooltips. Settings offers separate indicators (the default) or one highest-utilization indicator. Percentages default off. Either item opens the same popover and offers Open/Quit. A disabled Codex source hides its item; missing quota is neutral, and stale quota retains its last fill with a violet warning marker. Billing and activity failures stay in the popover.
-
-Tray preference saves preserve active provider polling schedules, credential cooldowns, and local parsing state. Polling configuration and API-key changes still use acknowledged watcher replacement. Failed settings saves reconcile controls with persisted settings because live application can fail after the disk commit.
