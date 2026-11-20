@@ -2,9 +2,9 @@
 
 ## Overview
 
-Balanze is a desktop utility for tracking personal AI usage across multiple providers in one place. The initial target is a tray-first desktop app built with Tauri 2 and Rust for Windows 11 and macOS 15+, with Ubuntu 24.04 LTS+ on GNOME added in a later phase.
+Balanze is a tray-first desktop utility for tracking personal AI usage across providers. It runs on Windows 11 and macOS 15+; its CLI also runs on Linux. Ubuntu GNOME desktop support is uncommitted.
 
-The goal is simple: reduce the friction of checking multiple tools, tabs, billing pages and account surfaces to answer a few recurring questions - How much of Claude has been used today? How much OpenAI API credit remains? When does a limit reset? How close is the current account to budget or cap?
+The goal is to reduce the friction of checking quota, reset times, and billed API spend across tools and account surfaces. A reported Codex credits balance is shown when available; OpenAI API credit balances are not currently provided.
 
 This is a side project, so the product should optimize for usefulness, low maintenance, and tight scope.
 
@@ -71,7 +71,7 @@ A small team or technically inclined individual who wants a local dashboard and 
 - A mature CLI surface (status, watch live-TUI, doctor, export, completions/man, exit-code taxonomy) - also the Linux story.
 - A productized, cross-provider Claude Code statusline (v0.4.2).
 - Provider connectors for OpenAI and Anthropic.
-- Unified account list across subscription and API account types.
+- A unified view of available subscription quota and API billing data.
 - Periodic background refresh and a manual display refresh using the latest known snapshot; on-demand provider polling is not implemented.
 - Local secure storage for credentials and preferences. (Durable history is deferred until a concrete consumer needs it; CLI `export` re-derives history from JSONL statelessly.)
 - Runnable distribution: downloadable binaries, no Rust toolchain required (v0.5).
@@ -114,11 +114,11 @@ Revisit if the project ever incorporates in an eligible jurisdiction, or if [Sig
 
 ## Key use cases
 
-- See all major AI accounts and balances in one glance.
+- See available provider quota and billed spend in one glance.
 - Check Claude subscription usage and reset timing without opening the web app, where reliable data is available.
 - Check the currently consumed subscription usage vs. the currently elapsed time in the time window.
-- Check OpenAI API spend and remaining credits quickly.
-- Get notified when nearing a usage limit or spending threshold.
+- Check OpenAI API spend and a reported Codex credits balance.
+- Eventually, get notified when nearing a usage limit or spending threshold.
 - Compare current billing-cycle usage across providers.
 
 ## Core user experience
@@ -134,14 +134,6 @@ The current compact views should prioritize:
 3. Remaining credits or estimated remaining quota.
 4. Reset time or billing-cycle progress.
 5. Alerts.
-
-The (future) full dashboard should add:
-
-- Per-provider detail pages.
-- Account source and confidence indicators.
-- Settings, connectors and troubleshooting.
-- Token usage and trends.
-- Deeper cost analysis.
 
 ## Functional requirements
 
@@ -209,7 +201,7 @@ Candidate notifications for a later release, subject to reliable source data and
 ## UX requirements
 
 - The compact popup should open fast and be glanceable in under 5 seconds.
-- The tray or menu-bar state should communicate utilization magnitude, with configurable combined or separate provider indicators planned for v0.6.
+- The tray or menu-bar state should communicate utilization magnitude, with configurable combined or separate provider indicators in the unreleased build.
 - Visual design should remain functional and lightweight rather than dashboard-heavy.
 - Users should understand at a glance what is official data versus inferred data.
 
@@ -255,31 +247,16 @@ Engineering bar (what "finished-feeling" means here):
 
 Current release: **v0.5.4**. The next release focuses on glanceability. Alerts move to a later, unassigned release. Settings work needed for tray choices belongs to v0.6; broader customization is not a prerequisite for v1.0. The v1.0 readiness bar will be revisited after v0.6.
 
-### Shipped
-
-Historical details and implementation rationale live in the [CHANGELOG](../CHANGELOG.md) and [architecture document](ARCHITECTURE.md).
-
-| Releases | Delivered |
-|---|---|
-| v0.1 | Four-quadrant data layer and CLI, with measured billing separate from subscription leverage. |
-| v0.2 | Live updates, statusline bridge, and measured quota-versus-elapsed pace. |
-| v0.3 | Tauri popover, settings, provider controls, and visible provenance/degradation. |
-| v0.4 | Polished GUI, CLI, and statusline; Codex window support; reliability hardening. |
-| v0.5.0-v0.5.2 | Desktop and CLI binaries, macOS signing, launch-at-login, Homebrew, and the docs site. |
-| v0.5.3 | Cross-process coordination, ingestion, freshness, pricing, and presentation correctness fixes. |
-| v0.5.4 | Codex credits, consistent quota window labels, refreshed Claude pricing, maintainer price refresh, and TLS security updates. |
-
 ### v0.6 - Glanceable tray & menu bar
 
 Make utilization and provider identity useful without opening the popover.
 
-- **Utilization icon and provider modes** ([#295](https://github.com/Oszkar/balanze/issues/295)). Approved: separate filling bars by default, each using its provider’s highest-utilization window, with an optional combined mode. Windows uses A/O beside each bar. Native Windows visual validation remains pending.
-- **Compact macOS text** ([#296](https://github.com/Oszkar/balanze/issues/296)). Approved: Cla/Cdx identities beside the bars, with percentages off by default and available in Settings.
-- **Consistent passive urgency** ([#263](https://github.com/Oszkar/balanze/issues/263)). Define how quota severity, pace, stale data, and source errors interact across surfaces, with intentional differences documented and representative parity coverage. Passive indicators are distinct from OS notifications.
+- **Utilization indicators and compact macOS text** ([#295](https://github.com/Oszkar/balanze/issues/295), [#296](https://github.com/Oszkar/balanze/issues/296)) are implemented. macOS behavior is confirmed; the Windows indicators were legible at the tested scale and mode switching and hiding a provider worked. Other native Windows checks remain in the [checklist](prototypes/tray-indicators-spec.md).
+- **Consistent passive urgency** ([#263](https://github.com/Oszkar/balanze/issues/263)). The presentation decisions are implemented and documented; representative parity coverage remains. Passive indicators are distinct from OS notifications.
 
-Done when utilization magnitude and provider identity are readable at native Windows/macOS tray sizes, users can select combined or separate provider presentation, macOS text is materially shorter, and missing/stale/error states remain honest. Preserve deduped repainting. The additive tray settings and two-item lifecycle are approved; native interaction and Windows readability checks remain release gates.
+Done when remaining Windows native checks and passive-urgency parity coverage pass. Preserve honest missing/stale/error states and deduped repainting.
 
-OS notifications, broad theming, and multi-environment aggregation are outside this release. The broad presentation refactor in [#232](https://github.com/Oszkar/balanze/issues/232) needs re-audit against shipped fixes; it is not automatically a prerequisite for either release.
+OS notifications, broad theming, and multi-environment aggregation are outside this release. The broad presentation refactor in [#232](https://github.com/Oszkar/balanze/issues/232) needs re-audit against shipped fixes; it is not automatically a prerequisite for v0.6.
 
 ### Later - unassigned
 
@@ -289,11 +266,11 @@ These are candidates, not a release sequence or prerequisites for v1.0:
 - **Alerts**: choose actionable quota, reset, spend, or persistent-failure notifications based on real use. Require fresh data, duplicate suppression, and defined startup/re-arm behavior. Credits alerts depend on a reliable balance source. No notification thresholds are committed yet.
 - **Save Diagnostics...** ([#278](https://github.com/Oszkar/balanze/issues/278)): revisit when collecting support information solves a concrete need; contents, redaction, packaging, and CLI access remain open.
 - **Additional configuration**: themes, statusline controls in the UI, refresh cadence within provider floors, and startup behavior, as actual needs emerge.
-- **CLI improvements**: export filtering ([#114](https://github.com/Oszkar/balanze/issues/114)), JSON time-series export ([#247](https://github.com/Oszkar/balanze/issues/247)), and typed failure categories ([#279](https://github.com/Oszkar/balanze/issues/279)). These do not fit either release's theme; typed status errors need separate schema review.
+- **CLI improvements**: export filtering ([#114](https://github.com/Oszkar/balanze/issues/114)), JSON time-series export ([#247](https://github.com/Oszkar/balanze/issues/247)), and typed failure categories ([#279](https://github.com/Oszkar/balanze/issues/279)). Typed status errors need separate schema review.
 - **Platform ergonomics**: Linux credential storage ([#231](https://github.com/Oszkar/balanze/issues/231)) and Windows arm64 desktop artifacts ([#219](https://github.com/Oszkar/balanze/issues/219)). Windows arm64 CLI artifacts already ship.
 - **Dashboard/history, extra providers, Ubuntu GNOME desktop, cross-device sync, and Android** remain uncommitted. Durable history needs a concrete consumer before adding storage. WinGet and auto-update remain optional; Windows signing remains declined as documented above.
 
-The Vite development-server issue ([#136](https://github.com/Oszkar/balanze/issues/136)) remains a development impediment to track independently, not a promised product feature. Explicit Claude file-credential refresh ([#186](https://github.com/Oszkar/balanze/issues/186)) remains uncommitted and requires its own credential-boundary review; the shipped read-only policy stands.
+Explicit Claude file-credential refresh ([#186](https://github.com/Oszkar/balanze/issues/186)) remains uncommitted and requires its own credential-boundary review; the shipped read-only policy stands.
 
 ## Open decisions
 
@@ -303,6 +280,4 @@ The Vite development-server issue ([#136](https://github.com/Oszkar/balanze/issu
 
 ## Tray presentation settings
 
-Separate filling bars show each provider’s highest-utilization window. macOS uses Cla/Cdx with optional percentages; Windows uses A/O beside the bars, with exact percentages in tooltips. Settings offers separate indicators (the default) or one highest-utilization indicator. Percentages default off. Either item opens the same popover and offers Open/Quit. A disabled Codex source hides its item; missing quota is neutral, and stale quota retains its last fill with a violet warning marker. Billing and activity failures stay in the popover. Combined mode compares raw utilization, with Codex winning ties, and flags degradation in either participating quota provider. The [approved spec and native checklist](prototypes/tray-indicators-spec.md) record the remaining validation.
-
-Tray preference saves preserve active provider polling schedules, credential cooldowns, and local parsing state. Polling configuration and API-key changes still use acknowledged watcher replacement. Failed settings saves reconcile controls with persisted settings because live application can fail after the disk commit.
+The [user guide](src/GUIDE.md#tray-indicators) describes the unreleased controls; the [architecture](ARCHITECTURE.md#tray-presentation-settings) records their behavior and lifecycle, and the [native checklist](prototypes/tray-indicators-spec.md) records remaining validation.

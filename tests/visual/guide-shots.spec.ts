@@ -17,7 +17,9 @@ const OUT = 'docs/src/assets/guide';
 // assets are displayed at the popover's real 360px width, so capture at 2x to
 // stay crisp on HiDPI screens. gallery.spec.ts deliberately keeps 1x - its
 // committed baselines would all churn otherwise.
-test.use({ deviceScaleFactor: 2 });
+// The settings frame is taller than the default 720px viewport. Keep the
+// entire frame visible so page.screenshot does not clip its top or bottom.
+test.use({ deviceScaleFactor: 2, viewport: { width: 1280, height: 1600 } });
 
 // Gallery figcaption label -> output filename. Every label must exist in
 // src/lib/gallery/fixtures.ts; a rename there fails this spec loudly rather

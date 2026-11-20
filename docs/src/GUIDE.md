@@ -6,15 +6,15 @@ New here? Start with the [Introduction](index.md) for what Balanze is and how to
 
 ## First run
 
-1. Install per [Install](install.md), or launch the desktop app.
-2. Run `balanze-cli setup`. The wizard walks through the OpenAI Admin key and offers to wire the Claude Code statusline.
+1. Install per [Install](install.md) and launch the desktop app, or install the CLI separately.
+2. Use the desktop settings to connect an OpenAI Admin key and optionally wire the Claude Code statusline. With the CLI installed, `balanze-cli setup` also offers these steps.
 3. The Claude side needs no setup if Claude Code is already configured - Balanze reads its OAuth credential directly.
 
 On the desktop app, first launch auto-opens the popover and fires a notification so the tray icon is easy to find.
 
 ![Settings panel with the OpenAI key field filled and both provider toggles on](assets/guide/settings-configured.png)
 
-*The settings panel after setup, keys in place.*
+*The settings panel in an unreleased build, with a key configured. The current release does not yet have tray indicator settings.*
 
 ## Reading the popover
 
@@ -63,7 +63,15 @@ A density toggle switches between the default **Details** view and a **Compact**
 
 ## Tray indicators
 
+**Unreleased:** The separate and combined indicator options below are available in builds from the current source; the latest published release, v0.5.4, uses a single tray indicator.
+
 Separate filling bars show each provider’s highest-utilization window. macOS uses Cla/Cdx with optional percentages; Windows uses A/O beside the bars, with exact percentages in tooltips. Open **Settings > Tray indicators > Provider display** and choose **Separate providers** (the default) or **Highest utilization** for one indicator. On macOS, enable **Show percentages in the menu bar** for exact numbers beside Cla/Cdx. Percentages default off. Either item opens the same popover and offers Open/Quit. A disabled Codex source hides its item; missing quota is neutral, and stale quota retains its last fill with a violet warning marker. Billing and activity failures stay in the popover. Utilization colors use the shared green/yellow/orange/red thresholds at 50/75/90 percent. Hover to see which window drives the fill.
+
+On Windows, separate indicators can each be pinned from the hidden-icons area.
+
+![Windows taskbar with separate A and O tray indicators](assets/guide/windows-tray.png)
+
+*Windows indicators at the tested display scale.*
 
 ## Connecting OpenAI
 
