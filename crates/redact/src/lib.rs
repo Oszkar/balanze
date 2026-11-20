@@ -123,7 +123,24 @@ fn scan(text: &str, out: &mut String, max_chars: Option<usize>) -> bool {
             .find(|c: char| !(p.is_token_char)(c))
             .unwrap_or(after.len());
         let marker = if len >= p.min_len {
-            pos = after_start + len;
+            let end = after_start + len;
+            // A run can swallow the start of another pattern's prefix (a key
+            // eats the word in `Bearer ` and stops at the space). Resume at that
+            // prefix so its token is still classified. Every cached match is at
+            // or after `idx`, and `p`'s own is `idx`, so `off > idx` excludes it;
+            // the resume point is strictly ahead of `idx`, so the scan still
+            // advances and stays linear.
+            pos = next
+                .iter()
+                .zip(PATTERNS)
+                .filter_map(|(slot, q)| match *slot {
+                    Some(Some(off)) if off > idx && off < end && off + q.prefix.len() > end => {
+                        Some(off)
+                    }
+                    _ => None,
+                })
+                .min()
+                .unwrap_or(end);
             p.marker
         } else {
             // Not secret-shaped; emit the original prefix bytes and keep scanning.
@@ -360,5 +377,33 @@ mod tests {
                 "{unit:?} took {elapsed:?}"
             );
         }
+    }
+
+    // A key run swallows an adjacent `Bearer` word (letters are key chars) and
+    // stops at the space; the Bearer token after it must still be masked.
+    #[test]
+    fn redact_secrets_masks_bearer_glued_to_key() {
+        let key = format!("sk-{}", "A".repeat(15));
+        let token = "T".repeat(30);
+        let text = format!("{key}Bearer {token}");
+        let out = redact_secrets(&text);
+        assert_eq!(out, "sk-...REDACTEDBearer ...REDACTED");
+        assert!(!out.contains(&token));
+    }
+
+    #[test]
+    fn redact_for_display_masks_bearer_glued_to_key() {
+        let token = "T".repeat(30);
+        let text = format!("x sk-{}bearer {token} y", "A".repeat(20));
+        let out = redact_for_display(&text);
+        assert_eq!(out, "x sk-...REDACTEDBearer ...REDACTED y");
+    }
+
+    // The converse overlap needs no rewind: a key inside a Bearer token is
+    // already covered by the Bearer mask.
+    #[test]
+    fn redact_secrets_masks_key_inside_bearer_token_once() {
+        let text = format!("Bearer {}sk-{} end", "x".repeat(5), "B".repeat(20));
+        assert_eq!(redact_secrets(&text), "Bearer ...REDACTED end");
     }
 }
