@@ -1736,6 +1736,61 @@ mod tests {
             .to_string()
     }
 
+    #[test]
+    fn shared_alert_scenarios_render_compact_quota_and_pace() {
+        for line in include_str!("../../../tests/fixtures/alert-parity.csv")
+            .lines()
+            .skip(1)
+        {
+            let fields: Vec<_> = line.split(',').collect();
+            let percent: f32 = fields[1].parse().unwrap();
+            let stale: bool = fields[2].parse().unwrap();
+            let ratio: f64 = fields[3].parse().unwrap();
+            let mut snap = fully_populated_snapshot();
+            let oauth = snap.claude_oauth.as_mut().unwrap();
+            oauth.cadences.truncate(1);
+            oauth.cadences[0].utilization_percent = percent;
+            snap.claude_oauth_error = stale.then(|| "failed".into());
+            snap.pace = vec![state_coordinator::WindowPace {
+                key: "five_hour".into(),
+                used_fraction: percent as f64 / 100.0,
+                elapsed_fraction: 0.5,
+                ratio: Some(ratio),
+            }];
+            let raw = String::from_utf8(render_compact_with_choice(
+                &snap,
+                anstream::ColorChoice::Always,
+            ))
+            .unwrap();
+            let row = raw.lines().find(|l| l.starts_with("Anthropic ")).unwrap();
+            assert!(
+                row.contains(&format!("{}%", percent.round() as i64)),
+                "{}: {row}",
+                fields[0]
+            );
+            assert_eq!(row.contains("stale"), stale, "{}: {row}", fields[0]);
+            let color = match fields[5] {
+                "green" => "\x1b[32m",
+                "yellow" => "\x1b[33m",
+                "orange" => "\x1b[38;2;217;106;42m",
+                "red" => "\x1b[31m",
+                _ => panic!("unknown severity"),
+            };
+            assert!(row.contains(color), "{}: {row:?}", fields[0]);
+            assert_eq!(compact_pace_line(&snap).is_none(), stale, "{}", fields[0]);
+            if !stale {
+                let expected = if ratio >= 1.5 {
+                    Bucket::Critical
+                } else if ratio >= 1.12 {
+                    Bucket::Warn
+                } else {
+                    Bucket::Ok
+                };
+                assert_eq!(pace_bucket(&snap), expected, "{}", fields[0]);
+            }
+        }
+    }
+
     /// A stale Codex cell (cached source error or an expired window) keeps the
     /// color its utilization earns and carries the staleness in the cell's own
     /// ⚠ marker and "stale" text. Replacing the color with a warning yellow

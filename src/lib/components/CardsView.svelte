@@ -107,12 +107,12 @@
       out.push({
         label: `Codex ${codexWindowLabel(win)} · ${codex.plan_type}`,
         used: win.used_percent,
-        elapsed: codexElapsedFraction(win, snapshot.fetched_at) * 100,
+        elapsed: codexView?.expired || !!degraded['codex_quota'] || !!snapshot.codex_quota_error ? null : codexElapsedFraction(win, snapshot.fetched_at) * 100,
         tone: quotaTone(win.used_percent),
         resetsAt: win.resets_at,
         // Staleness belongs to the rollout, not an individual bar. Once any
         // window has reset, every figure in that old rollout is an undercount.
-        stale: !!codexView?.expired || !!degraded['codex_quota'],
+        stale: !!codexView?.expired || !!degraded['codex_quota'] || !!snapshot.codex_quota_error,
         title: PROV.codexQuota.title,
       });
     }

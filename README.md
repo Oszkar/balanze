@@ -55,6 +55,8 @@ Product scope and roadmap live in [`docs/PRD.md`](docs/PRD.md); architecture and
 
 Quota labels identify the same window across the tray, popover, CLI, and statusline. Compact views use labels such as `5h` and `7d-opus`; Cards and sections use `5-hour` and `7-day Opus`. Unknown Anthropic windows keep their supplied label; unclassified Codex durations read `window`.
 
+Tray settings select the highest-utilization window by default, or a fixed 5-hour or weekly window for both providers. Missing selected windows are shown as unavailable.
+
 **Unreleased:** Builds from current source add separate Claude and Codex tray indicators and an optional combined indicator. See the [tray guide](https://oszkar.github.io/balanze/GUIDE.html#tray-indicators) for details. The latest published release, v0.5.4, uses one indicator.
 
 ## Install

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 
 // Each gallery frame is one popover state. We freeze the clock BEFORE the page
 // loads so the fixtures' module-load `Date.now()` and the components' relative
@@ -6,6 +7,30 @@ import { test, expect } from '@playwright/test';
 // `toHaveScreenshot` disables CSS animations by default, so the cold-start
 // skeleton's pulse does not flap the baseline.
 const FIXED = new Date('2026-01-01T12:00:00Z');
+
+test('shared alert scenarios render quota and pace in both layouts', async ({ page }) => {
+  await page.clock.setFixedTime(FIXED);
+  await page.goto('/gallery.html?alert-regression', { waitUntil: 'domcontentloaded' });
+  const lines = readFileSync('tests/fixtures/alert-parity.csv', 'utf8').trim().split('\n').slice(1);
+  for (const line of lines) {
+    const [name, value, staleText] = line.split(',');
+    const percent = Number(value);
+    const stale = staleText === 'true';
+    const tone = Math.round(percent) >= 90 ? 'bad' : Math.round(percent) >= 75 ? 'orange' : Math.round(percent) >= 50 ? 'warn' : 'ok';
+    for (const view of ['grid', 'cards']) {
+      const frame = page.locator('figure.frame').filter({ has: page.getByText(`Alert ${view} ${name}`, { exact: true }) });
+      const quota = view === 'grid' ? frame.locator('.qcell').first() : frame.locator('.pcard').first();
+      await expect(quota).toContainText(`${Math.round(percent)}%`);
+      await expect(quota).toContainText(stale ? 'stale' : 'left');
+      await expect(quota.locator('.tick')).toHaveCount(stale ? 0 : 1);
+      await expect(quota.locator('.fill').first()).toHaveAttribute('style', new RegExp(`var\\(--${tone}\\)`));
+    }
+  }
+  const secondary = page.locator('figure.frame').filter({ has: page.getByText('Alert grid secondary', { exact: true }) }).locator('.qcell').first();
+  await expect(secondary.locator('.pct')).toContainText('20%');
+  await expect(secondary.locator('.pct')).toHaveAttribute('style', /var\(--ok\)/);
+  await expect(secondary.getByText('7d 95%')).toHaveAttribute('style', /var\(--bad\)/);
+});
 
 for (const theme of ['light', 'dark'] as const) {
   test(`Anthropic quota freshness - ${theme}`, async ({ page }) => {
@@ -26,17 +51,7 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(fallback).not.toContainText('stale');
     await expect(fallback.locator('.tick')).toHaveCount(1);
     await expect(fallback).toContainText('62%');
-    await page.evaluate(() => document.fonts.ready);
-    // The SVG logo's intrinsic width changes the adjacent wordmark position
-    // once decoded; font readiness alone does not stabilize the header.
-    await page.evaluate(() => Promise.all(Array.from(document.images, (img) => img.decode())));
-    for (const view of ['Grid', 'Cards']) {
-      for (const scenario of ['aged quota', 'passed reset', 'statusline fallback']) {
-        const label = `${view} - Anthropic ${scenario}`;
-        const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-        await expect(frame(label)).toHaveScreenshot(`${slug}-${theme}.png`);
-      }
-    }
+    // The gallery frames test captures these same frames after fonts and images load.
   });
 }
 
@@ -153,4 +168,11 @@ test('Cards marks every bar stale when one Codex window has reset', async ({ pag
   await expect(codexCard).toHaveCount(1);
   await expect(codexCard.locator('.brow')).toHaveCount(2);
   await expect(codexCard.locator('.sfb')).toHaveCount(2);
+  await expect(codexCard.locator('.tick')).toHaveCount(0);
+  const grid = page.locator('figure.frame').filter({
+    has: page.getByText('Grid - Codex stale window', { exact: true }),
+  });
+  const codexCell = grid.locator('.qcell').nth(1);
+  await expect(codexCell).toContainText('stale');
+  await expect(codexCell.locator('.tick')).toHaveCount(0);
 });

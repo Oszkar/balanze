@@ -492,6 +492,71 @@ mod tests {
     }
 
     #[test]
+    fn shared_alert_scenarios_render_live_claude_and_cross_provider() {
+        for line in include_str!("../../../tests/fixtures/alert-parity.csv")
+            .lines()
+            .skip(1)
+        {
+            let fields: Vec<_> = line.split(',').collect();
+            let percent: f32 = fields[1].parse().unwrap();
+            let stale: bool = fields[2].parse().unwrap();
+            let mut snapshot = snap();
+            let windows = &mut snapshot.rate_limits.as_mut().unwrap().windows;
+            windows.truncate(1);
+            windows[0].used_percent = percent;
+            windows[0].resets_at = now() + Duration::minutes(150);
+            let cross = CrossProvider {
+                codex_five_hour: Some(percent),
+                codex_stale: stale,
+                ..Default::default()
+            };
+            let mut config = cfg();
+            config.theme = "dark".into();
+            config.lines = vec!["{usage} {codex}".into()];
+            let output = render(&RenderInput {
+                snapshot: &snapshot,
+                cross: Some(&cross),
+                config: &config,
+                now: now(),
+                color: false,
+            });
+            assert!(
+                output.contains(&format!("✳️ 5h {}%", percent.round() as i64)),
+                "{}: {output}",
+                fields[0]
+            );
+            assert!(
+                output.contains(&format!("🌀 5h {}%", percent.round() as i64)),
+                "{}: {output}",
+                fields[0]
+            );
+            assert_eq!(output.contains('⚠'), stale, "{}: {output}", fields[0]);
+            let arrow = if fields[4] == "down" { '↓' } else { '↑' };
+            assert!(output.contains(arrow), "{}: {output}", fields[0]);
+            let colored = render(&RenderInput {
+                snapshot: &snapshot,
+                cross: Some(&cross),
+                config: &config,
+                now: now(),
+                color: true,
+            });
+            let sgr = match fields[5] {
+                "green" => "38;2;158;206;106",
+                "yellow" => "38;2;224;175;104",
+                "orange" => "38;2;255;158;100",
+                "red" => "1;38;2;247;118;142",
+                _ => panic!("unknown severity"),
+            };
+            assert_eq!(
+                colored.matches(sgr).count(),
+                2,
+                "{}: {colored:?}",
+                fields[0]
+            );
+        }
+    }
+
+    #[test]
     fn anthropic_ties_keep_the_first_window_before_rounding() {
         for (first_key, first_pct, second_key, second_pct, expected) in [
             ("seven_day", 0.0, "seven_day_opus", 0.0, "✳️ 7d 0%"),

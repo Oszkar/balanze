@@ -1,0 +1,5 @@
+name,percent,stale,ratio,arrow,severity
+under,42.5,false,0.85,down,green
+warning,56,false,1.12,up,yellow
+critical,75,false,1.5,up,orange
+high_stale,95,true,1.9,up,red

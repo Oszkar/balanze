@@ -66,6 +66,18 @@ for (const outcome of ['reject', 'committed-error', 'success', 'normalized'] as 
     await expect(control).toBeEnabled();
     await expect(control).toHaveValue(outcome === 'reject' || outcome === 'normalized' ? 'separate' : 'combined');
   });
+
+  test(`tray quota window reconciles ${outcome}`, async ({ page }) => {
+    await configureSave(page, outcome);
+    const control = page.getByRole('combobox', { name: 'Tray quota window' });
+    await expect(control).toHaveValue('highest');
+    await control.selectOption('weekly');
+    if (outcome === 'reject' || outcome === 'committed-error') {
+      await expect(page.getByRole('figure', { name: 'Settings - configured', exact: true }).getByRole('status')).toContainText(outcome === 'reject' ? 'save denied' : 'live apply failed');
+    }
+    await expect(control).toBeEnabled();
+    await expect(control).toHaveValue(outcome === 'reject' || outcome === 'normalized' ? 'highest' : 'weekly');
+  });
 }
 
 test('checkbox retains a committed preference when live application fails', async ({ page }) => {
@@ -89,7 +101,7 @@ test('failed reconciliation preserves both errors and offers recovery', async ({
     const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> } }).__TAURI_INTERNALS__;
     const original = internals.invoke;
     internals.invoke = async (cmd, args) => cmd === 'get_settings'
-      ? { version: 2, providers: { anthropic_enabled: true, openai_enabled: true, codex_enabled: true }, tray: { mode: 'separate', show_percentages: false }, oauth_poll_interval_secs: 300, seen_welcome: true }
+      ? { version: 2, providers: { anthropic_enabled: true, openai_enabled: true, codex_enabled: true }, tray: { mode: 'separate', show_percentages: false, window: 'highest' }, oauth_poll_interval_secs: 300, seen_welcome: true }
       : original(cmd, args);
   });
   await page.getByRole('button', { name: 'Reload settings' }).click();

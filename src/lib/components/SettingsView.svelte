@@ -420,7 +420,16 @@
           <option value="combined">Highest utilization</option>
         </select>
       </label>
-      <div class="hint">Each bar shows the provider's highest-utilization quota window. Hover for the window and exact percentage.</div>
+      <label class="toggle">
+        <span>Quota window</span>
+        <select aria-label="Tray quota window" value={settings.tray.window} disabled={busy}
+          onchange={(e) => updateTray({ window: e.currentTarget.value as TraySettings['window'] })}>
+          <option value="highest">Highest utilization</option>
+          <option value="five_hour">5-hour</option>
+          <option value="weekly">Weekly</option>
+        </select>
+      </label>
+      <div class="hint">Applies to both providers. Hover for the window and exact percentage. A missing selected window is unavailable.</div>
       {#if isMac}
         <label class="toggle">
           <input type="checkbox" checked={settings.tray.show_percentages} disabled={busy}
