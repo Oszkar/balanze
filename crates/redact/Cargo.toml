@@ -1,0 +1,11 @@
+[package]
+name = "redact"
+description = "Pure secret-shaped substring redaction (sk- keys, Bearer tokens) shared by the provider HTTP clients and the diagnostics bundle. No dependencies. AGENTS.md §3.4."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]

@@ -4322,6 +4322,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "redact"
+version = "0.5.4"
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
