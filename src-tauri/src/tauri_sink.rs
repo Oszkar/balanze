@@ -73,9 +73,11 @@ fn source_key(source: Source) -> &'static str {
 struct TrayView<'a> {
     claude_5h: Option<f32>,
     claude_7d: Option<(&'a str, f32)>,
+    claude_weekly: Option<(&'a str, f32)>,
     claude_stale: bool,
     codex_5h: Option<f32>,
     codex_weekly: Option<(&'static str, f32)>,
+    codex_fixed_weekly: Option<(&'static str, f32)>,
     // Selected by codex_local before conversion to display precision. Detailed
     // slots must never re-select the Codex headline or its label.
     codex_headline: Option<(&'static str, f32)>,
@@ -100,6 +102,15 @@ impl<'a> TrayView<'a> {
             Some(AnthropicQuotaSource::OAuth { snapshot: o, stale }) => {
                 v.claude_stale = stale;
                 for c in &o.cadences {
+                    if c.key == "seven_day" || c.key.starts_with("seven_day_") {
+                        fold_labeled_max(
+                            &mut v.claude_weekly,
+                            (
+                                window::anthropic_label(&c.key, &c.display_label, false),
+                                c.utilization_percent,
+                            ),
+                        );
+                    }
                     if c.key == "five_hour" {
                         fold_max(&mut v.claude_5h, c.utilization_percent);
                     } else {
@@ -119,6 +130,15 @@ impl<'a> TrayView<'a> {
             }) => {
                 v.claude_stale = stale;
                 for w in &rl.windows {
+                    if w.key == "seven_day" || w.key.starts_with("seven_day_") {
+                        fold_labeled_max(
+                            &mut v.claude_weekly,
+                            (
+                                window::anthropic_label(&w.key, &w.label, false),
+                                w.used_percent,
+                            ),
+                        );
+                    }
                     if w.key == "five_hour" {
                         fold_max(&mut v.claude_5h, w.used_percent);
                     } else {
@@ -151,6 +171,15 @@ impl<'a> TrayView<'a> {
             v.codex_weekly = q
                 .weekly_or_other()
                 .map(|w| (w.kind().label(), w.used_percent as f32));
+            for w in q
+                .windows()
+                .filter(|w| w.kind() == state_coordinator::WindowKind::Weekly)
+            {
+                fold_labeled_max(
+                    &mut v.codex_fixed_weekly,
+                    (w.kind().label(), w.used_percent as f32),
+                );
+            }
         }
         v
     }
@@ -166,6 +195,7 @@ impl<'a> TrayView<'a> {
 
     /// Claude's worst window (max of 5h and 7d) - the single Claude figure shown
     /// in the menu-bar title.
+    #[cfg(test)]
     fn claude_worst(&self) -> Option<f32> {
         match (self.claude_5h, self.claude_7d.map(|(_, pct)| pct)) {
             (Some(a), Some(b)) => Some(a.max(b)),
@@ -193,14 +223,38 @@ impl<'a> TrayView<'a> {
     /// Rounded utilization of the worst window; the ring classifies THIS so its
     /// color matches the largest number the title/tooltip display (89.6 shows
     /// "90%" and must read Red, not Orange).
+    #[cfg(test)]
     fn worst_rounded(&self) -> f32 {
         self.worst().map_or(0.0, |(_, p)| p.round())
+    }
+
+    fn selected(&self, choice: settings::TrayWindow) -> Option<(String, f32)> {
+        match choice {
+            settings::TrayWindow::Highest => self.worst(),
+            settings::TrayWindow::FiveHour => [
+                self.claude_5h.map(|p| ("Claude 5h".to_string(), p)),
+                self.codex_5h.map(|p| ("Codex 5h".to_string(), p)),
+            ]
+            .into_iter()
+            .flatten()
+            .max_by(|a, b| a.1.total_cmp(&b.1)),
+            settings::TrayWindow::Weekly => [
+                self.claude_weekly
+                    .map(|(label, p)| (format!("Claude {label}"), p)),
+                self.codex_fixed_weekly
+                    .map(|(label, p)| (format!("Codex {label}"), p)),
+            ]
+            .into_iter()
+            .flatten()
+            .max_by(|a, b| a.1.total_cmp(&b.1)),
+        }
     }
 }
 
 /// Pick the tray color for a view. A degraded source forces the warning bucket;
 /// a view with no quota signal yet is Neutral; otherwise the worst window's
 /// rounded utilization maps to a heat color.
+#[cfg(test)]
 fn bucket_for_view(view: &TrayView, degraded: bool) -> ColorBucket {
     if degraded {
         ColorBucket::Warn
@@ -215,6 +269,7 @@ fn bucket_for_view(view: &TrayView, degraded: bool) -> ColorBucket {
 /// providers in fixed slots, each showing that provider's worst window. The
 /// fill color matches the larger of the two shown numbers. An unconfigured provider
 /// is omitted.
+#[cfg(test)]
 fn tray_title(view: &TrayView) -> String {
     let c = view
         .claude_worst()
@@ -274,6 +329,7 @@ fn paint_targets(snapshot: &Snapshot, settings: &settings::Settings) -> tray_ico
     let claude = TrayView {
         codex_5h: None,
         codex_weekly: None,
+        codex_fixed_weekly: None,
         codex_headline: None,
         codex_expired: false,
         ..view
@@ -281,11 +337,15 @@ fn paint_targets(snapshot: &Snapshot, settings: &settings::Settings) -> tray_ico
     let codex = TrayView {
         claude_5h: None,
         claude_7d: None,
+        claude_weekly: None,
         claude_stale: false,
         ..view
     };
+    let choice = settings.tray.window;
     let claude_state = if view.claude_stale {
         IconState::Stale
+    } else if claude.has_data() && claude.selected(choice).is_none() {
+        IconState::Missing
     } else if claude.has_data() {
         IconState::Fresh
     } else if snapshot.claude_oauth_error.is_some() || snapshot.claude_statusline_error.is_some() {
@@ -303,17 +363,22 @@ fn paint_targets(snapshot: &Snapshot, settings: &settings::Settings) -> tray_ico
         }
     } else if view.codex_expired {
         IconState::Stale
+    } else if codex.has_data() && codex.selected(choice).is_none() {
+        IconState::Missing
     } else if codex.has_data() {
         IconState::Fresh
     } else {
         IconState::Missing
     };
     let make = |provider: Provider, provider_view: &TrayView<'_>, state: IconState| {
-        let percent = provider_view.worst().map(|(_, p)| p.round());
+        let selected = provider_view.selected(choice);
+        let percent = selected.as_ref().map(|(_, p)| p.round());
         let title = if settings.tray.show_percentages && percent.is_some() {
-            tray_title(provider_view)
-                .replace("Claude", "Cla")
-                .replace("Codex", "Cdx")
+            format!(
+                "{} {}%",
+                provider.short_name(),
+                percent.unwrap_or_default() as i64
+            )
         } else {
             provider.short_name().to_string()
         };
@@ -322,8 +387,26 @@ fn paint_targets(snapshot: &Snapshot, settings: &settings::Settings) -> tray_ico
         } else {
             title
         };
-        let detail = provider_view.worst().map_or_else(
-            || state.description().to_string(),
+        let detail = selected.map_or_else(
+            || {
+                if provider_view.has_data() {
+                    let unavailable = format!(
+                        "{} window unavailable",
+                        match choice {
+                            settings::TrayWindow::FiveHour => "5-hour",
+                            settings::TrayWindow::Weekly => "Weekly",
+                            settings::TrayWindow::Highest => "Quota",
+                        }
+                    );
+                    if state.degraded() {
+                        format!("{unavailable}\n{}", state.description())
+                    } else {
+                        unavailable
+                    }
+                } else {
+                    state.description().to_string()
+                }
+            },
             |(window, p)| {
                 format!(
                     "{window} {}% used\n{}",
@@ -335,7 +418,11 @@ fn paint_targets(snapshot: &Snapshot, settings: &settings::Settings) -> tray_ico
         tray_icon::PaintTarget {
             icon: tray_icon::IconTarget {
                 provider,
-                bucket: bucket_for_view(provider_view, state.degraded()),
+                bucket: if state.degraded() {
+                    ColorBucket::Warn
+                } else {
+                    percent.map_or(ColorBucket::Neutral, ColorBucket::from_util)
+                },
                 fill: percent.map(|p| p.clamp(0.0, 100.0) as u8),
                 state,
             },
@@ -354,8 +441,8 @@ fn paint_targets(snapshot: &Snapshot, settings: &settings::Settings) -> tray_ico
     // Preserve Codex priority on ties, and select using raw values before rounding.
     let codex_wins = settings.providers.codex_enabled
         && codex
-            .worst()
-            .is_some_and(|(_, p)| claude.worst().is_none_or(|(_, c)| p >= c));
+            .selected(choice)
+            .is_some_and(|(_, p)| claude.selected(choice).is_none_or(|(_, c)| p >= c));
     if codex_wins {
         c = o;
     }
@@ -373,7 +460,24 @@ fn paint_targets(snapshot: &Snapshot, settings: &settings::Settings) -> tray_ico
     } else {
         claude
     };
-    c.tooltip = tray_tooltip(&combined_view, degraded);
+    c.tooltip = if choice == settings::TrayWindow::Highest {
+        tray_tooltip(&combined_view, degraded)
+    } else {
+        let describe = |name: &str, provider: &TrayView<'_>| {
+            provider.selected(choice).map_or_else(
+                || format!("{name}: selected window unavailable"),
+                |(label, pct)| format!("{label}: {}%", pct.round() as i64),
+            )
+        };
+        let mut lines = vec![describe("Claude", &claude)];
+        if settings.providers.codex_enabled {
+            lines.push(describe("Codex", &codex));
+        }
+        if degraded {
+            lines.push("Some data may be stale".to_string());
+        }
+        format!("Balanze\n{}", lines.join("\n"))
+    };
     tray_icon::PaintSet {
         main: c,
         codex: None,
@@ -485,6 +589,90 @@ mod tests {
             cadence.resets_at = oauth.fetched_at + chrono::Duration::hours(1);
         }
         oauth
+    }
+
+    #[test]
+    fn shared_alert_scenarios_render_tray_targets() {
+        for line in include_str!("../../tests/fixtures/alert-parity.csv")
+            .lines()
+            .skip(1)
+        {
+            let fields: Vec<_> = line.split(',').collect();
+            let percent: f32 = fields[1].parse().unwrap();
+            let stale: bool = fields[2].parse().unwrap();
+            let mut snapshot = Snapshot::empty(chrono::Utc::now());
+            snapshot.claude_oauth = Some(fresh_oauth(percent, 0.0));
+            snapshot.fetched_at = snapshot.claude_oauth.as_ref().unwrap().fetched_at;
+            if stale {
+                snapshot.claude_oauth_error = Some("failed".into());
+            }
+            let target = paint_targets(&snapshot, &settings::Settings::default()).main;
+            assert_eq!(
+                target.icon.fill,
+                Some(percent.round() as u8),
+                "{}",
+                fields[0]
+            );
+            assert_eq!(
+                target.icon.bucket,
+                if stale {
+                    ColorBucket::Warn
+                } else {
+                    match fields[5] {
+                        "green" => ColorBucket::Green,
+                        "yellow" => ColorBucket::Yellow,
+                        "orange" => ColorBucket::Orange,
+                        "red" => ColorBucket::Red,
+                        _ => panic!("unknown severity"),
+                    }
+                },
+                "{}",
+                fields[0]
+            );
+            assert_eq!(target.icon.state.degraded(), stale, "{}", fields[0]);
+        }
+    }
+
+    #[test]
+    fn tray_window_preference_selects_named_window_and_reports_missing() {
+        let mut s = Snapshot::empty(chrono::Utc::now());
+        s.claude_oauth = Some(fresh_oauth(20.0, 95.0));
+        s.codex_quota = Some(codex_5h_weekly(65.0, 80.0));
+        s.fetched_at = chrono::Utc::now();
+        let mut settings = settings::Settings::default();
+        assert_eq!(paint_targets(&s, &settings).main.icon.fill, Some(95));
+        settings.tray.window = settings::TrayWindow::FiveHour;
+        let separate = paint_targets(&s, &settings);
+        assert_eq!(separate.main.icon.fill, Some(20));
+        assert_eq!(separate.codex.unwrap().icon.fill, Some(65));
+        settings.tray.mode = settings::TrayMode::Combined;
+        let combined = paint_targets(&s, &settings);
+        assert_eq!(combined.main.icon.fill, Some(65));
+        assert!(combined.main.tooltip.contains("Codex 5h: 65%"));
+        settings.tray.window = settings::TrayWindow::Weekly;
+        assert_eq!(paint_targets(&s, &settings).main.icon.fill, Some(95));
+        s.codex_quota
+            .as_mut()
+            .unwrap()
+            .secondary
+            .as_mut()
+            .unwrap()
+            .window_duration_minutes = 4320;
+        let combined = paint_targets(&s, &settings);
+        assert!(
+            combined
+                .main
+                .tooltip
+                .contains("Codex: selected window unavailable")
+        );
+        settings.tray.mode = settings::TrayMode::Separate;
+        let codex = paint_targets(&s, &settings).codex.unwrap();
+        assert_eq!(codex.icon.fill, None);
+        assert!(codex.tooltip.contains("Weekly window unavailable"));
+        s.codex_quota_error = Some("read failed".into());
+        let codex = paint_targets(&s, &settings).codex.unwrap();
+        assert_eq!(codex.icon.bucket, ColorBucket::Warn);
+        assert!(codex.tooltip.contains("stale"));
     }
 
     #[test]

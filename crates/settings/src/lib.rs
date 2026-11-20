@@ -70,18 +70,30 @@ pub enum TrayMode {
     Combined,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayWindow {
+    #[default]
+    Highest,
+    FiveHour,
+    Weekly,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraySettings {
     #[serde(default)]
     pub mode: TrayMode,
     #[serde(default)]
     pub show_percentages: bool,
+    #[serde(default)]
+    pub window: TrayWindow,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct TraySettingsPatch {
     pub mode: Option<TrayMode>,
     pub show_percentages: Option<bool>,
+    pub window: Option<TrayWindow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +134,9 @@ pub struct ProviderSettingsPatch {
 
 impl SettingsPatch {
     pub fn apply(self, settings: &mut Settings) {
+        if let Some(window) = self.tray.window {
+            settings.tray.window = window;
+        }
         if let Some(mode) = self.tray.mode {
             settings.tray.mode = mode;
         }
@@ -1371,13 +1386,18 @@ mod tests {
         let mut current: Settings = serde_json::from_str(r#"{"version":2}"#).unwrap();
         assert_eq!(current.tray.mode, TrayMode::Separate);
         assert!(!current.tray.show_percentages);
+        assert_eq!(current.tray.window, TrayWindow::Highest);
         let mode: SettingsPatch = serde_json::from_str(r#"{"tray":{"mode":"combined"}}"#).unwrap();
         mode.apply(&mut current);
         let percentages: SettingsPatch =
             serde_json::from_str(r#"{"tray":{"show_percentages":true}}"#).unwrap();
         percentages.apply(&mut current);
+        let window: SettingsPatch =
+            serde_json::from_str(r#"{"tray":{"window":"weekly"}}"#).unwrap();
+        window.apply(&mut current);
         assert_eq!(current.tray.mode, TrayMode::Combined);
         assert!(current.tray.show_percentages);
+        assert_eq!(current.tray.window, TrayWindow::Weekly);
         let providers = current.providers.clone();
         let roundtrip: Settings =
             serde_json::from_str(&serde_json::to_string(&current).unwrap()).unwrap();
@@ -1385,6 +1405,7 @@ mod tests {
         assert_eq!(roundtrip.providers, providers);
         assert_eq!(roundtrip.version, 2);
         assert!(serde_json::from_str::<SettingsPatch>(r#"{"tray":{"mode":"unknown"}}"#).is_err());
+        assert!(serde_json::from_str::<SettingsPatch>(r#"{"tray":{"window":"unknown"}}"#).is_err());
     }
 
     #[test]

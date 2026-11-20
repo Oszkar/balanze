@@ -10,6 +10,7 @@ export interface ProviderSettings {
 export interface TraySettings {
   mode: 'separate' | 'combined';
   show_percentages: boolean;
+  window: 'highest' | 'five_hour' | 'weekly';
 }
 
 export interface Settings {

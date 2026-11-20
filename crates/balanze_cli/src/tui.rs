@@ -907,6 +907,55 @@ mod tests {
     }
 
     #[test]
+    fn shared_alert_scenarios_render_watch_quota_and_pace() {
+        for line in include_str!("../../../tests/fixtures/alert-parity.csv")
+            .lines()
+            .skip(1)
+        {
+            let fields: Vec<_> = line.split(',').collect();
+            let percent: f32 = fields[1].parse().unwrap();
+            let stale: bool = fields[2].parse().unwrap();
+            let ratio: f64 = fields[3].parse().unwrap();
+            let mut snap = populated_snapshot();
+            let oauth = snap.claude_oauth.as_mut().unwrap();
+            oauth.cadences.truncate(1);
+            oauth.cadences[0].utilization_percent = percent;
+            snap.claude_oauth_error = stale.then(|| "failed".into());
+            snap.pace = vec![state_coordinator::WindowPace {
+                key: "five_hour".into(),
+                used_fraction: percent as f64 / 100.0,
+                elapsed_fraction: 0.5,
+                ratio: Some(ratio),
+            }];
+            let terminal = render_to_terminal(&snap);
+            let text = buffer_text(&terminal);
+            let label = if stale { "5h (stale)" } else { "5h" };
+            assert!(
+                text.contains(&format!("{label} {}%", percent.round() as i64)),
+                "{}: {text}",
+                fields[0]
+            );
+            assert_eq!(text.contains("Pace: -"), stale, "{}: {text}", fields[0]);
+            let row = text
+                .lines()
+                .position(|line| line.contains(&format!("{label} {}%", percent.round() as i64)))
+                .unwrap() as u16;
+            let expected = match fields[5] {
+                "green" => Color::Green,
+                "yellow" => Color::Yellow,
+                "orange" => Color::Rgb(TRAY_ORANGE.0, TRAY_ORANGE.1, TRAY_ORANGE.2),
+                "red" => Color::Red,
+                _ => panic!("unknown severity"),
+            };
+            assert!(
+                (0..80).any(|x| terminal.backend().buffer()[(x, row)].fg == expected),
+                "{}: gauge color",
+                fields[0]
+            );
+        }
+    }
+
+    #[test]
     fn tui_render_populated_shows_quota_and_dollars() {
         let snap = populated_snapshot();
         let terminal = render_to_terminal(&snap);

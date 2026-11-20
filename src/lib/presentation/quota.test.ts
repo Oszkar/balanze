@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { anthropicWindowLabel, quotaTone, anthropicQuota, anthropicSourceView, codexElapsedFraction, codexWindowExpired, codexQuota, codexWindowLabel, codexWindowsByKind, codexCreditsLabel, classifyOverage, matchingAnthropicPace, openAiCostCell, overageCell } from './quota';
 import type { Snapshot, ExtraUsage } from '../types/snapshot';
 import policy from '../../../tests/fixtures/presentation-policy.json';
+import alerts from '../../../tests/fixtures/alert-parity.csv?raw';
 
 const base: Snapshot = {
   schema_version: 2,
@@ -16,6 +17,20 @@ const base: Snapshot = {
 };
 
 describe('quota', () => {
+  it('uses the shared alert scenarios for quota tone and stale pace suppression', () => {
+    for (const line of alerts.trim().split('\n').slice(1)) {
+      const [name, value, staleText, ratioText, , severity] = line.split(',');
+      const percent = Number(value);
+      const stale = staleText === 'true';
+      const s: Snapshot = { ...base, claude_oauth_error: stale ? 'failed' : null,
+        claude_oauth: { cadences: [{ key: 'five_hour', display_label: '5h', utilization_percent: percent, resets_at: '2026-06-03T14:00:00Z' }], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: base.fetched_at },
+        pace: [{ key: 'five_hour', used_fraction: percent / 100, elapsed_fraction: 0.5, ratio: Number(ratioText) }],
+      };
+      expect(anthropicQuota(s)?.tone, name).toBe(({ green: 'ok', yellow: 'warn', orange: 'orange', red: 'bad' } as Record<string, string>)[severity]);
+      expect(anthropicSourceView(s)?.stale, name).toBe(stale);
+      expect(matchingAnthropicPace(s).length, name).toBe(stale ? 0 : 1);
+    }
+  });
   it('checks OAuth age, reset expiry and errors and suppresses stale pace', () => {
     for (const [stamp, reset, error, stale] of [
       ['2026-06-03T11:45:00Z', '2026-06-03T12:00:00Z', null, false],
@@ -60,6 +75,17 @@ describe('quota', () => {
     expect(q.source).toBe('statusline');
     expect(q.headline.pct).toBe(62);
     expect(q.secondary?.pct).toBe(48);
+  });
+  it('colors the headline for its own percentage when the secondary window is high', () => {
+    const s: Snapshot = { ...base, claude_oauth: {
+      cadences: [
+        { key: 'five_hour', display_label: '5h', utilization_percent: 20, resets_at: '2026-06-03T14:00:00Z' },
+        { key: 'seven_day', display_label: '7d', utilization_percent: 95, resets_at: '2026-06-06T14:00:00Z' },
+      ], extra_usage: null, subscription_type: null, rate_limit_tier: null, org_uuid: null, fetched_at: base.fetched_at,
+    } };
+    const quota = anthropicQuota(s)!;
+    expect(quota.tone).toBe('ok');
+    expect(quotaTone(quota.secondary!.pct)).toBe('bad');
   });
   it('keeps only pace keys belonging to the selected statusline source', () => {
     const s: Snapshot = { ...base,
@@ -121,7 +147,7 @@ describe('quota', () => {
     };
     expect(anthropicSourceView(s)).toMatchObject({ source: 'oauth', stale: true });
   });
-  it('folds every non-5h cadence into the visible 7d slot and tones by the worst', () => {
+  it('shows the worst secondary cadence while keeping the headline tone', () => {
     const s: Snapshot = { ...base,
       claude_oauth: { cadences: [
         { key: 'five_hour', display_label: '5h', utilization_percent: 10, resets_at: '2026-06-03T14:41:00Z' },
@@ -133,7 +159,8 @@ describe('quota', () => {
     expect(q.headline.pct).toBe(10);
     expect(q.secondary?.pct).toBe(95);
     expect(q.secondary?.key).toBe('seven_day_opus');
-    expect(q.tone).toBe('bad');
+    expect(q.tone).toBe('ok');
+    expect(quotaTone(q.secondary!.pct)).toBe('bad');
   });
   it('falls back to oauth when the statusline payload is stale', () => {
     // Same data as above, but captured_at is >15min before fetched_at (a frozen

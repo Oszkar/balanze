@@ -19,7 +19,9 @@ export default defineConfig({
   // module runner hangs on the IPv6 socket, so the server prints "ready" but
   // never serves - which silently broke `bun run gallery:snap` (the Playwright
   // visual harness) on Windows until this pin.
-  server: { host: '127.0.0.1', port: 1430, strictPort: true },
+  // Rust build artifacts can contain hundreds of thousands of files. Watching
+  // them delays asset requests while Vite walks a tree unrelated to the gallery.
+  server: { host: '127.0.0.1', port: 1430, strictPort: true, watch: { ignored: ['**/target/**'] } },
   build: {
     outDir: 'build-gallery',
     rollupOptions: {

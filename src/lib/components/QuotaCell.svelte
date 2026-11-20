@@ -4,21 +4,22 @@
   import Badge from './Badge.svelte';
   import UsageBar from './UsageBar.svelte';
   import { relativeReset } from '#lib/presentation/format.ts';
-  let { pct, used, elapsed, tone, resetsAt, secondary, title, stale = false, staleLabel = 'fallback', badge = null }:
+  let { pct, used, elapsed, tone, resetsAt, secondary, secondaryTone = null, headlineLabel, title, stale = false, staleLabel = 'fallback', badge = null }:
     { pct: number; used: number; elapsed: number | null; tone: Tone;
-      resetsAt: string; secondary: string; title: string; stale?: boolean; staleLabel?: string; badge?: BadgeKind | null } = $props();
+      resetsAt: string; secondary: string; secondaryTone?: Tone | null; headlineLabel: string; title: string; stale?: boolean; staleLabel?: string; badge?: BadgeKind | null } = $props();
 </script>
 
 <div class="cell qcell" class:stale {title}>
   <div class="top">
     {#if stale}<span class="dot"></span>{/if}
     <span class="pct" style="color:var(--{tone})">{pct.toFixed(0)}<span class="unit">%</span></span>
+    <span class="window-label">{headlineLabel}</span>
     {#if badge}<span class="badge-slot"><Badge kind={badge} /></span>{/if}
   </div>
   <UsageBar {used} {elapsed} {tone} />
   <div class="meta">
     <span class:warn={stale}>{#if stale}<span aria-hidden="true">⚠</span> {staleLabel}{:else}{relativeReset(resetsAt)} left{/if}</span>
-    <span>{secondary}</span>
+    <span style:color={secondaryTone ? `var(--${secondaryTone})` : undefined}>{secondary}</span>
   </div>
 </div>
 
@@ -43,6 +44,7 @@
     text-box-trim: trim-both; text-box-edge: cap alphabetic;
   }
   .unit { font-size: 15px; font-weight: 460; opacity: .5; margin-left: 1px; }
+  .window-label { font-size: var(--text-2xs); color: var(--faint); }
   .badge-slot { margin-left: auto; }
   /* Fallback for engines without text-box-trim: nudge the badge to where the trim would centre it. */
   @supports not (text-box-trim: trim-both) { .badge-slot { transform: translateY(-2px); } }

@@ -5,6 +5,7 @@
 
 import type { Snapshot } from '#lib/types/snapshot.ts';
 import type { Settings, StatuslineWire } from '#lib/types/settings.ts';
+import alertCases from '../../../tests/fixtures/alert-parity.csv?raw';
 
 // Timestamps are anchored at module load so `relativeReset` (wall-clock relative)
 // reads naturally ("2h left"). `iso(0)` is "now"; positive = future reset,
@@ -371,13 +372,30 @@ export const GALLERY_STATES: GalleryState[] = [
   } },
 ];
 
+export const ALERT_STATES: GalleryState[] = alertCases.trim().split('\n').slice(1).flatMap((line) => {
+  const [name, value, staleText, ratio] = line.split(',');
+  const percent = Number(value);
+  const snapshot = baseSnapshot();
+  snapshot.claude_oauth!.cadences = [snapshot.claude_oauth!.cadences[0]];
+  snapshot.claude_oauth!.cadences[0].utilization_percent = percent;
+  snapshot.claude_oauth_error = staleText === 'true' ? 'failed' : null;
+  snapshot.pace = [{ key: 'five_hour', used_fraction: percent / 100, elapsed_fraction: 0.5, ratio: Number(ratio) }];
+  return (['grid', 'cards'] as const).map((view) => ({ label: `Alert ${view} ${name}`, view, snapshot, openaiEnabled: true }));
+}).concat((() => {
+  const snapshot = baseSnapshot();
+  snapshot.claude_oauth!.cadences[0].utilization_percent = 20;
+  snapshot.claude_oauth!.cadences[1].utilization_percent = 95;
+  snapshot.pace = [];
+  return [{ label: 'Alert grid secondary', view: 'grid' as const, snapshot, openaiEnabled: true }];
+})());
+
 // Canned IPC returns for the one Settings frame (see the route's mockIPC setup).
 export const DEMO_SETTINGS: Settings = {
   version: 1,
   providers: { openai_enabled: true, anthropic_enabled: true, codex_enabled: true },
   oauth_poll_interval_secs: 300,
   seen_welcome: true,
-  tray: { mode: 'separate', show_percentages: false },
+  tray: { mode: 'separate', show_percentages: false, window: 'highest' },
 };
 
 export const DEMO_STATUSLINE: StatuslineWire = {

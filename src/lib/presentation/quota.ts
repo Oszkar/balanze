@@ -106,7 +106,7 @@ export function anthropicQuota(s: Snapshot): AnthropicQuota | null {
     headline: { key: headline.key, pct: headline.pct, resetsAt: headline.resetsAt, label: anthropicWindowLabel(headline) },
     secondary: five && seven ? { key: seven.key, pct: seven.pct, resetsAt: seven.resetsAt, label: anthropicWindowLabel(seven) } : null,
     source: selected.source,
-    tone: quotaTone(Math.max(five?.pct ?? 0, seven?.pct ?? 0)),
+    tone: quotaTone(headline.pct),
   };
 }
 

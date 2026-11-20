@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snapshot } from '#lib/types/snapshot.ts';
-  import { anthropicQuota, anthropicSourceView, codexElapsedFraction, codexQuota, matchingAnthropicPace, openAiCostCell, overageCell } from '#lib/presentation/quota.ts';
+  import { anthropicQuota, anthropicSourceView, codexElapsedFraction, codexQuota, matchingAnthropicPace, openAiCostCell, overageCell, quotaTone } from '#lib/presentation/quota.ts';
   import { PROV } from '#lib/presentation/provenance.ts';
   import { ANTH_QUOTA_COPY, OPENAI_COL_COPY } from '#lib/presentation/quotaCopy.ts';
   import { anthropicQuotaState, openaiColumnState } from '#lib/presentation/cellState.ts';
@@ -54,9 +54,10 @@
   {/if}
 
   {#if anthState.kind === 'data' && aq}
-    <QuotaCell pct={aq.headline.pct} used={(anthPace?.used_fraction ?? aq.headline.pct / 100) * 100}
+    <QuotaCell pct={aq.headline.pct} headlineLabel={aq.headline.label} used={(anthPace?.used_fraction ?? aq.headline.pct / 100) * 100}
       elapsed={anthPace ? anthPace.elapsed_fraction * 100 : null} tone={aq.tone}
       resetsAt={aq.headline.resetsAt} secondary={aq.secondary ? `${aq.secondary.label} ${aq.secondary.pct.toFixed(0)}%` : ''}
+      secondaryTone={aq.secondary ? quotaTone(aq.secondary.pct) : null}
       stale={anthStale} staleLabel="stale"
       title={aq.source === 'statusline' ? PROV.anthropicQuotaStatusline.title : PROV.anthropicQuotaOauth.title} />
   {:else if anthState.kind === 'error'}
@@ -92,11 +93,11 @@
           title={OPENAI_COL_COPY.error.title(colState.message)} />
       </div>
     {:else if cq}
-      <QuotaCell pct={cq.headline.pct} used={cq.headline.pct}
-        elapsed={codexElapsedFraction(cq.headline.window, snapshot.fetched_at) * 100} tone={cq.tone}
+      <QuotaCell pct={cq.headline.pct} headlineLabel={cq.headline.label} used={cq.headline.pct}
+        elapsed={cq.expired || !!degraded['codex_quota'] || !!snapshot.codex_quota_error ? null : codexElapsedFraction(cq.headline.window, snapshot.fetched_at) * 100} tone={cq.tone}
         resetsAt={cq.headline.resetsAt}
         secondary={[cq.secondary ? `${cq.secondary.label} ${cq.secondary.pct.toFixed(0)}%` : null, cq.plan, cq.credits].filter(Boolean).join(' · ')}
-        stale={!!degraded['codex_quota'] || cq.expired} staleLabel="stale" title={PROV.codexQuota.title} />
+        stale={!!degraded['codex_quota'] || !!snapshot.codex_quota_error || cq.expired} staleLabel="stale" title={PROV.codexQuota.title} />
     {:else}
       <BilledCell note="not connected" title="OpenAI Codex not configured" />
     {/if}
