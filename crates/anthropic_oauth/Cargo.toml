@@ -17,6 +17,8 @@ path = "examples/smoke.rs"
 
 [dependencies]
 backoff = { path = "../backoff" }
+# Shared secret-shaped substring redaction for error bodies (AGENTS.md §3.4).
+redact = { path = "../redact" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
