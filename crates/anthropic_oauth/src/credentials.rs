@@ -110,7 +110,7 @@ fn home_dir() -> Option<PathBuf> {
 fn credentials_malformed(path: PathBuf, error: serde_json::Error) -> OAuthError {
     OAuthError::CredentialsMalformed {
         path,
-        reason: crate::client::redact_for_display(&error.to_string()),
+        reason: redact::redact_for_display(&error.to_string()),
     }
 }
 

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Datelike, TimeZone, Utc};
+use redact::redact_for_display;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Deserializer, de};
 use tracing::debug;
@@ -171,75 +172,6 @@ pub(crate) async fn fetch_costs_once(
     }
 
     parse_response(&body, start_time, actual_end, Utc::now())
-}
-
-/// Sanitize an HTTP error body before it ends up in an `OpenAiError`'s
-/// `Display` impl, which the CLI prints to stdout on the unhappy path.
-///
-/// Two protections, both defensive (OpenAI's current 4xx/5xx bodies don't
-/// echo headers, but the contract isn't a guarantee):
-///   1. Anything matching `sk-` followed by 15+ key-shaped characters is
-///      replaced with `sk-...REDACTED`.
-///   2. Bodies longer than 500 chars are truncated with a length-suffix.
-fn redact_for_display(body: &str) -> String {
-    const MAX_LEN: usize = 500;
-
-    fn push_bounded(
-        output: &mut String,
-        output_chars: &mut usize,
-        segment: &str,
-        max_chars: usize,
-    ) -> bool {
-        for ch in segment.chars() {
-            if *output_chars == max_chars {
-                return true;
-            }
-            output.push(ch);
-            *output_chars += 1;
-        }
-        false
-    }
-
-    // Scan the borrowed body to classify complete key-shaped runs, but retain
-    // only the displayed prefix. This prevents a second body-sized allocation
-    // without exposing a key that crosses the display boundary.
-    let mut redacted = String::with_capacity(MAX_LEN);
-    let mut redacted_chars = 0;
-    let mut rest = body;
-    let truncated = loop {
-        if redacted_chars == MAX_LEN {
-            break !rest.is_empty();
-        }
-
-        let Some(idx) = rest.find("sk-") else {
-            break push_bounded(&mut redacted, &mut redacted_chars, rest, MAX_LEN);
-        };
-        if push_bounded(&mut redacted, &mut redacted_chars, &rest[..idx], MAX_LEN) {
-            break true;
-        }
-
-        let after = &rest[idx + 3..];
-        let key_len = after
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-            .unwrap_or(after.len());
-        let marker = if key_len >= 15 {
-            rest = &after[key_len..];
-            "sk-...REDACTED"
-        } else {
-            // Not key-shaped; emit verbatim and continue.
-            rest = after;
-            "sk-"
-        };
-        if push_bounded(&mut redacted, &mut redacted_chars, marker, MAX_LEN) {
-            break true;
-        }
-    };
-
-    if truncated {
-        format!("{redacted}...[truncated, {} bytes]", body.len())
-    } else {
-        redacted
-    }
 }
 
 fn parse_response(
@@ -610,69 +542,6 @@ mod tests {
         assert_eq!(fom.to_rfc3339(), "2026-12-01T00:00:00+00:00");
     }
 
-    // --- redact_for_display: HTTP-error-body sanitizer ---
-
-    #[test]
-    fn redact_empty_body_is_empty() {
-        assert_eq!(redact_for_display(""), "");
-    }
-
-    #[test]
-    fn redact_body_without_sk_passes_through() {
-        let body = r#"{"error":{"message":"Unauthorized","type":"invalid_request_error"}}"#;
-        assert_eq!(redact_for_display(body), body);
-    }
-
-    #[test]
-    fn redact_replaces_admin_key_lookalike() {
-        let body = "auth failed for sk-admin-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890";
-        let out = redact_for_display(body);
-        assert!(
-            out.contains("sk-...REDACTED"),
-            "expected redaction marker; got: {out}"
-        );
-        assert!(
-            !out.contains("AbCdEfGhIjKlMn"),
-            "key body must not survive: {out}"
-        );
-    }
-
-    #[test]
-    fn redact_replaces_multiple_keys_in_one_body() {
-        let body = "key1 sk-admin-AAAAAAAAAAAAAAAA mid sk-proj-BBBBBBBBBBBBBBBB tail";
-        let out = redact_for_display(body);
-        assert_eq!(out.matches("sk-...REDACTED").count(), 2);
-        assert!(!out.contains("AAAAAAAAAAAAAAAA"));
-        assert!(!out.contains("BBBBBBBBBBBBBBBB"));
-    }
-
-    #[test]
-    fn redact_leaves_short_sk_dash_strings_alone() {
-        // "sk-" followed by fewer than 15 key chars isn't a real key; don't
-        // mangle legitimate prose that happens to contain "sk-".
-        let body = "see sk-foo bar";
-        let out = redact_for_display(body);
-        assert_eq!(out, "see sk-foo bar");
-    }
-
-    #[test]
-    fn redact_masks_key_straddling_truncation_boundary() {
-        let body = format!("{}sk-{}", "x".repeat(483), "A".repeat(40));
-        let leaked_prefix = format!("sk-{}", "A".repeat(14));
-        let out = redact_for_display(&body);
-        assert!(
-            !out.contains(&leaked_prefix),
-            "key prefix survived truncation: {out}"
-        );
-        assert!(out.contains("REDACTED"), "expected redaction marker: {out}");
-    }
-
-    #[test]
-    fn redact_skips_long_key_without_losing_displayable_tail() {
-        let body = format!("sk-{} tail", "A".repeat(1_000_000));
-        assert_eq!(redact_for_display(&body), "sk-...REDACTED tail");
-    }
-
     fn retry_after_fixed_now() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
             .unwrap()
@@ -738,15 +607,5 @@ mod tests {
             HeaderValue::from_static("not a value"),
         );
         assert!(parse_retry_after_at(&h, retry_after_fixed_now()).is_none());
-    }
-
-    #[test]
-    fn redact_truncates_long_bodies_with_length_suffix() {
-        let body: String = "x".repeat(800);
-        let out = redact_for_display(&body);
-        assert!(out.starts_with(&"x".repeat(500)));
-        assert!(out.contains("truncated"));
-        assert!(out.contains("800"));
-        assert!(out.len() < body.len());
     }
 }
