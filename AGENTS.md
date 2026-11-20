@@ -127,6 +127,8 @@ When the architecture changes, update both files in lockstep along with `README.
 
 Quota labels are presentation-only: known Anthropic keys use canonical compact labels (`5h`, `7d-opus`) or expanded labels (`5-hour`, `7-day Opus`), while unknown keys retain their supplied label. Codex uses `5h`, `7d`, or `window` for unclassified durations. Rust shares Anthropic labels through `window` and Codex labels through `codex_local::WindowKind`; TypeScript mirrors the policy against `tests/fixtures/presentation-policy.json`. Statusline and tray adapters retain the selected label with its percentage through fallback. Source labels and serialized schemas remain unchanged.
 
+Anthropic compact selection retains the first 5-hour window and the highest-utilization non-5-hour window, comparing raw percentages and keeping the first tie. The tray weekly preference separately selects only `seven_day` and `seven_day_*` windows. Rust selection lives in `window`, snapshot source and stale state are assembled by `state_coordinator`, and TypeScript mirrors selection against the shared presentation fixtures. The live statusline selects directly from its own payload.
+
 ## 5. Quick Start for Agents
 
 ### Every task

@@ -45,59 +45,28 @@ impl AnthropicSourceLabel {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct AnthropicWindow<'a> {
-    pub(crate) key: &'a str,
-    pub(crate) label: &'a str,
-    pub(crate) percent: f32,
-}
+type AnthropicWindow<'a> = state_coordinator::AnthropicPresentationWindow<'a>;
 
 /// The compact/TUI density rule: show the five-hour window plus the worst
 /// non-five-hour cadence from the canonical fresh-statusline-first source.
 pub(crate) fn anthropic_display_windows(
     s: &Snapshot,
 ) -> Option<(AnthropicSourceLabel, Vec<AnthropicWindow<'_>>, bool)> {
-    fn select<'a>(windows: impl Iterator<Item = AnthropicWindow<'a>>) -> Vec<AnthropicWindow<'a>> {
-        let mut five = None;
-        let mut weekly = None;
-        for window in windows {
-            if window.key == "five_hour" {
-                five.get_or_insert(window);
-            } else if weekly
-                .is_none_or(|current: AnthropicWindow<'_>| window.percent > current.percent)
-            {
-                weekly = Some(window);
-            }
+    let view = s.anthropic_presentation()?;
+    let source = match view.source {
+        state_coordinator::AnthropicPresentationSource::Statusline => {
+            AnthropicSourceLabel::Statusline
         }
-        [five, weekly].into_iter().flatten().collect()
-    }
-
-    match s.anthropic_quota_source()? {
-        AnthropicQuotaSource::Statusline {
-            rate_limits: rl,
-            stale,
-        } => Some((
-            AnthropicSourceLabel::Statusline,
-            select(rl.windows.iter().map(|w| AnthropicWindow {
-                key: &w.key,
-                label: &w.label,
-                percent: w.used_percent,
-            })),
-            stale,
-        )),
-        AnthropicQuotaSource::OAuth {
-            snapshot: oauth,
-            stale,
-        } => Some((
-            AnthropicSourceLabel::OAuth,
-            select(oauth.cadences.iter().map(|c| AnthropicWindow {
-                key: &c.key,
-                label: &c.display_label,
-                percent: c.utilization_percent,
-            })),
-            stale,
-        )),
-    }
+        state_coordinator::AnthropicPresentationSource::OAuth => AnthropicSourceLabel::OAuth,
+    };
+    Some((
+        source,
+        [view.windows.five_hour, view.windows.other]
+            .into_iter()
+            .flatten()
+            .collect(),
+        view.stale,
+    ))
 }
 
 /// Pace entries whose keys belong to the currently selected Anthropic quota
@@ -139,8 +108,8 @@ pub(crate) fn bucket_for_fraction(used: f64) -> Bucket {
 }
 
 /// Map a pace ratio (used% / elapsed%) to a bucket. `None` (no pace data) is
-/// `Neutral`. Burning faster than the clock (> 1.0) is `Warn`; well over pace
-/// (> 1.5) is `Critical`; at or under pace (< 1.0) is `Ok`.
+/// `Neutral`. The shared pace verdict maps warning and critical ratios to the
+/// corresponding buckets; under and on-pace verdicts use `Ok`.
 pub(crate) fn bucket_for_pace_ratio(ratio: Option<f64>) -> Bucket {
     match window::PaceVerdict::from_ratio(ratio) {
         window::PaceVerdict::TooEarly => Bucket::Neutral,
@@ -153,6 +122,37 @@ pub(crate) fn bucket_for_pace_ratio(ratio: Option<f64>) -> Bucket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_anthropic_selection_cases() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/presentation-policy.json"
+        ))
+        .unwrap();
+        for case in fixture["anthropicSelections"].as_array().unwrap() {
+            let windows = case["windows"].as_array().unwrap();
+            let selected =
+                window::select_anthropic_windows(windows.iter().enumerate().map(|(i, w)| {
+                    (
+                        i,
+                        w["key"].as_str().unwrap(),
+                        w["percent"].as_f64().unwrap() as f32,
+                    )
+                }));
+            for (key, actual) in [
+                ("five", selected.five_hour),
+                ("other", selected.other),
+                ("weekly", selected.weekly),
+            ] {
+                assert_eq!(
+                    actual,
+                    case[key].as_u64().map(|i| i as usize),
+                    "{}: {key}",
+                    case["name"]
+                );
+            }
+        }
+    }
     use anthropic_oauth::{CadenceBar, ClaudeOAuthSnapshot};
     use chrono::{DateTime, Utc};
     use claude_statusline::{RateLimits, RateWindow, StatuslineFilePayload, StatuslineSnapshot};
