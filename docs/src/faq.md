@@ -81,7 +81,7 @@ Balanze picks the refreshed credential up on its next poll. It never writes, mir
 
 Right-click the tray icon and choose **Save Diagnostics...**. Balanze writes a folder named `Balanze-diagnostics-<date>-<time>` to your Downloads folder (your home folder if there is no Downloads) and opens it. Nothing is uploaded; attach the folder's files to an issue yourself.
 
-The folder contains the last few days of Balanze log files, the latest usage snapshot, and a `README.txt` listing what was included. API keys, OAuth tokens, and Bearer tokens are replaced with `...REDACTED` before writing. It never includes your Balanze settings, credentials, Claude or Codex session files, or the OpenAI cost cache. Usage figures and file paths (which may contain your OS user name) are included, so look it over before sharing.
+The folder contains the most recent Balanze log files (up to three per app), the latest usage snapshot, and a `README.txt` listing what was included. API keys, OAuth tokens, and Bearer tokens are replaced with `...REDACTED` before writing. It never includes your Balanze settings, credentials, Claude or Codex session files, or the OpenAI cost cache. Usage figures and file paths (which may contain your OS user name) are included, so look it over before sharing.
 
 ## macOS keeps asking for Keychain permission
 
