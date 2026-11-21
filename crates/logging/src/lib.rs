@@ -11,6 +11,8 @@
 //! (`tracing-subscriber`, `tracing-appender`) don't leak into the pure library
 //! crates that depend on `settings` only for config.
 
+pub mod diagnostics;
+
 use std::path::Path;
 
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};

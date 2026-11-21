@@ -351,10 +351,69 @@ fn normalize_settings_on_disk() {
 
 fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let open = MenuItemBuilder::with_id("open", "Open Balanze").build(app)?;
+    let diagnostics =
+        MenuItemBuilder::with_id("save_diagnostics", "Save Diagnostics...").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
     MenuBuilder::new(app)
-        .items(&[&open, &PredefinedMenuItem::separator(app)?, &quit])
+        .items(&[
+            &open,
+            &diagnostics,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ])
         .build()
+}
+
+/// Write the redacted diagnostics folder off the main thread, then reveal it.
+/// Rust-side opener/notification calls need no webview capability (PoLP).
+fn save_diagnostics(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let snapshot = state_coordinator::snapshot_file_path();
+        // Save, reveal (COM on Windows) and notify are all blocking calls, so
+        // they share one blocking-pool closure; the async task only joins it.
+        let worker_app = app.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            match logging::diagnostics::save_bundle(snapshot) {
+                Ok(dir) => {
+                    tracing::info!("diagnostics: saved to {}", dir.display());
+                    use tauri_plugin_opener::OpenerExt;
+                    if let Err(e) = worker_app.opener().reveal_item_in_dir(&dir) {
+                        tracing::warn!("diagnostics: reveal failed ({e})");
+                        notify(&worker_app, "Diagnostics saved", &dir.display().to_string());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("diagnostics: save failed ({e})");
+                    notify(&worker_app, "Could not save diagnostics", &e.to_string());
+                }
+            }
+        })
+        .await;
+        if let Err(e) = result {
+            tracing::error!("diagnostics: task failed ({e})");
+            let _ = tokio::task::spawn_blocking(move || {
+                notify(
+                    &app,
+                    "Could not save diagnostics",
+                    "Unexpected internal error.",
+                );
+            })
+            .await;
+        }
+    });
+}
+
+/// Best-effort OS notification; silently skipped without permission.
+fn notify(app: &tauri::AppHandle, title: &str, body: &str) {
+    use tauri_plugin_notification::{NotificationExt, PermissionState};
+    let notifier = app.notification();
+    if !matches!(notifier.permission_state(), Ok(PermissionState::Granted)) {
+        return;
+    }
+    if let Err(e) = notifier.builder().title(title).body(body).show() {
+        tracing::warn!("notification show failed ({e})");
+    }
 }
 
 fn create_codex_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -376,6 +435,7 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
     // another global menu callback or retain a handler for a removed item.
     app.on_menu_event(|app, event| match event.id().as_ref() {
         "open" => show_popover_at_cursor(app),
+        "save_diagnostics" => save_diagnostics(app),
         "quit" => app.exit(0),
         _ => {}
     });

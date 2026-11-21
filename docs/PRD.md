@@ -255,6 +255,7 @@ Make utilization and provider identity useful without opening the popover.
 
 - **Utilization indicators and compact macOS text** ([#295](https://github.com/Oszkar/balanze/issues/295), [#296](https://github.com/Oszkar/balanze/issues/296)) are implemented. macOS behavior is confirmed; the Windows indicators were legible at the tested scale and mode switching and hiding a provider worked. Other native Windows checks remain in the [checklist](prototypes/tray-indicators-spec.md).
 - **Consistent passive urgency** ([#263](https://github.com/Oszkar/balanze/issues/263)). The presentation decisions are implemented and documented; representative parity coverage remains. Passive indicators are distinct from OS notifications.
+- **Save Diagnostics...** ([#278](https://github.com/Oszkar/balanze/issues/278)) is implemented: the tray menu writes a local folder of redacted logs and the current snapshot, with a README listing its contents, and reveals it. Nothing is uploaded. CLI access remains open.
 
 Done when remaining Windows native checks and passive-urgency parity coverage pass. Preserve honest missing/stale/error states and deduped repainting.
 
@@ -266,7 +267,6 @@ These are candidates, not a release sequence or prerequisites for v1.0:
 
 - **Multiple local environments** ([#297](https://github.com/Oszkar/balanze/issues/297)): investigate one Windows host plus WSL2 instances using the same Claude/OpenAI accounts. WSL-only activity must eventually keep the host view current; concurrent activity should contribute complete aggregates without duplicate records. Account-wide quota observations must be reconciled, never summed. First compare additional read locations with a local bridge and define freshness, identity, lifecycle, and deduplication requirements. Cloud sync and different-account support are not requirements for this investigation.
 - **Alerts**: choose actionable quota, reset, spend, or persistent-failure notifications based on real use. Require fresh data, duplicate suppression, and defined startup/re-arm behavior. Credits alerts depend on a reliable balance source. No notification thresholds are committed yet.
-- **Save Diagnostics...** ([#278](https://github.com/Oszkar/balanze/issues/278)): revisit when collecting support information solves a concrete need; contents, redaction, packaging, and CLI access remain open.
 - **Additional configuration**: themes, statusline controls in the UI, refresh cadence within provider floors, and startup behavior, as actual needs emerge.
 - **CLI improvements**: export filtering ([#114](https://github.com/Oszkar/balanze/issues/114)), JSON time-series export ([#247](https://github.com/Oszkar/balanze/issues/247)), and typed failure categories ([#279](https://github.com/Oszkar/balanze/issues/279)). Typed status errors need separate schema review.
 - **Platform ergonomics**: Linux credential storage ([#231](https://github.com/Oszkar/balanze/issues/231)) and Windows arm64 desktop artifacts ([#219](https://github.com/Oszkar/balanze/issues/219)). Windows arm64 CLI artifacts already ship.

@@ -1,7 +1,8 @@
 //! Secret-shaped substring redaction (AGENTS.md §3.4): masks `sk-` API keys and
 //! `Bearer` tokens in untrusted text. Used by the provider HTTP clients to
-//! sanitize error bodies before they reach `Display`, logs, and the UI. Pure
-//! and dependency-free.
+//! sanitize error bodies before they reach `Display`, logs, and the UI, and by
+//! `logging::diagnostics` to scrub the Save Diagnostics folder. Pure and
+//! dependency-free.
 
 /// Display cap used by [`redact_for_display`].
 pub const DISPLAY_MAX_CHARS: usize = 500;

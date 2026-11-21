@@ -10,6 +10,10 @@ publish.workspace = true
 
 [dependencies]
 settings = { path = "../settings" }
+# Diagnostics bundle: redaction, Downloads lookup, local timestamp in the folder name.
+redact = { path = "../redact" }
+directories = { workspace = true }
+chrono = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 
